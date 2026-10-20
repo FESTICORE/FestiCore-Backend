@@ -59,8 +59,8 @@ export class AdminCrawl1792500014000 implements MigrationInterface {
       await queryRunner.query(
         `INSERT INTO crawl_sources
           ("kind", "url", "parser", "parserConfig", "createdAt")
-         SELECT 'discovery', $1, 'ticket-list', '{}', now() - interval '1 day'
-         WHERE NOT EXISTS (SELECT 1 FROM crawl_sources WHERE "url" = $1)`,
+         SELECT 'discovery', $1::varchar, 'ticket-list', '{}', now() - interval '1 day'
+         WHERE NOT EXISTS (SELECT 1 FROM crawl_sources WHERE "url" = $1::varchar)`,
         [url],
       );
     }
