@@ -2,10 +2,10 @@ import { ArgumentsHost, BadRequestException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AllExceptionsFilter } from './all-exceptions.filter';
 
-function hostFor(body: unknown) {
+function hostFor(body: unknown, url = '/api/v1/auth/login') {
   const json = jest.fn();
   const response = { status: jest.fn(() => ({ json })) };
-  const request = { method: 'POST', url: '/api/v1/auth/login', body };
+  const request = { method: 'POST', url, body };
   const host = {
     switchToHttp: () => ({
       getRequest: () => request,
@@ -57,6 +57,18 @@ describe('AllExceptionsFilter', () => {
     expect(logged).not.toContain('auth-code-raw');
     expect(logged).not.toContain('id-token-raw');
     expect(logged).toContain('kakao');
+  });
+
+  it('OAuth 콜백 URL의 code와 state를 로그에 남기지 않는다', () => {
+    const { host } = hostFor(
+      {},
+      '/api/v1/auth/google/callback?code=secret-code&state=secret-state',
+    );
+    new AllExceptionsFilter().catch(new BadRequestException('bad'), host);
+    const logged = String((warn.mock.calls as unknown[][])[0][0]);
+    expect(logged).toContain('/api/v1/auth/google/callback - 400');
+    expect(logged).not.toContain('secret-code');
+    expect(logged).not.toContain('secret-state');
   });
 
   it('Railway production 환경은 DEV_LOGIN_ENABLED 와 무관하게 바디 미기록', () => {

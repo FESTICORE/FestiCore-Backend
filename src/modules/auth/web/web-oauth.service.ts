@@ -6,7 +6,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash, randomBytes } from 'crypto';
-import { IsNull, MoreThan, Repository } from 'typeorm';
+import { IsNull, LessThan, MoreThan, Repository } from 'typeorm';
 import { AuthService, type LoginResult } from '../service/auth.service';
 import { AppleService } from '../service/apple.service';
 import { GoogleService } from '../service/google.service';
@@ -103,6 +103,11 @@ export class WebOauthService {
     provider: Provider,
   ): Promise<{ url: string; browserToken: string }> {
     const redirectUri = this.redirectUri(provider);
+    const expiredAt = LessThan(new Date());
+    await Promise.all([
+      this.states.delete({ expiresAt: expiredAt }),
+      this.tickets.delete({ expiresAt: expiredAt }),
+    ]);
     const state = this.random();
     const browserToken = this.random();
     const nonce = this.random();

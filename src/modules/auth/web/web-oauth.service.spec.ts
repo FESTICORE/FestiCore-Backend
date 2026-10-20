@@ -52,6 +52,7 @@ function harness() {
       Object.assign(value, patch);
       return Promise.resolve({ affected: 1 });
     }),
+    delete: jest.fn().mockResolvedValue({ affected: 0 }),
   });
   const states = repo(stateRows, 'stateHash');
   const tickets = repo(ticketRows, 'ticketHash');
@@ -92,10 +93,16 @@ function harness() {
     states as unknown as Repository<WebOauthState>,
     tickets as unknown as Repository<WebOauthTicket>,
   );
-  return { service, googleExchange, appleExchange };
+  return { service, googleExchange, appleExchange, states, tickets };
 }
 
 describe('WebOauthService', () => {
+  it('removes expired states and tickets before starting a new login', async () => {
+    const { service, states, tickets } = harness();
+    await service.begin('google');
+    expect(states.delete).toHaveBeenCalledTimes(1);
+    expect(tickets.delete).toHaveBeenCalledTimes(1);
+  });
   it('binds state to the initiating browser and rejects replay', async () => {
     const { service, googleExchange } = harness();
     const started = await service.begin('google');

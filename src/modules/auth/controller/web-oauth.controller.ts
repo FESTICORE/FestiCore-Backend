@@ -2,6 +2,8 @@ import {
   BadRequestException,
   Controller,
   Get,
+  HttpCode,
+  HttpStatus,
   Post,
   Req,
   Res,
@@ -159,6 +161,7 @@ export class WebOauthController {
     const script = `if (!window.opener) { document.body.textContent = '로그인 창을 앱에서 다시 열어 주세요.'; } else { fetch('/api/v1/auth/web/token', {method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/json'}}).then(async r => { if (!r.ok) throw new Error('로그인 결과를 받을 수 없습니다.'); return r.json(); }).then(result => { window.opener.postMessage({type:'festicore:web-login', result}, ${JSON.stringify(targetOrigin)}); window.close(); }).catch(() => { document.body.textContent = '로그인이 완료되지 않았습니다. 다시 시도해 주세요.'; }); }`;
     const hash = createHash('sha256').update(script).digest('base64');
     response.setHeader('Cache-Control', 'no-store');
+    response.setHeader('Cross-Origin-Opener-Policy', 'unsafe-none');
     response.setHeader(
       'Content-Security-Policy',
       `default-src 'none'; script-src 'sha256-${hash}'; connect-src 'self'; base-uri 'none'; form-action 'none'`,
@@ -172,10 +175,11 @@ export class WebOauthController {
 
   @Public()
   @Post('web/token')
+  @HttpCode(HttpStatus.OK)
   async token(
     @Req() request: Request,
-    @Res() response: Response,
-  ): Promise<void> {
+    @Res({ passthrough: true }) response: Response,
+  ) {
     const origin = request.headers.origin;
     const allowed = ['google', 'apple'].flatMap((provider) => {
       try {
@@ -198,6 +202,6 @@ export class WebOauthController {
     });
     const result = await this.oauth.consumeTicket(ticket);
     response.setHeader('Cache-Control', 'no-store');
-    response.json(result);
+    return result;
   }
 }

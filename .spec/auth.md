@@ -27,7 +27,7 @@
 
 | 서비스          | 책임                     | 검증 방식                                                                          |
 | --------------- | ------------------------ | ---------------------------------------------------------------------------------- |
-| `GoogleService` | Google idToken 검증      | `google-auth-library` `verifyIdToken` (aud=GOOGLE_CLIENT_ID)                       |
+| `GoogleService` | Google idToken 검증      | `google-auth-library` `verifyIdToken` (aud=GOOGLE_CLIENT_ID 또는 GOOGLE_MOBILE_CLIENT_IDS) |
 | `AppleService`  | Apple identityToken 검증 | Apple JWKS 서명 검증(`jose`), iss=`https://appleid.apple.com`, aud=APPLE_CLIENT_ID |
 | `TokenService`  | 자체 JWT 발급·회전       | access/refresh 별도 secret, `typ` 클레임, refresh 는 sha256 해시만 저장            |
 | `AuthService`   | 오케스트레이션           | 프로필 → find-or-create → JWT 발급/갱신/탈퇴                                       |
@@ -43,6 +43,23 @@
 | POST   | `/api/v1/auth/logout`    | 필요   | -                                                | refresh 토큰 전체 폐기                            |
 | GET    | `/api/v1/auth/me`        | 필요   | -                                                | 현재 사용자                                       |
 | DELETE | `/api/v1/auth/me`        | 필요   | -                                                | 회원 탈퇴(provider revoke → 토큰·계정 삭제)       |
+| POST   | `/api/v1/auth/google`    | 불필요 | Google ID 토큰                                    | Google 앱 로그인                                  |
+| POST   | `/api/v1/auth/apple`     | 불필요 | Apple identity token/code                         | Apple 앱 로그인                                   |
+| DELETE | `/api/v1/auth/session`   | 필요   | -                                                | 현재 세션 종료                                    |
+| GET    | `/api/v1/me`             | 필요   | -                                                | 프로필 조회                                       |
+| PATCH  | `/api/v1/me`             | 필요   | 닉네임 등                                        | 프로필 수정                                       |
+| DELETE | `/api/v1/me`             | 필요   | -                                                | 탈퇴                                              |
+| GET    | `/api/v1/auth/google/start` | 불필요 | -                                            | Google 웹 로그인 시작                             |
+| GET    | `/api/v1/auth/google/callback` | 불필요 | `code`, `state`                            | Google 웹 콜백                                   |
+| GET    | `/api/v1/auth/apple/start` | 불필요 | -                                             | Apple 웹 로그인 시작                              |
+| POST   | `/api/v1/auth/apple/callback` | 불필요 | `form_post`                               | Apple 웹 콜백                                    |
+| GET    | `/api/v1/auth/web/result` | 불필요 | 일회용 브라우저 티켓                             | 웹 결과 전달                                      |
+| POST   | `/api/v1/auth/web/token` | 불필요 | 일회용 브라우저 티켓                             | 자체 토큰 교환                                    |
+
+웹 로그인 설정: `GOOGLE_WEB_REDIRECT_URI`, `APPLE_WEB_REDIRECT_URI`는 각각 환경별
+`https://<도메인>/api/v1/auth/<provider>/callback`이고,
+`APPLE_WEB_CLIENT_ID=co.festiCore.io`이다. `WEB_OAUTH_CLIENT_ORIGIN`은 실제 웹 클라이언트의
+고정 HTTPS origin이다. 앱용 Google ID 토큰의 audience에는 `GOOGLE_MOBILE_CLIENT_IDS`를 추가한다.
 
 ### 로그인 응답
 

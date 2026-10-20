@@ -4,6 +4,7 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  MaxLength,
   ValidateIf,
 } from 'class-validator';
 import type { SocialProvider } from '../types/social-profile';
@@ -25,6 +26,7 @@ export class SocialLoginDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(30)
   name?: string;
 
   @ApiPropertyOptional({

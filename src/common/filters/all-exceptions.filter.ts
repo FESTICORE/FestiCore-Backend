@@ -58,7 +58,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     // 4xx(인증 없음·검증 실패·not found 등)는 예상된 클라이언트 오류이므로
     // 스택 없이 warn 으로 남긴다. 5xx(진짜 서버 오류)만 스택과 함께 error 로 남겨
     // 로그에서 실제 장애가 401/404 노이즈에 묻히지 않게 한다.
-    const line = `${request.method} ${request.url} - ${status} - ${message}`;
+    const line = `${request.method} ${request.url.split('?')[0]} - ${status} - ${message}`;
     if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
       this.logger.error(
         line,

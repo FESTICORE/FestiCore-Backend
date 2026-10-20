@@ -59,6 +59,15 @@ export class AuthService {
   ): Promise<{ userId: string; newUser: boolean }> {
     const { user, isNew } = await this.findOrCreate(profile);
     if (grant?.refreshToken && grant.subject === profile.providerId) {
+      const previous = await this.userRepo.findOne({
+        where: { id: user.id },
+        select: {
+          id: true,
+          oauthRefreshToken: true,
+          oauthWebRefreshToken: true,
+          oauthWebClientId: true,
+        },
+      });
       await this.userRepo.update(
         { id: user.id },
         {
@@ -66,6 +75,20 @@ export class AuthService {
           oauthWebClientId: grant.clientId ?? null,
         },
       );
+      if (
+        previous?.oauthWebRefreshToken &&
+        previous.oauthWebRefreshToken !== previous.oauthRefreshToken &&
+        previous.oauthWebRefreshToken !== grant.refreshToken
+      ) {
+        if (profile.provider === 'google') {
+          await this.google.revokeConnection(previous.oauthWebRefreshToken);
+        } else {
+          await this.apple.revokeConnection(
+            previous.oauthWebRefreshToken,
+            previous.oauthWebClientId ?? undefined,
+          );
+        }
+      }
     }
     return { userId: user.id, newUser: isNew };
   }
@@ -225,7 +248,7 @@ export class AuthService {
         this.userRepo.create({
           ...where,
           email: profile.email ?? null,
-          nickname: profile.name ?? null,
+          nickname: profile.name?.slice(0, 30) ?? null,
           profileImageUrl: profile.picture ?? null,
         }),
       );

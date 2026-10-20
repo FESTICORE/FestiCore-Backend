@@ -2,6 +2,8 @@ import { Test } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types';
+import helmet from 'helmet';
+import { ResponseInterceptor } from '../src/common/interceptors/response.interceptor';
 import { WebOauthController } from '../src/modules/auth/controller/web-oauth.controller';
 import { WebOauthService } from '../src/modules/auth/web/web-oauth.service';
 
@@ -32,6 +34,8 @@ describe('Web OAuth callback (e2e)', () => {
       providers: [{ provide: WebOauthService, useValue: oauth }],
     }).compile();
     app = module.createNestApplication();
+    app.use(helmet({ contentSecurityPolicy: false }));
+    app.useGlobalInterceptors(new ResponseInterceptor());
     app.setGlobalPrefix('api/v1');
     await app.init();
     server = app.getHttpServer() as App;
@@ -71,12 +75,18 @@ describe('Web OAuth callback (e2e)', () => {
     expect(result.headers['content-security-policy']).toContain(
       "script-src 'sha256-",
     );
+    expect(result.headers['cross-origin-opener-policy']).toBe('unsafe-none');
     await request(server)
       .post('/api/v1/auth/web/token')
       .set('Origin', 'https://festicore-dev.up.railway.app')
       .set('Cookie', ticketCookie)
-      .expect(201)
-      .expect({ accessToken: 'access', refreshToken: 'refresh' });
+      .expect(200)
+      .expect({
+        success: true,
+        statusCode: 200,
+        data: { accessToken: 'access', refreshToken: 'refresh' },
+        message: '성공적으로 처리되었습니다.',
+      });
     expect(oauth.consumeTicket).toHaveBeenCalledWith('ticket');
   });
 

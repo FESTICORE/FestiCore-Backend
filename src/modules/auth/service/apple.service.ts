@@ -12,6 +12,7 @@ import {
   jwtVerify,
   SignJWT,
   type JWTVerifyGetKey,
+  type JWTPayload,
 } from 'jose';
 import type { OauthGrant, SocialProfile } from '../types/social-profile';
 
@@ -86,29 +87,51 @@ export class AppleService {
         'Apple 웹 로그인이 설정되지 않았습니다.',
       );
     }
-    const res = await fetch(APPLE_TOKEN_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id: webClientId,
-        client_secret: clientSecret,
-        code,
-        redirect_uri: redirectUri,
-        grant_type: 'authorization_code',
-      }),
-    });
+    let res: Response;
+    try {
+      res = await fetch(APPLE_TOKEN_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          client_id: webClientId,
+          client_secret: clientSecret,
+          code,
+          redirect_uri: redirectUri,
+          grant_type: 'authorization_code',
+        }),
+      });
+    } catch {
+      this.logger.warn('Apple 웹 토큰 엔드포인트에 연결하지 못했습니다.');
+      throw new ServiceUnavailableException(
+        'Apple 로그인 서비스에 연결할 수 없습니다.',
+      );
+    }
+    if (res.status >= 500)
+      throw new ServiceUnavailableException(
+        'Apple 로그인 서비스가 응답하지 않습니다.',
+      );
     if (!res.ok)
       throw new UnauthorizedException('Apple 인증 코드 교환에 실패했습니다.');
-    const tokens = (await res.json()) as {
-      id_token?: string;
-      refresh_token?: string;
-    };
+    let tokens: { id_token?: string; refresh_token?: string };
+    try {
+      tokens = (await res.json()) as typeof tokens;
+    } catch {
+      throw new ServiceUnavailableException(
+        'Apple 로그인 응답이 올바르지 않습니다.',
+      );
+    }
     if (!tokens.id_token)
       throw new UnauthorizedException('Apple ID 토큰이 없습니다.');
-    const { payload } = await jwtVerify(tokens.id_token, this.jwks, {
-      issuer: APPLE_ISSUER,
-      audience: webClientId,
-    });
+    let payload: JWTPayload;
+    try {
+      ({ payload } = await jwtVerify(tokens.id_token, this.jwks, {
+        issuer: APPLE_ISSUER,
+        audience: webClientId,
+      }));
+    } catch {
+      this.logger.warn('Apple 웹 ID 토큰 검증에 실패했습니다.');
+      throw new UnauthorizedException('유효하지 않은 Apple 토큰입니다.');
+    }
     if (!payload.sub || payload.nonce !== nonce) {
       throw new UnauthorizedException('Apple nonce가 일치하지 않습니다.');
     }
