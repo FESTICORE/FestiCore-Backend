@@ -7,6 +7,7 @@ import { HealthModule } from './modules/health/health.module';
 import { AdminAuthModule } from './modules/admin/auth/admin-auth.module';
 import { AdminFestivalModule } from './modules/admin/festival/admin-festival.module';
 import { FlagsModule } from './modules/flags/flags.module';
+import { PublicFestivalModule } from './modules/public/public-festival.module';
 
 /** SwaggerModule.createDocument 의 include 가 받는 모듈 클래스 타입. */
 type ModuleClass = new (...args: never[]) => unknown;
@@ -18,6 +19,7 @@ const MODULES_BY_SLUG: Record<string, ModuleClass[]> = {
   'admin-auth': [AdminAuthModule],
   'admin-festivals': [AdminFestivalModule],
   flags: [FlagsModule],
+  festivals: [PublicFestivalModule],
 };
 
 const DOMAIN_DOCS = API_DOMAINS.map((d) => ({

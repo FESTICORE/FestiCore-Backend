@@ -1,0 +1,365 @@
+import {
+  BadRequestException,
+  Controller,
+  Get,
+  Headers,
+  HttpException,
+  Param,
+  Query,
+  Res,
+} from '@nestjs/common';
+import {
+  ApiHeader,
+  ApiOperation,
+  ApiParam,
+  ApiQuery,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
+import { brotliCompressSync, gzipSync } from 'zlib';
+import type { Response } from 'express';
+import { Public } from '../auth/decorator/public.decorator';
+import { PublicFestivalService } from './public-festival.service';
+import { PublicLiveService } from './public-live.service';
+
+function matchesEtag(header: string | undefined, etag: string): boolean {
+  return (
+    header
+      ?.split(',')
+      .map((value) => value.trim())
+      .some(
+        (value) =>
+          value === '*' ||
+          value.replace(/^W\//, '') === etag.replace(/^W\//, ''),
+      ) ?? false
+  );
+}
+
+function acceptsEncoding(
+  header: string | undefined,
+  encoding: string,
+): boolean {
+  return (
+    header?.split(',').some((part) => {
+      const [name, ...parameters] = part.trim().split(';');
+      if (name.toLowerCase() !== encoding) return false;
+      const quality = parameters
+        .map((parameter) => parameter.trim().match(/^q\s*=\s*([0-9.]+)$/i))
+        .find(Boolean)?.[1];
+      return (
+        quality === undefined || (Number(quality) > 0 && Number(quality) <= 1)
+      );
+    }) ?? false
+  );
+}
+
+const festivalId = {
+  name: 'id',
+  description: '발행된 축제 ID',
+  example: 'fst_01234567',
+};
+
+@ApiTags('Public Festivals')
+@Public()
+@Controller('festivals')
+export class PublicFestivalController {
+  constructor(
+    private readonly service: PublicFestivalService,
+    private readonly liveService: PublicLiveService,
+  ) {}
+
+  private send(
+    response: Response,
+    body: unknown,
+    etag?: string,
+    ifNoneMatch?: string,
+  ) {
+    response.setHeader('Date', new Date().toUTCString());
+    if (etag) response.setHeader('ETag', etag);
+    if (etag && matchesEtag(ifNoneMatch, etag)) {
+      response.status(304).end();
+      return;
+    }
+    response.json(body);
+  }
+
+  @Get()
+  @ApiOperation({
+    summary: '발행 축제 목록',
+    description:
+      '첫날 시작 시각·축제 ID 순서로 발행된 축제만 조회합니다. 요청 본문은 없습니다.',
+  })
+  @ApiQuery({
+    name: 'after',
+    required: false,
+    description:
+      '시작 날짜 YYYY-MM-DD 또는 이전 응답의 nextCursor(조회 하한 날짜~시작 ISO8601 시각~축제 ID, URL 인코딩 필요)',
+    example: '2026-10-21',
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    description: '페이지 크기 1~50, 기본 20',
+    example: 20,
+  })
+  @ApiHeader({
+    name: 'If-None-Match',
+    required: false,
+    description: '이전 목록 응답의 ETag. 일치하면 304.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: '발행 축제 요약과 다음 페이지 커서',
+    schema: {
+      type: 'object',
+      example: {
+        items: [
+          {
+            id: 'fst_01234567',
+            name: '가을 음악 축제',
+            firstDate: '2026-10-24',
+            lastDate: '2026-10-24',
+            packVersion: 1,
+            status: 'upcoming',
+          },
+        ],
+        nextCursor: null,
+      },
+    },
+  })
+  @ApiResponse({ status: 304, description: '목록이 변경되지 않았습니다.' })
+  @ApiResponse({ status: 400, description: 'after 또는 limit 형식 오류' })
+  async list(
+    @Query('after') after: string | undefined,
+    @Query('limit') limit: string | undefined,
+    @Headers('if-none-match') ifNoneMatch: string | undefined,
+    @Res() response: Response,
+  ) {
+    const body = await this.service.list(after, limit);
+    response.setHeader('Cache-Control', 'public, max-age=3600');
+    this.send(response, body, this.service.etag(body), ifNoneMatch);
+  }
+
+  @Get(':id/pack/version')
+  @ApiOperation({
+    summary: '발행 팩 버전 확인',
+    description:
+      '앱의 저장 팩과 비교할 버전·갱신 시각·ETag를 조회합니다. 요청 본문은 없습니다.',
+  })
+  @ApiParam(festivalId)
+  @ApiResponse({
+    status: 200,
+    description: '발행 팩 버전',
+    schema: {
+      type: 'object',
+      example: {
+        packVersion: 1,
+        packUpdatedAt: '2026-10-20T09:00:00Z',
+        etag: '"v1"',
+      },
+    },
+  })
+  @ApiResponse({ status: 404, description: '발행된 축제가 없습니다.' })
+  async version(@Param('id') id: string, @Res() response: Response) {
+    const body = await this.service.version(id);
+    response.setHeader('Cache-Control', 'public, max-age=300');
+    this.send(response, body);
+  }
+
+  @Get(':id/pack')
+  @ApiOperation({
+    summary: '발행 축제 팩',
+    description:
+      '발행된 축제 전체 JSON 팩을 받습니다. Brotli 또는 gzip 압축을 지원합니다. 요청 본문은 없습니다.',
+  })
+  @ApiParam(festivalId)
+  @ApiHeader({
+    name: 'If-None-Match',
+    required: false,
+    description: '이전 팩 ETag. 일치하면 304.',
+  })
+  @ApiHeader({
+    name: 'Accept-Encoding',
+    required: false,
+    description: 'br, gzip 또는 identity. q=0인 압축은 사용하지 않습니다.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: '발행 팩 JSON',
+    schema: {
+      type: 'object',
+      additionalProperties: true,
+      example: {
+        id: 'fst_01234567',
+        name: '가을 음악 축제',
+        days: [{ date: '2026-10-24' }],
+        packVersion: 1,
+      },
+    },
+  })
+  @ApiResponse({ status: 304, description: '팩 버전이 변경되지 않았습니다.' })
+  @ApiResponse({ status: 404, description: '발행된 축제가 없습니다.' })
+  async pack(
+    @Param('id') id: string,
+    @Headers('if-none-match') ifNoneMatch: string | undefined,
+    @Headers('accept-encoding') acceptEncoding: string | undefined,
+    @Res() response: Response,
+  ) {
+    const body = await this.service.published(id);
+    response.setHeader(
+      'Cache-Control',
+      'public, max-age=3600, stale-while-revalidate=86400',
+    );
+    response.setHeader('Date', new Date().toUTCString());
+    response.setHeader('Vary', 'Accept-Encoding');
+    const etag = `"v${body.packVersion as number}"`;
+    response.setHeader('ETag', etag);
+    if (matchesEtag(ifNoneMatch, etag)) {
+      response.status(304).end();
+      return;
+    }
+    const raw = Buffer.from(JSON.stringify(body));
+    response.type('application/json');
+    if (acceptsEncoding(acceptEncoding, 'br')) {
+      response.setHeader('Content-Encoding', 'br');
+      response.send(brotliCompressSync(raw));
+    } else if (acceptsEncoding(acceptEncoding, 'gzip')) {
+      response.setHeader('Content-Encoding', 'gzip');
+      response.send(gzipSync(raw));
+    } else {
+      response.send(raw);
+    }
+  }
+
+  @Get(':id/flags')
+  @ApiOperation({
+    summary: '축제 공개 깃발 목록',
+    description:
+      '공개·비숨김 깃발만 반환합니다. tag를 여러 번 보내면 OR 필터입니다. 요청 본문은 없습니다.',
+  })
+  @ApiParam(festivalId)
+  @ApiQuery({
+    name: 'tag',
+    required: false,
+    isArray: true,
+    enum: ['slam', 'sing', 'train', 'calm', 'newbie'],
+    description: '반복 가능. 예: ?tag=slam&tag=calm',
+  })
+  @ApiResponse({
+    status: 200,
+    description: '공개 깃발 프로필과 팩 버전',
+    schema: {
+      type: 'object',
+      example: {
+        items: [{ id: 'flg_01234567', name: '응원 깃발', tags: ['slam'] }],
+        packVersion: 1,
+      },
+    },
+  })
+  @ApiResponse({ status: 400, description: 'tag 값 오류' })
+  @ApiResponse({ status: 404, description: '발행된 축제가 없습니다.' })
+  async flags(
+    @Param('id') id: string,
+    @Query('tag') tag: string | string[] | undefined,
+    @Res() response: Response,
+  ) {
+    if (tag !== undefined && typeof tag !== 'string' && !Array.isArray(tag))
+      throw new BadRequestException({
+        code: 'VALIDATION',
+        message: 'tag 형식이 올바르지 않습니다.',
+      });
+    const body = await this.service.flags(
+      id,
+      tag === undefined ? undefined : Array.isArray(tag) ? tag : [tag],
+    );
+    response.setHeader('Cache-Control', 'public, max-age=600');
+    this.send(response, body);
+  }
+
+  @Get(':id/live')
+  @ApiOperation({
+    summary: '축제 라이브 보드',
+    description:
+      '최근 공개 깃발 상태와 로그인 사용자의 팔로우·크루 정보를 반환합니다. 기기별 분당 최대 4회입니다. 요청 본문은 없습니다.',
+  })
+  @ApiParam(festivalId)
+  @ApiHeader({
+    name: 'X-Device-Id',
+    required: true,
+    description: '클라이언트 설치별 UUID',
+  })
+  @ApiHeader({
+    name: 'If-None-Match',
+    required: false,
+    description: '이전 라이브 응답의 ETag. 상태가 같으면 304.',
+  })
+  @ApiHeader({
+    name: 'Authorization',
+    required: false,
+    description:
+      '선택 사항. 로그인 사용자는 Bearer 앱 access token을 보내면 me 필드를 받습니다.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: '현재 라이브 보드',
+    schema: {
+      type: 'object',
+      example: {
+        festivalId: 'fst_01234567',
+        setOverrides: [],
+        activeFlags: [],
+        me: null,
+        serverAt: '2026-10-20T09:00:00Z',
+      },
+    },
+  })
+  @ApiResponse({ status: 304, description: '라이브 상태 변경 없음' })
+  @ApiResponse({ status: 400, description: '기기 UUID 형식 오류' })
+  @ApiResponse({
+    status: 401,
+    description: '전달된 Bearer 토큰이 유효하지 않습니다.',
+  })
+  @ApiResponse({
+    status: 429,
+    description: '기기별 요청 횟수 초과. Retry-After 헤더를 확인하세요.',
+  })
+  @ApiResponse({
+    status: 503,
+    description:
+      '요청 제한 기록 정리를 확인할 수 없어 라이브 조회를 잠시 중단함',
+  })
+  async live(
+    @Param('id') id: string,
+    @Headers('x-device-id') deviceId: string | undefined,
+    @Headers('authorization') authorization: string | undefined,
+    @Headers('if-none-match') ifNoneMatch: string | undefined,
+    @Res() response: Response,
+  ) {
+    try {
+      const { body, etag } = await this.liveService.board(
+        id,
+        deviceId,
+        authorization,
+      );
+      response.setHeader('Cache-Control', 'private, max-age=30');
+      response.setHeader('Vary', 'Authorization');
+      response.setHeader('X-Poll-After', '30');
+      this.send(response, body, etag, ifNoneMatch);
+    } catch (error) {
+      if (error instanceof HttpException && error.getStatus() === 429) {
+        const detail = error.getResponse();
+        const seconds =
+          typeof detail === 'object' &&
+          detail !== null &&
+          'retryAfter' in detail
+            ? Number(detail.retryAfter)
+            : 60;
+        response.setHeader(
+          'Retry-After',
+          String(Number.isFinite(seconds) ? seconds : 60),
+        );
+      }
+      throw error;
+    }
+  }
+}

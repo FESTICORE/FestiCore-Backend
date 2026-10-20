@@ -43,4 +43,10 @@ export const API_DOMAINS: ApiDomain[] = [
     description: '깃발·팔로우·기수·관리자 신고 처리',
     pathPrefix: 'flags',
   },
+  {
+    slug: 'festivals',
+    title: 'Festivals',
+    description: '발행 축제 목록·팩·깃발·라이브 보드',
+    pathPrefix: 'festivals',
+  },
 ];
