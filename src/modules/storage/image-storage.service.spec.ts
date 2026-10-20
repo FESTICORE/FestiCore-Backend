@@ -1,6 +1,6 @@
 import { ConfigService } from '@nestjs/config';
 import { Buffer } from 'buffer';
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { Readable } from 'stream';
@@ -145,6 +145,85 @@ describe('flag image storage', () => {
         ContentLength: bytes.length,
       } as never);
       await expect(storage.readCrawlImage(key)).resolves.toEqual(bytes);
+    } finally {
+      send.mockRestore();
+    }
+  });
+
+  it('stores, reads, and deletes private bounded text crawl snapshots', async () => {
+    const values: Record<string, string> = {
+      RAILWAY_BUCKET_REGION: 'auto',
+      RAILWAY_BUCKET_ENDPOINT: 'https://storage.example.test',
+      RAILWAY_BUCKET_ACCESS_KEY_ID: 'test-key',
+      RAILWAY_BUCKET_SECRET_ACCESS_KEY: 'test-secret',
+      RAILWAY_BUCKET_NAME: 'private-images',
+    };
+    const storage = new ImageStorageService({
+      get: (key: string) => values[key],
+    } as ConfigService);
+    const key = `crawl/snapshots/${randomUUID()}.txt`;
+    const bytes = Buffer.from('<html>축제</html>');
+    const send = jest.spyOn(S3Client.prototype, 'send');
+    try {
+      await expect(
+        storage.saveCrawlSnapshot('../flags/secret.webp', bytes),
+      ).rejects.toMatchObject({ status: 400 });
+      await expect(
+        storage.readCrawlSnapshot('crawl/elsewhere.html'),
+      ).rejects.toMatchObject({
+        status: 400,
+      });
+      await expect(
+        storage.readCrawlSnapshot(key.replace(/\.txt$/, '.html')),
+      ).rejects.toMatchObject({ status: 400 });
+      await expect(
+        storage.deleteCrawlSnapshot('../flags/secret.webp'),
+      ).rejects.toMatchObject({
+        status: 400,
+      });
+      await expect(
+        storage.saveCrawlSnapshot(key, Buffer.alloc(0)),
+      ).rejects.toMatchObject({
+        status: 400,
+      });
+      await expect(
+        storage.saveCrawlSnapshot(key, Buffer.alloc(2 * 1024 * 1024 + 1)),
+      ).rejects.toMatchObject({ status: 413 });
+      expect(send).not.toHaveBeenCalled();
+
+      send.mockResolvedValueOnce({} as never);
+      await storage.saveCrawlSnapshot(key, bytes);
+      expect(send.mock.calls[0][0]).toMatchObject({
+        input: {
+          Bucket: 'private-images',
+          Key: key,
+          Body: bytes,
+          ContentType: 'text/plain; charset=utf-8',
+        },
+      });
+      const upload = send.mock.calls[0][0] as {
+        input: { CacheControl: string };
+      };
+      expect(upload.input.CacheControl).toContain('private');
+
+      send.mockResolvedValueOnce({
+        Body: Readable.from([bytes]),
+        ContentLength: bytes.length,
+      } as never);
+      await expect(storage.readCrawlSnapshot(key)).resolves.toEqual(bytes);
+
+      send.mockResolvedValueOnce({
+        Body: Readable.from([Buffer.alloc(2 * 1024 * 1024), Buffer.from('x')]),
+      } as never);
+      await expect(storage.readCrawlSnapshot(key)).rejects.toMatchObject({
+        status: 413,
+      });
+
+      send.mockResolvedValueOnce({} as never);
+      await storage.deleteCrawlSnapshot(key);
+      expect(send.mock.calls[3][0]).toMatchObject({
+        input: { Bucket: 'private-images', Key: key },
+      });
     } finally {
       send.mockRestore();
     }

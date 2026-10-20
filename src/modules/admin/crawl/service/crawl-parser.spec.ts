@@ -1,0 +1,158 @@
+import { CrawlSource } from '../entity/crawl-source.entity';
+import { parseCrawl } from './crawl-parser';
+
+function source(
+  parser: CrawlSource['parser'],
+  kind: CrawlSource['kind'],
+  config: Record<string, string> = {},
+): CrawlSource {
+  return {
+    parser,
+    kind,
+    parserConfig: config,
+    url: 'https://festival.example.com/',
+  } as CrawlSource;
+}
+
+describe('crawl parsers', () => {
+  it('reads a configured timetable table into stable set candidates', async () => {
+    const html =
+      '<table><tr><th>Artist</th><th>Start</th><th>End</th></tr><tr><td>Band</td><td>12:00</td><td>13:00</td></tr></table>';
+    const config = { date: '2026-11-20', stageId: 'stg_main' };
+    expect(
+      await parseCrawl(source('html-table', 'timetable', config), html),
+    ).toEqual([
+      expect.objectContaining({
+        artist: 'Band',
+        stageId: 'stg_main',
+        startsAt: '2026-11-20T12:00:00+09:00',
+        endsAt: '2026-11-20T13:00:00+09:00',
+      }),
+    ]);
+  });
+
+  it('requires the declared date captures and rejects empty text', async () => {
+    expect(
+      await parseCrawl(
+        source('regex-days', 'days', {
+          pattern:
+            '(?<date>2026-11-20) (?<startsAt>2026-11-20T12:00:00\\+09:00) (?<endsAt>2026-11-20T13:00:00\\+09:00)',
+        }),
+        '2026-11-20 2026-11-20T12:00:00+09:00 2026-11-20T13:00:00+09:00',
+      ),
+    ).toEqual({
+      date: '2026-11-20',
+      startsAt: '2026-11-20T12:00:00+09:00',
+      endsAt: '2026-11-20T13:00:00+09:00',
+    });
+    await expect(
+      parseCrawl(source('html-text', 'notice'), '<script>hidden</script>'),
+    ).rejects.toThrow('비었습니다');
+  });
+
+  it('discovers festival cards with their event date and venue, without navigation links or duplicates', async () => {
+    const html = `
+      <nav><a href="/ticket">홈</a><a href="/festival">페스티벌</a></nav>
+      <ul>
+        <li class="ticket-item">
+          <a href="/ticket/products/123"><img alt="2026 서울 재즈 페스티벌" src="poster.jpg"></a>
+          <span class="date">2026.05.29 ~ 05.31</span>
+          <span class="venue">서울 올림픽공원</span>
+        </li>
+        <li><a href="/ticket/products/123">2026 서울 재즈 페스티벌</a></li>
+        <li><a href="https://tickets.example.com/concert">2026 단독 콘서트</a></li>
+        <li><a href="https://tickets.example.com/orchestra">페스티벌 오케스트라 내한공연</a></li>
+        <li><a href="http://insecure.example.com/festival">2026 부산 록 페스티벌</a></li>
+      </ul>`;
+    expect(await parseCrawl(source('ticket-list', 'discovery'), html)).toEqual([
+      {
+        name: '2026 서울 재즈 페스티벌',
+        url: 'https://festival.example.com/ticket/products/123',
+        date: '2026.05.29 ~ 05.31',
+        venue: '서울 올림픽공원',
+      },
+    ]);
+  });
+
+  it('reads serialized product URLs but does not mistake ticket opening time for event date', async () => {
+    const html = String.raw`<script>self.__next_f.push([1,"action":{"web":"https://nol.yanolja.com/ticket/products/26015181"},"thumbnail":"poster.jpg","title":"썸띵 뉴 뮤직 페스티벌 2026","dateInfo":"10.23(금) 17:00"}]);</script>`;
+    expect(await parseCrawl(source('ticket-list', 'discovery'), html)).toEqual([
+      {
+        name: '썸띵 뉴 뮤직 페스티벌 2026',
+        url: 'https://nol.yanolja.com/ticket/products/26015181',
+      },
+    ]);
+  });
+
+  it('reads the Melon festival category JSON and rejects concerts included in the category', async () => {
+    const melon = source('ticket-list', 'discovery');
+    melon.url =
+      'https://ticket.melon.com/performance/ajax/prodList.json?perfGenreCode=GENRE_CON_FESTIVAL';
+    const body = JSON.stringify({
+      result: 0,
+      data: [
+        {
+          prodId: 213665,
+          title: '2026 대구힙합페스티벌',
+          periodInfo: '2026.12.25 - 2026.12.26',
+          placeName: '대구 엑스코(EXCO)',
+        },
+        {
+          prodId: 213901,
+          title: '버츄얼 X 밴드 라이브 콘서트',
+          periodInfo: '2026.10.31 - 2026.10.31',
+          placeName: '서울',
+        },
+      ],
+    });
+    expect(await parseCrawl(melon, body)).toEqual([
+      {
+        name: '2026 대구힙합페스티벌',
+        url: 'https://ticket.melon.com/performance/index.htm?prodId=213665',
+        date: '2026.12.25 - 2026.12.26',
+        venue: '대구 엑스코(EXCO)',
+      },
+    ]);
+  });
+
+  it('reads a YES24 English concert card without confusing the Booking link with a festival', async () => {
+    const yes24 = source('ticket-list', 'discovery');
+    yes24.url = 'https://ticket.yes24.com/English/Genre/Concert';
+    const html = `<ul class="list_wrap">
+      <li class="poster"><a href="/English/Perf/60745"><img alt="poster"></a></li>
+      <li class="conlist"><h3><a href="/English/Perf/60745">COUNTDOWN FANTASY 2026-2027</a></h3>
+        <ul class="con_txt"><li><span>Genre</span>: [Festival]</li><li><span>Date/Time</span>: Dec 31, 2026</li><li><span>Venue</span>: KINTEX HALL 7·8</li></ul>
+      </li></ul><div class="btn"><a href="/English/Perf/60745">Booking</a></div>`;
+    expect(await parseCrawl(yes24, html)).toEqual([
+      {
+        name: 'COUNTDOWN FANTASY 2026-2027',
+        url: 'https://ticket.yes24.com/English/Perf/60745',
+        date: 'Dec 31, 2026',
+        venue: 'KINTEX HALL 7·8',
+      },
+    ]);
+  });
+
+  it('rejects a listing without a real festival candidate', async () => {
+    await expect(
+      parseCrawl(
+        source('ticket-list', 'discovery'),
+        '<a href="/festival">페스티벌</a><a href="https://tickets.example.com/1">예매하기</a>',
+      ),
+    ).rejects.toThrow('공개 예매 링크');
+  });
+
+  it('stops a catastrophic regex without blocking the event loop', async () => {
+    const slow = parseCrawl(
+      source('regex-days', 'days', {
+        pattern: '(a|aa)+$',
+      }),
+      'a'.repeat(4999) + '!',
+    );
+    const responsive = await new Promise<boolean>((resolve) =>
+      setTimeout(() => resolve(true), 20),
+    );
+    expect(responsive).toBe(true);
+    await expect(slow).rejects.toThrow('시간이 초과');
+  }, 4000);
+});
