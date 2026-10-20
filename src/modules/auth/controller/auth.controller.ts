@@ -8,7 +8,13 @@ import {
   HttpStatus,
   Post,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiOperation,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 import { RefreshDto } from '../dto/refresh.dto';
 import { SocialLoginDto } from '../dto/social-login.dto';
 import { CurrentUser } from '../decorator/current-user.decorator';
@@ -24,7 +30,38 @@ export class AuthController {
   @Public()
   @Post('login')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: '소셜 로그인/가입 (Google·Apple 통합)' })
+  @ApiOperation({
+    summary: '소셜 로그인/가입 (Google·Apple 통합)',
+    description:
+      '웹과 iOS 모두 이 경로를 사용합니다. Google은 ID 토큰을, Apple은 identity token과 authorization code를 보냅니다. 새 사용자면 계정을 만듭니다.',
+  })
+  @ApiBody({
+    type: SocialLoginDto,
+    examples: {
+      google: {
+        summary: 'Google 웹·앱',
+        value: { provider: 'google', token: '<Google ID token>' },
+      },
+      apple: {
+        summary: 'Apple 웹·앱',
+        value: {
+          provider: 'apple',
+          token: '<Apple identity token>',
+          authorizationCode: '<Apple authorization code>',
+          name: '축제관객',
+        },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 200,
+    description: '앱 access/refresh 토큰과 새 사용자 여부',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'provider 또는 필수 토큰/Apple 코드 누락',
+  })
+  @ApiResponse({ status: 401, description: '소셜 자격증명 검증 실패' })
   login(@Body() dto: SocialLoginDto) {
     if (dto.provider === 'apple' && !dto.authorizationCode) {
       throw new BadRequestException('Apple authorizationCode가 필요합니다.');
@@ -35,7 +72,17 @@ export class AuthController {
   @Public()
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'access/refresh 토큰 재발급 (회전)' })
+  @ApiOperation({
+    summary: 'access/refresh 토큰 재발급 (회전)',
+    description:
+      '본문의 refresh 토큰을 한 번만 사용하고 새 access/refresh 토큰을 발급합니다. 이전 refresh 토큰은 즉시 폐기됩니다.',
+  })
+  @ApiBody({ type: RefreshDto })
+  @ApiResponse({ status: 200, description: '새 access/refresh 토큰' })
+  @ApiResponse({
+    status: 401,
+    description: 'refresh 토큰이 만료·폐기·재사용됨',
+  })
   refresh(@Body() dto: RefreshDto) {
     return this.authService.refresh(dto.refreshToken);
   }
@@ -46,6 +93,11 @@ export class AuthController {
   @ApiOperation({
     summary: '로그아웃 (refresh 토큰 전체 폐기)',
     description: '이미 발급된 access 토큰은 만료(JWT_ACCESS_TTL)까지 유효하다.',
+  })
+  @ApiResponse({ status: 200, description: '{ success: true }' })
+  @ApiResponse({
+    status: 401,
+    description: '앱 access 토큰이 없거나 유효하지 않음',
   })
   async logout(@CurrentUser() user: AuthUser) {
     await this.authService.logout(user.userId);
@@ -61,6 +113,7 @@ export class AuthController {
       '현재 사용자의 refresh 토큰을 모두 폐기합니다. 새 클라이언트는 POST /auth/logout을 사용합니다.',
     deprecated: true,
   })
+  @ApiResponse({ status: 200, description: '{ success: true }' })
   async deleteSession(@CurrentUser() user: AuthUser) {
     await this.authService.logout(user.userId);
     return { success: true };
@@ -74,6 +127,11 @@ export class AuthController {
       '현재 앱 access 토큰의 사용자 정보를 반환합니다. 새 클라이언트는 GET /me를 사용합니다.',
     deprecated: true,
   })
+  @ApiResponse({ status: 200, description: '현재 사용자 정보' })
+  @ApiResponse({
+    status: 401,
+    description: '앱 access 토큰이 없거나 유효하지 않음',
+  })
   me(@CurrentUser() user: AuthUser) {
     return this.authService.me(user.userId);
   }
@@ -86,6 +144,11 @@ export class AuthController {
     description:
       '요청 본문 없이 계정과 refresh 토큰을 삭제하고 { success: true }를 반환합니다. 새 클라이언트는 확인 본문이 필요한 DELETE /me를 사용합니다.',
     deprecated: true,
+  })
+  @ApiResponse({ status: 200, description: '{ success: true }' })
+  @ApiResponse({
+    status: 401,
+    description: '앱 access 토큰이 없거나 유효하지 않음',
   })
   async withdraw(@CurrentUser() user: AuthUser) {
     await this.authService.withdraw(user.userId);

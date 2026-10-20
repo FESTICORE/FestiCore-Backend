@@ -1,0 +1,101 @@
+import { INestApplication } from '@nestjs/common';
+import { OpenAPIObject, SwaggerModule } from '@nestjs/swagger';
+import { setupSwagger } from './swagger';
+
+jest.mock('./modules/auth/auth.module', () => ({ AuthModule: class {} }));
+jest.mock('./modules/health/health.module', () => ({ HealthModule: class {} }));
+jest.mock('./modules/admin/auth/admin-auth.module', () => ({
+  AdminAuthModule: class {},
+}));
+jest.mock('./modules/admin/festival/admin-festival.module', () => ({
+  AdminFestivalModule: class {},
+}));
+jest.mock('./modules/flags/flags.module', () => ({ FlagsModule: class {} }));
+
+describe('Swagger 문서 분리', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it('공개·관리자 UI와 JSON에 각 대상의 경로만 포함한다', () => {
+    const paths = {
+      '/api/v1/health': { get: { responses: { 200: { description: 'OK' } } } },
+      '/api/v1/auth/login': {
+        post: { responses: { 200: { description: 'OK' } } },
+      },
+      '/api/v1/flags': { get: { responses: { 200: { description: 'OK' } } } },
+      '/api/v1/admin/auth/session': {
+        get: { responses: { 200: { description: 'OK' } } },
+      },
+      '/api/v1/admin/auth/magic-link': {
+        post: { responses: { 202: { description: 'Accepted' } } },
+      },
+      '/api/v1/admin/flags/reported': {
+        get: { responses: { 200: { description: 'OK' } } },
+      },
+    };
+    jest
+      .spyOn(SwaggerModule, 'createDocument')
+      .mockImplementation((_app, config) => ({
+        openapi: '3.0.0',
+        info: { title: 'test', version: '1', description: '' },
+        paths: { ...paths },
+        components: {
+          ...config.components,
+          schemas: { Flag: { type: 'object' } },
+        },
+      }));
+    const setup = jest.spyOn(SwaggerModule, 'setup').mockImplementation();
+
+    setupSwagger({} as INestApplication, { port: 3000, isProd: false });
+
+    const documents = new Map(
+      setup.mock.calls.map(([route, , document]) => [
+        route,
+        document as OpenAPIObject,
+      ]),
+    );
+    const publicPaths = Object.keys(documents.get('api-docs')!.paths);
+    const adminPaths = Object.keys(documents.get('admin/api-docs')!.paths);
+    expect(publicPaths).toEqual([
+      '/api/v1/health',
+      '/api/v1/auth/login',
+      '/api/v1/flags',
+    ]);
+    expect(adminPaths).toEqual([
+      '/api/v1/admin/auth/session',
+      '/api/v1/admin/auth/magic-link',
+      '/api/v1/admin/flags/reported',
+    ]);
+    expect(Object.keys(documents.get('api-docs/flags')!.paths)).toEqual(
+      publicPaths,
+    );
+    expect(Object.keys(documents.get('admin/api-docs/flags')!.paths)).toEqual(
+      adminPaths,
+    );
+    const admin = documents.get('admin/api-docs')!;
+    expect(admin.components.schemas).toHaveProperty('Flag');
+    expect(admin.components.securitySchemes?.['admin-session']).toEqual({
+      type: 'apiKey',
+      in: 'cookie',
+      name: 'festicore_admin_session',
+    });
+    expect(admin.components.securitySchemes).not.toHaveProperty('bearer');
+    expect(
+      documents.get('api-docs')!.components.securitySchemes,
+    ).toHaveProperty('bearer');
+    expect(
+      admin.paths['/api/v1/admin/auth/session'].get?.security,
+    ).toContainEqual({
+      'admin-session': [],
+    });
+    expect(
+      admin.paths['/api/v1/admin/flags/reported'].get?.security,
+    ).toContainEqual({
+      'admin-session': [],
+    });
+    expect(
+      admin.paths['/api/v1/admin/auth/magic-link'].post?.security,
+    ).toBeUndefined();
+    expect(documents.has('api-docs/admin-auth')).toBe(false);
+    expect(documents.has('admin/api-docs/auth')).toBe(true);
+  });
+});
