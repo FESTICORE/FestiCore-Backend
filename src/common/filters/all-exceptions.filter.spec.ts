@@ -1,4 +1,9 @@
-import { ArgumentsHost, BadRequestException, Logger } from '@nestjs/common';
+import {
+  ArgumentsHost,
+  BadRequestException,
+  ConflictException,
+  Logger,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AllExceptionsFilter } from './all-exceptions.filter';
 
@@ -141,6 +146,33 @@ describe('AllExceptionsFilter', () => {
       code: 'DRAFT_CONFLICT',
       draftVersion: 2,
       draft: { name: '현재 초안' },
+    });
+  });
+
+  it('일정 충돌 시 현재 일정만 노출한다', () => {
+    const { host, json } = hostFor({});
+    new AllExceptionsFilter().catch(
+      new ConflictException({
+        code: 'STATUS_STALE',
+        message: '더 최신 일정이 저장되어 있습니다.',
+        current: {
+          setIds: ['set_a1b2c3d4'],
+          updatedAt: new Date('2026-10-20T03:00:00Z'),
+          secret: 'hidden',
+        },
+      }),
+      host,
+    );
+    expect(json).toHaveBeenCalledWith({
+      success: false,
+      statusCode: 409,
+      data: null,
+      code: 'STATUS_STALE',
+      message: '더 최신 일정이 저장되어 있습니다.',
+      current: {
+        setIds: ['set_a1b2c3d4'],
+        updatedAt: '2026-10-20T03:00:00.000Z',
+      },
     });
   });
 });

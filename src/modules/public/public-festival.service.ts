@@ -7,6 +7,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
 import { Repository } from 'typeorm';
 import { AdminFestival } from '../admin/festival/festival.entity';
+import { festivalSetId } from '../admin/festival/festival-set-id';
 import { Flag } from '../flags/flag.entity';
 
 type Document = Record<string, unknown>;
@@ -87,7 +88,7 @@ function projectPack(pack: Document): Document {
     'startsAt',
     'endsAt',
     'note',
-  ]);
+  ]).map((set) => ({ ...set, id: festivalSetId(set) }));
   result.zones = projectedArray(pack.zones, [
     'id',
     'name',

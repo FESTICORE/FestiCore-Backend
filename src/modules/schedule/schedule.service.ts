@@ -7,6 +7,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { AdminFestival } from '../admin/festival/festival.entity';
+import { festivalSetId } from '../admin/festival/festival-set-id';
 import { ReplaceScheduleDto } from './schedule.dto';
 import { UserSchedule } from './schedule.entity';
 
@@ -99,8 +100,7 @@ export class ScheduleService {
           (set): set is Record<string, unknown> =>
             set !== null && typeof set === 'object' && !Array.isArray(set),
         )
-        .map((set) => set.id)
-        .filter((id): id is string => typeof id === 'string'),
+        .map((set) => festivalSetId(set)),
     );
     const errors = setIds.filter((id) => !validIds.has(id));
     if (errors.length)
