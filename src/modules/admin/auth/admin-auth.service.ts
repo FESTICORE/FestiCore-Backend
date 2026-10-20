@@ -10,7 +10,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash, randomBytes } from 'crypto';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, IsNull, MoreThan, Repository } from 'typeorm';
 import {
   AdminAccount,
   AdminAuthAudit,
@@ -47,6 +47,7 @@ export class AdminAuthService implements OnModuleInit {
   ) {}
 
   async onModuleInit(): Promise<void> {
+    this.validateDeploymentConfig();
     const ownerEmail = this.config
       .get<string>('ADMIN_OWNER_EMAIL')
       ?.trim()
@@ -57,16 +58,18 @@ export class AdminAuthService implements OnModuleInit {
       );
       return;
     }
-    if ((await this.accounts.count()) === 0) {
-      await this.accounts.save(
-        this.accounts.create({
-          email: ownerEmail,
-          role: 'owner',
-          active: true,
-        }),
+    await this.dataSource.transaction(async (manager) => {
+      await manager.query(
+        `SELECT pg_advisory_xact_lock(hashtext('admin_owner_seed'))`,
       );
-      this.logger.log('Initial admin owner account created.');
-    }
+      await manager.query(
+        `INSERT INTO "admin_accounts" ("email", "role", "active")
+         SELECT $1, 'owner', true
+         WHERE NOT EXISTS (SELECT 1 FROM "admin_accounts")
+         ON CONFLICT ("email") DO NOTHING`,
+        [ownerEmail],
+      );
+    });
   }
 
   async requestMagicLink(
@@ -74,7 +77,7 @@ export class AdminAuthService implements OnModuleInit {
     ipAddress: string | null,
   ): Promise<void> {
     const email = emailInput.trim().toLowerCase();
-    await this.checkRateLimit(ipAddress, email);
+    await this.checkRateLimit(ipAddress);
 
     const apiKey = this.config.get<string>('ADMIN_RESEND_API_KEY');
     const from = this.config.get<string>('ADMIN_EMAIL_FROM');
@@ -92,6 +95,12 @@ export class AdminAuthService implements OnModuleInit {
       const account = await this.accounts.findOneBy({ email, active: true });
       // 존재하지 않는 이메일도 같은 응답을 반환한다.
       if (!account) return;
+      const pending = await this.links.findOneBy({
+        adminId: account.id,
+        consumedAt: IsNull(),
+        expiresAt: MoreThan(new Date()),
+      });
+      if (pending) return;
 
       const token = randomBytes(32).toString('base64url');
       link = this.links.create({
@@ -110,6 +119,31 @@ export class AdminAuthService implements OnModuleInit {
         throw new Error('Production admin callback must use HTTPS.');
       }
       url.searchParams.set('token', token);
+      void this.deliverMagicLink(link.id, apiKey, from, email, url.toString());
+    } catch {
+      if (link?.id) {
+        try {
+          await this.links.delete(link.id);
+        } catch {
+          this.logger.error('Failed to invalidate an undelivered admin link.');
+        }
+      }
+      this.logger.error('Admin magic-link preparation failed.');
+      // 준비 실패도 같은 202 응답으로 처리해 계정 존재 여부를 드러내지 않는다.
+    } finally {
+      const wait = MIN_RESPONSE_MS - (Date.now() - startedAt);
+      if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+    }
+  }
+
+  private async deliverMagicLink(
+    linkId: string,
+    apiKey: string,
+    from: string,
+    email: string,
+    url: string,
+  ): Promise<void> {
+    try {
       const response = await fetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: {
@@ -120,25 +154,19 @@ export class AdminAuthService implements OnModuleInit {
           from,
           to: [email],
           subject: 'FestiCore 관리자 로그인',
-          html: `<p>15분 이내에 아래 링크로 로그인하세요.</p><p><a href="${url.toString()}">관리자 로그인</a></p>`,
+          html: `<p>15분 이내에 아래 링크로 로그인하세요.</p><p><a href="${url}">관리자 로그인</a></p>`,
         }),
         signal: AbortSignal.timeout(10000),
       });
       if (!response.ok)
         throw new Error(`Email provider returned ${response.status}.`);
     } catch {
-      if (link?.id) {
-        try {
-          await this.links.delete(link.id);
-        } catch {
-          this.logger.error('Failed to invalidate an undelivered admin link.');
-        }
+      try {
+        await this.links.delete(linkId);
+      } catch {
+        this.logger.error('Failed to invalidate an undelivered admin link.');
       }
       this.logger.error('Admin magic-link delivery failed.');
-      // 발송 실패도 같은 202 응답으로 처리해 계정 존재 여부를 드러내지 않는다.
-    } finally {
-      const wait = MIN_RESPONSE_MS - (Date.now() - startedAt);
-      if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
     }
   }
 
@@ -218,39 +246,60 @@ export class AdminAuthService implements OnModuleInit {
     return createHash('sha256').update(value).digest('hex');
   }
 
-  private async checkRateLimit(
-    ipAddress: string | null,
-    email: string,
-  ): Promise<void> {
-    const keys = [
-      `email:${this.hash(email)}`,
-      `ip:${this.hash(ipAddress ?? 'unknown')}`,
-    ].sort();
+  private validateDeploymentConfig(): void {
+    const webUrl = this.config.get<string>('ADMIN_WEB_URL');
+    if (!webUrl) return;
+    const origin = new URL(webUrl).origin;
+    const corsOrigins = (this.config.get<string>('CORS_ORIGINS') ?? '')
+      .split(',')
+      .map((value) => value.trim());
+    if (!corsOrigins.includes(origin)) {
+      throw new Error('ADMIN_WEB_URL origin must be listed in CORS_ORIGINS.');
+    }
+    const apiUrl =
+      this.config.get<string>('ADMIN_API_PUBLIC_URL') ??
+      this.config.get<string>('PUBLIC_URL');
+    const api = apiUrl ? new URL(apiUrl) : null;
+    const web = new URL(webUrl);
+    const sameSite = this.config.get<string>('ADMIN_SESSION_SAME_SITE');
+    if (sameSite && !['lax', 'strict', 'none'].includes(sameSite)) {
+      throw new Error('ADMIN_SESSION_SAME_SITE must be lax, strict, or none.');
+    }
+    if (sameSite === 'none' && api?.protocol !== 'https:') {
+      throw new Error('SameSite=None requires an HTTPS admin API URL.');
+    }
+    if (this.config.get<string>('NODE_ENV') === 'production') {
+      if (!api || api.protocol !== 'https:' || web.protocol !== 'https:') {
+        throw new Error('Production admin URLs must use HTTPS.');
+      }
+    }
+  }
+
+  private async checkRateLimit(ipAddress: string | null): Promise<void> {
+    const key = `ip:${this.hash(ipAddress ?? 'unknown')}`;
     await this.dataSource.transaction(async (manager) => {
-      for (const key of keys) {
-        await manager.query(
-          `SELECT pg_advisory_xact_lock(hashtext('admin_magic_link'), hashtext($1))`,
-          [key],
-        );
-        const rows: { count: number }[] = await manager.query(
-          `SELECT count(*)::int AS count FROM "admin_auth_audit"
-           WHERE "action" = 'magic_link_request_attempt'
-             AND "ipAddress" = $1
-             AND "createdAt" > now() - interval '15 minutes'`,
-          [key],
-        );
-        if (Number(rows[0]?.count ?? 0) >= REQUEST_LIMIT) {
-          throw new HttpException(
-            '잠시 후 다시 시도하세요.',
-            HttpStatus.TOO_MANY_REQUESTS,
-          );
-        }
-        await manager.query(
-          `INSERT INTO "admin_auth_audit" ("adminId", "action", "ipAddress")
-           VALUES (NULL, 'magic_link_request_attempt', $1)`,
-          [key],
+      await manager.query(
+        `SELECT pg_advisory_xact_lock(hashtext('admin_magic_link'), hashtext($1))`,
+        [key],
+      );
+      const rows: { count: number }[] = await manager.query(
+        `SELECT count(*)::int AS count FROM "admin_auth_audit"
+         WHERE "action" = 'magic_link_request_attempt'
+           AND "ipAddress" = $1
+           AND "createdAt" > now() - interval '15 minutes'`,
+        [key],
+      );
+      if (Number(rows[0]?.count ?? 0) >= REQUEST_LIMIT) {
+        throw new HttpException(
+          '잠시 후 다시 시도하세요.',
+          HttpStatus.TOO_MANY_REQUESTS,
         );
       }
+      await manager.query(
+        `INSERT INTO "admin_auth_audit" ("adminId", "action", "ipAddress")
+         VALUES (NULL, 'magic_link_request_attempt', $1)`,
+        [key],
+      );
     });
   }
 

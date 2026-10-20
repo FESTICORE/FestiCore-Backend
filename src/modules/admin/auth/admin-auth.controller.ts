@@ -65,10 +65,15 @@ export class AdminAuthController {
     const secret = this.config.get<string>('auth.jwt.accessSecret');
     if (!secret)
       throw new ServiceUnavailableException('관리자 로그인 설정이 없습니다.');
+    const frontend = this.config.get<string>('ADMIN_WEB_URL');
+    if (!frontend)
+      throw new ServiceUnavailableException(
+        '관리자 웹 주소가 설정되지 않았습니다.',
+      );
     const { nonce, cookie } = createCallbackCsrf(secret, token);
     response.cookie(ADMIN_CALLBACK_COOKIE, cookie, {
       httpOnly: true,
-      secure: this.config.get<string>('NODE_ENV') === 'production',
+      secure: this.secureCookie(),
       sameSite: 'strict',
       maxAge: 5 * 60 * 1000,
       path: '/api/v1/admin/auth/callback',
@@ -77,7 +82,7 @@ export class AdminAuthController {
     response.setHeader('Referrer-Policy', 'no-referrer');
     response.setHeader(
       'Content-Security-Policy',
-      "default-src 'none'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+      `default-src 'none'; form-action 'self' ${new URL(frontend).origin}; base-uri 'none'; frame-ancestors 'none'`,
     );
     response.type('html').send(`<!doctype html>
 <html lang="ko"><head><meta charset="utf-8"><title>FestiCore 관리자 로그인</title></head>
@@ -122,19 +127,20 @@ export class AdminAuthController {
       body.token,
       request.ip ?? null,
     );
-    const isProd = this.config.get<string>('NODE_ENV') === 'production';
+    const secure = this.secureCookie();
+    const sameSite = this.sessionSameSite(secure);
     response.setHeader('Cache-Control', 'no-store');
     response.setHeader('Referrer-Policy', 'no-referrer');
     response.clearCookie(ADMIN_CALLBACK_COOKIE, {
       httpOnly: true,
-      secure: isProd,
+      secure,
       sameSite: 'strict',
       path: '/api/v1/admin/auth/callback',
     });
     response.cookie(ADMIN_SESSION_COOKIE, sessionToken, {
       httpOnly: true,
-      secure: isProd,
-      sameSite: isProd ? 'none' : 'lax',
+      secure,
+      sameSite,
       maxAge: 7 * 24 * 60 * 60 * 1000,
       path: '/api/v1/admin',
     });
@@ -157,13 +163,30 @@ export class AdminAuthController {
       request.admin!.id,
       request.ip ?? null,
     );
-    const isProd = this.config.get<string>('NODE_ENV') === 'production';
+    const secure = this.secureCookie();
     response.clearCookie(ADMIN_SESSION_COOKIE, {
       httpOnly: true,
-      secure: isProd,
-      sameSite: isProd ? 'none' : 'lax',
+      secure,
+      sameSite: this.sessionSameSite(secure),
       path: '/api/v1/admin',
     });
     response.status(HttpStatus.NO_CONTENT).send();
+  }
+
+  private secureCookie(): boolean {
+    const apiUrl =
+      this.config.get<string>('ADMIN_API_PUBLIC_URL') ??
+      this.config.get<string>('PUBLIC_URL');
+    return apiUrl ? new URL(apiUrl).protocol === 'https:' : false;
+  }
+
+  private sessionSameSite(secure: boolean): 'lax' | 'strict' | 'none' {
+    const configured = this.config.get<string>('ADMIN_SESSION_SAME_SITE');
+    if (configured === 'lax' || configured === 'strict') return configured;
+    if (configured === 'none' && secure) return 'none';
+    if (!configured) return secure ? 'none' : 'lax';
+    throw new ServiceUnavailableException(
+      '관리자 세션 쿠키 설정이 유효하지 않습니다.',
+    );
   }
 }

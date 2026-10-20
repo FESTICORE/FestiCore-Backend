@@ -49,7 +49,7 @@ export class JwtAuthGuard implements CanActivate {
     const request = context.switchToHttp().getRequest<Request>();
     // 관리자 경로는 전역 AdminSessionGuard가 HttpOnly 쿠키를 검증한다.
     // 앱 사용자 Bearer JWT로 관리자 API에 접근할 수 없게 인증 경계를 분리한다.
-    if (/^\/api\/v1\/admin(?:\/|$)/.test(request.path)) {
+    if (/^\/api\/v1\/admin(?:\/|$)/i.test(request.path)) {
       return true;
     }
     const token = this.extractToken(request);

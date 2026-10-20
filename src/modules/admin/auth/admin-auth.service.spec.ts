@@ -22,6 +22,8 @@ describe('AdminAuthService', () => {
     ADMIN_EMAIL_FROM: 'admin@example.com',
     ADMIN_API_PUBLIC_URL: 'https://api.example.com',
     ADMIN_WEB_URL: 'https://admin.example.com',
+    CORS_ORIGINS: 'https://admin.example.com',
+    ADMIN_OWNER_EMAIL: 'owner@example.com',
     NODE_ENV: 'test',
   };
 
@@ -32,7 +34,12 @@ describe('AdminAuthService', () => {
     save: jest.Mock;
     create: jest.Mock;
   };
-  let links: { create: jest.Mock; save: jest.Mock; delete: jest.Mock };
+  let links: {
+    create: jest.Mock;
+    save: jest.Mock;
+    delete: jest.Mock;
+    findOneBy: jest.Mock;
+  };
   let audit: { create: jest.Mock; save: jest.Mock };
   let manager: { query: jest.Mock; getRepository: jest.Mock };
   let dataSource: { transaction: jest.Mock };
@@ -52,6 +59,7 @@ describe('AdminAuthService', () => {
       })),
       save: jest.fn().mockResolvedValue(undefined),
       delete: jest.fn().mockResolvedValue(undefined),
+      findOneBy: jest.fn().mockResolvedValue(null),
     };
     audit = {
       create: jest.fn((value: Partial<AdminAuthAudit>) => value),
@@ -178,5 +186,59 @@ describe('AdminAuthService', () => {
 
     expect(accounts.findOneBy).not.toHaveBeenCalled();
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it('reuses an unconsumed link without sending duplicate email', async () => {
+    links.findOneBy.mockResolvedValue({ id: 'existing-link' });
+
+    await expect(
+      service.requestMagicLink(account.email, '127.0.0.1'),
+    ).resolves.toBeUndefined();
+
+    expect(links.findOneBy).toHaveBeenCalledWith(
+      expect.objectContaining({ adminId: account.id }),
+    );
+    expect(links.save).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('does not apply a global email limit across different requesters', async () => {
+    await service.requestMagicLink(account.email, '127.0.0.1');
+
+    const rateKeys = (manager.query.mock.calls as [string, string[]][])
+      .filter(([sql]) => sql.includes('count(*)'))
+      .map(([, params]) => params[0]);
+    expect(rateKeys).toHaveLength(1);
+    expect(rateKeys[0]).toMatch(/^ip:/);
+    expect(send).toHaveBeenCalled();
+  });
+
+  it('returns before a slow email provider finishes', async () => {
+    let finishSend: ((value: { ok: boolean }) => void) | undefined;
+    send.mockImplementation(
+      () =>
+        new Promise((resolve: (value: { ok: boolean }) => void) => {
+          finishSend = resolve;
+        }),
+    );
+
+    await service.requestMagicLink(account.email, '127.0.0.1');
+
+    expect(send).toHaveBeenCalled();
+    expect(finishSend).toBeDefined();
+    finishSend!({ ok: true });
+  });
+
+  it('seeds the first owner under a database lock without a replica race', async () => {
+    await service.onModuleInit();
+
+    expect(manager.query).toHaveBeenCalledWith(
+      expect.stringContaining('pg_advisory_xact_lock'),
+    );
+    expect(manager.query).toHaveBeenCalledWith(
+      expect.stringContaining('ON CONFLICT ("email") DO NOTHING'),
+      ['owner@example.com'],
+    );
+    expect(accounts.count).not.toHaveBeenCalled();
   });
 });

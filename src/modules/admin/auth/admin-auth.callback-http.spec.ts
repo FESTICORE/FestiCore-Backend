@@ -1,10 +1,14 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { APP_GUARD } from '@nestjs/core';
+import { JwtService } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
 import type { Server } from 'http';
 import request from 'supertest';
 import { AdminAuthController } from './admin-auth.controller';
 import { AdminAuthService } from './admin-auth.service';
+import { AdminSessionGuard } from './admin-session.guard';
+import { JwtAuthGuard } from '../../auth/guard/jwt-auth.guard';
 
 describe('admin callback browser form', () => {
   let app: INestApplication;
@@ -12,6 +16,7 @@ describe('admin callback browser form', () => {
     consumeMagicLink: jest
       .fn()
       .mockResolvedValue({ sessionToken: 'b'.repeat(43) }),
+    validateSession: jest.fn(),
   };
   const token = 'a'.repeat(43);
   const values: Record<string, string> = {
@@ -26,6 +31,20 @@ describe('admin callback browser form', () => {
       controllers: [AdminAuthController],
       providers: [
         { provide: AdminAuthService, useValue: auth },
+        {
+          provide: JwtService,
+          useValue: {
+            verifyAsync: jest.fn().mockResolvedValue({
+              sub: 'user-1',
+              provider: 'google',
+              typ: 'access',
+            }),
+          },
+        },
+        AdminSessionGuard,
+        JwtAuthGuard,
+        { provide: APP_GUARD, useExisting: AdminSessionGuard },
+        { provide: APP_GUARD, useExisting: JwtAuthGuard },
         {
           provide: ConfigService,
           useValue: {
@@ -91,5 +110,16 @@ describe('admin callback browser form', () => {
       .expect(403);
 
     expect(auth.consumeMagicLink).not.toHaveBeenCalled();
+  });
+
+  it('rejects app JWTs on case-insensitive admin routes', async () => {
+    await request(app.getHttpServer() as Server)
+      .get('/api/v1/ADMIN/auth/me')
+      .set('Authorization', 'Bearer app-jwt')
+      .expect(401);
+    await request(app.getHttpServer() as Server)
+      .post('/api/v1/ADMIN/auth/logout')
+      .set('Authorization', 'Bearer app-jwt')
+      .expect(401);
   });
 });

@@ -10,7 +10,13 @@ describe('AdminAuthController callback confirmation', () => {
       auth as unknown as AdminAuthService,
       {
         get: (key: string) =>
-          key === 'auth.jwt.accessSecret' ? 'test-secret' : 'test',
+          key === 'auth.jwt.accessSecret'
+            ? 'test-secret'
+            : key === 'ADMIN_WEB_URL'
+              ? 'https://admin.example.com'
+              : key === 'ADMIN_API_PUBLIC_URL'
+                ? 'https://api.example.com'
+                : 'test',
       } as ConfigService,
     );
     const response = {
@@ -31,6 +37,10 @@ describe('AdminAuthController callback confirmation', () => {
     expect(response.setHeader).toHaveBeenCalledWith(
       'Referrer-Policy',
       'no-referrer',
+    );
+    expect(response.setHeader).toHaveBeenCalledWith(
+      'Content-Security-Policy',
+      expect.stringContaining("form-action 'self' https://admin.example.com"),
     );
     expect(response.send).toHaveBeenCalledWith(
       expect.stringContaining('method="post"'),

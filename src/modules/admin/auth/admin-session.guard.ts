@@ -31,7 +31,7 @@ export class AdminSessionGuard implements CanActivate {
   async canActivate(context: ExecutionContext): Promise<boolean> {
     if (context.getType() !== 'http') return true;
     const request = context.switchToHttp().getRequest<AdminRequest>();
-    const path = request.path;
+    const path = request.path.toLowerCase();
     if (!/^\/api\/v1\/admin(?:\/|$)/.test(path)) return true;
     if (
       (request.method === 'POST' && path === '/api/v1/admin/auth/magic-link') ||
