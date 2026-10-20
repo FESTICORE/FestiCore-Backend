@@ -7,13 +7,18 @@ FestiCore 백엔드는 Railway에서 **develop / production** 두 환경으로 �
 | develop    | `develop`   | 개발/스테이징 |
 | production | `main`      | 운영          |
 
-## 1. 프로젝트/환경 준비
+## 1. 프로젝트/환경 구성
 
-1. Railway 프로젝트 생성 후 GitHub 레포(`FESTICORE/FestiCore-Backend`) 연결
-2. `production`(기본), `develop` 두 환경 생성
-3. 각 환경의 서비스에 브랜치 매핑
-   - develop 환경 → `develop` 브랜치 자동 배포
-   - production 환경 → `main` 브랜치 자동 배포
+Railway 프로젝트 **FestiCore** (Roy's Projects). Cider 프로젝트와 같은 형태로 환경마다 서비스 2개를 둔다.
+
+| 서비스              | 소스                                           | 역할                     |
+| ------------------- | ---------------------------------------------- | ------------------------ |
+| `FestiCore-Backend` | GitHub `FESTICORE/FestiCore-Backend`           | NestJS API (Dockerfile)  |
+| `Postgres`          | `ghcr.io/railwayapp-templates/postgres-ssl:18` | DB (`DATABASE_URL` 제공) |
+
+- `production` 환경 → `main` 브랜치 자동 배포
+- `develop` 환경(production 복제) → `develop` 브랜치 자동 배포
+- 로컬 연결: `railway link --project FestiCore` 후 `railway environment <develop|production>`
 
 ## 2. 플러그인 추가 (환경마다 각각)
 
