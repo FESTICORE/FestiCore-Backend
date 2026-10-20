@@ -202,6 +202,8 @@ export function mergeDraft(
     if (!object(change)) return change;
     const result = object(base) ? { ...base } : {};
     for (const [key, value] of Object.entries(change)) {
+      if (key === '__proto__' || key === 'constructor' || key === 'prototype')
+        throw new BadRequestException(`수정할 수 없는 필드: ${key}`);
       if (value === null) delete result[key];
       else result[key] = merge(result[key], value);
     }

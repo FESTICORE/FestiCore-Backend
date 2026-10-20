@@ -69,6 +69,14 @@ describe('festival draft validation', () => {
     );
   });
 
+  it('rejects prototype-changing keys in nested patches', () => {
+    const patch = JSON.parse(
+      '{"source":{"__proto__":{"polluted":true}}}',
+    ) as unknown;
+    expect(() => mergeDraft(draft, patch)).toThrow(BadRequestException);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+
   it('requires at least one stage to publish', () => {
     expect(validateDraft({ ...draft, stages: [] }, true)).toContain(
       'stages: 배열 크기 오류',
