@@ -1,0 +1,35 @@
+# Railway 배포 설정 (https://docs.railway.com/reference/config-as-code)
+#
+# 환경(Environment) 2개를 사용한다.
+#   - develop : develop 브랜치 → 개발 환경
+#   - production : main 브랜치 → 운영 환경
+# 각 환경마다 Postgres 플러그인을 추가하면 DATABASE_URL 이 해당 환경에 자동 주입된다.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "node dist/main"
+healthcheckPath = "/api/v1/health"
+healthcheckTimeout = 100
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
+
+# ===== 환경별 오버라이드 =====
+[environments.production.deploy]
+healthcheckPath = "/api/v1/health"
+restartPolicyType = "ON_FAILURE"
+
+[environments.production.variables]
+NODE_ENV = "production"
+
+[environments.develop.deploy]
+healthcheckPath = "/api/v1/health"
+restartPolicyType = "ON_FAILURE"
+
+[environments.develop.variables]
+NODE_ENV = "production"
+# 개발 환경 한정: 소셜 검증 없이 토큰을 발급하는 /auth/dev/login 을 켠다.
+# (운영 환경에는 의도적으로 넣지 않고, 코드도 production 환경 이름이면 항상 거부한다)
+DEV_LOGIN_ENABLED = "true"

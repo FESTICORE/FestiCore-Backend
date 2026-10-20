@@ -1,0 +1,249 @@
+import { QueryFailedError } from 'typeorm';
+import request from 'supertest';
+import { App } from 'supertest/types';
+import { createTestApp, TestContext } from './app-factory';
+
+interface ApiBody {
+  success: boolean;
+  statusCode: number;
+  data: {
+    accessToken: string;
+    refreshToken: string;
+    newUser: boolean;
+    nickname: string | null;
+  } | null;
+}
+
+/** supertest 응답 바디를 표준 응답 형식으로 캐스팅한다. */
+const bodyOf = (res: request.Response) => res.body as ApiBody;
+const dataOf = (res: request.Response) => bodyOf(res).data!;
+
+/**
+ * 소셜 로그인 e2e.
+ * 외부 의존(Google/Apple 검증)과 DB는 스텁/인메모리로 대체해 순수 HTTP·JWT 흐름을 검증한다.
+ */
+describe('Auth (e2e)', () => {
+  let ctx: TestContext;
+  let server: App;
+
+  beforeEach(async () => {
+    ctx = await createTestApp();
+    server = ctx.app.getHttpServer() as App;
+  });
+
+  afterEach(async () => {
+    await ctx.app.close();
+  });
+
+  const devLogin = (key = 'tester') =>
+    request(server).post('/api/v1/auth/dev/login').send({ key });
+
+  describe('dev/login 게이트', () => {
+    it('플래그가 켜진 로컬 환경 → 200', async () => {
+      await devLogin().expect(200);
+    });
+
+    it('DEV_LOGIN_ENABLED 미설정 → 403', async () => {
+      ctx.env.DEV_LOGIN_ENABLED = undefined;
+      await devLogin().expect(403);
+    });
+
+    it('Railway production 환경 → 403 (플래그 무관)', async () => {
+      ctx.env.RAILWAY_ENVIRONMENT_NAME = 'production';
+      await devLogin().expect(403);
+    });
+
+    it('NODE_ENV=production + Railway develop → 200', async () => {
+      ctx.env.NODE_ENV = 'production';
+      ctx.env.RAILWAY_ENVIRONMENT_NAME = 'develop';
+      await devLogin().expect(200);
+    });
+
+    it('NODE_ENV=production + Railway 환경 없음 → 403', async () => {
+      ctx.env.NODE_ENV = 'production';
+      await devLogin().expect(403);
+    });
+  });
+
+  it('login → me → refresh(회전) → 이전 refresh 재사용 401 → logout 후 refresh 401', async () => {
+    const login = await devLogin().expect(200);
+    const { accessToken, refreshToken } = dataOf(login);
+    expect(dataOf(login).newUser).toBe(true);
+
+    const me = await request(server)
+      .get('/api/v1/auth/me')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(200);
+    expect(dataOf(me).nickname).toBe('tester');
+
+    const rotated = await request(server)
+      .post('/api/v1/auth/refresh')
+      .send({ refreshToken })
+      .expect(200);
+    await request(server)
+      .post('/api/v1/auth/refresh')
+      .send({ refreshToken })
+      .expect(401);
+
+    await request(server)
+      .post('/api/v1/auth/logout')
+      .set('Authorization', `Bearer ${dataOf(rotated).accessToken}`)
+      .expect(200);
+    await request(server)
+      .post('/api/v1/auth/refresh')
+      .send({ refreshToken: dataOf(rotated).refreshToken })
+      .expect(401);
+  });
+
+  it('같은 refresh 토큰 동시 2회 → 하나만 성공', async () => {
+    const login = await devLogin().expect(200);
+    const { refreshToken } = dataOf(login);
+    const results = await Promise.all([
+      request(server).post('/api/v1/auth/refresh').send({ refreshToken }),
+      request(server).post('/api/v1/auth/refresh').send({ refreshToken }),
+    ]);
+    expect(results.map((r) => r.status).sort()).toEqual([200, 401]);
+  });
+
+  it('refresh 토큰을 Bearer 로 쓰면 401 (logout 전후)', async () => {
+    const login = await devLogin().expect(200);
+    const { accessToken, refreshToken } = dataOf(login);
+    await request(server)
+      .get('/api/v1/auth/me')
+      .set('Authorization', `Bearer ${refreshToken}`)
+      .expect(401);
+    await request(server)
+      .post('/api/v1/auth/logout')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(200);
+    await request(server)
+      .get('/api/v1/auth/me')
+      .set('Authorization', `Bearer ${refreshToken}`)
+      .expect(401);
+  });
+
+  it('토큰 없이 me → 401 표준 에러', async () => {
+    const res = await request(server).get('/api/v1/auth/me').expect(401);
+    expect(bodyOf(res)).toMatchObject({
+      success: false,
+      statusCode: 401,
+      data: null,
+    });
+  });
+
+  it('잘못된 provider → 400 표준 에러', async () => {
+    const res = await request(server)
+      .post('/api/v1/auth/login')
+      .send({ provider: 'kakao', token: 'x' })
+      .expect(400);
+    expect(bodyOf(res).success).toBe(false);
+  });
+
+  it('google login → find-or-create, 두 번째는 newUser=false', async () => {
+    ctx.google.verify.mockResolvedValue({
+      provider: 'google',
+      providerId: 'g-1',
+      email: 'a@b.c',
+      name: 'G',
+    });
+    const first = await request(server)
+      .post('/api/v1/auth/login')
+      .send({ provider: 'google', token: 'id-token' })
+      .expect(200);
+    const second = await request(server)
+      .post('/api/v1/auth/login')
+      .send({ provider: 'google', token: 'id-token' })
+      .expect(200);
+    expect(dataOf(first).newUser).toBe(true);
+    expect(dataOf(second).newUser).toBe(false);
+    expect(ctx.users.rows).toHaveLength(1);
+  });
+
+  it('첫 로그인 동시 경합(unique 위반) → 재조회해 200 + newUser=false', async () => {
+    ctx.apple.verify.mockResolvedValue({
+      provider: 'apple',
+      providerId: 'a-1',
+    });
+    // 다른 요청이 먼저 만든 것처럼 행을 넣고, 이 요청의 save 는 23505 로 실패시킨다.
+    const raced = ctx.users.create({ provider: 'apple', providerId: 'a-1' });
+    const users = ctx.users;
+    const original = users.findOne.bind(users) as typeof users.findOne;
+    let calls = 0;
+    users.findOne = (options) => {
+      calls += 1;
+      return calls === 1 ? Promise.resolve(null) : original(options);
+    };
+    await ctx.users.save(raced);
+    ctx.users.failNextSave = new QueryFailedError('INSERT', [], {
+      code: '23505',
+    } as unknown as Error);
+
+    const res = await request(server)
+      .post('/api/v1/auth/login')
+      .send({ provider: 'apple', token: 'identity', authorizationCode: 'c' })
+      .expect(200);
+    expect(dataOf(res).newUser).toBe(false);
+  });
+
+  describe('Apple authorizationCode / 탈퇴 revoke', () => {
+    beforeEach(() => {
+      ctx.apple.verify.mockResolvedValue({
+        provider: 'apple',
+        providerId: 'a-2',
+      });
+    });
+
+    it('apple 로그인 code 누락 → 400', async () => {
+      await request(server)
+        .post('/api/v1/auth/login')
+        .send({ provider: 'apple', token: 'identity' })
+        .expect(400);
+    });
+
+    it('토큰이 저장된 apple 계정 탈퇴 → revoke 호출', async () => {
+      ctx.apple.exchangeAuthCode.mockResolvedValue({
+        refreshToken: 'apple-refresh',
+        subject: 'a-2',
+      });
+      const login = await request(server)
+        .post('/api/v1/auth/login')
+        .send({ provider: 'apple', token: 'identity', authorizationCode: 'c' })
+        .expect(200);
+      await request(server)
+        .delete('/api/v1/auth/me')
+        .set('Authorization', `Bearer ${dataOf(login).accessToken}`)
+        .expect(200);
+      expect(ctx.apple.revokeConnection).toHaveBeenCalledWith('apple-refresh');
+      expect(ctx.users.rows).toHaveLength(0);
+    });
+
+    it('code 교환 결과 sub 가 다르면 저장 안 함 → 탈퇴 시 revoke 미호출', async () => {
+      ctx.apple.exchangeAuthCode.mockResolvedValue({
+        refreshToken: 'other-refresh',
+        subject: 'someone-else',
+      });
+      const login = await request(server)
+        .post('/api/v1/auth/login')
+        .send({ provider: 'apple', token: 'identity', authorizationCode: 'c' })
+        .expect(200);
+      await request(server)
+        .delete('/api/v1/auth/me')
+        .set('Authorization', `Bearer ${dataOf(login).accessToken}`)
+        .expect(200);
+      expect(ctx.apple.revokeConnection).not.toHaveBeenCalled();
+    });
+
+    it('교환 실패로 토큰 없는 계정 탈퇴 → revoke 미호출, 200', async () => {
+      ctx.apple.exchangeAuthCode.mockResolvedValue(undefined);
+      const login = await request(server)
+        .post('/api/v1/auth/login')
+        .send({ provider: 'apple', token: 'identity', authorizationCode: 'c' })
+        .expect(200);
+      await request(server)
+        .delete('/api/v1/auth/me')
+        .set('Authorization', `Bearer ${dataOf(login).accessToken}`)
+        .expect(200);
+      expect(ctx.apple.revokeConnection).not.toHaveBeenCalled();
+    });
+  });
+});
