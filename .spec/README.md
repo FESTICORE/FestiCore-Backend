@@ -11,6 +11,7 @@
 - [admin-auth.md](./admin-auth.md) — 관리자 매직 링크와 세션
 - [admin-festivals.md](./admin-festivals.md) — 축제 초안·발행·롤백
 - [flags.md](./flags.md) — 깃발·기수·팔로우·사진·신고
+- [public-festivals.md](./public-festivals.md) — 발행 축제 목록·팩·깃발·라이브 조회
 
 ## 작성 규칙
 
