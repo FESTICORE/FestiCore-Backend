@@ -45,7 +45,7 @@ jobs:
       - run: docker build -t festicore-ci .
       - name: Docker 실행 및 PostgreSQL 마이그레이션 확인
         run: |
-          docker run --rm -d --name festicore-ci --network host \
+          docker run -d --name festicore-ci --network host \
             -e NODE_ENV=production \
             -e DB_HOST=127.0.0.1 \
             -e DB_USERNAME=postgres \

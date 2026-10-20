@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
+import { TypeOrmModule } from '@nestjs/typeorm';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AllExceptionsFilter } from '../common/filters/all-exceptions.filter';
 import { LoggingInterceptor } from '../common/interceptors/logging.interceptor';
@@ -8,6 +9,7 @@ import { ResponseInterceptor } from '../common/interceptors/response.interceptor
 import { JwtAuthGuard } from '../modules/auth/guard/jwt-auth.guard';
 import { AdminAuthModule } from '../modules/admin/auth/admin-auth.module';
 import { AdminSessionGuard } from '../modules/admin/auth/admin-session.guard';
+import { User } from '../modules/auth/entity/user.entity';
 
 /**
  * 외부 HTTP 요청이 기능 모듈로 들어가기 전에 반드시 통과하는 Gateway 경계.
@@ -16,6 +18,7 @@ import { AdminSessionGuard } from '../modules/admin/auth/admin-session.guard';
 @Module({
   imports: [
     JwtModule.register({}),
+    TypeOrmModule.forFeature([User]),
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 100 }]),
     AdminAuthModule,
   ],

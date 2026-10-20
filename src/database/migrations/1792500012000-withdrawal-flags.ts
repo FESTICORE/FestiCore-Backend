@@ -8,7 +8,7 @@ export class WithdrawalFlags1792500012000 implements MigrationInterface {
     await queryRunner.query(`UPDATE "flags" AS flag
       SET "ownerId" = NULL, "hidden" = true
       WHERE flag."ownerId" IS NOT NULL
-        AND NOT EXISTS (SELECT 1 FROM "users" WHERE "id"::text = flag."ownerId")`);
+        AND NOT EXISTS (SELECT 1 FROM "users" WHERE "id"::text = flag."ownerId"::text)`);
     await queryRunner.query(
       `ALTER TABLE "flags" ALTER COLUMN "ownerId" TYPE uuid USING "ownerId"::uuid`,
     );
