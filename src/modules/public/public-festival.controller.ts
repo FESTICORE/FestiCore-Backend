@@ -323,6 +323,11 @@ export class PublicFestivalController {
     status: 429,
     description: '기기별 요청 횟수 초과. Retry-After 헤더를 확인하세요.',
   })
+  @ApiResponse({
+    status: 503,
+    description:
+      '요청 제한 기록 정리를 확인할 수 없어 라이브 조회를 잠시 중단함',
+  })
   async live(
     @Param('id') id: string,
     @Headers('x-device-id') deviceId: string | undefined,

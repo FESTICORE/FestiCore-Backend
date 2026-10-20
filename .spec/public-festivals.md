@@ -16,7 +16,7 @@
 
 `GET /festivals`의 `after`가 날짜이면 그 날짜 이후 종료되는 축제부터 조회한다. 목록은 `days[0].startsAt`을 실제 시각으로 비교하고 축제 ID를 동률 순서로 정렬한다. UTC 오프셋이 다른 축제도 실제 시각순이다. `nextCursor`는 최초 조회 하한을 보존하는 `YYYY-MM-DD~시작 ISO8601 시각~fst_...` 형식으로 제공한다. 다음 요청에 사용할 때는 커서 전체를 URL 인코딩한다.
 
-`/pack`의 ETag는 명세대로 `"v{packVersion}"`이다. `If-None-Match`가 일치하면 본문 없이 304를 반환한다. 압축별 응답은 `Vary: Accept-Encoding`으로 구분한다. 목록과 라이브도 조건부 조회를 지원한다. `live`의 `X-Poll-After: 30`은 최소 권장 폴링 간격이며, 기기당 분당 4회 초과 시 429와 `Retry-After`를 보낸다.
+`/pack`의 ETag는 명세대로 `"v{packVersion}"`이다. `If-None-Match`가 일치하면 본문 없이 304를 반환한다. 압축별 응답은 `Vary: Accept-Encoding`으로 구분한다. 목록과 라이브도 조건부 조회를 지원한다. `live`의 `X-Poll-After: 30`은 최소 권장 폴링 간격이며, 기기당 분당 4회 초과 시 429와 `Retry-After`를 보낸다. 지난 요청 제한 기록 정리가 실패하면 새 제한 기록을 만들지 않고 503을 반환하며, 5분 간격으로 정리를 재시도한다.
 
 ## 오류와 보안
 

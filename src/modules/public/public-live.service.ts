@@ -3,6 +3,7 @@ import {
   HttpException,
   Injectable,
   Logger,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -24,6 +25,9 @@ function iso(date: Date): string {
 export class PublicLiveService {
   private readonly logger = new Logger(PublicLiveService.name);
   private lastRateLimitCleanupMinute = Number.NEGATIVE_INFINITY;
+  private lastRateLimitCleanupAttemptMinute = Number.NEGATIVE_INFINITY;
+  private rateLimitCleanupFailed = false;
+  private rateLimitCleanupTask: Promise<void> | null = null;
 
   constructor(
     private readonly festivals: PublicFestivalService,
@@ -60,6 +64,42 @@ export class PublicLiveService {
     }
   }
 
+  private async cleanupRateLimits(minute: number): Promise<void> {
+    if (minute - this.lastRateLimitCleanupMinute < 60) return;
+    if (this.rateLimitCleanupTask) return this.rateLimitCleanupTask;
+    if (
+      this.rateLimitCleanupFailed &&
+      minute - this.lastRateLimitCleanupAttemptMinute < 5
+    )
+      throw new ServiceUnavailableException(
+        '라이브 요청 제한 기록 정리 대기 중입니다.',
+      );
+
+    this.lastRateLimitCleanupAttemptMinute = minute;
+    this.rateLimitCleanupTask = (async () => {
+      try {
+        await this.dataSource.query(
+          'DELETE FROM public_live_rate_limits WHERE minute < $1',
+          [minute - 120],
+        );
+        this.lastRateLimitCleanupMinute = minute;
+        this.rateLimitCleanupFailed = false;
+      } catch (error) {
+        this.rateLimitCleanupFailed = true;
+        this.logger.error(
+          '지난 라이브 요청 제한 기록 정리에 실패했습니다.',
+          error instanceof Error ? error.stack : String(error),
+        );
+        throw new ServiceUnavailableException(
+          '라이브 요청 제한을 확인할 수 없습니다.',
+        );
+      } finally {
+        this.rateLimitCleanupTask = null;
+      }
+    })();
+    return this.rateLimitCleanupTask;
+  }
+
   private async limit(deviceId: string, now: Date): Promise<void> {
     if (
       !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
@@ -71,6 +111,7 @@ export class PublicLiveService {
         message: 'X-Device-Id UUID가 필요합니다.',
       });
     const minute = Math.floor(now.getTime() / 60_000);
+    await this.cleanupRateLimits(minute);
     const rows = await this.dataSource.query<{ count: number }[]>(
       `INSERT INTO public_live_rate_limits (device_id, minute, count)
        VALUES ($1, $2, 1)
@@ -78,17 +119,6 @@ export class PublicLiveService {
        RETURNING count`,
       [deviceId, minute],
     );
-    if (minute - this.lastRateLimitCleanupMinute >= 60) {
-      this.lastRateLimitCleanupMinute = minute;
-      try {
-        await this.dataSource.query(
-          'DELETE FROM public_live_rate_limits WHERE minute < $1',
-          [minute - 120],
-        );
-      } catch {
-        this.logger.warn('지난 라이브 요청 제한 기록 정리에 실패했습니다.');
-      }
-    }
     if (Number(rows[0]?.count) > 4)
       throw new HttpException(
         {

@@ -427,7 +427,7 @@ describe('Public festival API', () => {
     expect(queryBuilder.take).toHaveBeenCalledWith(2);
   });
 
-  it('uses weak conditional ETags across compressed representations', async () => {
+  it('uses conditional ETags across compressed representations', async () => {
     const url = `/api/v1/festivals/${pack.id}/pack`;
     const identity = await request(server)
       .get(url)
@@ -514,5 +514,31 @@ describe('Public festival API', () => {
     expect(Number(limited.headers['retry-after'])).toBe(
       (limited.body as { retryAfter: number }).retryAfter,
     );
+  });
+
+  it('blocks new rate-limit rows when cleanup fails and retries after five minutes', async () => {
+    const device = '3f9a2c1d-2b77-4e7e-9a1b-2a0123456789';
+    const liveService = app.get(PublicLiveService);
+    const baseMinute = Math.floor(Date.now() / 60_000) + 120;
+    const at = (offset: number) => new Date((baseMinute + offset) * 60_000);
+    dataSource.query.mockReset();
+    dataSource.query.mockRejectedValueOnce(new Error('cleanup unavailable'));
+
+    await expect(liveService['limit'](device, at(0))).rejects.toHaveProperty(
+      'status',
+      503,
+    );
+    expect(dataSource.query).toHaveBeenCalledTimes(1);
+    await expect(liveService['limit'](device, at(1))).rejects.toHaveProperty(
+      'status',
+      503,
+    );
+    expect(dataSource.query).toHaveBeenCalledTimes(1);
+
+    dataSource.query.mockResolvedValue([{ count: 1 }]);
+    await liveService['limit'](device, at(5));
+    expect(dataSource.query).toHaveBeenCalledTimes(3);
+    await liveService['limit'](device, at(6));
+    expect(dataSource.query).toHaveBeenCalledTimes(4);
   });
 });
