@@ -5,6 +5,7 @@ import { FlagsModule } from './flags/flags.module';
 import { PublicFestivalModule } from './public/public-festival.module';
 import { CrewModule } from './crews/crew.module';
 import { ScheduleModule } from './schedule/schedule.module';
+import { CrawlModule } from './admin/crawl/crawl.module';
 
 /**
  * app.module imports 에 펼칠(...) 기능 모듈 목록.
@@ -19,4 +20,5 @@ export const featureModules = [
   PublicFestivalModule,
   CrewModule,
   ScheduleModule,
+  CrawlModule,
 ];

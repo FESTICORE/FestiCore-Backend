@@ -10,6 +10,7 @@ import { FlagsModule } from './modules/flags/flags.module';
 import { PublicFestivalModule } from './modules/public/public-festival.module';
 import { CrewModule } from './modules/crews/crew.module';
 import { ScheduleModule } from './modules/schedule/schedule.module';
+import { CrawlModule } from './modules/admin/crawl/crawl.module';
 
 /** SwaggerModule.createDocument 의 include 가 받는 모듈 클래스 타입. */
 type ModuleClass = new (...args: never[]) => unknown;
@@ -20,6 +21,8 @@ const MODULES_BY_SLUG: Record<string, ModuleClass[]> = {
   auth: [AuthModule],
   'admin-auth': [AdminAuthModule],
   'admin-festivals': [AdminFestivalModule],
+  'admin-crawl': [CrawlModule],
+  'admin-proposals': [CrawlModule],
   flags: [FlagsModule],
   festivals: [PublicFestivalModule],
   crews: [CrewModule],
@@ -187,19 +190,21 @@ export function setupSwagger(
     { docs: ADMIN_DOCS, basePath: 'admin/api-docs', admin: true },
   ]) {
     for (const doc of docs) {
-      SwaggerModule.setup(
-        `${basePath}/${doc.slug}`,
-        app,
-        onlyAudience(
-          SwaggerModule.createDocument(
-            app,
-            build(doc.title, doc.description, admin),
-            { deepScanRoutes: false, include: doc.modules },
-          ),
-          admin,
+      const document = onlyAudience(
+        SwaggerModule.createDocument(
+          app,
+          build(doc.title, doc.description, admin),
+          { deepScanRoutes: false, include: doc.modules },
         ),
-        UI_OPTIONS,
+        admin,
       );
+      if (admin && (doc.slug === 'crawl' || doc.slug === 'proposals')) {
+        const prefix = new RegExp(`^/(?:api/v1/)?admin/${doc.slug}(?:/|$)`);
+        document.paths = Object.fromEntries(
+          Object.entries(document.paths).filter(([path]) => prefix.test(path)),
+        );
+      }
+      SwaggerModule.setup(`${basePath}/${doc.slug}`, app, document, UI_OPTIONS);
     }
   }
 }

@@ -25,6 +25,8 @@ import sharp from 'sharp';
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
 const CRAWL_IMAGE_KEY = /^crawl\/[0-9a-f]{64}\.webp$/;
+const CRAWL_SNAPSHOT_KEY =
+  /^crawl\/snapshots\/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.txt$/;
 const execFileAsync = promisify(execFile);
 
 export interface PreparedFlagPhoto {
@@ -242,6 +244,42 @@ export class ImageStorageService {
   async readCrawlImage(key: string): Promise<Buffer> {
     this.validateCrawlImageKey(key);
     return this.read(key);
+  }
+
+  async saveCrawlSnapshot(key: string, bytes: Buffer): Promise<void> {
+    this.validateCrawlSnapshotKey(key);
+    if (!bytes.length)
+      throw new BadRequestException('크롤링 스냅샷이 비어 있습니다.');
+    if (bytes.length > MAX_OUTPUT_BYTES) throw new PayloadTooLargeException();
+    const client = this.client();
+    try {
+      await client.send(
+        new PutObjectCommand({
+          Bucket: this.value('RAILWAY_BUCKET_NAME', 'AWS_S3_BUCKET_NAME'),
+          Key: key,
+          Body: bytes,
+          ContentType: 'text/plain; charset=utf-8',
+          CacheControl: 'private, max-age=86400',
+        }),
+      );
+    } finally {
+      client.destroy();
+    }
+  }
+
+  async readCrawlSnapshot(key: string): Promise<Buffer> {
+    this.validateCrawlSnapshotKey(key);
+    return this.read(key);
+  }
+
+  async deleteCrawlSnapshot(key: string): Promise<void> {
+    this.validateCrawlSnapshotKey(key);
+    await this.delete(key);
+  }
+
+  private validateCrawlSnapshotKey(key: string): void {
+    if (!CRAWL_SNAPSHOT_KEY.test(key))
+      throw new BadRequestException('잘못된 크롤링 스냅샷 키입니다.');
   }
 
   private validateCrawlImageKey(key: string): void {

@@ -38,6 +38,18 @@ export const API_DOMAINS: ApiDomain[] = [
     pathPrefix: 'admin/festivals',
   },
   {
+    slug: 'admin-crawl',
+    title: 'Admin Crawl',
+    description: '축제 정보 수집 소스·실행·제안 검토·이미지',
+    pathPrefix: 'admin/crawl',
+  },
+  {
+    slug: 'admin-proposals',
+    title: 'Admin Proposals',
+    description: '수집 제안 승인과 초안 반영',
+    pathPrefix: 'admin/proposals',
+  },
+  {
     slug: 'flags',
     title: 'Flags',
     description: '깃발·팔로우·기수·관리자 신고 처리',
