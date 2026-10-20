@@ -73,6 +73,25 @@ export class AllExceptionsFilter implements ExceptionFilter {
         ]) {
           if (key in fields) details[key] = fields[key];
         }
+        if (
+          status === HttpStatus.CONFLICT &&
+          fields.code === 'STATUS_STALE' &&
+          typeof fields.current === 'object' &&
+          fields.current !== null &&
+          !Array.isArray(fields.current)
+        ) {
+          const current = fields.current as Record<string, unknown>;
+          if (
+            Array.isArray(current.setIds) &&
+            current.setIds.every((id) => typeof id === 'string') &&
+            current.updatedAt instanceof Date
+          ) {
+            details.current = {
+              setIds: current.setIds,
+              updatedAt: current.updatedAt.toISOString(),
+            };
+          }
+        }
       }
     }
 

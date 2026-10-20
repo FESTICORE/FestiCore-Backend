@@ -55,4 +55,10 @@ export const API_DOMAINS: ApiDomain[] = [
     description: '비공개 크루 생성·초대·상태·집결·멤버 관리',
     pathPrefix: 'crews',
   },
+  {
+    slug: 'schedule',
+    title: 'Schedule',
+    description: '내 페스티벌 일정 저장과 조회',
+    pathPrefix: 'me/schedule',
+  },
 ];
