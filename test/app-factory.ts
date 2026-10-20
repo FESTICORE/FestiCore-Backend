@@ -8,6 +8,7 @@ import { DataSource } from 'typeorm';
 import { AllExceptionsFilter } from '../src/common/filters/all-exceptions.filter';
 import { ResponseInterceptor } from '../src/common/interceptors/response.interceptor';
 import { AuthController } from '../src/modules/auth/controller/auth.controller';
+import { MeController } from '../src/modules/auth/controller/me.controller';
 import { RefreshToken } from '../src/modules/auth/entity/refresh-token.entity';
 import { User } from '../src/modules/auth/entity/user.entity';
 import { JwtAuthGuard } from '../src/modules/auth/guard/jwt-auth.guard';
@@ -60,7 +61,7 @@ export async function createTestApp(): Promise<TestContext> {
 
   const moduleRef = await Test.createTestingModule({
     imports: [JwtModule.register({})],
-    controllers: [AuthController, HealthController],
+    controllers: [AuthController, MeController, HealthController],
     providers: [
       AuthService,
       TokenService,

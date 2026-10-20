@@ -1,33 +1,98 @@
-import { Body, Controller, Delete, Get, Patch } from '@nestjs/common';
-import { IsString, MaxLength, MinLength } from 'class-validator';
+import { Body, Controller, Delete, Get, HttpCode, Patch } from '@nestjs/common';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiProperty,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
+import { IsIn, IsString, MaxLength, MinLength } from 'class-validator';
 import { CurrentUser } from '../decorator/current-user.decorator';
 import { AuthService } from '../service/auth.service';
 import type { AuthUser } from '../types/social-profile';
 
 class UpdateMeDto {
+  @ApiProperty({
+    description: '변경할 닉네임',
+    example: '축제관객',
+    minLength: 1,
+    maxLength: 12,
+  })
   @IsString()
   @MinLength(1)
-  @MaxLength(30)
+  @MaxLength(12)
   nickname!: string;
 }
 
+class WithdrawMeDto {
+  @ApiProperty({
+    description: '실수로 계정을 삭제하지 않도록 입력하는 확인 문구',
+    example: 'DELETE',
+    enum: ['DELETE'],
+  })
+  @IsString()
+  @IsIn(['DELETE'])
+  confirm!: 'DELETE';
+}
+
+@ApiTags('Me')
+@ApiBearerAuth()
 @Controller('me')
 export class MeController {
   constructor(private readonly auth: AuthService) {}
 
   @Get()
+  @ApiOperation({
+    summary: '내 프로필 조회',
+    description:
+      '현재 access 토큰의 사용자 정보를 조회합니다. 다른 사용자의 프로필은 조회하지 않습니다.',
+  })
+  @ApiResponse({ status: 200, description: '현재 사용자 정보' })
+  @ApiResponse({
+    status: 401,
+    description: 'access 토큰이 없거나 유효하지 않음',
+  })
   me(@CurrentUser() user: AuthUser) {
     return this.auth.me(user.userId);
   }
 
   @Patch()
+  @ApiOperation({
+    summary: '내 닉네임 변경',
+    description:
+      '현재 로그인한 사용자의 닉네임을 변경하고 변경된 사용자 정보를 반환합니다.',
+  })
+  @ApiResponse({ status: 200, description: '변경된 사용자 정보' })
+  @ApiResponse({
+    status: 400,
+    description: '닉네임이 없거나 길이가 1~12자가 아님',
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'access 토큰이 없거나 유효하지 않음',
+  })
   update(@CurrentUser() user: AuthUser, @Body() body: UpdateMeDto) {
     return this.auth.updateMe(user.userId, body.nickname);
   }
 
   @Delete()
-  async withdraw(@CurrentUser() user: AuthUser) {
+  @HttpCode(204)
+  @ApiOperation({
+    summary: '회원 탈퇴',
+    description:
+      '요청 본문에 { "confirm": "DELETE" }를 보내면 현재 로그인한 계정과 refresh 토큰을 삭제합니다.',
+  })
+  @ApiResponse({ status: 204, description: '탈퇴 완료. 응답 본문 없음' })
+  @ApiResponse({ status: 400, description: 'confirm 값이 DELETE가 아님' })
+  @ApiResponse({
+    status: 401,
+    description: 'access 토큰이 없거나 유효하지 않음',
+  })
+  async withdraw(
+    @CurrentUser() user: AuthUser,
+    @Body() _body: WithdrawMeDto,
+  ): Promise<void> {
+    void _body;
     await this.auth.withdraw(user.userId);
-    return { success: true };
   }
 }
