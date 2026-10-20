@@ -6,11 +6,14 @@
 ## 목록
 
 - [health.md](./health.md) — 헬스체크
-- [auth.md](./auth.md) — 소셜 로그인(Google/Apple, provider 분리)
+- [auth.md](./auth.md) — Google/Apple 통합 로그인, 프로필, Apple 웹 콜백
+- [admin-auth.md](./admin-auth.md) — 관리자 매직 링크와 세션
+- [admin-festivals.md](./admin-festivals.md) — 축제 초안·발행·롤백
 
 ## 작성 규칙
 
 - 파일명: `<도메인>.md` (예: `auth.md`, `festival.md`)
+- API 모듈 구현과 같은 PR에서 해당 `.spec/<도메인>.md`를 작성·갱신한다.
 - 각 스펙은 최소한 아래를 포함한다.
   - 개요 / 목적
   - 엔드포인트 (메서드, 경로, 요청, 응답)

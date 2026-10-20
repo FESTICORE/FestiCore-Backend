@@ -3,13 +3,18 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { API_DOMAINS } from './common/api-domains';
 import { AuthModule } from './modules/auth/auth.module';
 import { HealthModule } from './modules/health/health.module';
+import { AdminAuthModule } from './modules/admin/auth/admin-auth.module';
+import { AdminFestivalModule } from './modules/admin/festival/admin-festival.module';
 
 /** SwaggerModule.createDocument 의 include 가 받는 모듈 클래스 타입. */
 type ModuleClass = new (...args: never[]) => unknown;
 
 /** slug → 문서에 포함할 모듈. 도메인 정의 자체는 common/api-domains 가 소유한다. */
 const MODULES_BY_SLUG: Record<string, ModuleClass[]> = {
+  health: [HealthModule],
   auth: [AuthModule],
+  'admin-auth': [AdminAuthModule],
+  'admin-festivals': [AdminFestivalModule],
 };
 
 const DOMAIN_DOCS = API_DOMAINS.map((d) => ({
@@ -94,7 +99,7 @@ export function setupSwagger(
         build(doc.title, doc.description),
         // deepScanRoutes:false — import한 다른 도메인 모듈의 컨트롤러까지
         // 딸려오지 않도록 해당 모듈 자기 라우트만 문서화한다.
-        { deepScanRoutes: false, include: [...doc.modules, HealthModule] },
+        { deepScanRoutes: false, include: doc.modules },
       ),
       UI_OPTIONS,
     );
