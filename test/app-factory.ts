@@ -4,7 +4,7 @@ import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { DataSource } from 'typeorm';
+import { DataSource, EntityManager } from 'typeorm';
 import { AllExceptionsFilter } from '../src/common/filters/all-exceptions.filter';
 import { ResponseInterceptor } from '../src/common/interceptors/response.interceptor';
 import { AuthController } from '../src/modules/auth/controller/auth.controller';
@@ -31,7 +31,7 @@ export interface TestContext {
   refreshTokens: FakeRepository<RefreshToken>;
   google: { [K in keyof GoogleService]: jest.Mock };
   apple: { [K in keyof AppleService]: jest.Mock };
-  dataSource: { query: jest.Mock };
+  dataSource: { query: jest.Mock; transaction: jest.Mock };
 }
 
 export async function createTestApp(): Promise<TestContext> {
@@ -57,6 +57,21 @@ export async function createTestApp(): Promise<TestContext> {
   };
   const dataSource = {
     query: jest.fn().mockResolvedValue([{ '?column?': 1 }]),
+    transaction: jest
+      .fn()
+      .mockImplementation(
+        (work: (manager: EntityManager) => Promise<unknown>) =>
+          work({
+            query: jest.fn().mockResolvedValue([]),
+            delete: jest
+              .fn()
+              .mockImplementation((entity: unknown, where: object) => {
+                if (entity === User) return users.delete(where);
+                if (entity === RefreshToken) return refreshTokens.delete(where);
+                throw new Error('지원하지 않는 테스트 엔티티입니다.');
+              }),
+          } as unknown as EntityManager),
+      ),
   };
 
   const moduleRef = await Test.createTestingModule({

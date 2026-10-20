@@ -1,4 +1,4 @@
-import { Repository } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 
 jest.mock('jose', () => ({
   createRemoteJWKSet: jest.fn(),
@@ -47,7 +47,13 @@ describe('AuthService web grant replacement', () => {
         refreshToken: 'refresh',
       }),
     } as unknown as TokenService;
-    const service = new AuthService(google, {} as AppleService, token, repo);
+    const service = new AuthService(
+      google,
+      {} as AppleService,
+      token,
+      repo,
+      {} as DataSource,
+    );
 
     const app = await service.login({
       provider: 'google',
@@ -86,6 +92,7 @@ describe('AuthService web grant replacement', () => {
       apple,
       {} as TokenService,
       repo,
+      {} as DataSource,
     );
 
     await expect(
@@ -106,5 +113,67 @@ describe('AuthService web grant replacement', () => {
       },
     );
     expect(revokeConnection).not.toHaveBeenCalled();
+  });
+});
+
+describe('AuthService 회원 탈퇴의 크루 소유권', () => {
+  const userId = 'departing-user';
+
+  function setup(successor?: string) {
+    const query = jest.fn().mockImplementation((sql: string) => {
+      if (sql.includes('FROM "crews"')) return [{ id: 'crew-1' }];
+      if (sql.includes('FROM "crew_members"'))
+        return successor ? [{ userId: successor }] : [];
+      return [];
+    });
+    const remove = jest.fn().mockResolvedValue({ affected: 1 });
+    const transaction = jest
+      .fn()
+      .mockImplementation(
+        (work: (manager: EntityManager) => Promise<unknown>) =>
+          work({ query, delete: remove } as unknown as EntityManager),
+      );
+    const userRepo = {
+      findOne: jest.fn().mockResolvedValue({ id: userId, provider: 'google' }),
+    } as unknown as Repository<User>;
+    const service = new AuthService(
+      {} as GoogleService,
+      {} as AppleService,
+      {} as TokenService,
+      userRepo,
+      { transaction } as unknown as DataSource,
+    );
+    return { service, query, remove, transaction };
+  }
+
+  it('가장 먼저 가입한 다른 멤버에게 소유권을 넘기고 계정을 삭제한다', async () => {
+    const { service, query, remove, transaction } = setup('successor');
+    await service.withdraw(userId);
+
+    expect(transaction).toHaveBeenCalledTimes(1);
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining('ORDER BY "id" FOR UPDATE'),
+      [userId],
+    );
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining('ORDER BY "joinedAt", "userId" LIMIT 1'),
+      ['crew-1', userId],
+    );
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining('UPDATE "crews"'),
+      ['successor', 'crew-1'],
+    );
+    expect(remove).toHaveBeenCalledWith(User, { id: userId });
+  });
+
+  it('다른 멤버가 없으면 크루를 지우고 계정을 삭제한다', async () => {
+    const { service, query, remove } = setup();
+    await service.withdraw(userId);
+
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining('DELETE FROM "crews"'),
+      ['crew-1'],
+    );
+    expect(remove).toHaveBeenCalledWith(User, { id: userId });
   });
 });

@@ -3,6 +3,7 @@ import { HealthModule } from './health/health.module';
 import { AdminFestivalModule } from './admin/festival/admin-festival.module';
 import { FlagsModule } from './flags/flags.module';
 import { PublicFestivalModule } from './public/public-festival.module';
+import { CrewModule } from './crews/crew.module';
 
 /**
  * app.module imports 에 펼칠(...) 기능 모듈 목록.
@@ -15,4 +16,5 @@ export const featureModules = [
   AdminFestivalModule,
   FlagsModule,
   PublicFestivalModule,
+  CrewModule,
 ];

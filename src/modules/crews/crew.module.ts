@@ -1,0 +1,24 @@
+import { Module } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { AdminFestival } from '../admin/festival/festival.entity';
+import { User } from '../auth/entity/user.entity';
+import { CrewController } from './crew.controller';
+import { CrewArchiveService } from './crew-archive.service';
+import { Crew, CrewGather, CrewMember } from './crew.entity';
+import { CrewService } from './crew.service';
+
+@Module({
+  imports: [
+    TypeOrmModule.forFeature([
+      Crew,
+      CrewMember,
+      CrewGather,
+      AdminFestival,
+      User,
+    ]),
+  ],
+  controllers: [CrewController],
+  providers: [CrewService, CrewArchiveService],
+  exports: [CrewService],
+})
+export class CrewModule {}

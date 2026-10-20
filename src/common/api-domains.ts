@@ -49,4 +49,10 @@ export const API_DOMAINS: ApiDomain[] = [
     description: '발행 축제 목록·팩·깃발·라이브 보드',
     pathPrefix: 'festivals',
   },
+  {
+    slug: 'crews',
+    title: 'Crews',
+    description: '비공개 크루 생성·초대·상태·집결·멤버 관리',
+    pathPrefix: 'crews',
+  },
 ];

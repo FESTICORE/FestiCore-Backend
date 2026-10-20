@@ -1,7 +1,8 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { QueryFailedError, Repository } from 'typeorm';
+import { DataSource, QueryFailedError, Repository } from 'typeorm';
 import { SocialLoginDto } from '../dto/social-login.dto';
+import { RefreshToken } from '../entity/refresh-token.entity';
 import { User } from '../entity/user.entity';
 import type { SocialProfile } from '../types/social-profile';
 import type { OauthGrant } from '../types/social-profile';
@@ -42,6 +43,7 @@ export class AuthService {
     private readonly token: TokenService,
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
+    private readonly dataSource: DataSource,
   ) {}
 
   async login(dto: SocialLoginDto): Promise<LoginResult> {
@@ -112,7 +114,7 @@ export class AuthService {
   }
 
   /**
-   * 회원 탈퇴: provider 연동 해제(revoke) → refresh 토큰 삭제 → 사용자 삭제.
+   * 회원 탈퇴: provider 연동 해제(revoke) → 크루 소유권 정리와 계정 삭제.
    * provider revoke 실패는 계정 삭제를 막지 않는다.
    */
   async withdraw(userId: string): Promise<void> {
@@ -158,8 +160,31 @@ export class AuthService {
         );
       }
     }
-    await this.token.deleteAllForUser(userId);
-    await this.userRepo.delete({ id: userId });
+    await this.dataSource.transaction(async (manager) => {
+      // 크루 변경 API와 동일하게 크루 행부터 잠가 소유권 이전/탈퇴 경쟁을 직렬화한다.
+      const ownedCrews = await manager.query<{ id: string }[]>(
+        `SELECT "id" FROM "crews" WHERE "ownerId" = $1 ORDER BY "id" FOR UPDATE`,
+        [userId],
+      );
+      for (const crew of ownedCrews) {
+        const successors = await manager.query<{ userId: string }[]>(
+          `SELECT "userId" FROM "crew_members"
+           WHERE "crewId" = $1 AND "userId" <> $2
+           ORDER BY "joinedAt", "userId" LIMIT 1`,
+          [crew.id, userId],
+        );
+        if (successors.length > 0) {
+          await manager.query(
+            `UPDATE "crews" SET "ownerId" = $1, "updatedAt" = now() WHERE "id" = $2`,
+            [successors[0].userId, crew.id],
+          );
+        } else {
+          await manager.query(`DELETE FROM "crews" WHERE "id" = $1`, [crew.id]);
+        }
+      }
+      await manager.delete(RefreshToken, { userId });
+      await manager.delete(User, { id: userId });
+    });
   }
 
   private verify(dto: SocialLoginDto): Promise<SocialProfile> {
