@@ -2,10 +2,10 @@
 
 FestiCore 백엔드는 Railway에서 **develop / production** 두 환경으로 운영한다.
 
-| 환경       | 연결 브랜치 | 용도          |
-| ---------- | ----------- | ------------- |
-| develop    | `develop`   | 개발/스테이징 |
-| production | `main`      | 운영          |
+| 환경       | 연결 브랜치 | API 도메인 | 용도          |
+| ---------- | ----------- | --- | ------------- |
+| develop    | `develop`   | `https://festicore-dev.up.railway.app` | 개발/스테이징 |
+| production | `main`      | `https://festicore.up.railway.app` | 운영          |
 
 ## 1. 프로젝트/환경 구성
 
@@ -52,6 +52,14 @@ APPLE_WEB_REDIRECT_URI=https://<환경별-도메인>/api/v1/auth/apple/callback
 APPLE_TEAM_ID=
 APPLE_KEY_ID=
 APPLE_PRIVATE_KEY=                          # 개행은 \n
+RAILWAY_BUCKET_NAME=                        # 각 환경의 비공개 이미지 버킷
+RAILWAY_BUCKET_REGION=
+RAILWAY_BUCKET_ENDPOINT=
+RAILWAY_BUCKET_ACCESS_KEY_ID=
+RAILWAY_BUCKET_SECRET_ACCESS_KEY=
+# 또는 AWS_S3_BUCKET_NAME, AWS_DEFAULT_REGION, AWS_ENDPOINT_URL,
+# AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY로 대체 가능
+AWS_S3_URL_STYLE=virtual                    # 엔드포인트가 경로 방식이면 path
 ```
 
 로컬은 같은 키를 `.env`에 둔다(로컬 DB는 `DB_HOST/DB_PORT/DB_USERNAME/DB_PASSWORD/DB_NAME`, 기본 DB명 `festicore`).
@@ -62,6 +70,12 @@ Google 웹은 Google Identity Services에서 받은 ID 토큰을 모바일 앱�
 백엔드의 Google 리디렉션 URI는 사용하지 않는다. `GOOGLE_CLIENT_ID`는 웹 클라이언트 ID,
 `GOOGLE_MOBILE_CLIENT_IDS`는 iOS/Android 클라이언트 ID 목록이며,
 백엔드는 이 목록으로 ID 토큰의 audience를 검증한다.
+
+이미지 저장은 Railway 환경마다 분리된 비공개 버킷을 사용한다. 현재 개발 버킷은
+`festicore-images-dev`, 운영 버킷은 `festicore-images-prod`이다. 버킷 자격증명은
+각 환경의 변수 참조로 설정하고 저장소·문서에 실제 값을 기록하지 않는다.
+이미지 저장 서비스는 WebP 변환과 키·크기 검증을 수행한다. 실제 버킷 업로드는
+현재 CI에서 검증하지 않으므로 배포 후 별도 스모크 검증이 필요하다.
 
 Apple Services ID `co.festiCore.io`의 웹 인증 도메인에는
 `festicore.up.railway.app`, `festicore-dev.up.railway.app`을 등록했다. Return URL은
@@ -105,5 +119,13 @@ API를 동일 origin으로 프록시해야 한다. 서로 다른 사이트의 Ra
 
 ## 6. 확인
 
-- 헬스체크: `https://<도메인>/api/v1/health`
-- Swagger: `https://<도메인>/api-docs` (도메인별: `/api-docs/auth`)
+- 개발 헬스체크: `https://festicore-dev.up.railway.app/api/v1/health`
+- 운영 헬스체크: `https://festicore.up.railway.app/api/v1/health`
+- 개발 Swagger: `https://festicore-dev.up.railway.app/api-docs`
+- 운영 Swagger: `https://festicore.up.railway.app/api-docs`
+- OpenAPI JSON: 각 도메인의 `/api-docs-json`; 도메인별 문서는
+  `/api-docs/health`, `/api-docs/auth`, `/api-docs/admin-auth`,
+  `/api-docs/admin-festivals`에 있다.
+
+2026-10-21 기준 두 환경 모두 `/api-docs`와 `/api-docs-json`이 HTTP 200을
+반환했다. 응답 확인은 최신 코드가 해당 환경에 배포되었다는 증거와 구분한다.

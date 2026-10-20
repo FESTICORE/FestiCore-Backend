@@ -42,4 +42,4 @@ src/
 
 ## 배포
 
-- [RAILWAY.md](./RAILWAY.md). `develop`/`main` 브랜치 자동 배포, `dev-v*`/`v*` 태그(GitHub Actions).
+- [RAILWAY.md](../deployment/RAILWAY.md). `develop`/`main` 브랜치 자동 배포, `dev-v*`/`v*` 태그(GitHub Actions).

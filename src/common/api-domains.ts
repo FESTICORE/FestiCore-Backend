@@ -14,9 +14,27 @@ export interface ApiDomain {
 
 export const API_DOMAINS: ApiDomain[] = [
   {
+    slug: 'health',
+    title: 'Health',
+    description: '서버와 데이터베이스 상태',
+    pathPrefix: 'health',
+  },
+  {
     slug: 'auth',
     title: 'Auth',
     description: '소셜 로그인(Google·Apple)·JWT·회원 탈퇴',
     pathPrefix: 'auth',
+  },
+  {
+    slug: 'admin-auth',
+    title: 'Admin Auth',
+    description: '관리자 매직 링크 로그인과 세션',
+    pathPrefix: 'admin/auth',
+  },
+  {
+    slug: 'admin-festivals',
+    title: 'Admin Festivals',
+    description: '축제 초안, 발행, 버전, 롤백',
+    pathPrefix: 'admin/festivals',
   },
 ];
