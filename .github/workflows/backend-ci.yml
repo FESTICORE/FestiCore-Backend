@@ -1,0 +1,66 @@
+name: Backend CI
+
+on:
+  pull_request: {}
+  push:
+    branches: [develop]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: festicore
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d festicore"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx eslint 'src/**/*.ts' 'test/**/*.ts'
+      - run: npm run build
+      - run: npm test -- --runInBand
+      - run: npm run test:e2e -- --runInBand
+      - run: npm audit --omit=dev --audit-level=high
+      - run: docker build -t festicore-ci .
+      - name: Docker 실행 및 PostgreSQL 마이그레이션 확인
+        run: |
+          docker run --rm -d --name festicore-ci --network host \
+            -e NODE_ENV=production \
+            -e DB_HOST=127.0.0.1 \
+            -e DB_USERNAME=postgres \
+            -e DB_PASSWORD=postgres \
+            -e DB_NAME=festicore \
+            -e JWT_ACCESS_SECRET=ci-access-secret-only \
+            -e JWT_REFRESH_SECRET=ci-refresh-secret-only \
+            festicore-ci
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:3000/api/v1/health; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs festicore-ci
+          exit 1
+      - if: always()
+        run: docker rm -f festicore-ci || true

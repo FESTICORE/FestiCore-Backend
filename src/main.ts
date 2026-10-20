@@ -1,6 +1,8 @@
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
+import type { Express, NextFunction, Request, Response } from 'express';
+import { isIP } from 'node:net';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { setupSwagger } from './swagger';
@@ -10,6 +12,21 @@ async function bootstrap() {
   const config = app.get(ConfigService);
   const isProd = config.get<string>('NODE_ENV') === 'production';
   const port = config.get<number>('PORT') ?? 3000;
+
+  if (config.get<string>('RAILWAY_ENVIRONMENT')) {
+    const express = app.getHttpAdapter().getInstance() as Express;
+    // Railway's public HTTP edge overwrites X-Real-IP; XFF has no fixed hop count.
+    express.set('trust proxy', 1);
+    app.use((request: Request, _response: Response, next: NextFunction) => {
+      const realIp = request.headers['x-real-ip'];
+      if (typeof realIp === 'string' && isIP(realIp)) {
+        request.headers['x-forwarded-for'] = realIp;
+      } else {
+        delete request.headers['x-forwarded-for'];
+      }
+      next();
+    });
+  }
 
   app.setGlobalPrefix('api/v1');
 
@@ -24,6 +41,8 @@ async function bootstrap() {
         .split(',')
         .map((o) => o.trim())
         .filter(Boolean),
+      credentials: true,
+      exposedHeaders: ['ETag'],
     });
   } else if (!isProd) {
     app.enableCors();

@@ -25,7 +25,6 @@ npm run start:dev
 
 - API: `http://localhost:3000/api/v1`
 - Swagger: `http://localhost:3000/api-docs`
-- 개발용 로그인: `.env`에 `DEV_LOGIN_ENABLED=true` → `POST /api/v1/auth/dev/login`
 
 ## 스크립트
 

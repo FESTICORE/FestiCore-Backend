@@ -27,12 +27,13 @@ export class LoggingInterceptor implements NestInterceptor {
     const req = http.getRequest<Request>();
     const res = http.getResponse<Response>();
     const { method, originalUrl } = req;
+    const path = originalUrl.split('?')[0];
     const startedAt = Date.now();
 
     return next.handle().pipe(
       tap(() => {
         const ms = Date.now() - startedAt;
-        this.logger.log(`${method} ${originalUrl} ${res.statusCode} +${ms}ms`);
+        this.logger.log(`${method} ${path} ${res.statusCode} +${ms}ms`);
       }),
     );
   }

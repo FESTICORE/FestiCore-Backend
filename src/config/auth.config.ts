@@ -29,6 +29,12 @@ export const authConfig = registerAs('auth', () => {
   assertJwtSecrets(process.env);
 
   const googleClientId = process.env.GOOGLE_CLIENT_ID;
+  const googleClientIds = [
+    googleClientId,
+    ...(process.env.GOOGLE_MOBILE_CLIENT_IDS ?? '').split(','),
+  ]
+    .map((id) => id?.trim())
+    .filter((id): id is string => Boolean(id));
   const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET;
 
   const appleClientId = process.env.APPLE_CLIENT_ID;
@@ -39,6 +45,7 @@ export const authConfig = registerAs('auth', () => {
   return {
     google: {
       clientId: googleClientId,
+      clientIds: [...new Set(googleClientIds)],
       // authorization code → refresh 토큰 교환에 필요(모바일 serverAuthCode)
       clientSecret: googleClientSecret,
       enabled: Boolean(googleClientId),

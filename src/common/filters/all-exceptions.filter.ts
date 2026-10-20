@@ -18,13 +18,17 @@ const REDACTED_KEYS = new Set([
   'authorizationcode',
   'code',
   'idtoken',
+  'id_token',
   'identitytoken',
+  'nonce',
   'password',
   'secret',
   'signature',
   'token',
   'accesstoken',
   'refreshtoken',
+  'state',
+  'user',
 ]);
 
 /**
@@ -58,7 +62,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     // 4xx(인증 없음·검증 실패·not found 등)는 예상된 클라이언트 오류이므로
     // 스택 없이 warn 으로 남긴다. 5xx(진짜 서버 오류)만 스택과 함께 error 로 남겨
     // 로그에서 실제 장애가 401/404 노이즈에 묻히지 않게 한다.
-    const line = `${request.method} ${request.url} - ${status} - ${message}`;
+    const line = `${request.method} ${request.url.split('?')[0]} - ${status} - ${message}`;
     if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
       this.logger.error(
         line,
@@ -85,7 +89,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
   /**
    * 요청 바디 로깅은 개발 진단용이라 운영에서는 절대 켜지 않는다.
-   * dev-login 플래그와 무관하게 Railway production 환경이면 항상 끈다.
+   * Railway production 환경이면 항상 끈다.
    */
   private isDiagnosticsEnabled(): boolean {
     if (!this.config) return false;

@@ -36,6 +36,15 @@ export class User {
   @Column({ type: 'varchar', nullable: true, select: false })
   oauthRefreshToken!: string | null;
 
+  @Column({ type: 'varchar', nullable: true, select: false })
+  oauthClientId!: string | null;
+
+  @Column({ type: 'varchar', nullable: true, select: false })
+  oauthWebRefreshToken!: string | null;
+
+  @Column({ type: 'varchar', nullable: true, select: false })
+  oauthWebClientId!: string | null;
+
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt!: Date;
 

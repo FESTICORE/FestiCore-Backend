@@ -1,10 +1,10 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { QueryFailedError, Repository } from 'typeorm';
-import { DevLoginDto } from '../dto/dev-login.dto';
 import { SocialLoginDto } from '../dto/social-login.dto';
 import { User } from '../entity/user.entity';
 import type { SocialProfile } from '../types/social-profile';
+import type { OauthGrant } from '../types/social-profile';
 import { AppleService } from './apple.service';
 import { GoogleService } from './google.service';
 import { TokenService } from './token.service';
@@ -52,21 +52,30 @@ export class AuthService {
     return { ...tokens, newUser: isNew, user: this.toView(user) };
   }
 
-  /**
-   * 개발 전용 로그인: 소셜 검증 없이 key로 사용자를 find-or-create 해 토큰을 발급한다.
-   * 같은 key는 항상 같은 계정으로 매핑되어(providerId=`dev-<key>`) 반복 테스트가 쉽다.
-   * 라우트 노출 여부는 컨트롤러에서 환경으로 제어한다.
-   */
-  async devLogin(dto: DevLoginDto): Promise<LoginResult> {
-    const key = (dto.key ?? 'default').trim() || 'default';
-    const { user, isNew } = await this.findOrCreate({
-      provider: 'google',
-      providerId: `dev-${key}`,
-      email: dto.email ?? undefined,
-      name: dto.nickname ?? key,
-    });
+  /** 웹 OAuth 콜백에서 검증이 끝난 프로필만 계정으로 연결한다. */
+  async completeWebLogin(
+    profile: SocialProfile,
+    grant?: OauthGrant,
+  ): Promise<{ userId: string; newUser: boolean }> {
+    const { user, isNew } = await this.findOrCreate(profile);
+    if (grant?.refreshToken && grant.subject === profile.providerId) {
+      await this.userRepo.update(
+        { id: user.id },
+        {
+          oauthWebRefreshToken: grant.refreshToken,
+          oauthWebClientId: grant.clientId ?? null,
+        },
+      );
+    }
+    return { userId: user.id, newUser: isNew };
+  }
+
+  /** 일회용 웹 교환 티켓 소비 후에만 토큰을 발급한다. */
+  async issueWebLogin(userId: string, newUser: boolean): Promise<LoginResult> {
+    const user = await this.userRepo.findOne({ where: { id: userId } });
+    if (!user) throw new NotFoundException('사용자를 찾을 수 없습니다.');
     const tokens = await this.token.issue(user);
-    return { ...tokens, newUser: isNew, user: this.toView(user) };
+    return { ...tokens, newUser, user: this.toView(user) };
   }
 
   /** refresh 토큰 회전: 기존 토큰 폐기 후 새 access/refresh 발급 */
@@ -94,6 +103,14 @@ export class AuthService {
     return this.toView(user);
   }
 
+  async updateMe(userId: string, nickname: string): Promise<UserView> {
+    const user = await this.userRepo.findOne({ where: { id: userId } });
+    if (!user) throw new NotFoundException('사용자를 찾을 수 없습니다.');
+    user.nickname = nickname;
+    await this.userRepo.save(user);
+    return this.toView(user);
+  }
+
   /**
    * 회원 탈퇴: provider 연동 해제(revoke) → refresh 토큰 삭제 → 사용자 삭제.
    * provider revoke 실패는 계정 삭제를 막지 않는다.
@@ -102,7 +119,14 @@ export class AuthService {
     // oauthRefreshToken은 select:false라 명시적으로 조회한다.
     const user = await this.userRepo.findOne({
       where: { id: userId },
-      select: { id: true, provider: true, oauthRefreshToken: true },
+      select: {
+        id: true,
+        provider: true,
+        oauthRefreshToken: true,
+        oauthClientId: true,
+        oauthWebRefreshToken: true,
+        oauthWebClientId: true,
+      },
     });
     if (!user) {
       throw new NotFoundException('사용자를 찾을 수 없습니다.');
@@ -111,12 +135,28 @@ export class AuthService {
       if (user.provider === 'google') {
         await this.google.revokeConnection(user.oauthRefreshToken);
       } else {
-        await this.apple.revokeConnection(user.oauthRefreshToken);
+        await this.apple.revokeConnection(
+          user.oauthRefreshToken,
+          user.oauthClientId ?? undefined,
+        );
       }
     } else {
       this.logger.warn(
         `provider 토큰이 없어 연동 해제를 건너뜁니다: ${user.provider} ${user.id}`,
       );
+    }
+    if (
+      user.oauthWebRefreshToken &&
+      user.oauthWebRefreshToken !== user.oauthRefreshToken
+    ) {
+      if (user.provider === 'google') {
+        await this.google.revokeConnection(user.oauthWebRefreshToken);
+      } else {
+        await this.apple.revokeConnection(
+          user.oauthWebRefreshToken,
+          user.oauthWebClientId ?? undefined,
+        );
+      }
     }
     await this.token.deleteAllForUser(userId);
     await this.userRepo.delete({ id: userId });
@@ -156,9 +196,13 @@ export class AuthService {
       return;
     }
     user.oauthRefreshToken = grant.refreshToken;
+    user.oauthClientId = grant.clientId ?? null;
     await this.userRepo.update(
       { id: user.id },
-      { oauthRefreshToken: grant.refreshToken },
+      {
+        oauthRefreshToken: grant.refreshToken,
+        oauthClientId: grant.clientId ?? null,
+      },
     );
   }
 
@@ -181,7 +225,7 @@ export class AuthService {
         this.userRepo.create({
           ...where,
           email: profile.email ?? null,
-          nickname: profile.name ?? null,
+          nickname: profile.name?.slice(0, 30) ?? null,
           profileImageUrl: profile.picture ?? null,
         }),
       );

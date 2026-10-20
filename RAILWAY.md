@@ -31,7 +31,7 @@ Railway 프로젝트 **FestiCore** (Roy's Projects). Cider 프로젝트와 같�
 
 ## 3. 환경변수 (서비스 Variables)
 
-`railway.toml`에서 `NODE_ENV=production`(두 환경)과 `DEV_LOGIN_ENABLED=true`(develop만)는 자동 설정된다.
+`railway.toml`에서 `NODE_ENV=production`(두 환경)은 자동 설정된다.
 추가로 설정할 값:
 
 ```
@@ -44,13 +44,32 @@ JWT_ACCESS_TTL=30m
 JWT_REFRESH_TTL=14d
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
+GOOGLE_MOBILE_CLIENT_IDS=                     # iOS/Android OAuth client ID, 쉼표 구분. 웹 ID는 GOOGLE_CLIENT_ID
+WEB_OAUTH_CLIENT_ORIGIN=https://<웹-클라이언트-origin> # 슬래시 없는 고정 HTTPS origin
 APPLE_CLIENT_ID=
+APPLE_WEB_CLIENT_ID=co.festiCore.io
+APPLE_WEB_REDIRECT_URI=https://<환경별-도메인>/api/v1/auth/apple/callback
 APPLE_TEAM_ID=
 APPLE_KEY_ID=
 APPLE_PRIVATE_KEY=                          # 개행은 \n
 ```
 
 로컬은 같은 키를 `.env`에 둔다(로컬 DB는 `DB_HOST/DB_PORT/DB_USERNAME/DB_PASSWORD/DB_NAME`, 기본 DB명 `festicore`).
+
+Google 웹은 Google Identity Services에서 받은 ID 토큰을 모바일 앱과 동일한
+`POST /api/v1/auth/login`에 `{ "provider": "google", "token": "<idToken>" }`으로 보낸다.
+웹 클라이언트의 승인된 JavaScript 원본에는 실제 웹사이트의 HTTPS origin을 등록한다.
+백엔드의 Google 리디렉션 URI는 사용하지 않는다. `GOOGLE_CLIENT_ID`는 웹 클라이언트 ID,
+`GOOGLE_MOBILE_CLIENT_IDS`는 iOS/Android 클라이언트 ID 목록이며,
+백엔드는 이 목록으로 ID 토큰의 audience를 검증한다.
+
+Apple Services ID `co.festiCore.io`의 웹 인증 도메인에는
+`festicore.up.railway.app`, `festicore-dev.up.railway.app`을 등록했다. Return URL은
+각 도메인의 `https://<도메인>/api/v1/auth/apple/callback`으로 등록했다.
+현재 iOS Apple 로그인은 앱의 identity token과 authorization code를
+`POST /api/v1/auth/login`에 전송하므로 이 웹 Return URL을 사용하지 않는다.
+웹 Apple 로그인은 `/api/v1/auth/apple/start`에서 시작하며 POST(form_post) 콜백에서
+state와 nonce를 검증한다. 웹 티켓 교환은 백엔드와 동일한 origin만 허용한다.
 
 ## 4. 배포 설정
 
