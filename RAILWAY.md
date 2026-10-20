@@ -71,6 +71,18 @@ Apple Services ID `co.festiCore.io`의 웹 인증 도메인에는
 웹 Apple 로그인은 `/api/v1/auth/apple/start`에서 시작하며 POST(form_post) 콜백에서
 state와 nonce를 검증한다. 웹 티켓 교환은 백엔드와 동일한 origin만 허용한다.
 
+## 관리자 인증 배포 조건
+
+관리자 인증에는 환경별로 `ADMIN_WEB_URL`, `ADMIN_API_PUBLIC_URL`,
+`ADMIN_OWNER_EMAIL`, `ADMIN_RESEND_API_KEY`, `ADMIN_EMAIL_FROM`,
+`ADMIN_SESSION_SAME_SITE`를 설정한다. 관리자 웹의 origin은 `CORS_ORIGINS`에도
+포함한다.
+
+관리자 세션은 브라우저 쿠키를 사용한다. 관리자 웹과 API를 같은 사이트의 HTTPS
+도메인(예: `admin.example.com`, `api.example.com`)에 배치하거나 관리자 웹에서
+API를 동일 origin으로 프록시해야 한다. 서로 다른 사이트의 Railway 기본 도메인과
+별도 웹 호스팅 도메인에서는 제3자 쿠키 차단으로 로그인이 유지되지 않는다.
+
 ## 4. 배포 설정
 
 `railway.toml`에 정의됨:

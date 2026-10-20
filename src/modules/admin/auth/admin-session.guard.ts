@@ -58,12 +58,14 @@ export class AdminSessionGuard implements CanActivate {
     if (rank[admin.role] < required)
       throw new ForbiddenException('관리자 권한이 부족합니다.');
 
-    if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) {
-      const allowed = this.config.get<string>('ADMIN_WEB_URL');
-      const origin = request.headers.origin;
-      if (!allowed || origin !== new URL(allowed).origin) {
-        throw new ForbiddenException('허용되지 않은 관리자 요청 출처입니다.');
-      }
+    const allowed = this.config.get<string>('ADMIN_WEB_URL');
+    const origin = request.headers.origin;
+    if (
+      !allowed ||
+      (origin && origin !== new URL(allowed).origin) ||
+      (!['GET', 'HEAD', 'OPTIONS'].includes(request.method) && !origin)
+    ) {
+      throw new ForbiddenException('허용되지 않은 관리자 요청 출처입니다.');
     }
     request.admin = admin;
     request.adminSessionToken = token;

@@ -90,6 +90,19 @@ describe('AdminSessionGuard', () => {
     ).rejects.toBeInstanceOf(ForbiddenException);
   });
 
+  it('rejects an admin read from another CORS-allowed origin', async () => {
+    await expect(
+      guard.canActivate(
+        context(
+          'GET',
+          '/api/v1/admin/auth/me',
+          'festicore_admin_session=token',
+          'https://app.example.com',
+        ),
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
   it('allows public magic link requests without a session', async () => {
     await expect(
       guard.canActivate(context('POST', '/api/v1/admin/auth/magic-link')),
