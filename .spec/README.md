@@ -12,6 +12,7 @@
 - [admin-festivals.md](./admin-festivals.md) — 축제 초안·발행·롤백
 - [flags.md](./flags.md) — 깃발·기수·팔로우·사진·신고
 - [public-festivals.md](./public-festivals.md) — 발행 축제 목록·팩·깃발·라이브 조회
+- [crews.md](./crews.md) — 비공개 크루·초대·상태·집결·멤버 관리
 
 ## 작성 규칙
 
