@@ -54,6 +54,13 @@ export class AuthController {
 
   @Delete('session')
   @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: '로그아웃 호환 경로',
+    description:
+      '현재 사용자의 refresh 토큰을 모두 폐기합니다. 새 클라이언트는 POST /auth/logout을 사용합니다.',
+    deprecated: true,
+  })
   async deleteSession(@CurrentUser() user: AuthUser) {
     await this.authService.logout(user.userId);
     return { success: true };
@@ -61,7 +68,12 @@ export class AuthController {
 
   @Get('me')
   @ApiBearerAuth()
-  @ApiOperation({ summary: '현재 로그인 사용자 정보' })
+  @ApiOperation({
+    summary: '내 프로필 조회 호환 경로',
+    description:
+      '현재 앱 access 토큰의 사용자 정보를 반환합니다. 새 클라이언트는 GET /me를 사용합니다.',
+    deprecated: true,
+  })
   me(@CurrentUser() user: AuthUser) {
     return this.authService.me(user.userId);
   }
@@ -70,7 +82,10 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
   @ApiOperation({
-    summary: '회원 탈퇴 (provider 연동 해제·계정·refresh 토큰 삭제)',
+    summary: '회원 탈퇴 호환 경로',
+    description:
+      '요청 본문 없이 계정과 refresh 토큰을 삭제하고 { success: true }를 반환합니다. 새 클라이언트는 확인 본문이 필요한 DELETE /me를 사용합니다.',
+    deprecated: true,
   })
   async withdraw(@CurrentUser() user: AuthUser) {
     await this.authService.withdraw(user.userId);
