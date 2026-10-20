@@ -56,6 +56,24 @@ describe('Auth (e2e)', () => {
       .expect(404);
   });
 
+  it('Google 웹과 앱은 같은 로그인 경로를 쓰며 Apple 인증 코드는 필수', async () => {
+    await request(server)
+      .post('/api/v1/auth/google')
+      .send({ token: 'x' })
+      .expect(404);
+    await request(server)
+      .post('/api/v1/auth/apple')
+      .send({ token: 'x' })
+      .expect(404);
+    await request(server).get('/api/v1/auth/google/start').expect(404);
+    await request(server).get('/api/v1/auth/google/callback').expect(404);
+    await request(server)
+      .post('/api/v1/auth/login')
+      .send({ provider: 'apple', token: 'identity-token' })
+      .expect(400);
+    await socialLogin().expect(200);
+  });
+
   it('login → me → refresh(회전) → 이전 refresh 재사용 401 → logout 후 refresh 401', async () => {
     const login = await socialLogin().expect(200);
     const { accessToken, refreshToken } = dataOf(login);

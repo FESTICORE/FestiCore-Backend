@@ -2,7 +2,6 @@ import { ConfigService } from '@nestjs/config';
 import { OAuth2Client } from 'google-auth-library';
 import { jwtVerify } from 'jose';
 import { validate } from 'class-validator';
-import { ProviderLoginDto } from '../dto/provider-login.dto';
 import { SocialLoginDto } from '../dto/social-login.dto';
 import { AppleService } from './apple.service';
 import { GoogleService } from './google.service';
@@ -16,56 +15,15 @@ jest.mock('jose', () => ({
 }));
 
 describe('OAuth client identity', () => {
-  it('limits names in both mobile login DTOs', async () => {
-    const provider = Object.assign(new ProviderLoginDto(), {
-      token: 'token',
-      name: 'x'.repeat(31),
-    });
+  it('limits names in the unified social login DTO', async () => {
     const social = Object.assign(new SocialLoginDto(), {
       provider: 'google',
       token: 'token',
       name: 'x'.repeat(31),
     });
     expect(
-      (await validate(provider)).some((error) => error.property === 'name'),
-    ).toBe(true);
-    expect(
       (await validate(social)).some((error) => error.property === 'name'),
     ).toBe(true);
-  });
-
-  it('maps Google web token network and verification failures', async () => {
-    const config = {
-      get: (key: string) =>
-        ({
-          'auth.google.clientId': 'web-client',
-          'auth.google.clientSecret': 'secret',
-          'auth.google.enabled': true,
-        })[key],
-    } as ConfigService;
-    const service = new GoogleService(config);
-    const fetchMock = jest
-      .spyOn(global, 'fetch')
-      .mockRejectedValueOnce(new Error('network'));
-    const verify = jest
-      .spyOn(OAuth2Client.prototype, 'verifyIdToken')
-      .mockRejectedValue(new Error('invalid'));
-    try {
-      await expect(
-        service.exchangeWebCode('code', 'https://callback', 'nonce'),
-      ).rejects.toMatchObject({ status: 503 });
-      fetchMock.mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: () => Promise.resolve({ id_token: 'invalid' }),
-      } as Response);
-      await expect(
-        service.exchangeWebCode('code', 'https://callback', 'nonce'),
-      ).rejects.toMatchObject({ status: 401 });
-    } finally {
-      fetchMock.mockRestore();
-      verify.mockRestore();
-    }
   });
 
   it('maps Apple web token network and verification failures', async () => {
@@ -105,7 +63,7 @@ describe('OAuth client identity', () => {
       verify.mockReset();
     }
   });
-  it('accepts configured mobile Google audience without changing web code client', async () => {
+  it('accepts configured web and mobile Google audiences on the same endpoint', async () => {
     const verify = jest
       .spyOn(OAuth2Client.prototype, 'verifyIdToken')
       .mockResolvedValue({ getPayload: () => ({ sub: 'subject' }) } as never);

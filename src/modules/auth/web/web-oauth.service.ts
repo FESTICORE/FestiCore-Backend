@@ -9,17 +9,15 @@ import { createHash, randomBytes } from 'crypto';
 import { IsNull, LessThan, MoreThan, Repository } from 'typeorm';
 import { AuthService, type LoginResult } from '../service/auth.service';
 import { AppleService } from '../service/apple.service';
-import { GoogleService } from '../service/google.service';
 import { WebOauthState, WebOauthTicket } from './web-oauth-state.entity';
 
-type Provider = 'google' | 'apple';
+type Provider = 'apple';
 
 @Injectable()
 export class WebOauthService {
   constructor(
     private readonly config: ConfigService,
     private readonly auth: AuthService,
-    private readonly google: GoogleService,
     private readonly apple: AppleService,
     @InjectRepository(WebOauthState)
     private readonly states: Repository<WebOauthState>,
@@ -36,11 +34,7 @@ export class WebOauthService {
   }
 
   redirectUri(provider: Provider): string {
-    const key =
-      provider === 'google'
-        ? 'GOOGLE_WEB_REDIRECT_URI'
-        : 'APPLE_WEB_REDIRECT_URI';
-    const configured = this.config.get<string>(key);
+    const configured = this.config.get<string>('APPLE_WEB_REDIRECT_URI');
     if (!configured)
       throw new ServiceUnavailableException(
         `${provider} 웹 콜백 URI가 설정되지 않았습니다.`,
@@ -121,33 +115,19 @@ export class WebOauthService {
         consumedAt: null,
       }),
     );
-    const clientId =
-      provider === 'google'
-        ? this.config.get<string>('auth.google.clientId')
-        : this.config.get<string>('APPLE_WEB_CLIENT_ID');
+    const clientId = this.config.get<string>('APPLE_WEB_CLIENT_ID');
     if (!clientId)
       throw new ServiceUnavailableException(
         `${provider} 웹 클라이언트가 설정되지 않았습니다.`,
       );
-    const url = new URL(
-      provider === 'google'
-        ? 'https://accounts.google.com/o/oauth2/v2/auth'
-        : 'https://appleid.apple.com/auth/authorize',
-    );
+    const url = new URL('https://appleid.apple.com/auth/authorize');
     url.searchParams.set('client_id', clientId);
     url.searchParams.set('redirect_uri', redirectUri);
-    url.searchParams.set(
-      'response_type',
-      provider === 'google' ? 'code' : 'code id_token',
-    );
-    url.searchParams.set(
-      'scope',
-      provider === 'google' ? 'openid email profile' : 'name email',
-    );
+    url.searchParams.set('response_type', 'code id_token');
+    url.searchParams.set('scope', 'name email');
     url.searchParams.set('state', state);
     url.searchParams.set('nonce', nonce);
-    if (provider === 'google') url.searchParams.set('access_type', 'offline');
-    else url.searchParams.set('response_mode', 'form_post');
+    url.searchParams.set('response_mode', 'form_post');
     return { url: url.toString(), browserToken };
   }
 
@@ -186,19 +166,12 @@ export class WebOauthService {
     );
     if (claimed.affected !== 1)
       throw new UnauthorizedException('이미 사용된 웹 로그인 상태입니다.');
-    const identity =
-      provider === 'google'
-        ? await this.google.exchangeWebCode(
-            code,
-            this.redirectUri(provider),
-            record.nonce,
-          )
-        : await this.apple.exchangeWebCode(
-            code,
-            this.redirectUri(provider),
-            record.nonce,
-            name,
-          );
+    const identity = await this.apple.exchangeWebCode(
+      code,
+      this.redirectUri(provider),
+      record.nonce,
+      name,
+    );
     const completed = await this.auth.completeWebLogin(
       identity.profile,
       identity.grant,

@@ -2,7 +2,6 @@ import { ConfigService } from '@nestjs/config';
 import { Repository } from 'typeorm';
 import { AuthService } from '../service/auth.service';
 import { AppleService } from '../service/apple.service';
-import { GoogleService } from '../service/google.service';
 import { WebOauthService } from './web-oauth.service';
 import { WebOauthState, WebOauthTicket } from './web-oauth-state.entity';
 
@@ -64,12 +63,9 @@ function harness() {
   const config = {
     get: (key: string) =>
       ({
-        GOOGLE_WEB_REDIRECT_URI:
-          'https://festicore-dev.up.railway.app/api/v1/auth/google/callback',
         APPLE_WEB_REDIRECT_URI:
           'https://festicore-dev.up.railway.app/api/v1/auth/apple/callback',
         APPLE_WEB_CLIENT_ID: 'co.festiCore.io',
-        'auth.google.clientId': 'google-client',
       })[key],
   } as ConfigService;
   const auth = {
@@ -80,12 +76,6 @@ function harness() {
       .fn()
       .mockResolvedValue({ accessToken: 'access', refreshToken: 'refresh' }),
   } as unknown as AuthService;
-  const googleExchange = jest.fn().mockResolvedValue({
-    profile: { provider: 'google', providerId: 'subject' },
-  });
-  const google = {
-    exchangeWebCode: googleExchange,
-  } as unknown as GoogleService;
   const appleExchange = jest.fn().mockResolvedValue({
     profile: { provider: 'apple', providerId: 'subject' },
   });
@@ -93,52 +83,51 @@ function harness() {
   const service = new WebOauthService(
     config,
     auth,
-    google,
     apple,
     states as unknown as Repository<WebOauthState>,
     tickets as unknown as Repository<WebOauthTicket>,
   );
-  return { service, googleExchange, appleExchange, states, tickets };
+  return { service, appleExchange, states, tickets };
 }
 
 describe('WebOauthService', () => {
   it('invalidates a cancelled state without exchanging provider code', async () => {
-    const { service, googleExchange } = harness();
-    const started = await service.begin('google');
+    const { service, appleExchange } = harness();
+    const started = await service.begin('apple');
     const state = new URL(started.url).searchParams.get('state')!;
     await expect(
-      service.cancel('google', state, 'other-browser'),
+      service.cancel('apple', state, 'other-browser'),
     ).rejects.toThrow();
-    await service.cancel('google', state, started.browserToken);
+    await service.cancel('apple', state, started.browserToken);
     await expect(
-      service.finish('google', 'code', state, started.browserToken),
+      service.finish('apple', 'code', state, started.browserToken),
     ).rejects.toThrow();
-    expect(googleExchange).not.toHaveBeenCalled();
+    expect(appleExchange).not.toHaveBeenCalled();
   });
 
   it('removes expired states and tickets before starting a new login', async () => {
     const { service, states, tickets } = harness();
-    await service.begin('google');
+    await service.begin('apple');
     expect(states.delete).toHaveBeenCalledTimes(1);
     expect(tickets.delete).toHaveBeenCalledTimes(1);
   });
   it('binds state to the initiating browser and rejects replay', async () => {
-    const { service, googleExchange } = harness();
-    const started = await service.begin('google');
+    const { service, appleExchange } = harness();
+    const started = await service.begin('apple');
     const state = new URL(started.url).searchParams.get('state')!;
     await expect(
-      service.finish('google', 'code', state, 'other-browser'),
+      service.finish('apple', 'code', state, 'other-browser'),
     ).rejects.toThrow();
     const ticket = await service.finish(
-      'google',
+      'apple',
       'code',
       state,
       started.browserToken,
     );
     expect(ticket).toBeTruthy();
-    expect(googleExchange).toHaveBeenCalledTimes(1);
+    expect(appleExchange).toHaveBeenCalledTimes(1);
     await expect(
-      service.finish('google', 'code', state, started.browserToken),
+      service.finish('apple', 'code', state, started.browserToken),
     ).rejects.toThrow();
   });
 

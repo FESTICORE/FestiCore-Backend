@@ -14,7 +14,57 @@ import { GoogleService } from './google.service';
 import { TokenService } from './token.service';
 
 describe('AuthService web grant replacement', () => {
-  it('revokes the previous provider grant after saving a replacement', async () => {
+  it('uses one account for Google app and web login with the same subject', async () => {
+    const users: User[] = [];
+    const repo = {
+      findOne: jest
+        .fn()
+        .mockImplementation(({ where }: { where: Partial<User> }) =>
+          Promise.resolve(
+            users.find(
+              (user) =>
+                user.provider === where.provider &&
+                user.providerId === where.providerId,
+            ) ?? null,
+          ),
+        ),
+      create: jest.fn().mockImplementation((input: User) => input),
+      save: jest.fn().mockImplementation((input: User) => {
+        const user = { ...input, id: 'shared-user' };
+        users.push(user);
+        return Promise.resolve(user);
+      }),
+    } as unknown as Repository<User>;
+    const google = {
+      verify: jest.fn().mockResolvedValue({
+        provider: 'google',
+        providerId: 'same-google-sub',
+      }),
+    } as unknown as GoogleService;
+    const token = {
+      issue: jest.fn().mockResolvedValue({
+        accessToken: 'access',
+        refreshToken: 'refresh',
+      }),
+    } as unknown as TokenService;
+    const service = new AuthService(google, {} as AppleService, token, repo);
+
+    const app = await service.login({
+      provider: 'google',
+      token: 'app-id-token',
+    });
+    const web = await service.completeWebLogin({
+      provider: 'google',
+      providerId: 'same-google-sub',
+    });
+
+    expect(app.user.id).toBe('shared-user');
+    expect(app.newUser).toBe(true);
+    expect(web).toEqual({ userId: 'shared-user', newUser: false });
+    expect(users).toHaveLength(1);
+  });
+
+  it('keeps provider authorization active when replacing a web refresh token', async () => {
     const user = {
       id: 'user-id',
       provider: 'apple',
@@ -55,6 +105,6 @@ describe('AuthService web grant replacement', () => {
         oauthWebClientId: 'new-client',
       },
     );
-    expect(revokeConnection).toHaveBeenCalledWith('old-grant', 'old-client');
+    expect(revokeConnection).not.toHaveBeenCalled();
   });
 });

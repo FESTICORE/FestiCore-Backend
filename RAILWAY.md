@@ -45,7 +45,6 @@ JWT_REFRESH_TTL=14d
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
 GOOGLE_MOBILE_CLIENT_IDS=                     # iOS/Android OAuth client ID, 쉼표 구분. 웹 ID는 GOOGLE_CLIENT_ID
-GOOGLE_WEB_REDIRECT_URI=https://<환경별-도메인>/api/v1/auth/google/callback
 WEB_OAUTH_CLIENT_ORIGIN=https://<웹-클라이언트-origin> # 슬래시 없는 고정 HTTPS origin
 APPLE_CLIENT_ID=
 APPLE_WEB_CLIENT_ID=co.festiCore.io
@@ -57,18 +56,12 @@ APPLE_PRIVATE_KEY=                          # 개행은 \n
 
 로컬은 같은 키를 `.env`에 둔다(로컬 DB는 `DB_HOST/DB_PORT/DB_USERNAME/DB_PASSWORD/DB_NAME`, 기본 DB명 `festicore`).
 
-Google 웹 OAuth 클라이언트의 승인된 리디렉션 URI는 운영
-`https://festicore.up.railway.app/api/v1/auth/google/callback`, 개발
-`https://festicore-dev.up.railway.app/api/v1/auth/google/callback`으로 등록했다.
-현재 모바일 Google 로그인은 앱이 받은 ID 토큰을 `POST /api/v1/auth/login`에 보내므로
-이 콜백 URI를 호출하지 않는다. 웹 인가 코드 흐름은 `/api/v1/auth/google/start`에서 시작하고
-콜백 뒤 일회용 HttpOnly 티켓을 `/api/v1/auth/web/token`에서 교환한다.
-웹 클라이언트는 로그인 시작 URL을 팝업으로 열고, 백엔드 origin에서 보낸
-`festicore:web-login` 메시지를 `event.origin` 검증 후 처리한다. 결과 페이지는
-백엔드 동일 origin에서 티켓을 소비하고 `WEB_OAUTH_CLIENT_ORIGIN`으로만 메시지를 보낸다.
-팝업이 아닌 직접 탐색에서는 티켓을 소비하지 않고 다시 열라는 안내를 표시한다.
-모바일 Google ID 토큰의 audience는 `GOOGLE_CLIENT_ID`와
-`GOOGLE_MOBILE_CLIENT_IDS`의 목록으로 검증하며, 웹 code 교환에는 웹 ID만 사용한다.
+Google 웹은 Google Identity Services에서 받은 ID 토큰을 모바일 앱과 동일한
+`POST /api/v1/auth/login`에 `{ "provider": "google", "token": "<idToken>" }`으로 보낸다.
+웹 클라이언트의 승인된 JavaScript 원본에는 실제 웹사이트의 HTTPS origin을 등록한다.
+백엔드의 Google 리디렉션 URI는 사용하지 않는다. `GOOGLE_CLIENT_ID`는 웹 클라이언트 ID,
+`GOOGLE_MOBILE_CLIENT_IDS`는 iOS/Android 클라이언트 ID 목록이며,
+백엔드는 이 목록으로 ID 토큰의 audience를 검증한다.
 
 Apple Services ID `co.festiCore.io`의 웹 인증 도메인에는
 `festicore.up.railway.app`, `festicore-dev.up.railway.app`을 등록했다. Return URL은

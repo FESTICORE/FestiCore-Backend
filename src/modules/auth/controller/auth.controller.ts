@@ -11,7 +11,6 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { RefreshDto } from '../dto/refresh.dto';
 import { SocialLoginDto } from '../dto/social-login.dto';
-import { ProviderLoginDto } from '../dto/provider-login.dto';
 import { CurrentUser } from '../decorator/current-user.decorator';
 import { Public } from '../decorator/public.decorator';
 import { AuthService } from '../service/auth.service';
@@ -27,24 +26,10 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: '소셜 로그인/가입 (Google·Apple 통합)' })
   login(@Body() dto: SocialLoginDto) {
-    return this.authService.login(dto);
-  }
-
-  @Public()
-  @Post('google')
-  @HttpCode(HttpStatus.OK)
-  loginGoogle(@Body() dto: ProviderLoginDto) {
-    return this.authService.login({ ...dto, provider: 'google' });
-  }
-
-  @Public()
-  @Post('apple')
-  @HttpCode(HttpStatus.OK)
-  loginApple(@Body() dto: ProviderLoginDto) {
-    if (!dto.authorizationCode) {
+    if (dto.provider === 'apple' && !dto.authorizationCode) {
       throw new BadRequestException('Apple authorizationCode가 필요합니다.');
     }
-    return this.authService.login({ ...dto, provider: 'apple' });
+    return this.authService.login(dto);
   }
 
   @Public()

@@ -45,7 +45,6 @@ export async function createTestApp(): Promise<TestContext> {
   const refreshTokens = new FakeRepository<RefreshToken>();
   const google = {
     verify: jest.fn(),
-    exchangeWebCode: jest.fn(),
     exchangeAuthCode: jest.fn(),
     revokeConnection: jest.fn(),
   };

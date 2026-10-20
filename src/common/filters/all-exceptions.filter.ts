@@ -18,13 +18,17 @@ const REDACTED_KEYS = new Set([
   'authorizationcode',
   'code',
   'idtoken',
+  'id_token',
   'identitytoken',
+  'nonce',
   'password',
   'secret',
   'signature',
   'token',
   'accesstoken',
   'refreshtoken',
+  'state',
+  'user',
 ]);
 
 /**

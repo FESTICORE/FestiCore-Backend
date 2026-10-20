@@ -14,7 +14,7 @@ import type { Request, Response } from 'express';
 import { Public } from '../decorator/public.decorator';
 import { WebOauthService } from '../web/web-oauth.service';
 
-type Provider = 'google' | 'apple';
+type Provider = 'apple';
 const TICKET_COOKIE = 'festicore_web_login_ticket';
 
 @Controller('auth')
@@ -80,33 +80,9 @@ export class WebOauthController {
   }
 
   @Public()
-  @Get('google/start')
-  googleStart(@Res() response: Response) {
-    return this.start('google', response);
-  }
-
-  @Public()
   @Get('apple/start')
   appleStart(@Res() response: Response) {
     return this.start('apple', response);
-  }
-
-  @Public()
-  @Get('google/callback')
-  googleCallback(@Req() request: Request, @Res() response: Response) {
-    response.setHeader('Cross-Origin-Opener-Policy', 'unsafe-none');
-    const state =
-      typeof request.query.state === 'string' ? request.query.state : '';
-    if (typeof request.query.error === 'string') {
-      return this.cancel('google', state, request, response);
-    }
-    return this.finish(
-      'google',
-      typeof request.query.code === 'string' ? request.query.code : '',
-      state,
-      request,
-      response,
-    );
   }
 
   @Public()
@@ -216,14 +192,8 @@ export class WebOauthController {
     @Res({ passthrough: true }) response: Response,
   ) {
     const origin = request.headers.origin;
-    const allowed = ['google', 'apple'].flatMap((provider) => {
-      try {
-        return [new URL(this.oauth.redirectUri(provider as Provider)).origin];
-      } catch {
-        return [];
-      }
-    });
-    if (!origin || !allowed.includes(origin)) {
+    const allowed = new URL(this.oauth.redirectUri('apple')).origin;
+    if (!origin || origin !== allowed) {
       throw new UnauthorizedException(
         '웹 로그인 교환 요청의 출처가 일치하지 않습니다.',
       );

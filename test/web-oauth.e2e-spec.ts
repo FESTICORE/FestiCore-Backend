@@ -12,7 +12,7 @@ describe('Web OAuth callback (e2e)', () => {
   let server: App;
   const oauth = {
     begin: jest.fn().mockResolvedValue({
-      url: 'https://accounts.google.com/o/oauth2/v2/auth?state=s',
+      url: 'https://appleid.apple.com/auth/authorize?state=s',
       browserToken: 'browser',
     }),
     finish: jest.fn().mockResolvedValue('ticket'),
@@ -23,7 +23,7 @@ describe('Web OAuth callback (e2e)', () => {
     redirectUri: jest
       .fn()
       .mockReturnValue(
-        'https://festicore-dev.up.railway.app/api/v1/auth/google/callback',
+        'https://festicore-dev.up.railway.app/api/v1/auth/apple/callback',
       ),
     clientOrigin: jest.fn().mockReturnValue('https://admin.example.com'),
   };
@@ -46,19 +46,21 @@ describe('Web OAuth callback (e2e)', () => {
 
   it('starts, callbacks, sends result to fixed popup origin, and exchanges once', async () => {
     const start = await request(server)
-      .get('/api/v1/auth/google/start')
+      .get('/api/v1/auth/apple/start')
       .expect(302);
-    expect(start.headers.location).toContain('accounts.google.com');
+    expect(start.headers.location).toContain('appleid.apple.com');
     expect(start.headers['cross-origin-opener-policy']).toBe('unsafe-none');
     const browserCookie = (
       start.headers['set-cookie'] as unknown as string[]
     )[0].split(';')[0];
     const callback = await request(server)
-      .get('/api/v1/auth/google/callback?code=code&state=state')
+      .post('/api/v1/auth/apple/callback')
+      .type('form')
+      .send({ code: 'code', state: 'state' })
       .set('Cookie', browserCookie)
       .expect(303);
     expect(oauth.finish).toHaveBeenCalledWith(
-      'google',
+      'apple',
       'code',
       'state',
       'browser',
@@ -103,15 +105,6 @@ describe('Web OAuth callback (e2e)', () => {
   });
 
   it('invalidates provider cancellation and tells the opener without requesting tokens', async () => {
-    const google = await request(server)
-      .get('/api/v1/auth/google/callback?error=access_denied&state=state')
-      .set('Cookie', 'festicore_google_oauth=browser')
-      .expect(303);
-    expect(google.headers['cross-origin-opener-policy']).toBe('unsafe-none');
-    expect(google.headers.location).toBe(
-      '/api/v1/auth/web/result?error=cancelled',
-    );
-    expect(oauth.cancel).toHaveBeenCalledWith('google', 'state', 'browser');
     const apple = await request(server)
       .post('/api/v1/auth/apple/callback')
       .set('Cookie', 'festicore_apple_oauth=browser')

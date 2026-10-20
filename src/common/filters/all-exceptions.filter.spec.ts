@@ -71,6 +71,28 @@ describe('AllExceptionsFilter', () => {
     expect(logged).not.toContain('secret-state');
   });
 
+  it('Apple form_post의 ID 토큰과 상태 및 사용자 정보를 숨긴다', () => {
+    const { host } = hostFor(
+      {
+        id_token: 'apple-id-token-raw',
+        state: 'apple-state-raw',
+        user: '{"email":"private@example.com"}',
+        nonce: 'apple-nonce-raw',
+      },
+      '/api/v1/auth/apple/callback',
+    );
+    new AllExceptionsFilter(configOf({ NODE_ENV: 'development' })).catch(
+      new BadRequestException('bad'),
+      host,
+    );
+    const logged = String((warn.mock.calls as unknown[][])[0][0]);
+    expect(logged).toContain('body=');
+    expect(logged).not.toContain('apple-id-token-raw');
+    expect(logged).not.toContain('apple-state-raw');
+    expect(logged).not.toContain('private@example.com');
+    expect(logged).not.toContain('apple-nonce-raw');
+  });
+
   it('Railway production 환경은 진단 바디를 기록하지 않는다', () => {
     const { host } = hostFor(badLogin);
     new AllExceptionsFilter(
