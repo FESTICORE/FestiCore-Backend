@@ -142,7 +142,7 @@ export class AuthController {
   @ApiOperation({
     summary: '회원 탈퇴 호환 경로',
     description:
-      '요청 본문 없이 계정과 refresh 토큰을 삭제하고 { success: true }를 반환합니다. 새 클라이언트는 확인 본문이 필요한 DELETE /me를 사용합니다.',
+      '요청 본문 없이 계정과 refresh 토큰을 삭제하고 { success: true }를 반환합니다. 새 클라이언트는 DELETE /me를 사용합니다.',
     deprecated: true,
   })
   @ApiResponse({ status: 200, description: '{ success: true }' })

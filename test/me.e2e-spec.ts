@@ -50,21 +50,11 @@ describe('Me API contract (e2e)', () => {
     expect(result.body).toMatchObject({ data: { nickname: '새이름' } });
   });
 
-  it('DELETE는 확인 문구가 있어야 하며 성공 시 204를 반환한다', async () => {
-    await request(server)
-      .delete('/api/v1/me')
-      .set('Authorization', `Bearer ${accessToken}`)
-      .send({})
-      .expect(400);
-    await request(server)
-      .delete('/api/v1/me')
-      .set('Authorization', `Bearer ${accessToken}`)
-      .send({ confirm: 'WRONG' })
-      .expect(400);
+  it('DELETE는 본문 없이 탈퇴하고 기존 access 토큰을 거부한다', async () => {
+    await request(server).delete('/api/v1/me').expect(401);
     const result = await request(server)
       .delete('/api/v1/me')
       .set('Authorization', `Bearer ${accessToken}`)
-      .send({ confirm: 'DELETE' })
       .expect(204);
     expect(result.text).toBe('');
 

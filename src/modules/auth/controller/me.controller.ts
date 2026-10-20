@@ -6,7 +6,7 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import { IsIn, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsString, MaxLength, MinLength } from 'class-validator';
 import { CurrentUser } from '../decorator/current-user.decorator';
 import { AuthService } from '../service/auth.service';
 import type { AuthUser } from '../types/social-profile';
@@ -22,17 +22,6 @@ class UpdateMeDto {
   @MinLength(1)
   @MaxLength(12)
   nickname!: string;
-}
-
-class WithdrawMeDto {
-  @ApiProperty({
-    description: '실수로 계정을 삭제하지 않도록 입력하는 확인 문구',
-    example: 'DELETE',
-    enum: ['DELETE'],
-  })
-  @IsString()
-  @IsIn(['DELETE'])
-  confirm!: 'DELETE';
 }
 
 @ApiTags('Me')
@@ -80,19 +69,14 @@ export class MeController {
   @ApiOperation({
     summary: '회원 탈퇴',
     description:
-      '요청 본문에 { "confirm": "DELETE" }를 보내면 현재 로그인한 계정과 refresh 토큰을 삭제합니다.',
+      '요청 본문 없이 현재 access 토큰의 계정과 refresh 토큰을 삭제합니다. 탈퇴 확인은 클라이언트 화면에서 처리합니다.',
   })
   @ApiResponse({ status: 204, description: '탈퇴 완료. 응답 본문 없음' })
-  @ApiResponse({ status: 400, description: 'confirm 값이 DELETE가 아님' })
   @ApiResponse({
     status: 401,
     description: 'access 토큰이 없거나 유효하지 않음',
   })
-  async withdraw(
-    @CurrentUser() user: AuthUser,
-    @Body() _body: WithdrawMeDto,
-  ): Promise<void> {
-    void _body;
+  async withdraw(@CurrentUser() user: AuthUser): Promise<void> {
     await this.auth.withdraw(user.userId);
   }
 }
