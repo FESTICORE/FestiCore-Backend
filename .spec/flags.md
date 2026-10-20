@@ -19,7 +19,7 @@
 | GET | `/api/v1/flags/:flagId/bearer` | 기수 | 기수 전용 상태, `no-store` |
 | PATCH | `/api/v1/flags/:flagId` | 기수 | 프로필 수정 |
 | POST | `/api/v1/flags/:flagId/status` | 기수 | `Idempotency-Key` 필수, 현장 상태 변경 |
-| POST | `/api/v1/flags/:flagId/photo` | 기수 | multipart `photo`(JPEG/PNG, 최대 5MB), WebP 변환·저장 |
+| POST | `/api/v1/flags/:flagId/photo` | 기수 | multipart `photo`(JPEG/PNG/HEIC/HEIF, 최대 5MB), WebP 변환·저장 |
 | POST | `/api/v1/flags/:flagId/co-bearers/invite` | 소유 기수 | 공동 기수 초대 |
 | DELETE | `/api/v1/flags/:flagId/co-bearers/:userId` | 소유 기수 | 공동 기수 해제, 204 |
 | POST | `/api/v1/bearer/claim` | 앱 JWT | 등록 코드·`X-Device-Id`로 기수 권한 신청 |
@@ -42,6 +42,8 @@
 - 비공개 또는 숨김 깃발의 공개 조회와 사진은 404다. 기수 전용 쓰기는 소유권을 확인한다.
 - 등록 코드는 조회용 해시와 암호문으로 저장한다. 관리자 코드 목록의 원문 복원에
   서버의 refresh 비밀값에서 분리해 파생한 키를 사용한다. 코드 추측은 사용자·디바이스·IP별로 제한한다.
+- 등록 코드 원문을 반환하는 관리자 응답은 `Cache-Control: no-store`다. JWT refresh 비밀값을
+  교체하면 이전 암호문을 복원할 수 없으므로, 기존 코드를 폐기하고 다시 발급해야 한다.
 - 팔로우·상태의 동일 멱등키에 다른 요청을 보내면 409다. 키는 24시간 보관한다.
 - 사진은 실제 바이트를 디코딩한 뒤 EXIF를 제거하고 WebP로 재인코딩한다.
 - 상태 변경의 `clientAt` 오래됨/미래 시간 검증과 소유권은
