@@ -2,10 +2,10 @@
 
 FestiCore 백엔드는 Railway에서 **develop / production** 두 환경으로 운영한다.
 
-| 환경       | 연결 브랜치 | API 도메인 | 용도          |
-| ---------- | ----------- | --- | ------------- |
+| 환경       | 연결 브랜치 | API 도메인                             | 용도          |
+| ---------- | ----------- | -------------------------------------- | ------------- |
 | develop    | `develop`   | `https://festicore-dev.up.railway.app` | 개발/스테이징 |
-| production | `main`      | `https://festicore.up.railway.app` | 운영          |
+| production | `main`      | `https://festicore.up.railway.app`     | 운영          |
 
 ## 1. 프로젝트/환경 구성
 
@@ -52,6 +52,7 @@ APPLE_WEB_REDIRECT_URI=https://<환경별-도메인>/api/v1/auth/apple/callback
 APPLE_TEAM_ID=
 APPLE_KEY_ID=
 APPLE_PRIVATE_KEY=                          # 개행은 \n
+APPLE_REVOKE_ENCRYPTION_KEY=                # Apple 폐기 재시도 토큰 암호화: 32바이트 base64 또는 64자리 hex, 환경별 별도 키
 RAILWAY_BUCKET_NAME=                        # 각 환경의 비공개 이미지 버킷
 RAILWAY_BUCKET_REGION=
 RAILWAY_BUCKET_ENDPOINT=
@@ -84,6 +85,11 @@ Apple Services ID `co.festiCore.io`의 웹 인증 도메인에는
 `POST /api/v1/auth/login`에 전송하므로 이 웹 Return URL을 사용하지 않는다.
 웹 Apple 로그인은 `/api/v1/auth/apple/start`에서 시작하며 POST(form_post) 콜백에서
 state와 nonce를 검증한다. 웹 티켓 교환은 백엔드와 동일한 origin만 허용한다.
+Apple 토큰 폐기가 실패하면 탈퇴 트랜잭션에서 암호화된 재시도 작업을 저장한다.
+`APPLE_REVOKE_ENCRYPTION_KEY`를 develop/production 모두에 먼저 설정해야 한다.
+작업자는 1분마다 최대 10건을 처리하고 최대 12회 지수 간격으로 재시도한다.
+12회 실패한 작업은 `apple_revoke_retries.exhaustedAt`에 표시되며 운영 점검이 필요하다.
+기존 암호문이 남아 있는 동안 키를 변경하면 복호화할 수 없으므로 키를 보존해야 한다.
 
 ## 관리자 인증 배포 조건
 

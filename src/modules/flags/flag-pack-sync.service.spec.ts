@@ -1,4 +1,4 @@
-import { DataSource } from 'typeorm';
+import { DataSource, EntityManager } from 'typeorm';
 import {
   AdminFestival,
   AdminFestivalVersion,
@@ -55,9 +55,23 @@ describe('FlagPackSyncService', () => {
       photoKey: null,
       thumbKey: null,
     } as Flag;
+    const secondFlag = {
+      ...flag,
+      id: 'flg_abcdef1234567890',
+      name: 'Red Flag',
+    };
     const saveVersion = jest.fn().mockResolvedValue(undefined);
     const repositories = new Map([
-      [Flag, { findOne: jest.fn().mockImplementation(() => flag) }],
+      [
+        Flag,
+        {
+          findOne: jest
+            .fn()
+            .mockImplementation(({ where }: { where: { id: string } }) =>
+              where.id === secondFlag.id ? secondFlag : flag,
+            ),
+        },
+      ],
       [
         AdminFestival,
         {
@@ -71,10 +85,10 @@ describe('FlagPackSyncService', () => {
       getRepository: (entity: unknown) =>
         repositories.get(entity as typeof Flag),
     };
-    const db = {
-      transaction: (run: (value: typeof manager) => Promise<void>) =>
-        run(manager),
-    } as DataSource;
+    const transaction = jest.fn(
+      (run: (value: typeof manager) => Promise<void>) => run(manager),
+    );
+    const db = { transaction } as unknown as DataSource;
     const service = new FlagPackSyncService(db);
 
     await service.sync(flag.id);
@@ -85,8 +99,18 @@ describe('FlagPackSyncService', () => {
     );
 
     flag.hidden = true;
-    await service.sync(flag.id);
+    await service.sync(flag.id, manager as unknown as EntityManager);
     expect(festival.publishedVersion).toBe(3);
     expect(festival.published?.flags).toEqual([]);
+    expect(transaction).toHaveBeenCalledTimes(1);
+
+    flag.hidden = false;
+    await service.syncMany(
+      [flag.id, secondFlag.id],
+      manager as unknown as EntityManager,
+    );
+    expect(festival.publishedVersion).toBe(4);
+    expect(saveVersion).toHaveBeenCalledTimes(3);
+    expect(festival.published?.flags).toHaveLength(2);
   });
 });

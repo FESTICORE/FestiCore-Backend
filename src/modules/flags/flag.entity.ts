@@ -38,8 +38,7 @@ export class Flag {
   activity!: FlagActivity | null;
   @Column({ type: 'boolean', default: false }) hidden!: boolean;
   @Column({ type: 'integer', default: 0 }) reportCount!: number;
-  @Column({ type: 'varchar', length: 36, nullable: true }) ownerId!:
-    string | null;
+  @Column({ type: 'uuid', nullable: true }) ownerId!: string | null;
   @Column({ type: 'date', nullable: true }) restartDate!: string | null;
   @Column({ type: 'timestamptz', nullable: true })
   statusUpdatedAt!: Date | null;
@@ -109,7 +108,7 @@ export class FlagReport {
 export class FlagStatusEvent {
   @PrimaryGeneratedColumn('uuid') id!: string;
   @Column({ type: 'varchar', length: 32 }) flagId!: string;
-  @Column({ type: 'uuid' }) userId!: string;
+  @Column({ type: 'uuid', nullable: true }) userId!: string | null;
   @Column({ type: 'varchar', length: 20 }) status!: FlagLifecycle;
   @Column({ type: 'varchar', length: 32, nullable: true }) zoneId!:
     string | null;

@@ -5,6 +5,7 @@ import {
   HttpException,
   Injectable,
   NotFoundException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
@@ -298,6 +299,15 @@ export class FlagsService {
     };
   }
 
+  // 탈퇴도 사용자 행을 먼저 잠근다. JWT 검사 직후 탈퇴가 시작된 요청을 여기서 거른다.
+  private async lockActiveUser(manager: EntityManager, userId: string) {
+    const rows = await manager.query<{ id: string }[]>(
+      `SELECT "id" FROM "users" WHERE "id" = $1 FOR UPDATE`,
+      [userId],
+    );
+    if (!rows.length) throw new UnauthorizedException('탈퇴한 사용자입니다.');
+  }
+
   async follow(id: string, userId: string, key: string) {
     const flag = await this.publicFlag(id);
     if (flag.hidden)
@@ -306,6 +316,7 @@ export class FlagsService {
         message: '깃발을 찾을 수 없습니다.',
       });
     return this.db.transaction(async (manager) => {
+      await this.lockActiveUser(manager, userId);
       const prior = await this.replay(manager, userId, key, `follow:${id}`, {});
       if (prior) return prior;
       const flags = manager.getRepository(Flag);
@@ -349,6 +360,7 @@ export class FlagsService {
   async unfollow(id: string, userId: string) {
     await this.publicFlag(id);
     return this.db.transaction(async (manager) => {
+      await this.lockActiveUser(manager, userId);
       const flags = manager.getRepository(Flag);
       const follows = manager.getRepository(FlagFollow);
       const pins = manager.getRepository(FlagPin);
@@ -428,6 +440,7 @@ export class FlagsService {
         message: '신고 사유가 올바르지 않습니다.',
       });
     return this.db.transaction(async (manager) => {
+      await this.lockActiveUser(manager, userId);
       const flags = manager.getRepository(Flag);
       const reports = manager.getRepository(FlagReport);
       const locked = await flags
@@ -834,18 +847,35 @@ export class FlagsService {
   }
 
   async removeBearer(id: string, actorId: string, targetId: string) {
-    const flag = await this.bearerFlag(id, actorId);
-    if (actorId !== targetId && flag.ownerId !== actorId)
-      throw new ForbiddenException({
-        code: 'FLAG_NOT_OWNER',
-        message: '원래 기수만 제거할 수 있습니다.',
+    await this.publicFlag(id);
+    await this.db.transaction(async (manager) => {
+      const flag = await manager.getRepository(Flag).findOne({
+        where: { id, visibility: 'public' },
+        lock: { mode: 'pessimistic_write' },
       });
-    if (targetId === flag.ownerId)
-      throw new ConflictException({
-        code: 'FLAG_OWNER_REQUIRED',
-        message: '원래 기수는 제거할 수 없습니다.',
-      });
-    await this.bearers.delete({ flagId: id, userId: targetId });
+      if (!flag)
+        throw new NotFoundException({
+          code: 'NOT_FOUND',
+          message: '깃발을 찾을 수 없습니다.',
+        });
+      const bearers = manager.getRepository(FlagBearer);
+      if (!(await bearers.exists({ where: { flagId: id, userId: actorId } })))
+        throw new ForbiddenException({
+          code: 'FLAG_NOT_BEARER',
+          message: '기수 권한이 없습니다.',
+        });
+      if (actorId !== targetId && flag.ownerId !== actorId)
+        throw new ForbiddenException({
+          code: 'FLAG_NOT_OWNER',
+          message: '원래 기수만 제거할 수 있습니다.',
+        });
+      if (targetId === flag.ownerId)
+        throw new ConflictException({
+          code: 'FLAG_OWNER_REQUIRED',
+          message: '원래 기수는 제거할 수 없습니다.',
+        });
+      await bearers.delete({ flagId: id, userId: targetId });
+    });
   }
 
   async createCodes(festivalId: string, input: unknown) {

@@ -4,9 +4,11 @@ import { APP_GUARD } from '@nestjs/core';
 import { JwtModule, JwtService } from '@nestjs/jwt';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { Test } from '@nestjs/testing';
+import { getRepositoryToken } from '@nestjs/typeorm';
 import request from 'supertest';
 import type { Server } from 'http';
 import { JwtAuthGuard } from '../src/modules/auth/guard/jwt-auth.guard';
+import { User } from '../src/modules/auth/entity/user.entity';
 import { CrewController } from '../src/modules/crews/crew.controller';
 import { CrewService } from '../src/modules/crews/crew.service';
 
@@ -43,6 +45,14 @@ describe('Crew HTTP contract', () => {
         {
           provide: ConfigService,
           useValue: { get: () => 'test-access-secret' },
+        },
+        {
+          provide: getRepositoryToken(User),
+          useValue: {
+            findOne: jest
+              .fn()
+              .mockResolvedValue({ id: userId, provider: 'google' }),
+          },
         },
         { provide: APP_GUARD, useClass: JwtAuthGuard },
       ],

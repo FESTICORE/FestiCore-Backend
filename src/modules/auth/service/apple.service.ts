@@ -203,9 +203,12 @@ export class AppleService {
   async revokeConnection(
     refreshToken: string,
     clientId = this.clientId,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const clientSecret = await this.buildClientSecret(clientId);
-    if (!clientSecret || !clientId) return;
+    if (!clientSecret || !clientId) {
+      this.logger.warn('Apple 연동 해제 설정이 없어 재시도가 필요합니다.');
+      return false;
+    }
 
     const body = new URLSearchParams({
       client_id: clientId,
@@ -219,12 +222,16 @@ export class AppleService {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body,
+        signal: AbortSignal.timeout(5000),
       });
       if (!res.ok) {
         this.logger.warn(`Apple 연동 해제 실패: ${res.status}`);
+        return false;
       }
-    } catch (error) {
-      this.logger.warn(`Apple 연동 해제 오류: ${(error as Error).message}`);
+      return true;
+    } catch {
+      this.logger.warn('Apple 연동 해제 연결 오류');
+      return false;
     }
   }
 

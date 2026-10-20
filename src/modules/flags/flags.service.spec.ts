@@ -114,4 +114,38 @@ describe('FlagsService security boundaries', () => {
       status: 404,
     });
   });
+
+  it('rejects follow when account disappears after JWT validation', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const db = {
+      transaction: (
+        work: (manager: { query: typeof query }) => Promise<unknown>,
+      ) => work({ query }),
+    } as unknown as DataSource;
+    const guarded = new FlagsService(
+      db,
+      { get: () => 'a-long-test-refresh-secret' } as unknown as ConfigService,
+      flags as unknown as Repository<Flag>,
+      {} as Repository<FlagFollow>,
+      {} as Repository<FlagPin>,
+      bearers as unknown as Repository<FlagBearer>,
+      codes as unknown as Repository<FlagBearerCode>,
+      {} as Repository<FlagClaimAttempt>,
+      {} as FlagClaimThrottleService,
+      {} as Repository<FlagReport>,
+      festivals as unknown as Repository<AdminFestival>,
+      {} as Repository<User>,
+      {} as ImageStorageService,
+      { sync } as unknown as FlagPackSyncService,
+    );
+    await expect(
+      guarded.follow('flg_1', 'departed', 'key-1'),
+    ).rejects.toMatchObject({
+      status: 401,
+    });
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining('FROM "users" WHERE "id" = $1 FOR UPDATE'),
+      ['departed'],
+    );
+  });
 });
