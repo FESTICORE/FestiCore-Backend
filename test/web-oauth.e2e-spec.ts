@@ -16,6 +16,7 @@ describe('Web OAuth callback (e2e)', () => {
       browserToken: 'browser',
     }),
     finish: jest.fn().mockResolvedValue('ticket'),
+    cancel: jest.fn().mockResolvedValue(undefined),
     consumeTicket: jest
       .fn()
       .mockResolvedValue({ accessToken: 'access', refreshToken: 'refresh' }),
@@ -48,6 +49,7 @@ describe('Web OAuth callback (e2e)', () => {
       .get('/api/v1/auth/google/start')
       .expect(302);
     expect(start.headers.location).toContain('accounts.google.com');
+    expect(start.headers['cross-origin-opener-policy']).toBe('unsafe-none');
     const browserCookie = (
       start.headers['set-cookie'] as unknown as string[]
     )[0].split(';')[0];
@@ -62,6 +64,7 @@ describe('Web OAuth callback (e2e)', () => {
       'browser',
       undefined,
     );
+    expect(callback.headers['cross-origin-opener-policy']).toBe('unsafe-none');
     const ticketCookie = (callback.headers['set-cookie'] as unknown as string[])
       .find((cookie) => cookie.startsWith('festicore_web_login_ticket='))!
       .split(';')[0];
@@ -99,6 +102,37 @@ describe('Web OAuth callback (e2e)', () => {
     expect(oauth.consumeTicket).not.toHaveBeenCalled();
   });
 
+  it('invalidates provider cancellation and tells the opener without requesting tokens', async () => {
+    const google = await request(server)
+      .get('/api/v1/auth/google/callback?error=access_denied&state=state')
+      .set('Cookie', 'festicore_google_oauth=browser')
+      .expect(303);
+    expect(google.headers['cross-origin-opener-policy']).toBe('unsafe-none');
+    expect(google.headers.location).toBe(
+      '/api/v1/auth/web/result?error=cancelled',
+    );
+    expect(oauth.cancel).toHaveBeenCalledWith('google', 'state', 'browser');
+    const apple = await request(server)
+      .post('/api/v1/auth/apple/callback')
+      .set('Cookie', 'festicore_apple_oauth=browser')
+      .type('form')
+      .send({ error: 'user_cancelled_authorize', state: 'apple-state' })
+      .expect(303);
+    expect(apple.headers['cross-origin-opener-policy']).toBe('unsafe-none');
+    expect(oauth.cancel).toHaveBeenCalledWith(
+      'apple',
+      'apple-state',
+      'browser',
+    );
+    const result = await request(server)
+      .get('/api/v1/auth/web/result?error=cancelled')
+      .expect(200);
+    expect(result.text).toContain("error:'cancelled'");
+    expect(result.text).not.toContain("fetch('/api/v1/auth/web/token'");
+    expect(oauth.finish).not.toHaveBeenCalled();
+    expect(oauth.consumeTicket).not.toHaveBeenCalled();
+  });
+
   it('passes bounded first-login Apple name and rejects oversized user data', async () => {
     await request(server)
       .post('/api/v1/auth/apple/callback')
@@ -117,11 +151,12 @@ describe('Web OAuth callback (e2e)', () => {
       'browser',
       '길동 홍',
     );
-    await request(server)
+    const invalid = await request(server)
       .post('/api/v1/auth/apple/callback')
       .type('form')
       .send({ code: 'code', state: 'state', user: 'x'.repeat(2049) })
       .expect(400);
+    expect(invalid.headers['cross-origin-opener-policy']).toBe('unsafe-none');
     expect(oauth.finish).toHaveBeenCalledTimes(1);
   });
 });

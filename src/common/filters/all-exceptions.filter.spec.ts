@@ -71,13 +71,12 @@ describe('AllExceptionsFilter', () => {
     expect(logged).not.toContain('secret-state');
   });
 
-  it('Railway production 환경은 DEV_LOGIN_ENABLED 와 무관하게 바디 미기록', () => {
+  it('Railway production 환경은 진단 바디를 기록하지 않는다', () => {
     const { host } = hostFor(badLogin);
     new AllExceptionsFilter(
       configOf({
         NODE_ENV: 'production',
         RAILWAY_ENVIRONMENT_NAME: 'production',
-        DEV_LOGIN_ENABLED: 'true',
       }),
     ).catch(new BadRequestException('bad'), host);
     expect(String((warn.mock.calls as unknown[][])[0][0])).not.toContain(

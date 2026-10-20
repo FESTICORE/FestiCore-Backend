@@ -85,7 +85,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
   /**
    * 요청 바디 로깅은 개발 진단용이라 운영에서는 절대 켜지 않는다.
-   * dev-login 플래그와 무관하게 Railway production 환경이면 항상 끈다.
+   * Railway production 환경이면 항상 끈다.
    */
   private isDiagnosticsEnabled(): boolean {
     if (!this.config) return false;

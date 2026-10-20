@@ -215,6 +215,29 @@ export class WebOauthService {
     return ticket;
   }
 
+  async cancel(
+    provider: Provider,
+    state: string,
+    browserToken: string,
+  ): Promise<void> {
+    if (!state || !browserToken)
+      throw new UnauthorizedException('웹 로그인 상태가 없습니다.');
+    const claimed = await this.states.update(
+      {
+        stateHash: this.hash(state),
+        browserHash: this.hash(browserToken),
+        provider,
+        consumedAt: IsNull(),
+        expiresAt: MoreThan(new Date()),
+      },
+      { consumedAt: new Date() },
+    );
+    if (claimed.affected !== 1)
+      throw new UnauthorizedException(
+        '만료되었거나 일치하지 않는 웹 로그인 상태입니다.',
+      );
+  }
+
   async consumeTicket(ticket: string): Promise<LoginResult> {
     if (!ticket) throw new UnauthorizedException('웹 로그인 티켓이 없습니다.');
     const ticketHash = this.hash(ticket);

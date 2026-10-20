@@ -49,6 +49,11 @@ function harness() {
     update: jest.fn((where: Record<string, unknown>, patch: Partial<T>) => {
       const value = rows.get(String(where[key as string]));
       if (!value || value.consumedAt) return Promise.resolve({ affected: 0 });
+      if (
+        where['browserHash'] &&
+        value['browserHash' as keyof T] !== where['browserHash']
+      )
+        return Promise.resolve({ affected: 0 });
       Object.assign(value, patch);
       return Promise.resolve({ affected: 1 });
     }),
@@ -97,6 +102,20 @@ function harness() {
 }
 
 describe('WebOauthService', () => {
+  it('invalidates a cancelled state without exchanging provider code', async () => {
+    const { service, googleExchange } = harness();
+    const started = await service.begin('google');
+    const state = new URL(started.url).searchParams.get('state')!;
+    await expect(
+      service.cancel('google', state, 'other-browser'),
+    ).rejects.toThrow();
+    await service.cancel('google', state, started.browserToken);
+    await expect(
+      service.finish('google', 'code', state, started.browserToken),
+    ).rejects.toThrow();
+    expect(googleExchange).not.toHaveBeenCalled();
+  });
+
   it('removes expired states and tickets before starting a new login', async () => {
     const { service, states, tickets } = harness();
     await service.begin('google');
