@@ -17,10 +17,14 @@ const REDACTED_KEYS = new Set([
   'authorization',
   'authorizationcode',
   'code',
+  'email',
   'idtoken',
   'id_token',
   'identitytoken',
   'nonce',
+  'linktoken',
+  'magictoken',
+  'otp',
   'password',
   'secret',
   'signature',
@@ -29,6 +33,7 @@ const REDACTED_KEYS = new Set([
   'refreshtoken',
   'state',
   'user',
+  'sessionid',
 ]);
 
 /**
@@ -47,6 +52,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
     let status = HttpStatus.INTERNAL_SERVER_ERROR;
     let message = '내부 서버 오류가 발생했습니다.';
+    const details: Record<string, unknown> = {};
 
     if (exception instanceof HttpException) {
       status = exception.getStatus();
@@ -54,8 +60,19 @@ export class AllExceptionsFilter implements ExceptionFilter {
       if (typeof body === 'string') {
         message = body;
       } else if (typeof body === 'object' && body !== null) {
-        const msg = (body as { message?: string | string[] }).message;
+        const fields = body as Record<string, unknown>;
+        const msg = fields.message as string | string[] | undefined;
         message = Array.isArray(msg) ? msg.join(', ') : (msg ?? message);
+        // API 계약에 명시된 오류 필드만 노출한다. 임의 예외 객체의 비밀값은 내보내지 않는다.
+        for (const key of [
+          'code',
+          'draft',
+          'draftVersion',
+          'errors',
+          'warnings',
+        ]) {
+          if (key in fields) details[key] = fields[key];
+        }
       }
     }
 
@@ -84,6 +101,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       statusCode: status,
       data: null,
       message,
+      ...details,
     });
   }
 

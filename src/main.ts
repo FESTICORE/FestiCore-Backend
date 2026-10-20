@@ -15,7 +15,8 @@ async function bootstrap() {
 
   if (config.get<string>('RAILWAY_ENVIRONMENT')) {
     const express = app.getHttpAdapter().getInstance() as Express;
-    // Railway's public HTTP edge overwrites X-Real-IP; XFF has no fixed hop count.
+    // Railway's HTTP edge overwrites X-Real-IP. X-Forwarded-For has no fixed hop count.
+    // Only use this for services reached through Railway's public HTTP edge.
     express.set('trust proxy', 1);
     app.use((request: Request, _response: Response, next: NextFunction) => {
       const realIp = request.headers['x-real-ip'];

@@ -105,4 +105,42 @@ describe('AllExceptionsFilter', () => {
       'body=',
     );
   });
+
+  it('매직 링크 값과 쿼리 토큰은 진단 로그에도 남기지 않는다', () => {
+    const { host } = hostFor(
+      { magicToken: 'secret-magic', email: 'admin@example.com' },
+      '/api/v1/admin/auth/callback?token=secret-query',
+    );
+    new AllExceptionsFilter(configOf({ NODE_ENV: 'development' })).catch(
+      new BadRequestException('bad'),
+      host,
+    );
+    const logged = String((warn.mock.calls as unknown[][])[0][0]);
+    expect(logged).not.toContain('secret-magic');
+    expect(logged).not.toContain('secret-query');
+    expect(logged).not.toContain('admin@example.com');
+  });
+
+  it('초안 충돌 응답의 버전과 현재 초안을 전달한다', () => {
+    const { host, json } = hostFor({});
+    new AllExceptionsFilter().catch(
+      new BadRequestException({
+        message: '초안 충돌',
+        code: 'DRAFT_CONFLICT',
+        draftVersion: 2,
+        draft: { name: '현재 초안' },
+        internalSecret: 'never-expose',
+      }),
+      host,
+    );
+    expect(json).toHaveBeenCalledWith({
+      success: false,
+      statusCode: 400,
+      data: null,
+      message: '초안 충돌',
+      code: 'DRAFT_CONFLICT',
+      draftVersion: 2,
+      draft: { name: '현재 초안' },
+    });
+  });
 });
