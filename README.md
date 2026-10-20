@@ -8,10 +8,11 @@
 | ------- | ------------------------------------------------------------------- |
 | common  | 표준 응답/에러 형식, 예외 필터, 로깅·응답 인터셉터, API 도메인 목록 |
 | gateway | 전역 Throttler·JwtAuthGuard(`@Public` 예외)·필터·인터셉터           |
-| swagger | `/api-docs` 전체, `/api-docs/<도메인>` 도메인별 문서                |
+| swagger | `/api-docs` 공개 API, `/admin/api-docs` 관리자 API. 각 경로에 도메인별 문서 제공 |
 | auth    | Google·Apple 통합 로그인, JWT access/refresh 회전, 회원 탈퇴      |
 | admin   | 관리자 매직 링크 인증, 축제 초안·발행·롤백                       |
 | storage | Railway 비공개 버킷의 WebP 사진 저장·읽기                       |
+| flags   | 공개 깃발, 팔로우·기수·상태·사진·관리자 신고 처리              |
 | health  | `GET /api/v1/health` — DB 실패 시 503                               |
 
 구조와 규칙은 [아키텍처 문서](./docs/architecture/ARCHITECTURE.md), 엔드포인트 계약은 [.spec/](./.spec/README.md),
@@ -26,13 +27,14 @@ npm run start:dev
 ```
 
 - API: `http://localhost:3000/api/v1`
-- Swagger: `http://localhost:3000/api-docs`
-- 개발 Swagger: https://festicore-dev.up.railway.app/api-docs
-- 운영 Swagger: https://festicore.up.railway.app/api-docs
+- 공개 Swagger: `http://localhost:3000/api-docs` (JSON: `/api-docs-json`)
+- 관리자 Swagger: `http://localhost:3000/admin/api-docs` (JSON: `/admin/api-docs-json`)
+- 개발: [공개](https://festicore-dev.up.railway.app/api-docs) · [관리자](https://festicore-dev.up.railway.app/admin/api-docs)
+- 운영: [공개](https://festicore.up.railway.app/api-docs) · [관리자](https://festicore.up.railway.app/admin/api-docs)
 
-Swagger UI의 드롭다운에서 전체·인증·관리자 인증·축제 관리 문서를 선택할 수 있다.
-브라우저 호출에는 해당 환경의 유효한 인증 정보가 필요하다. 두 환경의 Swagger UI와 JSON 문서가
-HTTP 200을 반환하는 것은 확인했으며, 최신 `develop` 배포 여부는 Railway 배포 상태로 별도 확인한다.
+각 UI의 드롭다운에서 해당 영역의 전체·도메인별 문서를 선택할 수 있다.
+공개 문서에는 `/api/v1/admin` 경로가 없고, 관리자 문서에는 관리자 경로만 표시된다.
+브라우저 호출에는 해당 환경의 유효한 인증 정보가 필요하다. 배포된 문서의 가용성과 최신 코드 반영 여부는 Railway 배포 상태로 확인한다.
 
 ## 스크립트
 

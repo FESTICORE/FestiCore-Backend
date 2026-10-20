@@ -11,12 +11,21 @@ import {
 } from '@nestjs/common';
 import { createHash } from 'crypto';
 import type { Request, Response } from 'express';
+import {
+  ApiBody,
+  ApiConsumes,
+  ApiHeader,
+  ApiOperation,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 import { Public } from '../decorator/public.decorator';
 import { WebOauthService } from '../web/web-oauth.service';
 
 type Provider = 'apple';
 const TICKET_COOKIE = 'festicore_web_login_ticket';
 
+@ApiTags('Auth')
 @Controller('auth')
 export class WebOauthController {
   constructor(private readonly oauth: WebOauthService) {}
@@ -81,12 +90,75 @@ export class WebOauthController {
 
   @Public()
   @Get('apple/start')
+  @ApiOperation({
+    summary: 'Apple 웹 로그인 시작',
+    description:
+      '브라우저 팝업에서 이 URL을 엽니다. 서버가 5분 유효한 상태를 만들고 HttpOnly·Secure 쿠키를 설정한 뒤 Apple 인증 화면으로 302 리디렉션합니다. 요청 본문은 없습니다.',
+  })
+  @ApiResponse({
+    status: 302,
+    description: 'Location: Apple 인증 URL, Set-Cookie: 일회용 OAuth 상태 쿠키',
+  })
+  @ApiResponse({
+    status: 503,
+    description: 'Apple 웹 OAuth 설정 누락 또는 오류',
+  })
   appleStart(@Res() response: Response) {
     return this.start('apple', response);
   }
 
   @Public()
   @Post('apple/callback')
+  @ApiOperation({
+    summary: 'Apple 웹 form_post 콜백',
+    description:
+      'Apple 서버가 브라우저를 통해 호출하는 등록된 Return URL입니다. 앱에서 직접 호출하지 않습니다. application/x-www-form-urlencoded 본문의 code·state와 시작 단계의 HttpOnly 쿠키를 검증합니다. 성공 시 60초 유효한 일회용 로그인 티켓을 HttpOnly 쿠키에 담고 /api/v1/auth/web/result로 303 리디렉션합니다. Apple 취소(error)는 같은 결과 페이지의 cancelled 경로로 이동합니다.',
+  })
+  @ApiConsumes('application/x-www-form-urlencoded')
+  @ApiBody({
+    description:
+      'Apple response_mode=form_post 본문. 성공은 code와 state, 취소는 error와 state를 보냅니다. user JSON은 최초 승인 시에만 올 수 있습니다.',
+    schema: {
+      type: 'object',
+      required: ['state'],
+      properties: {
+        code: {
+          type: 'string',
+          description: 'Apple이 발급한 일회용 authorization code(성공 시 필수)',
+          example: '<Apple authorization code>',
+        },
+        state: {
+          type: 'string',
+          description: '시작 단계에서 서버가 생성한 CSRF 방지 상태값',
+          example: '<OAuth state>',
+        },
+        id_token: {
+          type: 'string',
+          description: 'Apple form_post에 포함될 수 있는 identity token',
+          example: '<Apple identity token>',
+        },
+        user: {
+          type: 'string',
+          description:
+            '최초 승인 시에만 포함될 수 있는 JSON 문자열. 예: {"name":{"firstName":"축제","lastName":"관객"}}',
+          example: '{"name":{"firstName":"축제","lastName":"관객"}}',
+        },
+        error: {
+          type: 'string',
+          description: '사용자가 취소하거나 Apple 인증이 실패한 경우의 오류',
+          example: 'user_cancelled_authorize',
+        },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 303,
+    description: '성공 또는 취소 결과 페이지로 이동. 성공 시 티켓 쿠키 설정',
+  })
+  @ApiResponse({
+    status: 401,
+    description: '상태·쿠키 불일치, 만료 또는 재사용',
+  })
   appleCallback(@Req() request: Request, @Res() response: Response) {
     response.setHeader('Cross-Origin-Opener-Policy', 'unsafe-none');
     const body = request.body as Record<string, unknown> | undefined;
@@ -164,6 +236,16 @@ export class WebOauthController {
 
   @Public()
   @Get('web/result')
+  @ApiOperation({
+    summary: 'Apple 웹 로그인 결과 전달 페이지',
+    description:
+      '콜백의 303 리디렉션으로 열리는 HTML 페이지입니다. 같은 출처의 POST /auth/web/token으로 티켓을 교환하고 WEB_OAUTH_CLIENT_ORIGIN으로 설정된 창에 postMessage({type:"festicore:web-login", result})를 전송합니다. 취소 시에는 error:"cancelled"를 전송합니다. 요청 본문은 없습니다.',
+  })
+  @ApiResponse({ status: 200, description: '로그인 결과 전달용 HTML' })
+  @ApiResponse({
+    status: 503,
+    description: '웹 클라이언트 출처 설정 누락 또는 오류',
+  })
   result(@Req() request: Request, @Res() response: Response): void {
     const targetOrigin = this.oauth.clientOrigin();
     const cancelled = request.query.error === 'cancelled';
@@ -187,6 +269,26 @@ export class WebOauthController {
   @Public()
   @Post('web/token')
   @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Apple 웹 로그인 일회용 티켓 교환',
+    description:
+      '결과 페이지가 같은 출처에서 빈 본문으로 호출합니다. 브라우저가 HttpOnly·Secure 티켓 쿠키를 자동 전송하며 Origin 헤더는 등록된 Apple 콜백 URI의 출처와 일치해야 합니다. 티켓은 60초 유효하고 한 번만 사용할 수 있습니다. 성공 응답의 accessToken·refreshToken·newUser·user가 웹 클라이언트에 전달됩니다.',
+  })
+  @ApiHeader({
+    name: 'Origin',
+    description: 'Apple 콜백 URI와 동일한 HTTPS 출처',
+    required: true,
+    example: 'https://festicore.up.railway.app',
+  })
+  @ApiResponse({ status: 200, description: 'FestiCore 토큰과 사용자 정보' })
+  @ApiResponse({
+    status: 401,
+    description: 'Origin 불일치 또는 티켓 누락·만료·재사용',
+  })
+  @ApiResponse({
+    status: 503,
+    description: 'Apple 웹 콜백 URI 설정 누락 또는 오류',
+  })
   async token(
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
