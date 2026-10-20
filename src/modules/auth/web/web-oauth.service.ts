@@ -72,6 +72,33 @@ export class WebOauthService {
     return url.toString();
   }
 
+  clientOrigin(): string {
+    const configured = this.config.get<string>('WEB_OAUTH_CLIENT_ORIGIN');
+    if (!configured)
+      throw new ServiceUnavailableException(
+        '웹 로그인 클라이언트 출처가 설정되지 않았습니다.',
+      );
+    let url: URL;
+    try {
+      url = new URL(configured);
+    } catch {
+      throw new ServiceUnavailableException(
+        '웹 로그인 클라이언트 출처가 올바르지 않습니다.',
+      );
+    }
+    if (
+      url.protocol !== 'https:' ||
+      url.origin !== configured ||
+      url.username ||
+      url.password
+    ) {
+      throw new ServiceUnavailableException(
+        '웹 로그인 클라이언트 출처가 올바르지 않습니다.',
+      );
+    }
+    return url.origin;
+  }
+
   async begin(
     provider: Provider,
   ): Promise<{ url: string; browserToken: string }> {
@@ -124,6 +151,7 @@ export class WebOauthService {
     code: string,
     state: string,
     browserToken: string,
+    name?: string,
   ): Promise<string> {
     if (!code || !state || !browserToken)
       throw new UnauthorizedException('웹 로그인 상태가 없습니다.');
@@ -164,6 +192,7 @@ export class WebOauthService {
             code,
             this.redirectUri(provider),
             record.nonce,
+            name,
           );
     const completed = await this.auth.completeWebLogin(
       identity.profile,

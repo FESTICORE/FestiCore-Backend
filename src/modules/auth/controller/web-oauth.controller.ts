@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Controller,
   Get,
   Post,
@@ -6,6 +7,7 @@ import {
   Res,
   UnauthorizedException,
 } from '@nestjs/common';
+import { createHash } from 'crypto';
 import type { Request, Response } from 'express';
 import { Public } from '../decorator/public.decorator';
 import { WebOauthService } from '../web/web-oauth.service';
@@ -45,6 +47,7 @@ export class WebOauthController {
     state: string,
     request: Request,
     response: Response,
+    name?: string,
   ): Promise<void> {
     const cookieName = `festicore_${provider}_oauth`;
     const browserToken = this.cookie(request, cookieName);
@@ -54,7 +57,13 @@ export class WebOauthController {
       sameSite: 'none',
       path: `/api/v1/auth/${provider}/callback`,
     });
-    const ticket = await this.oauth.finish(provider, code, state, browserToken);
+    const ticket = await this.oauth.finish(
+      provider,
+      code,
+      state,
+      browserToken,
+      name,
+    );
     response.cookie(TICKET_COOKIE, ticket, {
       httpOnly: true,
       secure: true,
@@ -94,23 +103,70 @@ export class WebOauthController {
   @Post('apple/callback')
   appleCallback(@Req() request: Request, @Res() response: Response) {
     const body = request.body as Record<string, unknown> | undefined;
+    const name = this.appleName(body?.user);
     return this.finish(
       'apple',
       typeof body?.code === 'string' ? body.code : '',
       typeof body?.state === 'string' ? body.state : '',
       request,
       response,
+      name,
+    );
+  }
+
+  private appleName(raw: unknown): string | undefined {
+    if (raw === undefined) return undefined;
+    if (typeof raw !== 'string' || Buffer.byteLength(raw, 'utf8') > 2048) {
+      throw new BadRequestException('Apple 사용자 정보가 올바르지 않습니다.');
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new BadRequestException('Apple 사용자 정보가 올바르지 않습니다.');
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new BadRequestException('Apple 사용자 정보가 올바르지 않습니다.');
+    }
+    const name = (parsed as { name?: unknown }).name;
+    if (!name || typeof name !== 'object' || Array.isArray(name))
+      return undefined;
+    const { firstName, lastName } = name as Record<string, unknown>;
+    if (
+      [firstName, lastName].some(
+        (part) =>
+          part !== undefined && (typeof part !== 'string' || part.length > 100),
+      )
+    ) {
+      throw new BadRequestException('Apple 사용자 정보가 올바르지 않습니다.');
+    }
+    return (
+      [firstName, lastName]
+        .filter(
+          (part): part is string =>
+            typeof part === 'string' && part.trim().length > 0,
+        )
+        .join(' ')
+        .trim()
+        .slice(0, 200) || undefined
     );
   }
 
   @Public()
   @Get('web/result')
   result(@Res() response: Response): void {
+    const targetOrigin = this.oauth.clientOrigin();
+    const script = `if (!window.opener) { document.body.textContent = '로그인 창을 앱에서 다시 열어 주세요.'; } else { fetch('/api/v1/auth/web/token', {method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/json'}}).then(async r => { if (!r.ok) throw new Error('로그인 결과를 받을 수 없습니다.'); return r.json(); }).then(result => { window.opener.postMessage({type:'festicore:web-login', result}, ${JSON.stringify(targetOrigin)}); window.close(); }).catch(() => { document.body.textContent = '로그인이 완료되지 않았습니다. 다시 시도해 주세요.'; }); }`;
+    const hash = createHash('sha256').update(script).digest('base64');
     response.setHeader('Cache-Control', 'no-store');
+    response.setHeader(
+      'Content-Security-Policy',
+      `default-src 'none'; script-src 'sha256-${hash}'; connect-src 'self'; base-uri 'none'; form-action 'none'`,
+    );
     response
       .type('html')
       .send(
-        '<!doctype html><html lang="ko"><meta charset="utf-8"><title>로그인 완료</title><body>로그인이 완료되었습니다.</body></html>',
+        `<!doctype html><html lang="ko"><meta charset="utf-8"><title>로그인 완료</title><body>로그인 결과를 전달하는 중입니다.<script>${script}</script></body></html>`,
       );
   }
 

@@ -80,11 +80,10 @@ function harness() {
   const google = {
     exchangeWebCode: googleExchange,
   } as unknown as GoogleService;
-  const apple = {
-    exchangeWebCode: jest.fn().mockResolvedValue({
-      profile: { provider: 'apple', providerId: 'subject' },
-    }),
-  } as unknown as AppleService;
+  const appleExchange = jest.fn().mockResolvedValue({
+    profile: { provider: 'apple', providerId: 'subject' },
+  });
+  const apple = { exchangeWebCode: appleExchange } as unknown as AppleService;
   const service = new WebOauthService(
     config,
     auth,
@@ -93,7 +92,7 @@ function harness() {
     states as unknown as Repository<WebOauthState>,
     tickets as unknown as Repository<WebOauthTicket>,
   );
-  return { service, googleExchange, apple };
+  return { service, googleExchange, appleExchange };
 }
 
 describe('WebOauthService', () => {
@@ -118,7 +117,7 @@ describe('WebOauthService', () => {
   });
 
   it('consumes the short-lived ticket once', async () => {
-    const { service } = harness();
+    const { service, appleExchange } = harness();
     const started = await service.begin('apple');
     const state = new URL(started.url).searchParams.get('state')!;
     const ticket = await service.finish(
@@ -126,6 +125,13 @@ describe('WebOauthService', () => {
       'code',
       state,
       started.browserToken,
+      '길동 홍',
+    );
+    expect(appleExchange).toHaveBeenCalledWith(
+      'code',
+      'https://festicore-dev.up.railway.app/api/v1/auth/apple/callback',
+      expect.any(String),
+      '길동 홍',
     );
     await expect(service.consumeTicket(ticket)).resolves.toMatchObject({
       accessToken: 'access',

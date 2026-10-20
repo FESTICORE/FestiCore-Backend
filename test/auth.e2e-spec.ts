@@ -2,6 +2,7 @@ import { QueryFailedError } from 'typeorm';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { createTestApp, TestContext } from './app-factory';
+import { AuthService } from '../src/modules/auth/service/auth.service';
 
 interface ApiBody {
   success: boolean;
@@ -203,8 +204,72 @@ describe('Auth (e2e)', () => {
         .delete('/api/v1/auth/me')
         .set('Authorization', `Bearer ${dataOf(login).accessToken}`)
         .expect(200);
-      expect(ctx.apple.revokeConnection).toHaveBeenCalledWith('apple-refresh');
+      expect(ctx.apple.revokeConnection).toHaveBeenCalledWith(
+        'apple-refresh',
+        undefined,
+      );
       expect(ctx.users.rows).toHaveLength(0);
+    });
+
+    it('웹 Services ID로 발급된 토큰은 해당 client ID로 철회', async () => {
+      ctx.apple.exchangeAuthCode.mockResolvedValue({
+        refreshToken: 'apple-web-refresh',
+        subject: 'a-2',
+        clientId: 'co.festiCore.io',
+      });
+      const login = await request(server)
+        .post('/api/v1/auth/login')
+        .send({
+          provider: 'apple',
+          token: 'identity',
+          authorizationCode: 'code',
+        })
+        .expect(200);
+      await request(server)
+        .delete('/api/v1/auth/me')
+        .set('Authorization', `Bearer ${dataOf(login).accessToken}`)
+        .expect(200);
+      expect(ctx.apple.revokeConnection).toHaveBeenCalledWith(
+        'apple-web-refresh',
+        'co.festiCore.io',
+      );
+    });
+
+    it('iOS와 웹 토큰을 별도로 저장하고 탈퇴 때 각각 철회', async () => {
+      ctx.apple.exchangeAuthCode.mockResolvedValue({
+        refreshToken: 'ios-refresh',
+        subject: 'a-2',
+        clientId: 'io.festiCore.co',
+      });
+      const login = await request(server)
+        .post('/api/v1/auth/login')
+        .send({
+          provider: 'apple',
+          token: 'identity',
+          authorizationCode: 'native-code',
+        })
+        .expect(200);
+      const auth = ctx.app.get(AuthService);
+      await auth.completeWebLogin(
+        { provider: 'apple', providerId: 'a-2', name: '첫 이름' },
+        {
+          refreshToken: 'web-refresh',
+          subject: 'a-2',
+          clientId: 'co.festiCore.io',
+        },
+      );
+      await request(server)
+        .delete('/api/v1/auth/me')
+        .set('Authorization', `Bearer ${dataOf(login).accessToken}`)
+        .expect(200);
+      expect(ctx.apple.revokeConnection).toHaveBeenCalledWith(
+        'ios-refresh',
+        'io.festiCore.co',
+      );
+      expect(ctx.apple.revokeConnection).toHaveBeenCalledWith(
+        'web-refresh',
+        'co.festiCore.io',
+      );
     });
 
     it('code 교환 결과 sub 가 다르면 저장 안 함 → 탈퇴 시 revoke 미호출', async () => {

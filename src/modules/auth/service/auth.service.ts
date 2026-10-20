@@ -61,7 +61,10 @@ export class AuthService {
     if (grant?.refreshToken && grant.subject === profile.providerId) {
       await this.userRepo.update(
         { id: user.id },
-        { oauthRefreshToken: grant.refreshToken },
+        {
+          oauthWebRefreshToken: grant.refreshToken,
+          oauthWebClientId: grant.clientId ?? null,
+        },
       );
     }
     return { userId: user.id, newUser: isNew };
@@ -116,7 +119,14 @@ export class AuthService {
     // oauthRefreshToken은 select:false라 명시적으로 조회한다.
     const user = await this.userRepo.findOne({
       where: { id: userId },
-      select: { id: true, provider: true, oauthRefreshToken: true },
+      select: {
+        id: true,
+        provider: true,
+        oauthRefreshToken: true,
+        oauthClientId: true,
+        oauthWebRefreshToken: true,
+        oauthWebClientId: true,
+      },
     });
     if (!user) {
       throw new NotFoundException('사용자를 찾을 수 없습니다.');
@@ -125,12 +135,28 @@ export class AuthService {
       if (user.provider === 'google') {
         await this.google.revokeConnection(user.oauthRefreshToken);
       } else {
-        await this.apple.revokeConnection(user.oauthRefreshToken);
+        await this.apple.revokeConnection(
+          user.oauthRefreshToken,
+          user.oauthClientId ?? undefined,
+        );
       }
     } else {
       this.logger.warn(
         `provider 토큰이 없어 연동 해제를 건너뜁니다: ${user.provider} ${user.id}`,
       );
+    }
+    if (
+      user.oauthWebRefreshToken &&
+      user.oauthWebRefreshToken !== user.oauthRefreshToken
+    ) {
+      if (user.provider === 'google') {
+        await this.google.revokeConnection(user.oauthWebRefreshToken);
+      } else {
+        await this.apple.revokeConnection(
+          user.oauthWebRefreshToken,
+          user.oauthWebClientId ?? undefined,
+        );
+      }
     }
     await this.token.deleteAllForUser(userId);
     await this.userRepo.delete({ id: userId });
@@ -170,9 +196,13 @@ export class AuthService {
       return;
     }
     user.oauthRefreshToken = grant.refreshToken;
+    user.oauthClientId = grant.clientId ?? null;
     await this.userRepo.update(
       { id: user.id },
-      { oauthRefreshToken: grant.refreshToken },
+      {
+        oauthRefreshToken: grant.refreshToken,
+        oauthClientId: grant.clientId ?? null,
+      },
     );
   }
 

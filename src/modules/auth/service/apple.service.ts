@@ -77,6 +77,7 @@ export class AppleService {
     code: string,
     redirectUri: string,
     nonce: string,
+    name?: string,
   ): Promise<{ profile: SocialProfile; grant?: OauthGrant }> {
     const webClientId = this.config.get<string>('APPLE_WEB_CLIENT_ID');
     const clientSecret = await this.buildClientSecret(webClientId);
@@ -116,9 +117,14 @@ export class AppleService {
         provider: 'apple',
         providerId: payload.sub,
         email: typeof payload.email === 'string' ? payload.email : undefined,
+        name,
       },
       grant: tokens.refresh_token
-        ? { refreshToken: tokens.refresh_token, subject: payload.sub }
+        ? {
+            refreshToken: tokens.refresh_token,
+            subject: payload.sub,
+            clientId: webClientId,
+          }
         : undefined,
     };
   }
@@ -159,6 +165,7 @@ export class AppleService {
       return {
         refreshToken: json.refresh_token,
         subject: json.id_token ? decodeJwt(json.id_token).sub : undefined,
+        clientId: this.clientId,
       };
     } catch (error) {
       this.logger.warn(`Apple 토큰 교환 오류: ${(error as Error).message}`);
@@ -170,12 +177,15 @@ export class AppleService {
    * refresh 토큰으로 Apple 연동을 해제한다(회원 탈퇴).
    * 실패해도 예외를 던지지 않는다(계정 삭제는 계속 진행).
    */
-  async revokeConnection(refreshToken: string): Promise<void> {
-    const clientSecret = await this.buildClientSecret();
-    if (!clientSecret || !this.clientId) return;
+  async revokeConnection(
+    refreshToken: string,
+    clientId = this.clientId,
+  ): Promise<void> {
+    const clientSecret = await this.buildClientSecret(clientId);
+    if (!clientSecret || !clientId) return;
 
     const body = new URLSearchParams({
-      client_id: this.clientId,
+      client_id: clientId,
       client_secret: clientSecret,
       token: refreshToken,
       token_type_hint: 'refresh_token',

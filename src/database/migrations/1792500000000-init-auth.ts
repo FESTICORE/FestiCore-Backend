@@ -18,6 +18,9 @@ export class InitAuth1792500000000 implements MigrationInterface {
         "nickname" varchar,
         "profileImageUrl" varchar,
         "oauthRefreshToken" varchar,
+        "oauthClientId" varchar,
+        "oauthWebRefreshToken" varchar,
+        "oauthWebClientId" varchar,
         "createdAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
         "updatedAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
         CONSTRAINT "PK_users_id" PRIMARY KEY ("id")
