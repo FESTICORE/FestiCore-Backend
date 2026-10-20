@@ -1,0 +1,96 @@
+name: Auto Tag
+
+# 브랜치 푸시 → 변경 로그를 담은 자동 태그 생성 (릴리스 기록)
+#   - develop → dev-v*
+#   - main    → v*
+#
+# 실제 배포는 Railway GitHub 연동(브랜치 자동 배포)이 담당한다.
+# → Railway 대시보드에 커밋 메시지·SHA가 표시된다.
+#   (railway up CLI 배포는 커밋 메시지를 표시할 수 없어 사용하지 않음)
+on:
+  push:
+    branches:
+      - develop
+      - main
+
+# 태그 push 권한 필요
+permissions:
+  contents: write
+
+# 동일 브랜치 연속 푸시 시 태그 충돌 방지
+concurrency:
+  group: auto-tag-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: 태그 접두사 결정
+        id: prefix
+        run: |
+          if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
+            echo "value=v" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=dev-v" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 다음 버전·변경 로그 계산
+        id: version
+        run: |
+          PREFIX="${{ steps.prefix.outputs.value }}"
+          # 해당 접두사의 최신 semver 태그 조회 (없으면 0.0.0에서 시작)
+          LATEST=$(git tag --list "${PREFIX}*" \
+            | sed "s/^${PREFIX}//" \
+            | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
+            | sort -t. -k1,1n -k2,2n -k3,3n \
+            | tail -n1)
+          if [[ -z "$LATEST" ]]; then
+            PREV_TAG=""
+            LATEST="0.0.0"
+          else
+            PREV_TAG="${PREFIX}${LATEST}"
+          fi
+          IFS=. read -r MAJOR MINOR PATCH <<< "$LATEST"
+          NEXT="${MAJOR}.${MINOR}.$((PATCH + 1))"
+          TAG="${PREFIX}${NEXT}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+          # 이전 태그 이후의 커밋 변경 로그 수집 (없으면 최근 20개)
+          # 각 줄에 GitHub 커밋 링크를 붙여 배포 메시지에서 커밋을 바로 열 수 있게 한다.
+          REPO_URL="${{ github.server_url }}/${{ github.repository }}"
+          if [[ -n "$PREV_TAG" ]]; then
+            RANGE="${PREV_TAG}..HEAD"
+          else
+            RANGE="-n 20 HEAD"
+          fi
+          {
+            echo "changes<<CHANGELOG_EOF"
+            git log --no-merges --pretty=format:"- %s (%h) ${REPO_URL}/commit/%H" $RANGE
+            echo ""
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: 태그 생성 및 푸시
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          CHANGES: ${{ steps.version.outputs.changes }}
+          # 이 태그가 배포하는 GitHub 커밋 링크 (배포 메시지에 그대로 노출)
+          DEPLOY_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # 배포되는 커밋(HEAD)의 전체 커밋 메시지 (제목 + 본문)
+          COMMIT_MSG=$(git log -1 --format=%B "$GITHUB_SHA")
+          git tag -a "$TAG" \
+            -m "$TAG" \
+            -m "배포 커밋: $DEPLOY_URL" \
+            -m "$COMMIT_MSG" \
+            -m "변경 사항:" \
+            -m "$CHANGES"
+          git push origin "$TAG"
