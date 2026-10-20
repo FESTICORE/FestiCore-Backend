@@ -56,6 +56,6 @@ import { FlagPackSyncService } from './flag-pack-sync.service';
     FlagPackSyncService,
     ImageStorageService,
   ],
-  exports: [FlagsService, TypeOrmModule],
+  exports: [FlagsService, FlagPackSyncService, TypeOrmModule],
 })
 export class FlagsModule {}

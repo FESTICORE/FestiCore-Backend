@@ -3,12 +3,14 @@ import { ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
+import { getRepositoryToken } from '@nestjs/typeorm';
 import type { Server } from 'http';
 import request from 'supertest';
 import { AdminAuthController } from './admin-auth.controller';
 import { AdminAuthService } from './admin-auth.service';
 import { AdminSessionGuard } from './admin-session.guard';
 import { JwtAuthGuard } from '../../auth/guard/jwt-auth.guard';
+import { User } from '../../auth/entity/user.entity';
 
 describe('admin callback browser form', () => {
   let app: INestApplication;
@@ -43,6 +45,14 @@ describe('admin callback browser form', () => {
         },
         AdminSessionGuard,
         JwtAuthGuard,
+        {
+          provide: getRepositoryToken(User),
+          useValue: {
+            findOne: jest
+              .fn()
+              .mockResolvedValue({ id: 'user-1', provider: 'google' }),
+          },
+        },
         { provide: APP_GUARD, useExisting: AdminSessionGuard },
         { provide: APP_GUARD, useExisting: JwtAuthGuard },
         {

@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { brotliCompressSync } from 'zlib';
-import { DataSource } from 'typeorm';
+import { DataSource, EntityManager } from 'typeorm';
 import {
   AdminFestival,
   AdminFestivalVersion,
@@ -59,66 +59,83 @@ function replaceProfile(
 export class FlagPackSyncService {
   constructor(@InjectDataSource() private readonly db: DataSource) {}
 
-  async sync(flagId: string): Promise<void> {
-    await this.db.transaction(async (manager) => {
+  async sync(flagId: string, transaction?: EntityManager): Promise<void> {
+    await this.syncMany([flagId], transaction);
+  }
+
+  async syncMany(
+    flagIds: string[],
+    transaction?: EntityManager,
+  ): Promise<void> {
+    const apply = async (manager: EntityManager) => {
       const flags = manager.getRepository(Flag);
-      const flag = await flags.findOne({ where: { id: flagId } });
-      if (!flag) return;
+      const byFestival = new Map<string, Flag[]>();
+      for (const flagId of new Set(flagIds)) {
+        const flag = await flags.findOne({ where: { id: flagId } });
+        if (!flag) continue;
+        const group = byFestival.get(flag.festivalId) ?? [];
+        group.push(flag);
+        byFestival.set(flag.festivalId, group);
+      }
       const festivals = manager.getRepository(AdminFestival);
-      const festival = await festivals.findOne({
-        where: { id: flag.festivalId },
-        lock: { mode: 'pessimistic_write' },
-      });
-      if (!festival) return;
-
-      const draft = replaceProfile(festival.draft, flag);
-      const draftErrors = validateDraft(draft);
-      if (draftErrors.length)
-        throw new BadRequestException({
-          code: 'VALIDATION',
-          errors: draftErrors,
+      for (const [festivalId, changedFlags] of byFestival) {
+        const festival = await festivals.findOne({
+          where: { id: festivalId },
+          lock: { mode: 'pessimistic_write' },
         });
-      if (
-        JSON.stringify(draft.flags) !== JSON.stringify(festival.draft.flags)
-      ) {
-        festival.draft = draft;
-        festival.draftVersion += 1;
-      }
+        if (!festival) continue;
 
-      if (festival.published) {
-        const next = replaceProfile(festival.published, flag);
-        if (
-          JSON.stringify(next.flags) !==
-          JSON.stringify(festival.published.flags)
-        ) {
-          const packErrors = validateDraft(next, true);
-          if (packErrors.length)
-            throw new BadRequestException({
-              code: 'VALIDATION',
-              errors: packErrors,
-            });
-          const packVersion = festival.publishedVersion + 1;
-          const pack = {
-            ...next,
-            packVersion,
-            packUpdatedAt: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
-          };
-          const serialized = JSON.stringify(pack);
-          if (brotliCompressSync(Buffer.from(serialized)).length > 200 * 1024)
-            throw new BadRequestException('압축된 팩이 200KB를 초과합니다.');
-          festival.published = pack;
-          festival.publishedVersion = packVersion;
-          await manager.getRepository(AdminFestivalVersion).save({
-            festivalId: festival.id,
-            packVersion,
-            pack,
-            publishedBy: null,
-            note: `Flag ${flag.id} profile update`,
-            sizeBytes: Buffer.byteLength(serialized),
+        const draft = changedFlags.reduce(replaceProfile, festival.draft);
+        const draftErrors = validateDraft(draft);
+        if (draftErrors.length)
+          throw new BadRequestException({
+            code: 'VALIDATION',
+            errors: draftErrors,
           });
+        if (
+          JSON.stringify(draft.flags) !== JSON.stringify(festival.draft.flags)
+        ) {
+          festival.draft = draft;
+          festival.draftVersion += 1;
         }
+
+        if (festival.published) {
+          const next = changedFlags.reduce(replaceProfile, festival.published);
+          if (
+            JSON.stringify(next.flags) !==
+            JSON.stringify(festival.published.flags)
+          ) {
+            const packErrors = validateDraft(next, true);
+            if (packErrors.length)
+              throw new BadRequestException({
+                code: 'VALIDATION',
+                errors: packErrors,
+              });
+            const packVersion = festival.publishedVersion + 1;
+            const pack = {
+              ...next,
+              packVersion,
+              packUpdatedAt: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+            };
+            const serialized = JSON.stringify(pack);
+            if (brotliCompressSync(Buffer.from(serialized)).length > 200 * 1024)
+              throw new BadRequestException('압축된 팩이 200KB를 초과합니다.');
+            festival.published = pack;
+            festival.publishedVersion = packVersion;
+            await manager.getRepository(AdminFestivalVersion).save({
+              festivalId: festival.id,
+              packVersion,
+              pack,
+              publishedBy: null,
+              note: `Flag profiles update`,
+              sizeBytes: Buffer.byteLength(serialized),
+            });
+          }
+        }
+        await festivals.save(festival);
       }
-      await festivals.save(festival);
-    });
+    };
+    if (transaction) await apply(transaction);
+    else await this.db.transaction(apply);
   }
 }

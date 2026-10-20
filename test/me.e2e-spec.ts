@@ -67,5 +67,10 @@ describe('Me API contract (e2e)', () => {
       .send({ confirm: 'DELETE' })
       .expect(204);
     expect(result.text).toBe('');
+
+    await request(server)
+      .get('/api/v1/me')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(401);
   });
 });

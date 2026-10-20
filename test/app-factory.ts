@@ -13,9 +13,11 @@ import { RefreshToken } from '../src/modules/auth/entity/refresh-token.entity';
 import { User } from '../src/modules/auth/entity/user.entity';
 import { JwtAuthGuard } from '../src/modules/auth/guard/jwt-auth.guard';
 import { AppleService } from '../src/modules/auth/service/apple.service';
+import { AppleRevokeRetryService } from '../src/modules/auth/service/apple-revoke-retry.service';
 import { AuthService } from '../src/modules/auth/service/auth.service';
 import { GoogleService } from '../src/modules/auth/service/google.service';
 import { TokenService } from '../src/modules/auth/service/token.service';
+import { FlagPackSyncService } from '../src/modules/flags/flag-pack-sync.service';
 import { HealthController } from '../src/modules/health/controller/health.controller';
 import { HealthService } from '../src/modules/health/service/health.service';
 import { FakeRepository } from './fake-repository';
@@ -31,6 +33,8 @@ export interface TestContext {
   refreshTokens: FakeRepository<RefreshToken>;
   google: { [K in keyof GoogleService]: jest.Mock };
   apple: { [K in keyof AppleService]: jest.Mock };
+  appleRetry: { enqueue: jest.Mock };
+  flagPackSync: { sync: jest.Mock };
   dataSource: { query: jest.Mock; transaction: jest.Mock };
 }
 
@@ -53,7 +57,11 @@ export async function createTestApp(): Promise<TestContext> {
     verify: jest.fn(),
     exchangeWebCode: jest.fn(),
     exchangeAuthCode: jest.fn(),
-    revokeConnection: jest.fn(),
+    revokeConnection: jest.fn().mockResolvedValue(true),
+  };
+  const appleRetry = { enqueue: jest.fn().mockResolvedValue(undefined) };
+  const flagPackSync = {
+    syncMany: jest.fn().mockResolvedValue(undefined),
   };
   const dataSource = {
     query: jest.fn().mockResolvedValue([{ '?column?': 1 }]),
@@ -62,7 +70,15 @@ export async function createTestApp(): Promise<TestContext> {
       .mockImplementation(
         (work: (manager: EntityManager) => Promise<unknown>) =>
           work({
-            query: jest.fn().mockResolvedValue([]),
+            query: jest
+              .fn()
+              .mockImplementation((sql: string, params?: string[]) =>
+                sql.includes('FROM "users"') && sql.includes('FOR UPDATE')
+                  ? users
+                      .findOne({ where: { id: params?.[0] } })
+                      .then((user) => (user ? [user] : []))
+                  : Promise.resolve([]),
+              ),
             delete: jest
               .fn()
               .mockImplementation((entity: unknown, where: object) => {
@@ -83,6 +99,8 @@ export async function createTestApp(): Promise<TestContext> {
       HealthService,
       { provide: GoogleService, useValue: google },
       { provide: AppleService, useValue: apple },
+      { provide: AppleRevokeRetryService, useValue: appleRetry },
+      { provide: FlagPackSyncService, useValue: flagPackSync },
       { provide: DataSource, useValue: dataSource },
       { provide: getRepositoryToken(User), useValue: users },
       { provide: getRepositoryToken(RefreshToken), useValue: refreshTokens },
@@ -112,6 +130,8 @@ export async function createTestApp(): Promise<TestContext> {
     refreshTokens,
     google: google,
     apple: apple,
+    appleRetry,
+    flagPackSync,
     dataSource,
   };
 }

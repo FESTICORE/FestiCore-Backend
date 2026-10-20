@@ -9,7 +9,9 @@ jest.mock('jose', () => ({
 }));
 import { User } from '../entity/user.entity';
 import { AppleService } from './apple.service';
+import { AppleRevokeRetryService } from './apple-revoke-retry.service';
 import { AuthService } from './auth.service';
+import { FlagPackSyncService } from '../../flags/flag-pack-sync.service';
 import { GoogleService } from './google.service';
 import { TokenService } from './token.service';
 
@@ -53,6 +55,8 @@ describe('AuthService web grant replacement', () => {
       token,
       repo,
       {} as DataSource,
+      {} as AppleRevokeRetryService,
+      {} as FlagPackSyncService,
     );
 
     const app = await service.login({
@@ -93,6 +97,8 @@ describe('AuthService web grant replacement', () => {
       {} as TokenService,
       repo,
       {} as DataSource,
+      {} as AppleRevokeRetryService,
+      {} as FlagPackSyncService,
     );
 
     await expect(
@@ -114,6 +120,82 @@ describe('AuthService web grant replacement', () => {
     );
     expect(revokeConnection).not.toHaveBeenCalled();
   });
+
+  it('retries Apple grant revocation when account is deleted during web callback', async () => {
+    const user = {
+      id: 'gone',
+      provider: 'apple',
+      providerId: 'subject',
+    } as User;
+    const repo = {
+      findOne: jest.fn().mockResolvedValue(user),
+      update: jest.fn().mockResolvedValue({ affected: 0 }),
+    } as unknown as Repository<User>;
+    const apple = {
+      revokeConnection: jest.fn().mockResolvedValue(false),
+    } as unknown as AppleService;
+    const enqueue = jest.fn().mockResolvedValue(undefined);
+    const service = new AuthService(
+      {} as GoogleService,
+      apple,
+      {} as TokenService,
+      repo,
+      {} as DataSource,
+      { enqueue } as unknown as AppleRevokeRetryService,
+      {} as FlagPackSyncService,
+    );
+    await expect(
+      service.completeWebLogin(
+        { provider: 'apple', providerId: 'subject' },
+        { refreshToken: 'new-grant', subject: 'subject', clientId: 'client' },
+      ),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(enqueue).toHaveBeenCalledWith('new-grant', 'client');
+  });
+
+  it('does not issue tokens when an app grant update loses a race with withdrawal', async () => {
+    const user = {
+      id: 'gone',
+      provider: 'apple',
+      providerId: 'subject',
+    } as User;
+    const repo = {
+      findOne: jest.fn().mockResolvedValue(user),
+      update: jest.fn().mockResolvedValue({ affected: 0 }),
+    } as unknown as Repository<User>;
+    const apple = {
+      verify: jest
+        .fn()
+        .mockResolvedValue({ provider: 'apple', providerId: 'subject' }),
+      exchangeAuthCode: jest.fn().mockResolvedValue({
+        refreshToken: 'new-app-grant',
+        subject: 'subject',
+        clientId: 'client',
+      }),
+      revokeConnection: jest.fn().mockResolvedValue(false),
+    } as unknown as AppleService;
+    const issue = jest.fn();
+    const token = { issue } as unknown as TokenService;
+    const enqueue = jest.fn().mockResolvedValue(undefined);
+    const service = new AuthService(
+      {} as GoogleService,
+      apple,
+      token,
+      repo,
+      {} as DataSource,
+      { enqueue } as unknown as AppleRevokeRetryService,
+      {} as FlagPackSyncService,
+    );
+    await expect(
+      service.login({
+        provider: 'apple',
+        token: 'id-token',
+        authorizationCode: 'fresh-code',
+      }),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(enqueue).toHaveBeenCalledWith('new-app-grant', 'client');
+    expect(issue).not.toHaveBeenCalled();
+  });
 });
 
 describe('AuthService 회원 탈퇴의 크루 소유권', () => {
@@ -121,6 +203,8 @@ describe('AuthService 회원 탈퇴의 크루 소유권', () => {
 
   function setup(successor?: string) {
     const query = jest.fn().mockImplementation((sql: string) => {
+      if (sql.includes('FROM "users"') && sql.includes('FOR UPDATE'))
+        return [{ id: userId, provider: 'google' }];
       if (sql.includes('FROM "crews"')) return [{ id: 'crew-1' }];
       if (sql.includes('FROM "crew_members"'))
         return successor ? [{ userId: successor }] : [];
@@ -142,6 +226,8 @@ describe('AuthService 회원 탈퇴의 크루 소유권', () => {
       {} as TokenService,
       userRepo,
       { transaction } as unknown as DataSource,
+      {} as AppleRevokeRetryService,
+      {} as FlagPackSyncService,
     );
     return { service, query, remove, transaction };
   }
@@ -175,5 +261,131 @@ describe('AuthService 회원 탈퇴의 크루 소유권', () => {
       ['crew-1'],
     );
     expect(remove).toHaveBeenCalledWith(User, { id: userId });
+  });
+
+  it('탈퇴 트랜잭션은 사용자 행을 먼저 잠근다', async () => {
+    const { service, query } = setup();
+    await service.withdraw(userId);
+    expect(query.mock.calls[0]).toEqual([
+      expect.stringContaining('FROM "users" WHERE "id" = $1 FOR UPDATE'),
+      [userId],
+    ]);
+  });
+});
+
+describe('AuthService 회원 탈퇴의 깃발과 Apple 재시도', () => {
+  const userId = '00000000-0000-4000-8000-000000000001';
+  const flagId = 'flg_1234567890abcdef';
+
+  function setup(options: { successor?: string; apple?: boolean } = {}) {
+    const query = jest.fn().mockImplementation((sql: string) => {
+      if (sql.includes('FROM "users"') && sql.includes('FOR UPDATE'))
+        return [
+          {
+            id: userId,
+            provider: options.apple ? 'apple' : 'google',
+            oauthRefreshToken: options.apple ? 'private-refresh-token' : null,
+            oauthClientId: options.apple ? 'apple-client' : null,
+          },
+        ];
+      if (sql.includes('FROM "flags"') && sql.includes('FOR UPDATE'))
+        return [{ id: flagId, ownerId: userId }];
+      if (sql.includes('FROM "flag_bearers"'))
+        return options.successor ? [{ userId: options.successor }] : [];
+      return [];
+    });
+    const remove = jest.fn().mockResolvedValue({ affected: 1 });
+    const manager = { query, delete: remove } as unknown as EntityManager;
+    const transaction = jest
+      .fn()
+      .mockImplementation((work: (value: EntityManager) => Promise<unknown>) =>
+        work(manager),
+      );
+    const apple = {
+      revokeConnection: jest.fn().mockResolvedValue(false),
+    } as unknown as AppleService;
+    const enqueue = jest.fn().mockResolvedValue(undefined);
+    const syncMany = jest.fn().mockResolvedValue(undefined);
+    const userRepo = {
+      findOne: jest.fn().mockResolvedValue({
+        id: userId,
+        provider: options.apple ? 'apple' : 'google',
+        oauthRefreshToken: options.apple ? 'private-refresh-token' : null,
+        oauthClientId: options.apple ? 'apple-client' : null,
+      }),
+    } as unknown as Repository<User>;
+    const service = new AuthService(
+      {} as GoogleService,
+      apple,
+      {} as TokenService,
+      userRepo,
+      { transaction } as unknown as DataSource,
+      { enqueue } as unknown as AppleRevokeRetryService,
+      { syncMany } as unknown as FlagPackSyncService,
+    );
+    return { service, query, remove, manager, enqueue, syncMany };
+  }
+
+  it('첫 공동 기수에게 깃발을 이전하고 팩을 갱신한다', async () => {
+    const successor = '00000000-0000-4000-8000-000000000002';
+    const { service, query, syncMany } = setup({ successor });
+    await service.withdraw(userId);
+
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining('UPDATE "flags" SET "ownerId"'),
+      [successor, flagId],
+    );
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining('"isOwner" = true'),
+      [flagId, successor],
+    );
+    expect(syncMany).toHaveBeenCalledWith([flagId], expect.anything());
+  });
+
+  it('후임이 없는 깃발을 숨기고 관리자 알림을 남긴다', async () => {
+    const { service, query } = setup();
+    await service.withdraw(userId);
+
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining('"hidden" = true'),
+      [flagId],
+    );
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining('INSERT INTO "admin_notifications"'),
+      [flagId],
+    );
+  });
+
+  it('탈퇴한 사용자의 신고와 팔로우 집계를 함께 다시 계산한다', async () => {
+    const { service, query } = setup();
+    await service.withdraw(userId);
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining('SELECT "flagId" FROM "flag_reports"'),
+      [userId],
+    );
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining('"reportCount" = ('),
+      [flagId],
+    );
+  });
+
+  it('Apple 철회 실패는 같은 트랜잭션에 암호화 재시도 건을 저장한다', async () => {
+    const { service, enqueue, manager, remove } = setup({ apple: true });
+    await service.withdraw(userId);
+
+    expect(enqueue).toHaveBeenCalledWith(
+      'private-refresh-token',
+      'apple-client',
+      manager,
+    );
+    expect(remove).toHaveBeenCalledWith(User, { id: userId });
+  });
+
+  it('재시도 건 저장이 실패하면 계정을 삭제하지 않는다', async () => {
+    const { service, enqueue, remove } = setup({ apple: true });
+    enqueue.mockRejectedValueOnce(new Error('queue unavailable'));
+
+    await expect(service.withdraw(userId)).rejects.toThrow('queue unavailable');
+    expect(remove).not.toHaveBeenCalled();
   });
 });

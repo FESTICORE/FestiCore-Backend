@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { JwtModule, JwtService } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
+import { getRepositoryToken } from '@nestjs/typeorm';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { AllExceptionsFilter } from '../src/common/filters/all-exceptions.filter';
@@ -10,6 +11,7 @@ import { ResponseInterceptor } from '../src/common/interceptors/response.interce
 import { AdminAuthService } from '../src/modules/admin/auth/admin-auth.service';
 import { AdminSessionGuard } from '../src/modules/admin/auth/admin-session.guard';
 import { JwtAuthGuard } from '../src/modules/auth/guard/jwt-auth.guard';
+import { User } from '../src/modules/auth/entity/user.entity';
 import {
   AdminFlagsController,
   BearerController,
@@ -63,6 +65,14 @@ describe('Flags HTTP authorization (e2e)', () => {
         },
         AdminSessionGuard,
         JwtAuthGuard,
+        {
+          provide: getRepositoryToken(User),
+          useValue: {
+            findOne: jest
+              .fn()
+              .mockResolvedValue({ id: 'user-1', provider: 'google' }),
+          },
+        },
         { provide: APP_FILTER, useClass: AllExceptionsFilter },
         { provide: APP_INTERCEPTOR, useClass: ResponseInterceptor },
         { provide: APP_GUARD, useExisting: AdminSessionGuard },
