@@ -45,11 +45,14 @@ export class AdminFestivalService {
 
   async list() {
     const rows = await this.festivals.find({ order: { createdAt: 'DESC' } });
-    const counts = await this.dataSource.query<
-      { festivalId: string; count: number }[]
-    >(
-      `SELECT "festivalId", count(*)::int AS count FROM "crawl_proposals" WHERE status = 'open' AND "festivalId" IS NOT NULL GROUP BY "festivalId"`,
+    const table = await this.dataSource.query<{ present: string | null }[]>(
+      `SELECT to_regclass('crawl_proposals') AS present`,
     );
+    const counts = table[0]?.present
+      ? await this.dataSource.query<{ festivalId: string; count: number }[]>(
+          `SELECT "festivalId", count(*)::int AS count FROM "crawl_proposals" WHERE status = 'open' AND "festivalId" IS NOT NULL GROUP BY "festivalId"`,
+        )
+      : [];
     const openByFestival = new Map(
       counts.map((count) => [count.festivalId, count.count]),
     );

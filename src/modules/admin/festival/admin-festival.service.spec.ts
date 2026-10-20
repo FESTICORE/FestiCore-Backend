@@ -2,6 +2,29 @@ import { HttpException } from '@nestjs/common';
 import { AdminFestivalService } from './admin-festival.service';
 
 describe('AdminFestivalService optimistic edits', () => {
+  it('lists festivals before the crawler proposal table exists', async () => {
+    const query = jest.fn().mockResolvedValue([{ present: null }]);
+    const service = new AdminFestivalService(
+      {
+        find: jest.fn().mockResolvedValue([
+          {
+            id: 'fst_12345678',
+            draft: { name: 'Festival', venue: 'Seoul', days: [] },
+            draftVersion: 1,
+            publishedVersion: 0,
+          },
+        ]),
+      } as never,
+      {} as never,
+      { query } as never,
+    );
+
+    await expect(service.list()).resolves.toMatchObject({
+      items: [{ id: 'fst_12345678', openProposals: 0 }],
+    });
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+
   const row = {
     id: 'fst_12345678',
     draft: { name: 'Current' },
