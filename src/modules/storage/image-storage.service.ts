@@ -15,11 +15,17 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3';
 import { createHash, randomUUID } from 'crypto';
+import { execFile } from 'child_process';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { promisify } from 'util';
 import sharp from 'sharp';
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
 const CRAWL_IMAGE_KEY = /^crawl\/[0-9a-f]{64}\.webp$/;
+const execFileAsync = promisify(execFile);
 
 export interface PreparedFlagPhoto {
   photo: Buffer;
@@ -41,6 +47,24 @@ function imageType(bytes: Buffer): 'jpeg' | 'png' | 'heif' | null {
   return null;
 }
 
+async function decodeHeif(bytes: Buffer): Promise<Buffer> {
+  const directory = await mkdtemp(join(tmpdir(), 'festicore-heif-'));
+  const source = join(directory, 'source.heic');
+  const decoded = join(directory, 'decoded.jpg');
+  try {
+    await writeFile(source, bytes, { mode: 0o600 });
+    await execFileAsync('heif-dec', ['-q', '90', source, decoded], {
+      timeout: 10_000,
+      maxBuffer: 64 * 1024,
+    });
+    if ((await stat(decoded)).size > MAX_IMAGE_BYTES * 10)
+      throw new PayloadTooLargeException('변환된 사진이 너무 큽니다.');
+    return await readFile(decoded);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
 /** Decode and re-encode to strip EXIF and prevent client-controlled image payloads. */
 export async function prepareFlagPhoto(
   bytes: Buffer,
@@ -48,18 +72,17 @@ export async function prepareFlagPhoto(
 ): Promise<PreparedFlagPhoto> {
   if (bytes.length > MAX_IMAGE_BYTES) throw new PayloadTooLargeException();
   const kind = imageType(bytes);
-  if (kind === 'heif')
-    throw new UnsupportedMediaTypeException(
-      'HEIC/HEIF 변환은 현재 서버에서 지원되지 않습니다. JPEG 또는 PNG로 변환해 업로드해 주세요.',
-    );
   const allowed = {
     jpeg: ['image/jpeg'],
     png: ['image/png'],
+    heif: ['image/heic', 'image/heif'],
   };
   if (!kind || !allowed[kind].includes(declaredType.toLowerCase()))
-    throw new UnsupportedMediaTypeException('JPEG 또는 PNG 사진만 허용됩니다.');
+    throw new UnsupportedMediaTypeException(
+      'JPEG, PNG 또는 HEIC/HEIF 사진만 허용됩니다.',
+    );
   try {
-    const image = sharp(bytes, {
+    const image = sharp(kind === 'heif' ? await decodeHeif(bytes) : bytes, {
       failOn: 'error',
       limitInputPixels: 40_000_000,
     });

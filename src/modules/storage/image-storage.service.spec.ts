@@ -1,7 +1,7 @@
 import { ConfigService } from '@nestjs/config';
 import { Buffer } from 'buffer';
 import { createHash } from 'crypto';
-import { readFileSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { Readable } from 'stream';
 import sharp from 'sharp';
@@ -51,17 +51,24 @@ describe('flag image storage', () => {
     ).rejects.toMatchObject({ status: 413 });
   });
 
-  it('rejects a genuine HEIC with an actionable 415 instead of claiming support', async () => {
+  it('rejects a genuine HEIC with a forged MIME type', async () => {
     const heic = readFileSync(join(__dirname, 'fixtures/valid-320.heic'));
     expect(heic.toString('ascii', 8, 12)).toBe('heic');
-    await expect(prepareFlagPhoto(heic, 'image/heic')).rejects.toMatchObject({
+    await expect(prepareFlagPhoto(heic, 'image/jpeg')).rejects.toMatchObject({
       status: 415,
-      response: {
-        message:
-          'HEIC/HEIF 변환은 현재 서버에서 지원되지 않습니다. JPEG 또는 PNG로 변환해 업로드해 주세요.',
-      },
     });
   });
+
+  (existsSync('/usr/bin/heif-dec') ? it : it.skip)(
+    'converts a genuine HEIC to square WebP variants',
+    async () => {
+      const heic = readFileSync(join(__dirname, 'fixtures/valid-320.heic'));
+      const result = await prepareFlagPhoto(heic, 'image/heic');
+      expect((await sharp(result.photo).metadata()).format).toBe('webp');
+      expect((await sharp(result.photo).metadata()).width).toBe(512);
+      expect((await sharp(result.thumbnail).metadata()).width).toBe(128);
+    },
+  );
 
   it('rejects keys from another flag before contacting storage', async () => {
     const service = new ImageStorageService({} as ConfigService);
