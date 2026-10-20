@@ -72,6 +72,57 @@ export class AppleService {
     }
   }
 
+  /** Apple Services ID 전용 웹 code 교환 및 nonce 검증. */
+  async exchangeWebCode(
+    code: string,
+    redirectUri: string,
+    nonce: string,
+  ): Promise<{ profile: SocialProfile; grant?: OauthGrant }> {
+    const webClientId = this.config.get<string>('APPLE_WEB_CLIENT_ID');
+    const clientSecret = await this.buildClientSecret(webClientId);
+    if (!webClientId || !clientSecret) {
+      throw new ServiceUnavailableException(
+        'Apple 웹 로그인이 설정되지 않았습니다.',
+      );
+    }
+    const res = await fetch(APPLE_TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: webClientId,
+        client_secret: clientSecret,
+        code,
+        redirect_uri: redirectUri,
+        grant_type: 'authorization_code',
+      }),
+    });
+    if (!res.ok)
+      throw new UnauthorizedException('Apple 인증 코드 교환에 실패했습니다.');
+    const tokens = (await res.json()) as {
+      id_token?: string;
+      refresh_token?: string;
+    };
+    if (!tokens.id_token)
+      throw new UnauthorizedException('Apple ID 토큰이 없습니다.');
+    const { payload } = await jwtVerify(tokens.id_token, this.jwks, {
+      issuer: APPLE_ISSUER,
+      audience: webClientId,
+    });
+    if (!payload.sub || payload.nonce !== nonce) {
+      throw new UnauthorizedException('Apple nonce가 일치하지 않습니다.');
+    }
+    return {
+      profile: {
+        provider: 'apple',
+        providerId: payload.sub,
+        email: typeof payload.email === 'string' ? payload.email : undefined,
+      },
+      grant: tokens.refresh_token
+        ? { refreshToken: tokens.refresh_token, subject: payload.sub }
+        : undefined,
+    };
+  }
+
   /**
    * authorizationCode를 Apple refresh 토큰으로 교환한다(교환 결과의 사용자 sub 포함).
    * 자격증명(teamId/keyId/privateKey)이 없으면 undefined를 반환(연동 저장 생략).
@@ -145,8 +196,10 @@ export class AppleService {
   }
 
   /** Apple client secret(ES256 JWT) 생성. 자격증명 미비 시 undefined. */
-  private async buildClientSecret(): Promise<string | undefined> {
-    if (!this.clientId || !this.teamId || !this.keyId || !this.privateKey) {
+  private async buildClientSecret(
+    clientId = this.clientId,
+  ): Promise<string | undefined> {
+    if (!clientId || !this.teamId || !this.keyId || !this.privateKey) {
       return undefined;
     }
     try {
@@ -157,7 +210,7 @@ export class AppleService {
         .setIssuedAt()
         .setExpirationTime('5m')
         .setAudience(APPLE_ISSUER)
-        .setSubject(this.clientId)
+        .setSubject(clientId)
         .sign(key);
     } catch (error) {
       this.logger.error(

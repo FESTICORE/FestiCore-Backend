@@ -35,38 +35,28 @@ describe('Auth (e2e)', () => {
     await ctx.app.close();
   });
 
-  const devLogin = (key = 'tester') =>
-    request(server).post('/api/v1/auth/dev/login').send({ key });
-
-  describe('dev/login 게이트', () => {
-    it('플래그가 켜진 로컬 환경 → 200', async () => {
-      await devLogin().expect(200);
+  const socialLogin = () => {
+    ctx.google.verify.mockResolvedValue({
+      provider: 'google',
+      providerId: 'g-tester',
+      email: 'tester@example.com',
+      name: 'tester',
     });
+    return request(server)
+      .post('/api/v1/auth/login')
+      .send({ provider: 'google', token: 'id-token' });
+  };
 
-    it('DEV_LOGIN_ENABLED 미설정 → 403', async () => {
-      ctx.env.DEV_LOGIN_ENABLED = undefined;
-      await devLogin().expect(403);
-    });
-
-    it('Railway production 환경 → 403 (플래그 무관)', async () => {
-      ctx.env.RAILWAY_ENVIRONMENT_NAME = 'production';
-      await devLogin().expect(403);
-    });
-
-    it('NODE_ENV=production + Railway develop → 200', async () => {
-      ctx.env.NODE_ENV = 'production';
-      ctx.env.RAILWAY_ENVIRONMENT_NAME = 'develop';
-      await devLogin().expect(200);
-    });
-
-    it('NODE_ENV=production + Railway 환경 없음 → 403', async () => {
-      ctx.env.NODE_ENV = 'production';
-      await devLogin().expect(403);
-    });
+  it('삭제된 개발용 로그인 경로는 플래그가 있어도 404', async () => {
+    ctx.env.DEV_LOGIN_ENABLED = 'true';
+    await request(server)
+      .post('/api/v1/auth/dev/login')
+      .send({ key: 'tester' })
+      .expect(404);
   });
 
   it('login → me → refresh(회전) → 이전 refresh 재사용 401 → logout 후 refresh 401', async () => {
-    const login = await devLogin().expect(200);
+    const login = await socialLogin().expect(200);
     const { accessToken, refreshToken } = dataOf(login);
     expect(dataOf(login).newUser).toBe(true);
 
@@ -96,7 +86,7 @@ describe('Auth (e2e)', () => {
   });
 
   it('같은 refresh 토큰 동시 2회 → 하나만 성공', async () => {
-    const login = await devLogin().expect(200);
+    const login = await socialLogin().expect(200);
     const { refreshToken } = dataOf(login);
     const results = await Promise.all([
       request(server).post('/api/v1/auth/refresh').send({ refreshToken }),
@@ -106,7 +96,7 @@ describe('Auth (e2e)', () => {
   });
 
   it('refresh 토큰을 Bearer 로 쓰면 401 (logout 전후)', async () => {
-    const login = await devLogin().expect(200);
+    const login = await socialLogin().expect(200);
     const { accessToken, refreshToken } = dataOf(login);
     await request(server)
       .get('/api/v1/auth/me')

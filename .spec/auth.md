@@ -39,7 +39,6 @@
 | 메서드 | 경로                     | 인증   | 요청                                             | 설명                                              |
 | ------ | ------------------------ | ------ | ------------------------------------------------ | ------------------------------------------------- |
 | POST   | `/api/v1/auth/login`     | 불필요 | `{ provider, token, name?, authorizationCode? }` | 소셜 로그인/가입. apple 은 authorizationCode 필수 |
-| POST   | `/api/v1/auth/dev/login` | 불필요 | `{ key?, nickname?, email? }`                    | 개발 전용 토큰 발급                               |
 | POST   | `/api/v1/auth/refresh`   | 불필요 | `{ refreshToken }`                               | access/refresh 재발급(회전, 1회용)                |
 | POST   | `/api/v1/auth/logout`    | 필요   | -                                                | refresh 토큰 전체 폐기                            |
 | GET    | `/api/v1/auth/me`        | 필요   | -                                                | 현재 사용자                                       |
@@ -74,8 +73,6 @@
 - refresh 소비는 조건부 업데이트(`revokedAt IS NULL`)로 원자적 — 동시 재사용 시 하나만 성공.
 - logout 후에도 이미 발급된 access 토큰은 만료(`JWT_ACCESS_TTL`, 기본 30m)까지 유효(의도된 트레이드오프).
 - 첫 로그인 동시 경합으로 unique 위반(23505)이 나면 재조회해 기존 사용자로 처리.
-- dev/login: `DEV_LOGIN_ENABLED=true` 필수, `RAILWAY_ENVIRONMENT_NAME=production` 이면 항상 거부,
-  `NODE_ENV=production` 이면 Railway `develop` 환경에서만 허용.
 - 에러 로그 바디 진단은 production 환경에서 항상 off, 인증 값(`token`, `authorizationCode` 등)은 가린다.
 - 알려진 한계: refresh 와 logout 이 ms 단위로 겹치면 logout 직후 새 토큰이 발급될 수 있다.
 
@@ -85,7 +82,6 @@
 | --------------------------------------- | ---- |
 | 검증 실패(provider 값, apple code 누락) | 400  |
 | 토큰 없음/무효/refresh 재사용           | 401  |
-| dev/login 비활성                        | 403  |
 | provider 미설정                         | 503  |
 
 ## 검증 기준

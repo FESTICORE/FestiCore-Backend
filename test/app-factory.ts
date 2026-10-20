@@ -40,17 +40,18 @@ export async function createTestApp(): Promise<TestContext> {
     'auth.jwt.accessTtl': '30m',
     'auth.jwt.refreshTtl': '14d',
     NODE_ENV: 'test',
-    DEV_LOGIN_ENABLED: 'true',
   };
   const users = new FakeRepository<User>();
   const refreshTokens = new FakeRepository<RefreshToken>();
   const google = {
     verify: jest.fn(),
+    exchangeWebCode: jest.fn(),
     exchangeAuthCode: jest.fn(),
     revokeConnection: jest.fn(),
   };
   const apple = {
     verify: jest.fn(),
+    exchangeWebCode: jest.fn(),
     exchangeAuthCode: jest.fn(),
     revokeConnection: jest.fn(),
   };

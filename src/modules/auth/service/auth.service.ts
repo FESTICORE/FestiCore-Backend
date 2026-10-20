@@ -1,10 +1,10 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { QueryFailedError, Repository } from 'typeorm';
-import { DevLoginDto } from '../dto/dev-login.dto';
 import { SocialLoginDto } from '../dto/social-login.dto';
 import { User } from '../entity/user.entity';
 import type { SocialProfile } from '../types/social-profile';
+import type { OauthGrant } from '../types/social-profile';
 import { AppleService } from './apple.service';
 import { GoogleService } from './google.service';
 import { TokenService } from './token.service';
@@ -52,21 +52,27 @@ export class AuthService {
     return { ...tokens, newUser: isNew, user: this.toView(user) };
   }
 
-  /**
-   * 개발 전용 로그인: 소셜 검증 없이 key로 사용자를 find-or-create 해 토큰을 발급한다.
-   * 같은 key는 항상 같은 계정으로 매핑되어(providerId=`dev-<key>`) 반복 테스트가 쉽다.
-   * 라우트 노출 여부는 컨트롤러에서 환경으로 제어한다.
-   */
-  async devLogin(dto: DevLoginDto): Promise<LoginResult> {
-    const key = (dto.key ?? 'default').trim() || 'default';
-    const { user, isNew } = await this.findOrCreate({
-      provider: 'google',
-      providerId: `dev-${key}`,
-      email: dto.email ?? undefined,
-      name: dto.nickname ?? key,
-    });
+  /** 웹 OAuth 콜백에서 검증이 끝난 프로필만 계정으로 연결한다. */
+  async completeWebLogin(
+    profile: SocialProfile,
+    grant?: OauthGrant,
+  ): Promise<{ userId: string; newUser: boolean }> {
+    const { user, isNew } = await this.findOrCreate(profile);
+    if (grant?.refreshToken && grant.subject === profile.providerId) {
+      await this.userRepo.update(
+        { id: user.id },
+        { oauthRefreshToken: grant.refreshToken },
+      );
+    }
+    return { userId: user.id, newUser: isNew };
+  }
+
+  /** 일회용 웹 교환 티켓 소비 후에만 토큰을 발급한다. */
+  async issueWebLogin(userId: string, newUser: boolean): Promise<LoginResult> {
+    const user = await this.userRepo.findOne({ where: { id: userId } });
+    if (!user) throw new NotFoundException('사용자를 찾을 수 없습니다.');
     const tokens = await this.token.issue(user);
-    return { ...tokens, newUser: isNew, user: this.toView(user) };
+    return { ...tokens, newUser, user: this.toView(user) };
   }
 
   /** refresh 토큰 회전: 기존 토큰 폐기 후 새 access/refresh 발급 */
@@ -91,6 +97,14 @@ export class AuthService {
     if (!user) {
       throw new NotFoundException('사용자를 찾을 수 없습니다.');
     }
+    return this.toView(user);
+  }
+
+  async updateMe(userId: string, nickname: string): Promise<UserView> {
+    const user = await this.userRepo.findOne({ where: { id: userId } });
+    if (!user) throw new NotFoundException('사용자를 찾을 수 없습니다.');
+    user.nickname = nickname;
+    await this.userRepo.save(user);
     return this.toView(user);
   }
 

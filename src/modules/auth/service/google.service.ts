@@ -61,6 +61,58 @@ export class GoogleService {
     }
   }
 
+  /** 웹 authorization code는 등록된 redirect URI와 함께 교환한다. */
+  async exchangeWebCode(
+    code: string,
+    redirectUri: string,
+    nonce: string,
+  ): Promise<{ profile: SocialProfile; grant?: OauthGrant }> {
+    if (!this.enabled || !this.clientId || !this.clientSecret) {
+      throw new ServiceUnavailableException(
+        'Google 웹 로그인이 설정되지 않았습니다.',
+      );
+    }
+    const res = await fetch(GOOGLE_TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: this.clientId,
+        client_secret: this.clientSecret,
+        code,
+        redirect_uri: redirectUri,
+        grant_type: 'authorization_code',
+      }),
+    });
+    if (!res.ok)
+      throw new UnauthorizedException('Google 인증 코드 교환에 실패했습니다.');
+    const tokens = (await res.json()) as {
+      id_token?: string;
+      refresh_token?: string;
+    };
+    if (!tokens.id_token)
+      throw new UnauthorizedException('Google ID 토큰이 없습니다.');
+    const ticket = await this.client.verifyIdToken({
+      idToken: tokens.id_token,
+      audience: this.clientId,
+    });
+    const payload = ticket.getPayload();
+    if (!payload?.sub || payload.nonce !== nonce) {
+      throw new UnauthorizedException('Google nonce가 일치하지 않습니다.');
+    }
+    return {
+      profile: {
+        provider: 'google',
+        providerId: payload.sub,
+        email: payload.email,
+        name: payload.name,
+        picture: payload.picture,
+      },
+      grant: tokens.refresh_token
+        ? { refreshToken: tokens.refresh_token, subject: payload.sub }
+        : undefined,
+    };
+  }
+
   /**
    * serverAuthCode를 Google refresh 토큰으로 교환한다(교환 결과의 사용자 sub 포함).
    * clientSecret이 없으면 undefined(연동 저장 생략).

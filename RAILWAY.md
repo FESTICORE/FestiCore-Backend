@@ -31,7 +31,7 @@ Railway 프로젝트 **FestiCore** (Roy's Projects). Cider 프로젝트와 같�
 
 ## 3. 환경변수 (서비스 Variables)
 
-`railway.toml`에서 `NODE_ENV=production`(두 환경)과 `DEV_LOGIN_ENABLED=true`(develop만)는 자동 설정된다.
+`railway.toml`에서 `NODE_ENV=production`(두 환경)은 자동 설정된다.
 추가로 설정할 값:
 
 ```
@@ -51,6 +51,21 @@ APPLE_PRIVATE_KEY=                          # 개행은 \n
 ```
 
 로컬은 같은 키를 `.env`에 둔다(로컬 DB는 `DB_HOST/DB_PORT/DB_USERNAME/DB_PASSWORD/DB_NAME`, 기본 DB명 `festicore`).
+
+Google 웹 OAuth 클라이언트의 승인된 리디렉션 URI는 운영
+`https://festicore.up.railway.app/api/v1/auth/google/callback`, 개발
+`https://festicore-dev.up.railway.app/api/v1/auth/google/callback`으로 등록했다.
+현재 모바일 Google 로그인은 앱이 받은 ID 토큰을 `POST /api/v1/auth/login`에 보내므로
+이 콜백 URI를 호출하지 않는다. 웹 인가 코드 흐름은 `/api/v1/auth/google/start`에서 시작하고
+콜백 뒤 일회용 HttpOnly 티켓을 `/api/v1/auth/web/token`에서 교환한다.
+
+Apple Services ID `co.festiCore.io`의 웹 인증 도메인에는
+`festicore.up.railway.app`, `festicore-dev.up.railway.app`을 등록했다. Return URL은
+각 도메인의 `https://<도메인>/api/v1/auth/apple/callback`으로 등록했다.
+현재 iOS Apple 로그인은 앱의 identity token과 authorization code를
+`POST /api/v1/auth/login`에 전송하므로 이 웹 Return URL을 사용하지 않는다.
+웹 Apple 로그인은 `/api/v1/auth/apple/start`에서 시작하며 POST(form_post) 콜백에서
+state와 nonce를 검증한다. 웹 티켓 교환은 백엔드와 동일한 origin만 허용한다.
 
 ## 4. 배포 설정
 
