@@ -17,6 +17,7 @@ import {
   FlagPin,
 } from '../src/modules/flags/flag.entity';
 import { PublicFestivalController } from '../src/modules/public/public-festival.controller';
+import { discoverySummaries } from '../src/modules/public/crawl-catalog';
 import { PublicFestivalService } from '../src/modules/public/public-festival.service';
 import { PublicLiveService } from '../src/modules/public/public-live.service';
 
@@ -214,6 +215,71 @@ describe('Public festival API', () => {
     expect(unchanged.text).toBe('');
     const missing = await request(server)
       .get('/api/v1/festivals/fst_unknown/pack')
+      .expect(404);
+    expect(errorData<null>(missing.body, 'NOT_FOUND')).toBeNull();
+  });
+
+  it('returns a discovered festival detail with stored poster and artist images', async () => {
+    const candidate = {
+      candidate: {
+        name: 'WONDERLIVET 2026 (원더리벳 2026)',
+        venue: 'KINTEX HALL 7/8/9/10',
+        date: '2026.11.20 - 2026.11.22',
+        url: 'https://ticket.melon.com/performance/index.htm?prodId=213793',
+        posterUrl:
+          'https://cdnticket.melon.co.kr/resource/image/upload/product/poster.jpg',
+        artists: [
+          {
+            name: 'THE ORAL CIGARETTES',
+            sourceUrl: 'https://cdnimg.melon.co.kr/artist/1.jpg',
+          },
+        ],
+      },
+    };
+    dataSource.query
+      .mockResolvedValueOnce([candidate])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          originUrl: candidate.candidate.posterUrl,
+          id: '00000000-0000-4000-8000-000000000001',
+        },
+        {
+          originUrl: candidate.candidate.artists[0].sourceUrl,
+          id: '00000000-0000-4000-8000-000000000002',
+        },
+      ]);
+    const id = discoverySummaries([candidate])[0].id;
+    const response = await request(server)
+      .get(`/api/v1/festivals/${id}`)
+      .expect(200);
+    expect(successData<Record<string, unknown>>(response.body)).toMatchObject({
+      id,
+      status: 'discovered',
+      thumbUrl:
+        '/api/v1/festivals/images/00000000-0000-4000-8000-000000000001.webp',
+      artists: [
+        {
+          name: 'THE ORAL CIGARETTES',
+          imageUrl:
+            '/api/v1/festivals/images/00000000-0000-4000-8000-000000000002.webp',
+        },
+      ],
+      timetable: [],
+    });
+  });
+
+  it('returns a published festival detail and rejects unknown IDs', async () => {
+    const response = await request(server)
+      .get(`/api/v1/festivals/${pack.id}`)
+      .expect(200);
+    expect(successData<Record<string, unknown>>(response.body)).toMatchObject({
+      id: pack.id,
+      packVersion: 7,
+    });
+    dataSource.query.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+    const missing = await request(server)
+      .get('/api/v1/festivals/fst_unknown')
       .expect(404);
     expect(errorData<null>(missing.body, 'NOT_FOUND')).toBeNull();
   });

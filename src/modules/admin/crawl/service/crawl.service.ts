@@ -22,7 +22,11 @@ import { CrawlSnapshot } from '../entity/crawl-snapshot.entity';
 import { CrawlSource } from '../entity/crawl-source.entity';
 import { Proposal, ProposalItem } from '../entity/proposal.entity';
 import { checkedUrl, robotsAllows, safeGet, safeGetImage } from './crawl-fetch';
-import { discoverImageUrls, prepareCrawlImage } from './crawl-image';
+import {
+  discoverImageUrls,
+  prepareCrawlImage,
+  selectRunImages,
+} from './crawl-image';
 import { parseCrawl, plainText } from './crawl-parser';
 import { CrawlAlertService } from './crawl-alert.service';
 
@@ -361,10 +365,10 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
             ? source.url.startsWith(
                 'https://ticket.yes24.com/New/Genre/Ajax/GenreList_Data.aspx',
               )
-              ? 'ticket-list:v3'
+              ? 'ticket-list:v4'
               : source.url.startsWith('https://nol.yanolja.com/ticket')
                 ? 'ticket-list:v3'
-                : 'ticket-list:v2'
+                : 'ticket-list:v3'
             : '',
         )
         .digest('hex');
@@ -416,6 +420,27 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
                SELECT 'discovery', $1::varchar, 'ticket-list', '{"seed":"mintpaper-detail"}', now() - interval '1 day'
                WHERE NOT EXISTS (SELECT 1 FROM crawl_sources WHERE "url" = $1)`,
               [item.url],
+            );
+          }
+        }
+        if (source.kind === 'discovery' && Array.isArray(parsed)) {
+          for (const item of parsed.slice(0, 100) as unknown[]) {
+            if (!item || typeof item !== 'object' || !('url' in item)) continue;
+            const url = item.url;
+            if (
+              typeof url !== 'string' ||
+              url === source.url ||
+              (!/^https:\/\/ticket\.melon\.com\/performance\/index\.htm\?prodId=\d+$/.test(
+                url,
+              ) &&
+                !/^https:\/\/ticket\.yes24\.com\/Perf\/\d+$/.test(url))
+            )
+              continue;
+            await this.dataSource.query(
+              `INSERT INTO crawl_sources ("kind", "url", "parser", "parserConfig", "createdAt")
+               SELECT 'discovery', $1::varchar, 'ticket-list', '{"seed":"ticket-detail"}', now() - interval '1 day'
+               WHERE NOT EXISTS (SELECT 1 FROM crawl_sources WHERE "url" = $1)`,
+              [url],
             );
           }
         }
@@ -710,7 +735,11 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     urls: URL[],
   ): Promise<string[]> {
     const stored: string[] = [];
-    for (const url of urls) {
+    for (const url of selectRunImages(
+      urls,
+      source.url,
+      run.scheduledDate ?? new Date().toISOString().slice(0, 10),
+    )) {
       if (url.toString().length > 2048) continue;
       let validated = false;
       try {

@@ -184,6 +184,55 @@ export class PublicFestivalController {
     );
   }
 
+  @Get(':id')
+  @ApiOperation({
+    summary: '축제 상세 정보',
+    description:
+      '목록의 축제 ID로 상세를 조회합니다. 발견된 축제는 확인된 일정·장소·보관 포스터·출연진만 반환하고 타임테이블은 발행 전 빈 목록입니다. 발행된 축제는 공개 팩 내용을 반환합니다. 요청 본문은 없습니다.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: '축제 목록에서 받은 ID',
+    example: 'fst_0123456789abcdef',
+  })
+  @ApiResponse({
+    status: 200,
+    description: '축제 상세와 확인된 출연진, 이미지 경로',
+    schema: {
+      type: 'object',
+      example: {
+        code: 'SUCCESS',
+        data: {
+          id: 'fst_0123456789abcdef',
+          name: 'WONDERLIVET 2026 (원더리벳 2026)',
+          venue: 'KINTEX HALL 7/8/9/10',
+          firstDate: '2026-11-20',
+          lastDate: '2026-11-22',
+          status: 'discovered',
+          packVersion: 0,
+          thumbUrl:
+            '/api/v1/festivals/images/00000000-0000-4000-8000-000000000001.webp',
+          sourceUrl:
+            'https://ticket.melon.com/performance/index.htm?prodId=213793',
+          officialInstagramUrl: null,
+          artists: [{ name: 'THE ORAL CIGARETTES', imageUrl: null }],
+          timetable: [],
+        },
+        message: '성공적으로 처리되었습니다.',
+      },
+    },
+  })
+  @ApiResponse({
+    status: 404,
+    description: '축제를 찾을 수 없습니다.',
+    schema: jsonErrorSchema('NOT_FOUND'),
+  })
+  async detail(@Param('id') id: string, @Res() response: Response) {
+    const body = await this.service.detail(id);
+    response.setHeader('Cache-Control', 'public, max-age=60');
+    this.send(response, body);
+  }
+
   @Get(':id/pack/version')
   @ApiOperation({
     summary: '발행 팩 버전 확인',

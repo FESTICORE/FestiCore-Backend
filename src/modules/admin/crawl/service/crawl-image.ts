@@ -1,10 +1,97 @@
 import { createHash } from 'node:crypto';
 import sharp from 'sharp';
 import { checkedUrl } from './crawl-fetch';
+import { yes24EventJson } from './crawl-parser';
 
 const MAX_INPUT_BYTES = 5 * 1024 * 1024;
 const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
 const MAX_IMAGES_PER_RUN = 8;
+
+export function selectRunImages(
+  urls: URL[],
+  pageUrl: string,
+  day: string,
+): URL[] {
+  if (urls.length <= MAX_IMAGES_PER_RUN) return urls;
+  const page = new URL(pageUrl);
+  if (
+    page.hostname !== 'ticket.melon.com' ||
+    page.pathname !== '/performance/index.htm'
+  )
+    return urls.slice(0, MAX_IMAGES_PER_RUN);
+  const poster = urls[0];
+  const artists = urls.slice(1);
+  const dayNumber = Math.floor(Date.parse(`${day}T00:00:00Z`) / 86_400_000);
+  const start =
+    (Number.isFinite(dayNumber) ? dayNumber * (MAX_IMAGES_PER_RUN - 1) : 0) %
+    artists.length;
+  return [
+    poster,
+    ...Array.from(
+      { length: MAX_IMAGES_PER_RUN - 1 },
+      (_, index) => artists[(start + index) % artists.length],
+    ),
+  ];
+}
+
+function melonDetailImages(html: string, pageUrl: string): URL[] | null {
+  const page = new URL(pageUrl);
+  if (
+    page.hostname !== 'ticket.melon.com' ||
+    page.pathname !== '/performance/index.htm' ||
+    !/^\d+$/.test(page.searchParams.get('prodId') ?? '')
+  )
+    return null;
+  const urls: URL[] = [];
+  const add = (raw: string, hostname: string) => {
+    try {
+      const url = checkedUrl(new URL(raw, page).toString());
+      if (
+        url.hostname === hostname &&
+        !urls.some((item) => item.toString() === url.toString())
+      )
+        urls.push(url);
+    } catch {
+      /* Ignore malformed or unsafe image locations. */
+    }
+  };
+  const poster =
+    /<meta\b[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i.exec(
+      html,
+    )?.[1];
+  if (poster) add(poster, 'cdnticket.melon.co.kr');
+  const artistList =
+    /<ul\b[^>]*class=["'][^"']*\blist_artist\b[^"']*["'][^>]*>([\s\S]*?)<\/ul>/i.exec(
+      html,
+    )?.[1];
+  for (const tag of artistList?.match(/<img\b[^>]*>/gi) ?? []) {
+    const image = /\bsrc=["']([^"']+)["']/i.exec(tag)?.[1];
+    if (image) add(image, 'cdnimg.melon.co.kr');
+    if (urls.length >= 81) break;
+  }
+  return urls;
+}
+
+function yes24DetailImages(html: string, pageUrl: string): URL[] | null {
+  const page = new URL(pageUrl);
+  if (
+    page.hostname !== 'ticket.yes24.com' ||
+    !/^\/Perf\/\d+$/.test(page.pathname)
+  )
+    return null;
+  const event = yes24EventJson(html);
+  if (!event) return [];
+  try {
+    if (typeof event.image !== 'string') return [];
+    const image = checkedUrl(new URL(event.image, page).toString());
+    return image.hostname === 'tkfile.yes24.com' &&
+      image.pathname.startsWith('/upload2/PerfBlog/')
+      ? [image]
+      : [];
+  } catch {
+    return [];
+  }
+}
 
 function mintPaperImages(html: string, pageUrl: string): URL[] | null {
   const page = new URL(pageUrl);
@@ -58,6 +145,10 @@ function mintPaperImages(html: string, pageUrl: string): URL[] | null {
 export function discoverImageUrls(html: string, pageUrl: string): URL[] {
   const officialImages = mintPaperImages(html, pageUrl);
   if (officialImages) return officialImages;
+  const melonImages = melonDetailImages(html, pageUrl);
+  if (melonImages) return melonImages;
+  const yes24Images = yes24DetailImages(html, pageUrl);
+  if (yes24Images) return yes24Images;
   const urls: URL[] = [];
   const seen = new Set<string>();
   if (

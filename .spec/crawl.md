@@ -17,7 +17,9 @@
 - [YES24 티켓 콘서트 목록](https://ticket.yes24.com/English/Genre/Concert): 장르가 Festival인 상품을 후보로 추린다.
 - [YES24 국내 페스티벌 장르 AJAX 목록](https://ticket.yes24.com/New/Genre/Ajax/GenreList_Data.aspx?genre=15464&sort=0&area=&genretype=2&pCurPage=1&pPageSize=30): 공개 목록의 `ListTotalCnt`를 읽어 필요할 때 최대 4페이지를 순차 수집한다(페이지당 최대 2 MB, 페이지당 robots.txt 재확인). 공연 ID로 상품 URL을 구성하고 카드의 날짜와 장소를 수집하며, 제목 검증과 중복 제거를 적용해 최대 100개 후보를 만든다. 카드의 `data-src` 포스터 URL은 기존 이미지 검증·보관 경로의 수집 후보가 된다. 네트워크, robots.txt, 이미지 형식 검증이 실패하면 해당 이미지 보관은 보장되지 않는다.
 
-새 소스 마이그레이션은 URL이 이미 있으면 중복 등록하지 않는다. NOL의 기존 기본 URL은 과거 403 실패로 `broken`일 수 있으므로 새 장르 소스를 만들고 기존 소스를 비활성화한다. 새 NOL·YES24 소스와 멜론의 `v=2` 대체 소스는 `createdAt`을 전날로 등록해 배포 후 첫 예약 점검에서 실행한다. 멜론의 기존 `v=1` 소스는 대체 소스가 존재할 때 비활성화해 같은 목록의 중복 실행을 막는다.
+확인된 멜론·YES24 상품 URL은 별도 상세 소스로 등록해 다음 KST 예약 실행부터 수집한다. 멜론 상세에서 출연진 이름과 공식 사진 URL을, YES24 상세의 공개 구조화 데이터에서 일정·장소·포스터를 읽는다. 이미지는 매 실행 최대 8개만 가져오고 멜론 출연진 사진은 날짜별로 순환해 수집한다. 사진은 WebP 보관에 성공한 경우에만 공개 경로를 제공한다. NOL 기본 소스는 지속된 403으로 이번 마이그레이션에서 비활성화한다. 공연 시작 시각과 무대별 타임테이블은 공식 정보가 확인되기 전에는 생성하지 않는다.
+
+새 소스 마이그레이션은 URL이 이미 있으면 중복 등록하지 않는다. 기존 NOL·YES24 소스와 멜론 대체 소스는 `createdAt`을 전날로 등록해 배포 후 첫 예약 점검에서 실행한다. 멜론의 기존 `v=1` 소스는 대체 소스가 존재할 때 비활성화해 같은 목록의 중복 실행을 막는다.
 
 ## 관리자 인증과 문서
 
@@ -25,19 +27,19 @@
 
 ## 크롤 소스와 실행 API
 
-| 메서드 | 경로 | 역할 | 본문·쿼리 | 결과 |
-| --- | --- | --- | --- | --- |
-| GET | `/admin/crawl/sources` | viewer | `festivalId?`, `status?` | `{items: CrawlSource[]}` |
-| POST | `/admin/crawl/sources` | owner | `{festivalId?, kind, url, parser, parserConfig}` | 생성된 소스 |
-| PATCH | `/admin/crawl/sources/:id` | owner | `{enabled?, parserConfig?, intervalMinutes?: 1440, url?}` | 변경된 소스 |
-| POST | `/admin/crawl/sources/:id/run` | editor | 없음 | 202 `{runId}` |
-| POST | `/admin/crawl/sources/:id/test` | editor | 없음 | `{parsed, excerpt}` |
-| GET | `/admin/crawl/runs` | viewer | `sourceId?`, `result?`, `limit?` | `{items: CrawlRun[]}`; 기본 50, 최대 100 |
-| GET | `/admin/crawl/snapshots/:id` | viewer | 없음 | `{id, runId, body, createdAt}`; 30일 보관 |
-| GET | `/admin/crawl/images` | viewer | `runId?`, `sourceId?` | `{items: CrawlImage[]}`; 최근 100개 |
-| GET | `/admin/crawl/images/:id` | viewer | 없음 | `image/webp` 바이너리 |
-| GET | `/admin/crawl/alerts` | viewer | `status?`, `limit?` | `{items: CrawlAlert[]}` |
-| PATCH | `/admin/crawl/alerts/:id/acknowledge` | editor | 없음 | 확인된 알림 |
+| 메서드 | 경로                                  | 역할   | 본문·쿼리                                                 | 결과                                      |
+| ------ | ------------------------------------- | ------ | --------------------------------------------------------- | ----------------------------------------- |
+| GET    | `/admin/crawl/sources`                | viewer | `festivalId?`, `status?`                                  | `{items: CrawlSource[]}`                  |
+| POST   | `/admin/crawl/sources`                | owner  | `{festivalId?, kind, url, parser, parserConfig}`          | 생성된 소스                               |
+| PATCH  | `/admin/crawl/sources/:id`            | owner  | `{enabled?, parserConfig?, intervalMinutes?: 1440, url?}` | 변경된 소스                               |
+| POST   | `/admin/crawl/sources/:id/run`        | editor | 없음                                                      | 202 `{runId}`                             |
+| POST   | `/admin/crawl/sources/:id/test`       | editor | 없음                                                      | `{parsed, excerpt}`                       |
+| GET    | `/admin/crawl/runs`                   | viewer | `sourceId?`, `result?`, `limit?`                          | `{items: CrawlRun[]}`; 기본 50, 최대 100  |
+| GET    | `/admin/crawl/snapshots/:id`          | viewer | 없음                                                      | `{id, runId, body, createdAt}`; 30일 보관 |
+| GET    | `/admin/crawl/images`                 | viewer | `runId?`, `sourceId?`                                     | `{items: CrawlImage[]}`; 최근 100개       |
+| GET    | `/admin/crawl/images/:id`             | viewer | 없음                                                      | `image/webp` 바이너리                     |
+| GET    | `/admin/crawl/alerts`                 | viewer | `status?`, `limit?`                                       | `{items: CrawlAlert[]}`                   |
+| PATCH  | `/admin/crawl/alerts/:id/acknowledge` | editor | 없음                                                      | 확인된 알림                               |
 
 소스 등록 예시:
 
@@ -55,12 +57,12 @@
 
 ## 제안 검토와 초안 반영
 
-| 메서드 | 경로 | 역할 | 본문·쿼리 | 결과 |
-| --- | --- | --- | --- | --- |
-| GET | `/admin/proposals` | viewer | `festivalId?`, `status?` (`open` 기본) | `{items: Proposal[]}` |
-| GET | `/admin/proposals/:id` | viewer | 없음 | 제안과 `currentDraftValues` |
-| POST | `/admin/proposals/:id/decide` | editor | `{decisions:[{itemId,decision,after?}]}` | `{proposal,conflicts,draftVersion}` |
-| POST | `/admin/proposals/:id/dismiss` | editor | `{reason}` (1~500자) | 거절된 제안 |
+| 메서드 | 경로                           | 역할   | 본문·쿼리                                | 결과                                |
+| ------ | ------------------------------ | ------ | ---------------------------------------- | ----------------------------------- |
+| GET    | `/admin/proposals`             | viewer | `festivalId?`, `status?` (`open` 기본)   | `{items: Proposal[]}`               |
+| GET    | `/admin/proposals/:id`         | viewer | 없음                                     | 제안과 `currentDraftValues`         |
+| POST   | `/admin/proposals/:id/decide`  | editor | `{decisions:[{itemId,decision,after?}]}` | `{proposal,conflicts,draftVersion}` |
+| POST   | `/admin/proposals/:id/dismiss` | editor | `{reason}` (1~500자)                     | 거절된 제안                         |
 
 `decision`은 `accepted` 또는 `rejected`다. `decide`는 항목별 판단을 받으며 중복 itemId는 거절한다. 기존 축제 변경을 수락하면 초안의 이전 값이 제안 생성 당시 값과 같은지 검사한다. 달라졌거나 초안 검증에 실패한 항목은 `conflicts`에 이유가 반환되고 `pending`으로 남는다.
 
@@ -70,19 +72,23 @@
 
 ```json
 {
-  "decisions": [{
-    "itemId": "0",
-    "decision": "accepted",
-    "after": {
-      "name": "샘플 뮤직 페스티벌",
-      "venue": "서울 올림픽공원",
-      "days": [{
-        "date": "2026-10-25",
-        "startsAt": "2026-10-25T10:00:00+09:00",
-        "endsAt": "2026-10-25T22:00:00+09:00"
-      }]
+  "decisions": [
+    {
+      "itemId": "0",
+      "decision": "accepted",
+      "after": {
+        "name": "샘플 뮤직 페스티벌",
+        "venue": "서울 올림픽공원",
+        "days": [
+          {
+            "date": "2026-10-25",
+            "startsAt": "2026-10-25T10:00:00+09:00",
+            "endsAt": "2026-10-25T22:00:00+09:00"
+          }
+        ]
+      }
     }
-  }]
+  ]
 }
 ```
 

@@ -234,6 +234,8 @@ describe('crawl parsers', () => {
         url: 'https://ticket.yes24.com/Perf/59840',
         date: '2026.11.20 ~ 2026.11.22',
         venue: 'KINTEX HALL 7/8/9/10',
+        posterUrl:
+          'https://tkfile.yes24.com/upload2/PerfBlog/202608/20260820/20260820-59840.png/dims/quality/70/',
       },
     ]);
   });
@@ -252,6 +254,51 @@ describe('crawl parsers', () => {
         url: 'https://ticket.yes24.com/English/Perf/60745',
         date: 'Dec 31, 2026',
         venue: 'KINTEX HALL 7·8',
+      },
+    ]);
+  });
+
+  it('reads a Melon detail page with verified artist images', async () => {
+    const melon = source('ticket-list', 'discovery');
+    melon.url = 'https://ticket.melon.com/performance/index.htm?prodId=213793';
+    const html = `<meta property="og:image" content="https://cdnticket.melon.co.kr/resource/image/upload/product/poster.jpg">
+      <strong class="tit">WONDERLIVET 2026 (원더리벳 2026)</strong>
+      <span class="txt_info">2026.11.20 - 2026.11.22</span>
+      <span class="place">KINTEX HALL 7/8/9/10</span>
+      <ul class="list_artist"><li><img src="https://cdnimg.melon.co.kr/artist/1.jpg"><span class="singer">THE ORAL CIGARETTES</span></li></ul>`;
+    expect(await parseCrawl(melon, html)).toEqual([
+      expect.objectContaining({
+        name: 'WONDERLIVET 2026 (원더리벳 2026)',
+        artists: [
+          {
+            name: 'THE ORAL CIGARETTES',
+            sourceUrl: 'https://cdnimg.melon.co.kr/artist/1.jpg',
+          },
+        ],
+      }),
+    ]);
+  });
+
+  it('reads a YES24 detail Event without inventing a timetable', async () => {
+    const yes24 = source('ticket-list', 'discovery');
+    yes24.url = 'https://ticket.yes24.com/Perf/60590';
+    const html = `<script type="application/ld+json">{"@type":"Organization"}</script><script type="application/ld+json">${JSON.stringify(
+      {
+        '@type': 'Event',
+        name: 'COUNTDOWN FANTASY 2026-2027',
+        startDate: '2026-12-31',
+        endDate: '2026-12-31',
+        location: { name: '킨텍스 제2전시장 7홀, 8홀' },
+        image: 'https://tkfile.yes24.com/upload2/PerfBlog/cdf.jpg',
+      },
+    )}</script>`;
+    expect(await parseCrawl(yes24, html)).toEqual([
+      {
+        name: 'COUNTDOWN FANTASY 2026-2027',
+        url: yes24.url,
+        date: '2026-12-31 ~ 2026-12-31',
+        venue: '킨텍스 제2전시장 7홀, 8홀',
+        posterUrl: 'https://tkfile.yes24.com/upload2/PerfBlog/cdf.jpg',
       },
     ]);
   });

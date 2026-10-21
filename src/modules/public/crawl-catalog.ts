@@ -32,6 +32,7 @@ export interface DiscoverySummary {
   sourceUrl: string;
   officialInstagramUrl?: string;
   posterUrl?: string;
+  artists?: { name: string; sourceUrl?: string; imageUrl?: string | null }[];
   sortAt: string;
 }
 
@@ -59,6 +60,8 @@ function officialPosterUrl(raw: unknown): string | null {
     const url = new URL(raw);
     const trusted =
       url.hostname === 'mintpaper.s3.ap-northeast-2.amazonaws.com' ||
+      (url.hostname === 'tkfile.yes24.com' &&
+        url.pathname.startsWith('/upload2/PerfBlog/')) ||
       (url.hostname === 'cdnticket.melon.co.kr' &&
         url.pathname.startsWith('/resource/image/upload/product/'));
     return url.protocol === 'https:' &&
@@ -70,6 +73,34 @@ function officialPosterUrl(raw: unknown): string | null {
   } catch {
     return null;
   }
+}
+
+function verifiedArtists(raw: unknown): { name: string; sourceUrl?: string }[] {
+  if (!Array.isArray(raw)) return [];
+  const artists: { name: string; sourceUrl?: string }[] = [];
+  for (const value of raw.slice(0, 80)) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+    const name = (value as Record<string, unknown>).name;
+    if (typeof name !== 'string' || !name.trim() || name.length > 160) continue;
+    const artist: { name: string; sourceUrl?: string } = { name: name.trim() };
+    const rawUrl = (value as Record<string, unknown>).sourceUrl;
+    if (typeof rawUrl === 'string') {
+      try {
+        const url = new URL(rawUrl);
+        if (
+          url.protocol === 'https:' &&
+          url.hostname === 'cdnimg.melon.co.kr' &&
+          !url.username &&
+          !url.password
+        )
+          artist.sourceUrl = url.toString();
+      } catch {
+        /* Ignore malformed artist image URLs. */
+      }
+    }
+    artists.push(artist);
+  }
+  return artists;
 }
 
 const months: Record<string, number> = {
@@ -250,11 +281,14 @@ export function discoverySummaries(
     if (publishedKeys.has(key)) continue;
     const instagramUrl = officialInstagramUrl(value.officialInstagramUrl);
     const posterUrl = officialPosterUrl(value.posterUrl);
+    const artists = verifiedArtists(value.artists);
     const existing = found.get(key);
     if (existing) {
       if (instagramUrl && !existing.officialInstagramUrl)
         existing.officialInstagramUrl = instagramUrl;
       if (posterUrl && !existing.posterUrl) existing.posterUrl = posterUrl;
+      if (artists.length && !existing.artists?.length)
+        existing.artists = artists;
       continue;
     }
     const id = `fst_${createHash('sha256').update(key).digest('hex').slice(0, 16)}`;
@@ -270,6 +304,7 @@ export function discoverySummaries(
       sourceUrl: url.toString(),
       ...(instagramUrl ? { officialInstagramUrl: instagramUrl } : {}),
       ...(posterUrl ? { posterUrl } : {}),
+      ...(artists.length ? { artists } : {}),
       // 정렬 전용 날짜 하한. 실제 공연 시작 시각으로 반환하지 않는다.
       sortAt: `${dates.firstDate}T00:00:00+09:00`,
     });
