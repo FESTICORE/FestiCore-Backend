@@ -2,8 +2,6 @@ import {
   BadRequestException,
   Body,
   Controller,
-  Delete,
-  Get,
   HttpCode,
   HttpStatus,
   Post,
@@ -101,57 +99,6 @@ export class AuthController {
   })
   async logout(@CurrentUser() user: AuthUser) {
     await this.authService.logout(user.userId);
-    return { success: true };
-  }
-
-  @Delete('session')
-  @HttpCode(HttpStatus.OK)
-  @ApiBearerAuth()
-  @ApiOperation({
-    summary: '로그아웃 호환 경로',
-    description:
-      '현재 사용자의 refresh 토큰을 모두 폐기합니다. 새 클라이언트는 POST /auth/logout을 사용합니다.',
-    deprecated: true,
-  })
-  @ApiResponse({ status: 200, description: '{ success: true }' })
-  async deleteSession(@CurrentUser() user: AuthUser) {
-    await this.authService.logout(user.userId);
-    return { success: true };
-  }
-
-  @Get('me')
-  @ApiBearerAuth()
-  @ApiOperation({
-    summary: '내 프로필 조회 호환 경로',
-    description:
-      '현재 앱 access 토큰의 사용자 정보를 반환합니다. 새 클라이언트는 GET /me를 사용합니다.',
-    deprecated: true,
-  })
-  @ApiResponse({ status: 200, description: '현재 사용자 정보' })
-  @ApiResponse({
-    status: 401,
-    description: '앱 access 토큰이 없거나 유효하지 않음',
-  })
-  me(@CurrentUser() user: AuthUser) {
-    return this.authService.me(user.userId);
-  }
-
-  @Delete('me')
-  @HttpCode(HttpStatus.OK)
-  @ApiBearerAuth()
-  @ApiOperation({
-    summary: '회원 탈퇴 호환 경로',
-    description:
-      '요청 본문 없이 계정과 refresh 토큰을 삭제하고 { success: true }를 반환합니다. 새 클라이언트는 DELETE /me를 사용합니다.',
-    deprecated: true,
-  })
-  @ApiResponse({ status: 200, description: '{ success: true }' })
-  @ApiResponse({
-    status: 401,
-    description: '앱 access 토큰이 없거나 유효하지 않음',
-  })
-  async withdraw(@CurrentUser() user: AuthUser) {
-    await this.authService.withdraw(user.userId);
     return { success: true };
   }
 }

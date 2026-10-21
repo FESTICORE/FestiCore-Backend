@@ -41,9 +41,6 @@
 | POST   | `/api/v1/auth/login`          | 불필요 | `{ provider, token, name?, authorizationCode? }` | 소셜 로그인/가입. apple 은 authorizationCode 필수 |
 | POST   | `/api/v1/auth/refresh`        | 불필요 | `{ refreshToken }`                               | access/refresh 재발급(회전, 1회용)                |
 | POST   | `/api/v1/auth/logout`         | 필요   | -                                                | refresh 토큰 전체 폐기                            |
-| GET    | `/api/v1/auth/me`             | 필요   | -                                                | 현재 사용자                                       |
-| DELETE | `/api/v1/auth/me`             | 필요   | -                                                | 회원 탈퇴(provider revoke → 토큰·계정 삭제)       |
-| DELETE | `/api/v1/auth/session`        | 필요   | -                                                | 현재 세션 종료                                    |
 | GET    | `/api/v1/me`                  | 필요   | -                                                | 프로필 조회                                       |
 | PATCH  | `/api/v1/me`                  | 필요   | 닉네임 등                                        | 프로필 수정                                       |
 | DELETE | `/api/v1/me`                  | 필요   | -                                                | 탈퇴                                              |

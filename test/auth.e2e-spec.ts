@@ -1,4 +1,5 @@
 import { QueryFailedError } from 'typeorm';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { createTestApp, TestContext } from './app-factory';
@@ -73,13 +74,43 @@ describe('Auth (e2e)', () => {
     await socialLogin().expect(200);
   });
 
+  it('제거한 인증 호환 경로는 404이고 Swagger에서도 빠진다', async () => {
+    const login = await socialLogin().expect(200);
+    const bearer = `Bearer ${dataOf(login).accessToken}`;
+    await request(server)
+      .delete('/api/v1/auth/session')
+      .set('Authorization', bearer)
+      .expect(404);
+    await request(server)
+      .get('/api/v1/auth/me')
+      .set('Authorization', bearer)
+      .expect(404);
+    await request(server)
+      .delete('/api/v1/auth/me')
+      .set('Authorization', bearer)
+      .expect(404);
+    await request(server)
+      .get('/api/v1/me')
+      .set('Authorization', bearer)
+      .expect(200);
+    const paths = SwaggerModule.createDocument(
+      ctx.app,
+      new DocumentBuilder().setTitle('인증 경로 검증').setVersion('1').build(),
+    ).paths;
+    expect(paths['/api/v1/auth/session']).toBeUndefined();
+    expect(paths['/api/v1/auth/me']).toBeUndefined();
+    expect(paths['/api/v1/auth/logout']?.post).toBeDefined();
+    expect(paths['/api/v1/me']?.get).toBeDefined();
+    expect(paths['/api/v1/me']?.delete).toBeDefined();
+  });
+
   it('login → me → refresh(회전) → 이전 refresh 재사용 401 → logout 후 refresh 401', async () => {
     const login = await socialLogin().expect(200);
     const { accessToken, refreshToken } = dataOf(login);
     expect(dataOf(login).newUser).toBe(true);
 
     const me = await request(server)
-      .get('/api/v1/auth/me')
+      .get('/api/v1/me')
       .set('Authorization', `Bearer ${accessToken}`)
       .expect(200);
     expect(dataOf(me).nickname).toBe('tester');
@@ -117,7 +148,7 @@ describe('Auth (e2e)', () => {
     const login = await socialLogin().expect(200);
     const { accessToken, refreshToken } = dataOf(login);
     await request(server)
-      .get('/api/v1/auth/me')
+      .get('/api/v1/me')
       .set('Authorization', `Bearer ${refreshToken}`)
       .expect(401);
     await request(server)
@@ -125,13 +156,13 @@ describe('Auth (e2e)', () => {
       .set('Authorization', `Bearer ${accessToken}`)
       .expect(200);
     await request(server)
-      .get('/api/v1/auth/me')
+      .get('/api/v1/me')
       .set('Authorization', `Bearer ${refreshToken}`)
       .expect(401);
   });
 
   it('토큰 없이 me → 401 표준 에러', async () => {
-    const res = await request(server).get('/api/v1/auth/me').expect(401);
+    const res = await request(server).get('/api/v1/me').expect(401);
     expect(bodyOf(res)).toMatchObject({
       code: 'UNAUTHORIZED',
       data: null,
@@ -217,9 +248,9 @@ describe('Auth (e2e)', () => {
         .send({ provider: 'apple', token: 'identity', authorizationCode: 'c' })
         .expect(200);
       await request(server)
-        .delete('/api/v1/auth/me')
+        .delete('/api/v1/me')
         .set('Authorization', `Bearer ${dataOf(login).accessToken}`)
-        .expect(200);
+        .expect(204);
       expect(ctx.apple.revokeConnection).toHaveBeenCalledWith(
         'apple-refresh',
         undefined,
@@ -242,9 +273,9 @@ describe('Auth (e2e)', () => {
         })
         .expect(200);
       await request(server)
-        .delete('/api/v1/auth/me')
+        .delete('/api/v1/me')
         .set('Authorization', `Bearer ${dataOf(login).accessToken}`)
-        .expect(200);
+        .expect(204);
       expect(ctx.apple.revokeConnection).toHaveBeenCalledWith(
         'apple-web-refresh',
         'co.festiCore.io',
@@ -275,9 +306,9 @@ describe('Auth (e2e)', () => {
         },
       );
       await request(server)
-        .delete('/api/v1/auth/me')
+        .delete('/api/v1/me')
         .set('Authorization', `Bearer ${dataOf(login).accessToken}`)
-        .expect(200);
+        .expect(204);
       expect(ctx.apple.revokeConnection).toHaveBeenCalledWith(
         'ios-refresh',
         'io.festiCore.co',
@@ -298,22 +329,22 @@ describe('Auth (e2e)', () => {
         .send({ provider: 'apple', token: 'identity', authorizationCode: 'c' })
         .expect(200);
       await request(server)
-        .delete('/api/v1/auth/me')
+        .delete('/api/v1/me')
         .set('Authorization', `Bearer ${dataOf(login).accessToken}`)
-        .expect(200);
+        .expect(204);
       expect(ctx.apple.revokeConnection).not.toHaveBeenCalled();
     });
 
-    it('교환 실패로 토큰 없는 계정 탈퇴 → revoke 미호출, 200', async () => {
+    it('교환 실패로 토큰 없는 계정 탈퇴 → revoke 미호출, 204', async () => {
       ctx.apple.exchangeAuthCode.mockResolvedValue(undefined);
       const login = await request(server)
         .post('/api/v1/auth/login')
         .send({ provider: 'apple', token: 'identity', authorizationCode: 'c' })
         .expect(200);
       await request(server)
-        .delete('/api/v1/auth/me')
+        .delete('/api/v1/me')
         .set('Authorization', `Bearer ${dataOf(login).accessToken}`)
-        .expect(200);
+        .expect(204);
       expect(ctx.apple.revokeConnection).not.toHaveBeenCalled();
     });
   });
