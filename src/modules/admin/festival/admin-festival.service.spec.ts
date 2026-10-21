@@ -239,10 +239,16 @@ describe('pack update delivery queue', () => {
       { record } as never,
     );
 
-    await expect(service.publish(draft.id, '', undefined, null)).rejects.toMatchObject({ status: 428 });
-    await expect(service.publish(draft.id, '', '"d2"', null)).rejects.toMatchObject({ status: 412 });
+    await expect(
+      service.publish(draft.id, '', undefined, null),
+    ).rejects.toMatchObject({ status: 428 });
+    await expect(
+      service.publish(draft.id, '', '"d2"', null),
+    ).rejects.toMatchObject({ status: 412 });
     expect(festivalRepo.save).not.toHaveBeenCalled();
-    await expect(service.publish(draft.id, '', '"d1"', null)).resolves.toMatchObject({
+    await expect(
+      service.publish(draft.id, '', '"d1"', null),
+    ).resolves.toMatchObject({
       packVersion: 1,
       pushedDevices: 2,
     });
