@@ -76,6 +76,21 @@ export class AdminAuthService implements OnModuleInit {
     emailInput: string,
     ipAddress: string | null,
   ): Promise<void> {
+    await this.prepareMagicLink(emailInput, ipAddress);
+  }
+
+  /** 등록된 계정을 관리하는 owner 요청에서만 메일 준비 결과를 노출한다. */
+  async requestInviteLink(
+    emailInput: string,
+    ipAddress: string | null,
+  ): Promise<boolean> {
+    return this.prepareMagicLink(emailInput, ipAddress);
+  }
+
+  private async prepareMagicLink(
+    emailInput: string,
+    ipAddress: string | null,
+  ): Promise<boolean> {
     const email = emailInput.trim().toLowerCase();
     await this.checkRateLimit(ipAddress);
 
@@ -94,13 +109,13 @@ export class AdminAuthService implements OnModuleInit {
     try {
       const account = await this.accounts.findOneBy({ email, active: true });
       // 존재하지 않는 이메일도 같은 응답을 반환한다.
-      if (!account) return;
+      if (!account) return false;
       const pending = await this.links.findOneBy({
         adminId: account.id,
         consumedAt: IsNull(),
         expiresAt: MoreThan(new Date()),
       });
-      if (pending) return;
+      if (pending) return false;
 
       const token = randomBytes(32).toString('base64url');
       link = this.links.create({
@@ -120,6 +135,7 @@ export class AdminAuthService implements OnModuleInit {
       }
       url.searchParams.set('token', token);
       void this.deliverMagicLink(link.id, apiKey, from, email, url.toString());
+      return true;
     } catch {
       if (link?.id) {
         try {
@@ -130,6 +146,7 @@ export class AdminAuthService implements OnModuleInit {
       }
       this.logger.error('Admin magic-link preparation failed.');
       // 준비 실패도 같은 202 응답으로 처리해 계정 존재 여부를 드러내지 않는다.
+      return false;
     } finally {
       const wait = MIN_RESPONSE_MS - (Date.now() - startedAt);
       if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));

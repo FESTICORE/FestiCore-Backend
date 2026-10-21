@@ -12,6 +12,7 @@
 - `GET /api/v1/notifications/subscriptions`: 현재 기기의 공개 축제 구독 목록을 반환한다. 응답 `data.items[]`는 `festivalId`, `festivalStarts`, `packUpdates`를 포함한다.
 - `PUT /api/v1/notifications/subscriptions/{festivalId}`: 본문 `{ "festivalStarts": true, "packUpdates": false }`를 저장한다. `festivalId`는 구독 대상 축제이며 기기 ID가 아니다. 응답 `data`는 저장된 구독이다. `packUpdates`는 구독 설정만 저장하며 팩 변경 푸시 발송은 별도 작업이다.
 - `DELETE /api/v1/notifications/subscriptions/{festivalId}`: 해당 기기의 구독을 해제한다. 성공 204.
+- `POST /api/v1/admin/push/test`: editor 이상 관리자 세션으로 `{ "deviceId": "UUID v4", "type": "flag.status|crew.status|crew.gather|pack.updated" }`를 보내면 등록된 한 기기의 APNs 토큰과 환경으로 테스트 푸시 1건을 시도한다. 자유 입력 메시지와 APNs 토큰은 받지 않는다. 분당 5회로 제한하고 감사 기록에 요청을 남긴다. 응답 `data`는 `deviceId`, `type`, APNs 수락 여부 `accepted`, 실패 시 `reason`이다. APNs 수락은 실기기 수신을 보장하지 않는다.
 
 JSON 응답은 공통 `{ "code", "data", "message" }` 형식을 따른다. 204에는 본문이 없다. 비밀값·APNs 토큰은 목록 응답에 넣지 않는다.
 

@@ -9,9 +9,13 @@ import {
   AdminSession,
 } from './admin.entity';
 import { AdminSessionGuard } from './admin-session.guard';
+import { AdminAuditModule } from '../audit/admin-audit.module';
+import { AdminAccountsController } from './admin-accounts.controller';
+import { AdminAccountsService } from './admin-accounts.service';
 
 @Module({
   imports: [
+    AdminAuditModule,
     TypeOrmModule.forFeature([
       AdminAccount,
       AdminMagicLink,
@@ -19,8 +23,8 @@ import { AdminSessionGuard } from './admin-session.guard';
       AdminAuthAudit,
     ]),
   ],
-  controllers: [AdminAuthController],
-  providers: [AdminAuthService, AdminSessionGuard],
+  controllers: [AdminAuthController, AdminAccountsController],
+  providers: [AdminAuthService, AdminAccountsService, AdminSessionGuard],
   exports: [AdminAuthService, AdminSessionGuard],
 })
 export class AdminAuthModule {}

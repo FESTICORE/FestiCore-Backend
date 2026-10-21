@@ -173,4 +173,36 @@ describe('ApnsService', () => {
     });
     expect(session.destroy).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    ['flag.status', 'alert', '5', false],
+    ['crew.status', 'alert', '5', false],
+    ['crew.gather', 'alert', '10', false],
+    ['pack.updated', 'background', '5', true],
+  ] as const)(
+    'sends %s test push with matching APNs headers and payload',
+    async (type, pushType, priority, background) => {
+      const { session, stream } = mockResponse(200);
+      const service = new ApnsService(config(credentials));
+      await expect(
+        service.sendTestNotification(DEVICE_TOKEN, 'sandbox', type),
+      ).resolves.toEqual({ accepted: true, permanent: false });
+      const sentHeaders: unknown = session.request.mock.calls[0];
+      const headers = (sentHeaders as [Record<string, string>])[0];
+      expect(headers['apns-push-type']).toBe(pushType);
+      expect(headers['apns-priority']).toBe(priority);
+      expect(Number(headers['apns-expiration'])).toBeGreaterThan(
+        Math.floor(Date.now() / 1000),
+      );
+      const sentBody: unknown = stream.end.mock.calls[0];
+      const payload = JSON.parse((sentBody as [string])[0]) as {
+        aps: Record<string, unknown>;
+        type: string;
+        route: string;
+      };
+      expect(payload).toMatchObject({ type, route: '/' });
+      expect(payload.aps['content-available'] === 1).toBe(background);
+      if (background) expect(payload.aps.alert).toBeUndefined();
+    },
+  );
 });

@@ -103,4 +103,10 @@ export const API_DOMAINS: ApiDomain[] = [
     description: '관리자 변경 감사 이력',
     pathPrefix: 'admin/audit',
   },
+  {
+    slug: 'admin-push',
+    title: 'Admin Push',
+    description: '등록 기기에 테스트 푸시 발송',
+    pathPrefix: 'admin/push',
+  },
 ];

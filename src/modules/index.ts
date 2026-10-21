@@ -10,6 +10,7 @@ import { DeviceModule } from './device/device.module';
 import { NotificationModule } from './notification/notification.module';
 import { MetricsModule } from './metrics/metrics.module';
 import { AdminAuditModule } from './admin/audit/admin-audit.module';
+import { AdminPushModule } from './admin/push/admin-push.module';
 
 /**
  * app.module imports 에 펼칠(...) 기능 모듈 목록.
@@ -29,4 +30,5 @@ export const featureModules = [
   NotificationModule,
   MetricsModule,
   AdminAuditModule,
+  AdminPushModule,
 ];
