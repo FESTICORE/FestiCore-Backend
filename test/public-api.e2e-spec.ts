@@ -195,6 +195,9 @@ describe('Public festival API', () => {
     const first = await request(server)
       .get(`/api/v1/festivals/${pack.id}/pack`)
       .expect(200);
+    expect(first.headers['cache-control']).toBe(
+      'public, no-cache, must-revalidate',
+    );
     expect(successData(first.body)).toEqual(
       expect.objectContaining({
         id: pack.id,
@@ -392,6 +395,11 @@ describe('Public festival API', () => {
       packUpdatedAt: pack.packUpdatedAt,
       etag: '"cdm1-v7"',
     });
+    expect(version.headers.etag).toBe('"cdm1-v7"');
+    await request(server)
+      .get(`/api/v1/festivals/${pack.id}/pack/version`)
+      .set('If-None-Match', version.headers.etag)
+      .expect(304);
     const flags = await request(server)
       .get(`/api/v1/festivals/${pack.id}/flags?tag=slam&tag=newbie`)
       .expect(200);

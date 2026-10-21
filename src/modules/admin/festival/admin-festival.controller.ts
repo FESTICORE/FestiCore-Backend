@@ -486,7 +486,7 @@ export class AdminFestivalController {
   @ApiOperation({
     summary: '축제 팩 발행',
     description:
-      'editor 이상이 현재 초안을 새 팩 버전으로 발행합니다. 무대가 최소 1개 필요하고 Brotli 압축 팩은 200KB 이하여야 합니다. 현재 응답의 pushedDevices는 0이며 푸시 전송을 수행하지 않습니다.',
+      'editor 이상이 현재 초안을 새 팩 버전으로 발행합니다. 무대가 최소 1개 필요하고 Brotli 압축 팩은 200KB 이하여야 합니다. pushedDevices는 배경 푸시 작업을 큐에 등록한 기기 수이며 실제 수신 수가 아닙니다.',
   })
   @ApiParam(festivalId)
   @ApiBody({
@@ -501,7 +501,7 @@ export class AdminFestivalController {
   })
   @ApiResponse({
     status: 200,
-    description: '새 팩 버전과 ETag. pushedDevices는 현재 0입니다.',
+    description: '새 팩 버전과 ETag, 배경 푸시 작업이 등록된 기기 수',
     schema: versionResponse,
   })
   @ApiResponse({

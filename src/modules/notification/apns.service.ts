@@ -62,6 +62,30 @@ export class ApnsService {
     );
   }
 
+  async sendPackUpdated(
+    token: string,
+    environment: 'sandbox' | 'production',
+    festivalId: string,
+    packVersion: number,
+  ): Promise<ApnsSendResult> {
+    return this.send(
+      token,
+      environment,
+      {
+        aps: { 'content-available': 1 },
+        type: 'pack.updated',
+        festivalId,
+        packVersion,
+      },
+      {
+        pushType: 'background',
+        priority: '5',
+        collapseKey: `pack:${festivalId}`,
+        expirationSeconds: 24 * 60 * 60,
+      },
+    );
+  }
+
   async sendTestNotification(
     token: string,
     environment: 'sandbox' | 'production',

@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { randomBytes } from 'crypto';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 import { brotliCompressSync } from 'zlib';
 import {
   AdminFestival,
@@ -233,7 +233,12 @@ export class AdminFestivalService {
         note,
         sizeBytes,
       });
-      return { packVersion, etag: `"v${packVersion}"`, pushedDevices: 0 };
+      const pushedDevices = await this.queuePackUpdate(
+        manager,
+        id,
+        packVersion,
+      );
+      return { packVersion, etag: `"v${packVersion}"`, pushedDevices };
     });
   }
 
@@ -292,8 +297,33 @@ export class AdminFestivalService {
         note: `Rollback to ${toVersion}`,
         sizeBytes: Buffer.byteLength(JSON.stringify(pack)),
       });
-      return { packVersion, etag: `"v${packVersion}"`, pushedDevices: 0 };
+      const pushedDevices = await this.queuePackUpdate(
+        manager,
+        id,
+        packVersion,
+      );
+      return { packVersion, etag: `"v${packVersion}"`, pushedDevices };
     });
+  }
+
+  private async queuePackUpdate(
+    manager: EntityManager,
+    id: string,
+    version: number,
+  ): Promise<number> {
+    const queued = await manager.query<{ id: string }[]>(
+      `INSERT INTO "notification_deliveries"
+        ("id", "deviceId", "festivalId", "eventKey", "scheduledAt", "nextAttemptAt")
+       SELECT gen_random_uuid(), s."deviceId", $1, $2, now(), now()
+       FROM "device_subscriptions" s
+       JOIN "devices" d ON d."id" = s."deviceId"
+       WHERE s."festivalId" = $1 AND s."packUpdates" = true
+         AND d."apnsToken" IS NOT NULL AND d."apnsEnvironment" IS NOT NULL
+       ON CONFLICT ("deviceId", "eventKey") DO NOTHING
+       RETURNING "id"`,
+      [id, `pack-updated:${id}:${version}`],
+    );
+    return queued.length;
   }
 
   private async get(id: string): Promise<AdminFestival> {

@@ -10,7 +10,7 @@
 | ---------------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
 | `GET /api/v1/festivals`                  | `after=YYYY-MM-DD` 또는 이전 응답의 `nextCursor`, `limit=1..50`(기본 20), 선택 `If-None-Match` | `items`(ID, 이름, 장소, 날짜, 팩 버전, 상태, 썸네일, 발견 항목의 `sourceUrl`), `nextCursor` |
 | `GET /api/v1/festivals/:id`              | 목록에서 받은 축제 ID, 본문 없음                                                               | 발행 축제는 공개 팩, 발견 축제는 확인된 날짜·장소·출처·저장 포스터·출연진과 빈 `timetable`  |
-| `GET /api/v1/festivals/:id/pack/version` | 없음                                                                                           | `packVersion`, `packUpdatedAt`, `etag`                                                      |
+| `GET /api/v1/festivals/:id/pack/version` | 선택 `If-None-Match`                                                                           | `packVersion`, `packUpdatedAt`, `etag`                                                      |
 | `GET /api/v1/festivals/:id/pack`         | 선택 `If-None-Match`, `Accept-Encoding: br` 또는 `gzip`                                        | 발행된 팩 전체 JSON                                                                         |
 | `GET /api/v1/festivals/:id/flags`        | 선택 `tag=slam&tag=calm`처럼 반복, OR 필터                                                     | `items`(공개 깃발 프로필), `packVersion`                                                    |
 | `GET /api/v1/festivals/:id/live`         | 필수 `X-Device-Id: UUID`, 선택 `Authorization: Bearer <access-token>` 및 `If-None-Match`       | `festivalId`, `setOverrides`, `activeFlags`, `me`, `serverAt`                               |
@@ -21,7 +21,7 @@
 
 발견 항목은 `status: "discovered"`, `packVersion: 0`, `flagsEnabled: false`로 구분한다. 보관된 공식 포스터가 없으면 `thumbUrl`은 `null`이다. 공식 행사 페이지가 직접 연결한 계정이 있으면 `officialInstagramUrl`을 포함하며 주최자 공통 계정을 행사 계정으로 표시하지 않는다. 이 ID의 팩·버전·깃발·라이브 요청은 발행 전 404다. 앱은 마지막 성공 목록과 발행 팩을 기기 저장소에 보관하고, 재연결 시 ETag와 팩 버전을 비교해 갱신한다. 오프라인 중 서버의 새 데이터는 도착할 수 없다. 자세한 발견 항목 계약은 [수집 축제 공개 목록](crawl-catalog.md)을 따른다.
 
-`/pack`의 ETag는 JSON 응답 형식 변경을 구분하는 `"cdm1-v{packVersion}"`이다. `/pack/version`의 `etag`도 같은 값을 반환한다. `If-None-Match`가 일치하면 본문 없이 304를 반환한다. 이전 형식의 ETag는 일치하지 않아 새 본문을 다시 받는다. 압축별 응답은 `Vary: Accept-Encoding`으로 구분한다. 목록과 라이브도 조건부 조회를 지원한다. 목록 캐시는 60초다. `live`의 `X-Poll-After: 30`은 최소 권장 폴링 간격이며, 기기당 분당 4회 초과 시 429와 `Retry-After`를 보낸다. 지난 요청 제한 기록 정리가 실패하면 새 제한 기록을 만들지 않고 503을 반환하며, 5분 간격으로 정리를 재시도한다.
+`/pack`의 ETag는 JSON 응답 형식 변경을 구분하는 `"cdm1-v{packVersion}"`이다. `/pack/version`의 응답 헤더와 본문 `etag`도 같은 값을 반환한다. 두 경로 모두 `If-None-Match`가 일치하면 본문 없이 304를 반환한다. 이전 형식의 ETag는 일치하지 않아 새 본문을 다시 받는다. 압축별 응답은 `Vary: Accept-Encoding`으로 구분한다. 목록과 라이브도 조건부 조회를 지원한다. 목록 캐시는 60초다. `live`의 `X-Poll-After: 30`은 최소 권장 폴링 간격이며, 기기당 분당 4회 초과 시 429와 `Retry-After`를 보낸다. 지난 요청 제한 기록 정리가 실패하면 새 제한 기록을 만들지 않고 503을 반환하며, 5분 간격으로 정리를 재시도한다.
 
 ## 오류와 보안
 

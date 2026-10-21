@@ -135,6 +135,28 @@ describe('ApnsService', () => {
     },
   );
 
+  it('sends a silent pack update with festival ID and published version', async () => {
+    const { session, stream } = mockResponse(200);
+    const service = new ApnsService(config(credentials));
+    await expect(
+      service.sendPackUpdated(DEVICE_TOKEN, 'production', 'fst_12345678', 3),
+    ).resolves.toEqual({ accepted: true, permanent: false });
+    const headers = (session.request.mock.calls as unknown[][])[0][0] as Record<
+      string,
+      string
+    >;
+    expect(headers['apns-push-type']).toBe('background');
+    expect(headers['apns-priority']).toBe('5');
+    expect(
+      JSON.parse((stream.end.mock.calls as unknown[][])[0][0] as string),
+    ).toMatchObject({
+      aps: { 'content-available': 1 },
+      type: 'pack.updated',
+      festivalId: 'fst_12345678',
+      packVersion: 3,
+    });
+  });
+
   it('does not contact APNs for malformed tokens or missing credentials', async () => {
     const service = new ApnsService(config(credentials));
     await expect(

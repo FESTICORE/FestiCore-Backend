@@ -240,6 +240,11 @@ export class PublicFestivalController {
       '앱의 저장 팩과 비교할 버전·갱신 시각·ETag를 조회합니다. 요청 본문은 없습니다.',
   })
   @ApiParam(festivalId)
+  @ApiHeader({
+    name: 'If-None-Match',
+    required: false,
+    description: '이전 버전 ETag. 일치하면 304.',
+  })
   @ApiResponse({
     status: 200,
     description: '발행 팩 버전',
@@ -261,10 +266,15 @@ export class PublicFestivalController {
     description: '발행된 축제가 없습니다.',
     schema: jsonErrorSchema('NOT_FOUND'),
   })
-  async version(@Param('id') id: string, @Res() response: Response) {
+  @ApiResponse({ status: 304, description: '팩 버전이 변경되지 않았습니다.' })
+  async version(
+    @Param('id') id: string,
+    @Headers('if-none-match') ifNoneMatch: string | undefined,
+    @Res() response: Response,
+  ) {
     const body = await this.service.version(id);
-    response.setHeader('Cache-Control', 'public, max-age=300');
-    this.send(response, body);
+    response.setHeader('Cache-Control', 'public, no-cache, must-revalidate');
+    this.send(response, body, body.etag, ifNoneMatch);
   }
 
   @Get(':id/pack')
@@ -315,10 +325,7 @@ export class PublicFestivalController {
     @Res() response: Response,
   ) {
     const body = await this.service.published(id);
-    response.setHeader(
-      'Cache-Control',
-      'public, max-age=3600, stale-while-revalidate=86400',
-    );
+    response.setHeader('Cache-Control', 'public, no-cache, must-revalidate');
     response.setHeader('Date', new Date().toUTCString());
     response.setHeader('Vary', 'Accept-Encoding');
     const etag = envelopeEtag(`"v${body.packVersion as number}"`);
