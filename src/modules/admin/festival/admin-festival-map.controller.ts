@@ -1,14 +1,18 @@
 import {
   BadRequestException,
   Controller,
+  Logger,
   Param,
   Post,
+  Req,
   ServiceUnavailableException,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { FileInterceptor } from '@nestjs/platform-express';
+import type { Request } from 'express';
+import { DataSource } from 'typeorm';
 import {
   ApiBody,
   ApiConsumes,
@@ -23,16 +27,23 @@ import {
   prepareFestivalMap,
 } from '../../storage/image-storage.service';
 import { AdminRoles } from '../auth/admin-roles.decorator';
+import { AdminAuditService } from '../audit/admin-audit.service';
 import { AdminFestivalService } from './admin-festival.service';
+
+type AdminRequest = Request & { admin?: { id: string } };
 
 @ApiTags('Admin Festivals')
 @ApiCookieAuth('admin-session')
 @Controller('admin/festivals')
 export class AdminFestivalMapController {
+  private readonly logger = new Logger(AdminFestivalMapController.name);
+
   constructor(
     private readonly festivals: AdminFestivalService,
     private readonly storage: ImageStorageService,
     private readonly config: ConfigService,
+    private readonly db: DataSource,
+    private readonly audit: AdminAuditService,
   ) {}
 
   @AdminRoles('editor')
@@ -89,7 +100,8 @@ export class AdminFestivalMapController {
   )
   async upload(
     @Param('id') id: string,
-    @UploadedFile() file?: { buffer: Buffer; mimetype: string },
+    @UploadedFile() file: { buffer: Buffer; mimetype: string } | undefined,
+    @Req() request: AdminRequest,
   ) {
     if (!file) throw new BadRequestException('지도 이미지 파일이 필요합니다.');
     await this.festivals.getDraft(id);
@@ -121,6 +133,29 @@ export class AdminFestivalMapController {
       throw new ServiceUnavailableException('공개 API URL 설정이 없습니다.');
     }
     const key = await this.storage.saveFestivalMap(id, prepared.image);
+    try {
+      await this.db.transaction((manager) =>
+        this.audit.record(manager, {
+          actor: request.admin!.id,
+          action: 'festival.map.uploaded',
+          target: `festival:${id}`,
+          before: null,
+          after: { key, aspect: prepared.aspect },
+        }),
+      );
+    } catch (error) {
+      try {
+        await this.storage.delete(key);
+      } catch (cleanupError) {
+        this.logger.error(
+          `감사 기록 실패 후 지도 객체 삭제 실패: ${key}`,
+          cleanupError instanceof Error
+            ? cleanupError.stack
+            : String(cleanupError),
+        );
+      }
+      throw error;
+    }
     return {
       mapImageUrl: `${origin}/api/v1/${key}`,
       mapAspect: prepared.aspect,
