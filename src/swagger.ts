@@ -12,6 +12,7 @@ import { CrewModule } from './modules/crews/crew.module';
 import { ScheduleModule } from './modules/schedule/schedule.module';
 import { CrawlModule } from './modules/admin/crawl/crawl.module';
 import { DeviceModule } from './modules/device/device.module';
+import { MetricsModule } from './modules/metrics/metrics.module';
 
 /** SwaggerModule.createDocument 의 include 가 받는 모듈 클래스 타입. */
 type ModuleClass = new (...args: never[]) => unknown;
@@ -30,6 +31,8 @@ const MODULES_BY_SLUG: Record<string, ModuleClass[]> = {
   schedule: [ScheduleModule],
   devices: [DeviceModule],
   notifications: [DeviceModule],
+  metrics: [MetricsModule],
+  'admin-metrics': [MetricsModule],
 };
 
 const DOMAIN_DOCS = API_DOMAINS.map((d) => ({
@@ -76,6 +79,7 @@ function onlyAudience(document: OpenAPIObject, admin: boolean): OpenAPIObject {
           statusCode === 204 ||
           statusCode === 205 ||
           statusCode === 304 ||
+          (path.endsWith('/metrics/events') && statusCode === 202) ||
           (statusCode < 400 && statusCode >= 300) ||
           (path.endsWith('/auth/web/result') && statusCode === 200) ||
           !response ||
@@ -305,13 +309,23 @@ export function setupSwagger(
         ),
         admin,
       );
-      if (admin && (doc.slug === 'crawl' || doc.slug === 'proposals')) {
+      if (
+        admin &&
+        (doc.slug === 'crawl' ||
+          doc.slug === 'proposals' ||
+          doc.slug === 'metrics')
+      ) {
         const prefix = new RegExp(`^/(?:api/v1/)?admin/${doc.slug}(?:/|$)`);
         document.paths = Object.fromEntries(
           Object.entries(document.paths).filter(([path]) => prefix.test(path)),
         );
       }
-      if (!admin && (doc.slug === 'devices' || doc.slug === 'notifications')) {
+      if (
+        !admin &&
+        (doc.slug === 'devices' ||
+          doc.slug === 'notifications' ||
+          doc.slug === 'metrics')
+      ) {
         const prefix = new RegExp(`^/(?:api/v1/)?${doc.slug}(?:/|$)`);
         document.paths = Object.fromEntries(
           Object.entries(document.paths).filter(([path]) => prefix.test(path)),

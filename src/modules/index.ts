@@ -8,6 +8,7 @@ import { ScheduleModule } from './schedule/schedule.module';
 import { CrawlModule } from './admin/crawl/crawl.module';
 import { DeviceModule } from './device/device.module';
 import { NotificationModule } from './notification/notification.module';
+import { MetricsModule } from './metrics/metrics.module';
 
 /**
  * app.module imports 에 펼칠(...) 기능 모듈 목록.
@@ -25,4 +26,5 @@ export const featureModules = [
   CrawlModule,
   DeviceModule,
   NotificationModule,
+  MetricsModule,
 ];

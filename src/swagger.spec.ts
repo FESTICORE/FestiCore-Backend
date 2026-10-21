@@ -11,6 +11,9 @@ jest.mock('./modules/admin/festival/admin-festival.module', () => ({
   AdminFestivalModule: class {},
 }));
 jest.mock('./modules/flags/flags.module', () => ({ FlagsModule: class {} }));
+jest.mock('./modules/metrics/metrics.module', () => ({
+  MetricsModule: class {},
+}));
 
 describe('Swagger 문서 분리', () => {
   afterEach(() => jest.restoreAllMocks());
@@ -47,6 +50,12 @@ describe('Swagger 문서 분리', () => {
         put: { responses: { 200: { description: 'OK' } } },
       },
       '/api/v1/notifications/subscriptions': {
+        get: { responses: { 200: { description: 'OK' } } },
+      },
+      '/api/v1/metrics/events': {
+        post: { responses: { 202: { description: 'Accepted' } } },
+      },
+      '/api/v1/admin/metrics': {
         get: { responses: { 200: { description: 'OK' } } },
       },
       '/api/v1/admin/auth/session': {
@@ -89,8 +98,10 @@ describe('Swagger 문서 분리', () => {
       '/api/v1/festivals',
       '/api/v1/devices',
       '/api/v1/notifications/subscriptions',
+      '/api/v1/metrics/events',
     ]);
     expect(adminPaths).toEqual([
+      '/api/v1/admin/metrics',
       '/api/v1/admin/auth/session',
       '/api/v1/admin/auth/magic-link',
       '/api/v1/admin/flags/reported',
@@ -104,6 +115,16 @@ describe('Swagger 문서 분리', () => {
     expect(Object.keys(documents.get('api-docs/notifications')!.paths)).toEqual(
       ['/api/v1/notifications/subscriptions'],
     );
+    expect(Object.keys(documents.get('api-docs/metrics')!.paths)).toEqual([
+      '/api/v1/metrics/events',
+    ]);
+    expect(Object.keys(documents.get('admin/api-docs/metrics')!.paths)).toEqual(
+      ['/api/v1/admin/metrics'],
+    );
+    expect(
+      documents.get('api-docs')!.paths['/api/v1/metrics/events'].post
+        ?.responses['202'],
+    ).not.toHaveProperty('content');
     expect(Object.keys(documents.get('admin/api-docs/flags')!.paths)).toEqual(
       adminPaths,
     );
