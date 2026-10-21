@@ -7,6 +7,16 @@ interface DateRange {
 
 export interface DiscoveryRow {
   candidate: unknown;
+  decision?: string;
+  proposalStatus?: string;
+}
+
+export interface PublishedDiscoveryRow {
+  name: string | null;
+  venue: string | null;
+  firstDate: string | null;
+  lastDate: string | null;
+  sourceUrl: string | null;
 }
 
 export interface DiscoverySummary {
@@ -89,9 +99,51 @@ function cleanName(name: string): string {
   return name.replace(/\s*[-–]\s*(?:슈퍼)?얼리버드\s*$/i, '').trim();
 }
 
-export function discoverySummaries(rows: DiscoveryRow[]): DiscoverySummary[] {
+function candidateKey(name: string, venue: string, dates: DateRange): string {
+  return `${cleanName(name).toLowerCase()}|${venue.trim().toLowerCase()}|${dates.firstDate}|${dates.lastDate}`;
+}
+
+export function discoverySummaries(
+  rows: DiscoveryRow[],
+  published: PublishedDiscoveryRow[] = [],
+): DiscoverySummary[] {
+  // The query supplies only the newest proposal for each ticket URL.
+  const byUrl = new Map<string, DiscoveryRow>();
+  for (const row of rows) {
+    if (
+      !row.candidate ||
+      typeof row.candidate !== 'object' ||
+      Array.isArray(row.candidate)
+    )
+      continue;
+    const url = (row.candidate as Record<string, unknown>).url;
+    if (typeof url === 'string' && !byUrl.has(url)) byUrl.set(url, row);
+  }
+  const publishedKeys = new Set<string>();
+  for (const row of published) {
+    if (row.name && row.venue && row.firstDate && row.lastDate) {
+      publishedKeys.add(
+        candidateKey(row.name, row.venue, {
+          firstDate: row.firstDate,
+          lastDate: row.lastDate,
+        }),
+      );
+    }
+    const source = row.sourceUrl ? byUrl.get(row.sourceUrl)?.candidate : null;
+    if (source && typeof source === 'object' && !Array.isArray(source)) {
+      const value = source as Record<string, unknown>;
+      const dates = ticketDateRange(value.date);
+      if (
+        typeof value.name === 'string' &&
+        typeof value.venue === 'string' &&
+        dates
+      )
+        publishedKeys.add(candidateKey(value.name, value.venue, dates));
+    }
+  }
   const found = new Map<string, DiscoverySummary>();
-  for (const { candidate } of rows) {
+  for (const { candidate, decision, proposalStatus } of byUrl.values()) {
+    if (decision === 'rejected' || proposalStatus === 'rejected') continue;
     if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate))
       continue;
     const value = candidate as Record<string, unknown>;
@@ -123,13 +175,13 @@ export function discoverySummaries(rows: DiscoveryRow[]): DiscoverySummary[] {
     )
       continue;
     const name = cleanName(value.name);
-    const key = `${name.toLowerCase()}|${value.venue.toLowerCase()}|${dates.firstDate}|${dates.lastDate}`;
-    if (found.has(key)) continue;
+    const key = candidateKey(name, value.venue, dates);
+    if (found.has(key) || publishedKeys.has(key)) continue;
     const id = `fst_${createHash('sha256').update(key).digest('hex').slice(0, 16)}`;
     found.set(key, {
       id,
       name,
-      venue: value.venue,
+      venue: value.venue.trim(),
       ...dates,
       packVersion: 0,
       flagsEnabled: false,

@@ -63,4 +63,50 @@ describe('ticket discovery catalog', () => {
     });
     expect(entries[0]).not.toHaveProperty('startsAt');
   });
+
+  it('uses only the newest proposal for a URL and removes all tiers after publication', () => {
+    const date = '2026.12.26 - 2026.12.27';
+    const firstUrl =
+      'https://ticket.melon.com/performance/index.htm?prodId=214100';
+    const secondUrl =
+      'https://ticket.melon.com/performance/index.htm?prodId=213769';
+    const rows = [
+      {
+        candidate: {
+          name: '원웨이 페스티벌 2026 - 얼리버드',
+          venue: '킨텍스',
+          date,
+          url: firstUrl,
+        },
+      },
+      {
+        candidate: {
+          name: '원웨이 페스티벌 2026 - 얼리버드',
+          venue: '옛 장소',
+          date,
+          url: firstUrl,
+        },
+      },
+      {
+        candidate: {
+          name: '원웨이 페스티벌 2026 - 슈퍼얼리버드',
+          venue: '킨텍스',
+          date,
+          url: secondUrl,
+        },
+      },
+    ];
+    expect(discoverySummaries(rows)).toHaveLength(1);
+    expect(
+      discoverySummaries(rows, [
+        {
+          name: '원웨이 페스티벌 2026',
+          venue: '킨텍스',
+          firstDate: '2026-12-26',
+          lastDate: '2026-12-27',
+          sourceUrl: firstUrl,
+        },
+      ]),
+    ).toEqual([]);
+  });
 });

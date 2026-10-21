@@ -131,7 +131,9 @@ describe('Public festival API', () => {
     ];
     dataSource.query
       .mockResolvedValueOnce(candidates)
-      .mockResolvedValueOnce(candidates);
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce(candidates)
+      .mockResolvedValueOnce([]);
     const first = await request(server)
       .get('/api/v1/festivals?limit=1')
       .expect(200);

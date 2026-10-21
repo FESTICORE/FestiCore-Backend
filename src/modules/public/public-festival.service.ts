@@ -9,7 +9,11 @@ import { DataSource, Repository } from 'typeorm';
 import { AdminFestival } from '../admin/festival/festival.entity';
 import { festivalSetId } from '../admin/festival/festival-set-id';
 import { Flag } from '../flags/flag.entity';
-import { discoverySummaries, DiscoveryRow } from './crawl-catalog';
+import {
+  discoverySummaries,
+  DiscoveryRow,
+  PublishedDiscoveryRow,
+} from './crawl-catalog';
 
 type Document = Record<string, unknown>;
 
@@ -293,25 +297,33 @@ export class PublicFestivalService {
       ];
     });
     const discoveryRows = await this.dataSource.query<DiscoveryRow[]>(
-      `SELECT item->'after' AS candidate
+      `SELECT DISTINCT ON (item->'after'->>'url')
+         item->'after' AS candidate,
+         item->>'decision' AS decision,
+         p.status AS "proposalStatus"
        FROM crawl_proposals p
        CROSS JOIN LATERAL jsonb_array_elements(p.items) item
        WHERE p.kind = 'festival.new'
-         AND p.status IN ('open', 'partial', 'applied')
-         AND item->>'decision' IN ('pending', 'accepted')
-         AND NOT EXISTS (
-           SELECT 1 FROM admin_festivals f
-           WHERE f.published IS NOT NULL
-             AND f."publishedVersion" > 0
-             AND f.published->'source'->>'url' = item->'after'->>'url'
-         )`,
+         AND item->'after'->>'url' IS NOT NULL
+       ORDER BY item->'after'->>'url', p."createdAt" DESC, p.id DESC`,
     );
-    const discovered = discoverySummaries(discoveryRows).filter((entry) => {
-      if (entry.lastDate < floor) return false;
-      if (!cursor) return true;
-      const sort = Date.parse(entry.sortAt) - Date.parse(cursor[2]);
-      return sort > 0 || (sort === 0 && entry.id > cursor[3]);
-    });
+    const publishedRows = await this.dataSource.query<PublishedDiscoveryRow[]>(
+      `SELECT published->>'name' AS name,
+         published->>'venue' AS venue,
+         published->'days'->0->>'date' AS "firstDate",
+         published->'days'->-1->>'date' AS "lastDate",
+         published->'source'->>'url' AS "sourceUrl"
+       FROM admin_festivals
+       WHERE published IS NOT NULL AND "publishedVersion" > 0`,
+    );
+    const discovered = discoverySummaries(discoveryRows, publishedRows).filter(
+      (entry) => {
+        if (entry.lastDate < floor) return false;
+        if (!cursor) return true;
+        const sort = Date.parse(entry.sortAt) - Date.parse(cursor[2]);
+        return sort > 0 || (sort === 0 && entry.id > cursor[3]);
+      },
+    );
     const ordered = [...summaries, ...discovered].sort(
       (a, b) =>
         Date.parse(a.sortAt) - Date.parse(b.sortAt) || a.id.localeCompare(b.id),
