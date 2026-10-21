@@ -103,6 +103,30 @@ describe('crawl parsers', () => {
           periodInfo: '2026.10.31 - 2026.10.31',
           placeName: '서울',
         },
+        {
+          prodId: 213902,
+          title: '재즈 페스티벌 콘서트',
+          periodInfo: '2026.10.31 - 2026.10.31',
+          placeName: '서울',
+        },
+        {
+          prodId: 213903,
+          title: '제83회 JAZZ! 라이브 클럽 데이',
+          periodInfo: '2026.10.31 - 2026.10.31',
+          placeName: '서울',
+        },
+        {
+          prodId: 213904,
+          title: 'KT&G 상상마당 부산 시리즈 기획 공연 - 클로버 뮤직 스테이션',
+          periodInfo: '2026.10.31 - 2026.10.31',
+          placeName: '부산',
+        },
+        {
+          prodId: 213793,
+          title: 'WONDERLIVET 2026 (원더리벳 2026)',
+          periodInfo: '2026.11.20 - 2026.11.22',
+          placeName: 'KINTEX HALL 7/8/9/10',
+        },
       ],
     });
     expect(await parseCrawl(melon, body)).toEqual([
@@ -111,6 +135,44 @@ describe('crawl parsers', () => {
         url: 'https://ticket.melon.com/performance/index.htm?prodId=213665',
         date: '2026.12.25 - 2026.12.26',
         venue: '대구 엑스코(EXCO)',
+      },
+      {
+        name: 'WONDERLIVET 2026 (원더리벳 2026)',
+        url: 'https://ticket.melon.com/performance/index.htm?prodId=213793',
+        date: '2026.11.20 - 2026.11.22',
+        venue: 'KINTEX HALL 7/8/9/10',
+      },
+    ]);
+  });
+
+  it('reads the YES24 Korean festival category cards without requiring a festival word', async () => {
+    const yes24 = source('ticket-list', 'discovery');
+    yes24.url =
+      'https://ticket.yes24.com/New/Genre/Ajax/GenreList_Data.aspx?genre=15464&sort=0&area=&genretype=2&pCurPage=1&pPageSize=30';
+    const html = `<div class='ms-list-imgs'>
+      <a onclick='jsf_base_GoToPerfDetail(60590);' title='COUNTDOWN FANTASY 2026-2027'><div>
+        <p class='list-b-tit1 v2'>COUNTDOWN FANTASY 2026-2027</p>
+        <p class='list-b-tit2 v2'>2026.12.31 ~ 2026.12.31</p>
+        <p class='list-b-tit2 v2'>킨텍스 제2전시장 7홀, 8홀</p></div></a>
+      <a onclick='jsf_base_GoToPerfDetail(59840);'><div>
+        <p class='list-b-tit1'>WONDERLIVET 2026 (원더리벳 2026)</p>
+        <p class='list-b-tit2'>2026.11.20 ~ 2026.11.22</p>
+        <p class='list-b-tit2'>KINTEX HALL 7/8/9/10</p></div></a>
+      <a onclick='jsf_base_GoToPerfDetail(60000);'><div><p class='list-b-tit1'>단독 콘서트</p></div></a>
+      <a onclick='jsf_base_GoToPerfDetail(60590);'><div><p class='list-b-tit1'>COUNTDOWN FANTASY 2026-2027</p></div></a>
+    </div>`;
+    expect(await parseCrawl(yes24, html)).toEqual([
+      {
+        name: 'COUNTDOWN FANTASY 2026-2027',
+        url: 'https://ticket.yes24.com/Perf/60590',
+        date: '2026.12.31 ~ 2026.12.31',
+        venue: '킨텍스 제2전시장 7홀, 8홀',
+      },
+      {
+        name: 'WONDERLIVET 2026 (원더리벳 2026)',
+        url: 'https://ticket.yes24.com/Perf/59840',
+        date: '2026.11.20 ~ 2026.11.22',
+        venue: 'KINTEX HALL 7/8/9/10',
       },
     ]);
   });

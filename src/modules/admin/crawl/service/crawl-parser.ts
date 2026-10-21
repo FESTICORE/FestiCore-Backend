@@ -87,6 +87,9 @@ const FESTIVAL_TITLE = /(?:페스티벌|축제|festival|\bfest\b)/i;
 const GENERIC_TITLE =
   /^(?:페스티벌|축제|festival|fest|예매하기|상세보기|더보기|티켓)$/i;
 const FESTIVAL_GROUP_NAME = /(?:페스티벌|festival)\s*(?:오케스트라|orchestra)/i;
+const CONCERT_TITLE = /(?:콘서트|\bconcert\b|오케스트라|\borchestra\b)/i;
+const VERIFIED_FESTIVAL_BRAND =
+  /^(?:WONDERLIVET|원더리벳|COUNTDOWN FANTASY)(?:\s|$)/i;
 const DATE_TEXT =
   /\b20\d{2}[.\-/]\s?(?:0?[1-9]|1[0-2])[.\-/]\s?(?:[0-2]?\d|3[01])(?:\s?[-~–]\s?(?:(?:20\d{2})[.\-/]\s?)?(?:0?[1-9]|1[0-2])[.\-/]\s?(?:[0-2]?\d|3[01]))?/;
 
@@ -142,9 +145,11 @@ function melonFestivalCandidates(
   const source = new URL(base);
   if (
     source.hostname !== 'ticket.melon.com' ||
-    source.pathname !== '/performance/ajax/prodList.json'
+    source.pathname !== '/performance/ajax/prodList.json' ||
+    source.searchParams.get('perfGenreCode') !== 'GENRE_CON_FESTIVAL'
   )
     return null;
+  if (body.length > 2_000_000) return [];
   let payload: unknown;
   try {
     payload = JSON.parse(body);
@@ -164,7 +169,8 @@ function melonFestivalCandidates(
     const id = product.prodId;
     if (
       typeof name !== 'string' ||
-      !isFestivalTitle(name) ||
+      CONCERT_TITLE.test(name) ||
+      !(isFestivalTitle(name) || VERIFIED_FESTIVAL_BRAND.test(name)) ||
       (typeof id !== 'string' && typeof id !== 'number') ||
       !/^\d+$/.test(String(id))
     )
@@ -187,9 +193,63 @@ function melonFestivalCandidates(
   return [...candidates.values()];
 }
 
+function yes24FestivalCandidates(
+  body: string,
+  base: string,
+): FestivalCandidate[] | null {
+  const source = new URL(base);
+  if (
+    source.hostname !== 'ticket.yes24.com' ||
+    source.pathname !== '/New/Genre/Ajax/GenreList_Data.aspx' ||
+    source.searchParams.get('genre') !== '15464'
+  )
+    return null;
+  const candidates = new Map<string, FestivalCandidate>();
+  const bounded = body.slice(0, 2_000_000);
+  for (const match of bounded.matchAll(
+    /<a\b([^>]*\bonclick=["']jsf_base_GoToPerfDetail\((\d+)\);?["'][^>]*)>([\s\S]*?)<\/a>/gi,
+  )) {
+    const name =
+      classText(match[3], 'list-b-tit1') ||
+      /\btitle=["']([^"']+)["']/i.exec(match[1])?.[1]?.trim();
+    if (
+      !name ||
+      name.length > 160 ||
+      name.length <= 3 ||
+      GENERIC_TITLE.test(name) ||
+      CONCERT_TITLE.test(name) ||
+      !(isFestivalTitle(name) || VERIFIED_FESTIVAL_BRAND.test(name))
+    )
+      continue;
+    const details = [
+      ...match[3].matchAll(
+        /<p\b[^>]*class=["'][^"']*\blist-b-tit2\b[^"']*["'][^>]*>([\s\S]*?)<\/p>/gi,
+      ),
+    ]
+      .slice(0, 2)
+      .map((item) => plainText(item[1]));
+    const candidate: FestivalCandidate = {
+      name,
+      url: `https://ticket.yes24.com/Perf/${match[2]}`,
+    };
+    if (details[0] && DATE_TEXT.test(details[0])) candidate.date = details[0];
+    if (details[1]) candidate.venue = details[1];
+    const previous = candidates.get(candidate.url);
+    if (
+      !previous ||
+      Object.keys(candidate).length > Object.keys(previous).length
+    )
+      candidates.set(candidate.url, candidate);
+    if (candidates.size >= 100) break;
+  }
+  return [...candidates.values()];
+}
+
 function ticketCandidates(body: string, base: string): FestivalCandidate[] {
   const melon = melonFestivalCandidates(body, base);
   if (melon) return melon;
+  const yes24 = yes24FestivalCandidates(body, base);
+  if (yes24) return yes24;
   const yes24Cards = [
     ...body.matchAll(
       /<li\b[^>]*class=["'][^"']*\bconlist\b[^"']*["'][^>]*>[\s\S]*?<\/ul>\s*<\/li>/gi,

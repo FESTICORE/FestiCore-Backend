@@ -11,9 +11,12 @@
 
 기본 발견 소스는 다음 공개 목록이다. 초기 배포 때 한 번 수집한 뒤 매일 갱신한다. 수집 페이지에서 확정할 수 없는 개최 시각은 추측하지 않고 관리자 검토 입력으로 남긴다.
 
-- [NOL 티켓](https://nol.yanolja.com/ticket): 식별 가능한 크롤러 요청에 403이 반환되어 운영 수집 성공은 확인되지 않았다. 실행 이력에 실패로 기록하고 연속 3회 실패 시 관리자 알림을 만든다.
-- [멜론티켓 페스티벌 목록](https://ticket.melon.com/concert/index.htm): 페이지가 사용하는 공개 `prodList.json` 목록 응답을 수집한다.
+- [NOL 티켓 콘서트 장르](https://nol.yanolja.com/ticket/genre/concert): 목록의 직렬화된 공연 URL 중 페스티벌 제목만 후보로 삼는다. 식별 가능한 크롤러 요청에 403이 반환된 이력이 있어 운영 수집 성공은 확인되지 않았다. 실행 이력에 실패로 기록하고 연속 3회 실패 시 관리자 알림을 만든다.
+- [멜론티켓 페스티벌 목록](https://ticket.melon.com/concert/index.htm): 페이지가 사용하는 공개 `prodList.json?perfGenreCode=GENRE_CON_FESTIVAL` 목록 응답을 수집한다. 이 장르에도 일반 공연이 섞여 있어 제목에 축제 표시가 필요하다. 공식 정보로 확인한 `WONDERLIVET`과 `COUNTDOWN FANTASY`는 예외로 삼고, 콘서트·오케스트라 제목은 제외한다.
 - [YES24 티켓 콘서트 목록](https://ticket.yes24.com/English/Genre/Concert): 장르가 Festival인 상품을 후보로 추린다.
+- [YES24 국내 페스티벌 장르 AJAX 목록](https://ticket.yes24.com/New/Genre/Ajax/GenreList_Data.aspx?genre=15464&sort=0&area=&genretype=2&pCurPage=1&pPageSize=30): 공연 ID로 상품 URL을 구성하고 카드의 날짜와 장소를 수집한다. 같은 제목 검증을 적용하고 첫 페이지 최대 30건을 수집한다.
+
+새 소스 마이그레이션은 URL이 이미 있으면 중복 등록하지 않는다. NOL의 기존 기본 URL은 과거 403 실패로 `broken`일 수 있으므로 새 장르 소스를 만들고 기존 소스를 비활성화한다. 새 NOL·YES24 소스와 멜론의 `v=2` 대체 소스는 `createdAt`을 전날로 등록해 배포 후 첫 예약 점검에서 실행한다. 멜론의 기존 `v=1` 소스는 대체 소스가 존재할 때 비활성화해 같은 목록의 중복 실행을 막는다.
 
 ## 관리자 인증과 문서
 
