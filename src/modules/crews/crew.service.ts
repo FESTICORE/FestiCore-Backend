@@ -8,11 +8,17 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { randomBytes, randomUUID } from 'crypto';
+import { createHash, randomBytes, randomUUID } from 'crypto';
 import { EntityManager, Repository } from 'typeorm';
 import { AdminFestival } from '../admin/festival/festival.entity';
 import { User } from '../auth/entity/user.entity';
-import { Crew, CrewGather, CrewMember, CrewState } from './crew.entity';
+import {
+  Crew,
+  CrewGather,
+  CrewMember,
+  CrewState,
+  CrewStatusIdempotency,
+} from './crew.entity';
 
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const INVITE_MS = 48 * 60 * 60_000;
@@ -460,28 +466,79 @@ export class CrewService {
     id: string,
     userId: string,
     body: { zoneId?: string; state?: CrewState; clientAt?: string },
+    key?: string,
   ) {
     const { crew } = await this.member(id, userId);
-    await this.active(crew);
-    const time = Date.parse(body?.clientAt ?? '');
-    if (!Number.isFinite(time) || Math.abs(Date.now() - time) > 5 * 60_000)
-      throw new BadRequestException(
-        error('VALIDATION', 'clientAt은 현재 시각에서 5분 이내여야 합니다.'),
-      );
-    if (body.zoneId === undefined && body.state === undefined)
-      throw new BadRequestException(
-        error('VALIDATION', 'zoneId 또는 state가 필요합니다.'),
-      );
-    if (
-      body.state !== undefined &&
-      !['here', 'eating', 'toilet', 'leaving'].includes(body.state)
-    )
-      throw new BadRequestException(
-        error('VALIDATION', '유효하지 않은 상태입니다.'),
-      );
-    if (body.zoneId !== undefined && body.state !== 'leaving')
-      await this.zone(crew.festivalId, body.zoneId);
     return this.crews.manager.transaction(async (manager: EntityManager) => {
+      let idempotency: Repository<CrewStatusIdempotency> | undefined;
+      let requestHash: string | undefined;
+      if (key) {
+        requestHash = createHash('sha256')
+          .update(
+            JSON.stringify({
+              id,
+              clientAt: body.clientAt,
+              zoneId: body.zoneId,
+              state: body.state,
+            }),
+          )
+          .digest('hex');
+        await manager.query(
+          'SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))',
+          [userId, key],
+        );
+        idempotency = manager.getRepository(CrewStatusIdempotency);
+        const prior = await idempotency.findOne({ where: { userId, key } });
+        if (prior && prior.expiresAt > new Date()) {
+          const member = await manager.getRepository(CrewMember).findOne({
+            where: { crewId: id, userId },
+            lock: { mode: 'pessimistic_write' },
+          });
+          if (!member)
+            throw new ForbiddenException(
+              error('CREW_NOT_MEMBER', '크루 멤버만 접근할 수 있습니다.'),
+            );
+          if (prior.requestHash !== requestHash)
+            throw new ConflictException(
+              error(
+                'IDEMPOTENCY_CONFLICT',
+                '같은 키로 다른 요청을 보냈습니다.',
+              ),
+            );
+          return prior.response;
+        }
+        if (prior) await idempotency.delete({ userId, key });
+      }
+      const remember = async (response: Record<string, unknown>) => {
+        if (idempotency && key && requestHash)
+          await idempotency.save({
+            userId,
+            key,
+            requestHash,
+            response,
+            expiresAt: new Date(Date.now() + 24 * 60 * 60_000),
+          });
+        return response;
+      };
+      await this.active(crew);
+      const time = Date.parse(body?.clientAt ?? '');
+      if (!Number.isFinite(time) || Math.abs(Date.now() - time) > 5 * 60_000)
+        throw new BadRequestException(
+          error('VALIDATION', 'clientAt은 현재 시각에서 5분 이내여야 합니다.'),
+        );
+      if (body.zoneId === undefined && body.state === undefined)
+        throw new BadRequestException(
+          error('VALIDATION', 'zoneId 또는 state가 필요합니다.'),
+        );
+      if (
+        body.state !== undefined &&
+        !['here', 'eating', 'toilet', 'leaving'].includes(body.state)
+      )
+        throw new BadRequestException(
+          error('VALIDATION', '유효하지 않은 상태입니다.'),
+        );
+      if (body.zoneId !== undefined && body.state !== 'leaving')
+        await this.zone(crew.festivalId, body.zoneId);
       await this.lockedCrew(manager, id, userId);
       const repository = manager.getRepository(CrewMember);
       const member = await repository.findOne({
@@ -500,12 +557,12 @@ export class CrewService {
             body.zoneId === undefined ||
             body.zoneId === member.zoneId)
         )
-          return {
+          return remember({
             userId,
             zoneId: member.zoneId,
             state: member.state,
             updatedAt: member.statusUpdatedAt,
-          };
+          });
         throw new ConflictException({
           ...error('STATUS_STALE', '이전 상태입니다.'),
           current: {
@@ -521,12 +578,13 @@ export class CrewService {
       member.state = body.state ?? member.state;
       member.statusUpdatedAt = new Date(time);
       await repository.save(member);
-      return {
+      const response = {
         userId,
         zoneId: member.zoneId,
         state: member.state,
         updatedAt: member.statusUpdatedAt,
       };
+      return remember(response);
     });
   }
 

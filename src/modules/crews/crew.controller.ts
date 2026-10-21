@@ -1,8 +1,10 @@
 import {
   Body,
+  BadRequestException,
   Controller,
   Delete,
   Get,
+  Headers,
   HttpCode,
   Param,
   Patch,
@@ -11,6 +13,7 @@ import {
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
+  ApiHeader,
   ApiOperation,
   ApiParam,
   ApiResponse,
@@ -228,7 +231,13 @@ export class CrewController {
   @ApiOperation({
     summary: '내 크루 상태 갱신',
     description:
-      'zoneId 또는 state 중 하나 이상과 clientAt을 보냅니다. 오래된 clientAt은 STATUS_STALE이며 leaving은 zoneId를 null로 만듭니다. 분당 12회 제한입니다.',
+      'zoneId 또는 state 중 하나 이상과 clientAt을 보냅니다. Idempotency-Key로 24시간 같은 요청을 재전송할 수 있습니다. 오래된 clientAt은 STATUS_STALE이며 leaving은 zoneId를 null로 만듭니다. 분당 12회 제한입니다.',
+  })
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    description: '요청별 고유 키, 최대 128자. 24시간 보관',
+    required: true,
+    example: 'crew-status-001',
   })
   @ApiResponse({
     status: 200,
@@ -241,14 +250,23 @@ export class CrewController {
       },
     },
   })
-  @ApiResponse({ status: 409, description: 'STATUS_STALE, current 포함' })
+  @ApiResponse({
+    status: 409,
+    description: 'STATUS_STALE(current 포함) 또는 IDEMPOTENCY_CONFLICT',
+  })
   @ApiResponse({ status: 410, description: 'CREW_ARCHIVED' })
   status(
     @Param('crewId') id: string,
     @CurrentUser() user: AuthUser,
+    @Headers('idempotency-key') key: string | undefined,
     @Body() body: CrewStatusDto,
   ) {
-    return this.service.status(id, user.userId, body);
+    if (!key?.trim() || key.length > 128)
+      throw new BadRequestException({
+        code: 'VALIDATION',
+        message: 'Idempotency-Key가 필요합니다.',
+      });
+    return this.service.status(id, user.userId, body, key);
   }
 
   @Post(':crewId/gather')

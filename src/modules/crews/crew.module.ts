@@ -4,7 +4,12 @@ import { AdminFestival } from '../admin/festival/festival.entity';
 import { User } from '../auth/entity/user.entity';
 import { CrewController } from './crew.controller';
 import { CrewArchiveService } from './crew-archive.service';
-import { Crew, CrewGather, CrewMember } from './crew.entity';
+import {
+  Crew,
+  CrewGather,
+  CrewMember,
+  CrewStatusIdempotency,
+} from './crew.entity';
 import { CrewService } from './crew.service';
 
 @Module({
@@ -13,6 +18,7 @@ import { CrewService } from './crew.service';
       Crew,
       CrewMember,
       CrewGather,
+      CrewStatusIdempotency,
       AdminFestival,
       User,
     ]),

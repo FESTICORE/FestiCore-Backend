@@ -4,6 +4,7 @@ import {
   Entity,
   Index,
   PrimaryColumn,
+  PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
 
@@ -89,4 +90,17 @@ export class CrewGather {
 
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt!: Date;
+}
+
+@Entity('crew_status_idempotency')
+@Index('IDX_crew_status_idempotency_user_key', ['userId', 'key'], {
+  unique: true,
+})
+export class CrewStatusIdempotency {
+  @PrimaryGeneratedColumn('uuid') id!: string;
+  @Column({ type: 'uuid' }) userId!: string;
+  @Column({ type: 'varchar', length: 128 }) key!: string;
+  @Column({ type: 'varchar', length: 64 }) requestHash!: string;
+  @Column({ type: 'jsonb' }) response!: Record<string, unknown>;
+  @Column({ type: 'timestamptz' }) expiresAt!: Date;
 }
