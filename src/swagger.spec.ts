@@ -58,6 +58,9 @@ describe('Swagger 문서 분리', () => {
       '/api/v1/admin/metrics': {
         get: { responses: { 200: { description: 'OK' } } },
       },
+      '/api/v1/admin/audit': {
+        get: { responses: { 200: { description: 'OK' } } },
+      },
       '/api/v1/admin/auth/session': {
         get: { responses: { 200: { description: 'OK' } } },
       },
@@ -121,6 +124,7 @@ describe('Swagger 문서 분리', () => {
     ]);
     expect(adminPaths).toEqual([
       '/api/v1/admin/metrics',
+      '/api/v1/admin/audit',
       '/api/v1/admin/auth/session',
       '/api/v1/admin/auth/magic-link',
       '/api/v1/admin/flags/reported',
@@ -139,6 +143,9 @@ describe('Swagger 문서 분리', () => {
     ]);
     expect(Object.keys(documents.get('admin/api-docs/metrics')!.paths)).toEqual(
       ['/api/v1/admin/metrics'],
+    );
+    expect(Object.keys(documents.get('admin/api-docs/audit')!.paths)).toEqual(
+      adminPaths,
     );
     expect(
       documents.get('api-docs')!.paths['/api/v1/metrics/events'].post

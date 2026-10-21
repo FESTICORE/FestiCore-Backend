@@ -18,6 +18,7 @@ import {
 } from 'crypto';
 import { DataSource, EntityManager, IsNull, Repository } from 'typeorm';
 import { AdminFestival } from '../admin/festival/festival.entity';
+import { AdminAuditService } from '../admin/audit/admin-audit.service';
 import { User } from '../auth/entity/user.entity';
 import {
   ImageStorageService,
@@ -35,6 +36,7 @@ import {
   FlagStatusEvent,
 } from './flag.entity';
 import {
+  forcedStatus,
   isRecord,
   nextStatus,
   statusView,
@@ -85,6 +87,7 @@ export class FlagsService {
     @InjectRepository(User) private readonly users: Repository<User>,
     private readonly images: ImageStorageService,
     private readonly packSync: FlagPackSyncService,
+    private readonly adminAudit: AdminAuditService,
   ) {}
 
   private codeKey(): Buffer {
@@ -814,6 +817,55 @@ export class FlagsService {
         response,
       );
       return response;
+    });
+  }
+
+  async forceStatus(
+    id: string,
+    actor: string | null,
+    input: unknown,
+  ): Promise<ReturnType<typeof statusView>> {
+    const next = forcedStatus(input);
+    return this.db.transaction(async (manager) => {
+      const flags = manager.getRepository(Flag);
+      const flag = await flags
+        .createQueryBuilder('flag')
+        .setLock('pessimistic_write')
+        .where('flag.id = :id', { id })
+        .getOne();
+      if (!flag) throw new NotFoundException({ code: 'NOT_FOUND' });
+      if (next.zoneId) {
+        const festival = await manager.getRepository(AdminFestival).findOne({
+          where: { id: flag.festivalId },
+        });
+        if (
+          !Array.isArray(festival?.published?.zones) ||
+          !festival.published.zones.some(
+            (zone) => isRecord(zone) && zone.id === next.zoneId,
+          )
+        ) {
+          fail('ZONE_NOT_FOUND', 404, '존을 찾을 수 없습니다.');
+        }
+      }
+      const before = statusView(flag);
+      Object.assign(flag, next, { statusUpdatedAt: new Date() });
+      await flags.save(flag);
+      await manager.getRepository(FlagStatusEvent).save({
+        flagId: id,
+        userId: null,
+        status: flag.status,
+        zoneId: flag.zoneId,
+        activity: flag.activity,
+      });
+      const after = statusView(flag);
+      await this.adminAudit.record(manager, {
+        actor,
+        action: 'flag.force-status',
+        target: `flag:${id}`,
+        before,
+        after,
+      });
+      return after;
     });
   }
 

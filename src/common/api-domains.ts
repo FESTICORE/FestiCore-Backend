@@ -97,4 +97,10 @@ export const API_DOMAINS: ApiDomain[] = [
     description: '축제별 앱 관측 지표 집계',
     pathPrefix: 'admin/metrics',
   },
+  {
+    slug: 'admin-audit',
+    title: 'Admin Audit',
+    description: '관리자 변경 감사 이력',
+    pathPrefix: 'admin/audit',
+  },
 ];

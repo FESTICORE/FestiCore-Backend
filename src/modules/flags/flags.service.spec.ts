@@ -2,6 +2,7 @@ import { ConfigService } from '@nestjs/config';
 import { createHash } from 'crypto';
 import { DataSource, Repository } from 'typeorm';
 import { AdminFestival } from '../admin/festival/festival.entity';
+import { AdminAuditService } from '../admin/audit/admin-audit.service';
 import { User } from '../auth/entity/user.entity';
 import { ImageStorageService } from '../storage/image-storage.service';
 import { FlagPackSyncService } from './flag-pack-sync.service';
@@ -70,6 +71,7 @@ describe('FlagsService security boundaries', () => {
     {} as Repository<User>,
     {} as ImageStorageService,
     { sync } as unknown as FlagPackSyncService,
+    {} as AdminAuditService,
   );
 
   beforeEach(() => {
@@ -137,6 +139,7 @@ describe('FlagsService security boundaries', () => {
       {} as Repository<User>,
       {} as ImageStorageService,
       { sync } as unknown as FlagPackSyncService,
+      {} as AdminAuditService,
     );
     await expect(
       guarded.follow('flg_1', 'departed', 'key-1'),

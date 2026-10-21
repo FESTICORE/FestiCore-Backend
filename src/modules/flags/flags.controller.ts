@@ -14,6 +14,7 @@ import {
   Req,
   Res,
   UploadedFile,
+  UnauthorizedException,
   UseInterceptors,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -32,6 +33,7 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Request, Response } from 'express';
 import { AdminRoles } from '../admin/auth/admin-roles.decorator';
+import type { AdminRequest } from '../admin/auth/admin-session.guard';
 import { CurrentUser } from '../auth/decorator/current-user.decorator';
 import { Public } from '../auth/decorator/public.decorator';
 import type { AuthUser } from '../auth/types/social-profile';
@@ -699,6 +701,70 @@ export class MyFlagsController {
 @Controller('admin')
 export class AdminFlagsController {
   constructor(private readonly service: FlagsService) {}
+  @Post('flags/:flagId/force-status')
+  @HttpCode(200)
+  @AdminRoles('editor', 'owner')
+  @ApiParam({
+    name: 'flagId',
+    description: '깃발 ID',
+    example: 'flg_1234567890',
+  })
+  @ApiOperation({
+    summary: '관리자 깃발 상태 강제 변경',
+    description:
+      '기수 기기를 사용할 수 없을 때 editor/owner가 상태를 변경합니다. 이전·변경 상태와 관리자 ID를 감사 로그에 같은 트랜잭션으로 남깁니다.',
+  })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['status', 'zoneId', 'activity'],
+      additionalProperties: false,
+      properties: {
+        status: {
+          type: 'string',
+          enum: ['scheduled', 'active', 'resting', 'ended'],
+        },
+        zoneId: {
+          type: 'string',
+          nullable: true,
+          description: 'active/resting이면 발행된 축제의 존 ID, 나머지는 null',
+        },
+        activity: {
+          type: 'string',
+          nullable: true,
+          enum: ['slam', 'sing', 'train', 'calm', 'resting'],
+          description: 'active이면 활동 값, resting이면 resting, 나머지는 null',
+        },
+      },
+      example: { status: 'active', zoneId: 'zone_main', activity: 'sing' },
+    },
+  })
+  @ApiResponse({
+    status: 200,
+    description: '서버 시각으로 갱신된 FlagStatus',
+    schema: {
+      example: {
+        flagId: 'flg_1234567890',
+        status: 'active',
+        zoneId: 'zone_main',
+        activity: 'sing',
+        updatedAt: '2026-10-21T00:00:00.000Z',
+      },
+    },
+  })
+  @ApiResponse({ status: 400, description: '잘못된 상태 조합' })
+  @ApiResponse({ status: 401, description: '관리자 세션 없음 또는 만료' })
+  @ApiResponse({ status: 403, description: 'editor/owner 권한 없음' })
+  @ApiResponse({ status: 404, description: '깃발 또는 존을 찾을 수 없음' })
+  forceStatus(
+    @Param('flagId') id: string,
+    @Req() request: AdminRequest,
+    @Body() body: unknown,
+  ) {
+    if (!request.admin?.id)
+      throw new UnauthorizedException('관리자 세션이 필요합니다.');
+    return this.service.forceStatus(id, request.admin.id, body);
+  }
   @Post('festivals/:festivalId/bearer-codes')
   @AdminRoles('editor', 'owner')
   @ApiParam({ name: 'festivalId', description: '축제 ID', example: 'fst_123' })

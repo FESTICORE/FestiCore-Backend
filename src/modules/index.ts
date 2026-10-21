@@ -9,6 +9,7 @@ import { CrawlModule } from './admin/crawl/crawl.module';
 import { DeviceModule } from './device/device.module';
 import { NotificationModule } from './notification/notification.module';
 import { MetricsModule } from './metrics/metrics.module';
+import { AdminAuditModule } from './admin/audit/admin-audit.module';
 
 /**
  * app.module imports 에 펼칠(...) 기능 모듈 목록.
@@ -27,4 +28,5 @@ export const featureModules = [
   DeviceModule,
   NotificationModule,
   MetricsModule,
+  AdminAuditModule,
 ];
