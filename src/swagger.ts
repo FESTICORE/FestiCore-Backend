@@ -1,6 +1,7 @@
 import { INestApplication } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import type { OpenAPIObject } from '@nestjs/swagger';
+import type { NextFunction, Request, Response } from 'express';
 import { API_DOMAINS } from './common/api-domains';
 import { AuthModule } from './modules/auth/auth.module';
 import { HealthModule } from './modules/health/health.module';
@@ -217,6 +218,13 @@ export function setupSwagger(
   app: INestApplication,
   opts: { publicUrl?: string; port: number; isProd: boolean },
 ): void {
+  app.use((request: Request, response: Response, next: NextFunction) => {
+    if (/^\/(?:admin\/)?api-docs(?:\/|-|$)/.test(request.path)) {
+      response.setHeader('Cache-Control', 'no-store, max-age=0');
+    }
+    next();
+  });
+
   const gatewayServer = (): string => {
     if (!opts.isProd) return `http://localhost:${opts.port}`;
     if (!opts.publicUrl) return '/';
