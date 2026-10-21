@@ -212,9 +212,15 @@ export class AdminFestivalService {
     return { items };
   }
 
-  async publish(id: string, note: string, actor: string | null) {
+  async publish(
+    id: string,
+    note: string,
+    ifMatch: string | undefined,
+    actor: string | null,
+  ) {
     if (typeof note !== 'string' || [...note].length > 500)
       throw new BadRequestException('note는 500자 이하의 문자열이어야 합니다.');
+    const expected = this.matchVersion(ifMatch);
     return this.dataSource.transaction(async (manager) => {
       const repo = manager.getRepository(AdminFestival);
       const row = await repo.findOne({
@@ -222,6 +228,7 @@ export class AdminFestivalService {
         lock: { mode: 'pessimistic_write' },
       });
       if (!row) throw new NotFoundException('페스티벌을 찾을 수 없습니다.');
+      if (row.draftVersion !== expected) conflict(row);
       const errors = validateDraft(row.draft, true);
       if (errors.length)
         throw new BadRequestException({

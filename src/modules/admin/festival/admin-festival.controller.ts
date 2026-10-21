@@ -486,9 +486,10 @@ export class AdminFestivalController {
   @ApiOperation({
     summary: '축제 팩 발행',
     description:
-      'editor 이상이 현재 초안을 새 팩 버전으로 발행합니다. 무대가 최소 1개 필요하고 Brotli 압축 팩은 200KB 이하여야 합니다. pushedDevices는 배경 푸시 작업을 큐에 등록한 기기 수이며 실제 수신 수가 아닙니다.',
+      'editor 이상이 검토한 초안을 새 팩 버전으로 발행합니다. GET /admin/festivals/{id}/draft의 draftVersion을 `If-Match: "d{draftVersion}"`으로 보내야 하며, 초안이 바뀌면 최신 초안과 함께 412를 반환합니다. 무대가 최소 1개 필요하고 Brotli 압축 팩은 200KB 이하여야 합니다. pushedDevices는 배경 푸시 작업을 큐에 등록한 기기 수이며 실제 수신 수가 아닙니다.',
   })
   @ApiParam(festivalId)
+  @ApiHeader(draftHeader)
   @ApiBody({
     required: false,
     description:
@@ -509,14 +510,21 @@ export class AdminFestivalController {
     description: '메모·발행 초안 검증 실패 또는 압축 팩 200KB 초과',
   })
   @ApiResponse({ status: 404, description: '축제를 찾을 수 없습니다.' })
+  @ApiResponse({
+    status: 412,
+    description: '검토한 초안 버전이 변경되었습니다.',
+  })
+  @ApiResponse({ status: 428, description: 'If-Match 초안 버전이 필요합니다.' })
   publish(
     @Param('id') id: string,
     @Body() body: { note?: string },
+    @Headers('if-match') ifMatch: string | undefined,
     @Req() request: AdminRequest,
   ) {
     return this.service.publish(
       id,
       body?.note ?? '',
+      ifMatch,
       request.admin?.id ?? null,
     );
   }

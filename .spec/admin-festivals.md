@@ -18,7 +18,7 @@
 | PUT    | `/:id/draft/sets`        | 같은 `If-Match`, 배열                                                   | 공연 목록 전체 교체                                               |
 | PUT    | `/:id/draft/zones`       | 같은 `If-Match`, 배열                                                   | 존 목록 전체 교체                                                 |
 | GET    | `/:id/draft/diff`        | ID                                                                      | 발행본 대비 최상위 필드 차이                                      |
-| POST   | `/:id/publish`           | `{ note?: string }`                                                     | 새 `packVersion`, ETag, `pushedDevices`(알림 대기열 등록 수)      |
+| POST   | `/:id/publish`           | `If-Match: "d{draftVersion}"`, `{ note?: string }`                     | 검토한 초안 버전만 발행. 새 `packVersion`, ETag, `pushedDevices`(알림 대기열 등록 수) |
 | GET    | `/:id/versions`          | ID                                                                      | 발행 이력                                                         |
 | POST   | `/:id/rollback`          | `{ toVersion }`                                                         | 이전 팩을 새 버전으로 재발행                                      |
 | POST   | `/:id/pack/import-image` | multipart `image` (JPEG/PNG/WebP, 최대 10MB), `date` (등록된 축제 날짜) | HTTP 200 `{ draft: Set[], confidence: 0..1, unparsed: string[] }` |
