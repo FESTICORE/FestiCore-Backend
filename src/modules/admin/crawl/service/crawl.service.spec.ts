@@ -2,6 +2,7 @@ import { CrawlService } from './crawl.service';
 import { CrawlSource } from '../entity/crawl-source.entity';
 import { CrawlRun } from '../entity/crawl-run.entity';
 import { NotFoundException } from '@nestjs/common';
+import { In } from 'typeorm';
 
 type PrivateCrawl = {
   scheduleDue(): Promise<void>;
@@ -153,6 +154,30 @@ describe('CrawlService scheduled runs', () => {
     await service.scheduleDue();
 
     expect(insertQb.execute).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('retries a broken source on the next Korean calendar day', async () => {
+    const { service, source, sourcesRepo, execute } = harness();
+    source.status = 'broken';
+    source.lastRunAt = new Date('2026-10-20T14:59:00Z');
+
+    await service.scheduleDue();
+
+    expect(sourcesRepo.findBy).toHaveBeenCalledWith({
+      enabled: true,
+      status: In(['ok', 'broken']),
+    });
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry a broken source again after a run today', async () => {
+    const { service, source, execute } = harness();
+    source.status = 'broken';
+    source.lastRunAt = new Date('2026-10-20T15:00:00Z');
+
+    await service.scheduleDue();
+
     expect(execute).not.toHaveBeenCalled();
   });
 });

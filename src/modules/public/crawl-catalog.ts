@@ -57,8 +57,12 @@ function officialPosterUrl(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
   try {
     const url = new URL(raw);
+    const trusted =
+      url.hostname === 'mintpaper.s3.ap-northeast-2.amazonaws.com' ||
+      (url.hostname === 'cdnticket.melon.co.kr' &&
+        url.pathname.startsWith('/resource/image/upload/product/'));
     return url.protocol === 'https:' &&
-      url.hostname === 'mintpaper.s3.ap-northeast-2.amazonaws.com' &&
+      trusted &&
       !url.username &&
       !url.password
       ? url.toString()

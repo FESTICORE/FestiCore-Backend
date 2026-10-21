@@ -9,7 +9,7 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, LessThan, Repository } from 'typeorm';
+import { DataSource, In, LessThan, Repository } from 'typeorm';
 import { AdminFestival } from '../../festival/festival.entity';
 import { ImageStorageService } from '../../../storage/image-storage.service';
 import {
@@ -271,11 +271,18 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     }
     const sources = await this.sourcesRepo.findBy({
       enabled: true,
-      status: 'ok',
+      status: In(['ok', 'broken']),
     });
     for (const source of sources) {
       // 자정 이후 새로 추가된 소스는 다음 자정부터 예약 실행한다.
       if (kstDay(source.createdAt) >= date) continue;
+      // 실패한 소스도 다음 날 재시도한다. 당일 수동 실행 직후에는 중복 시도하지 않는다.
+      if (
+        source.status === 'broken' &&
+        source.lastRunAt &&
+        kstDay(source.lastRunAt) >= date
+      )
+        continue;
       await this.failStaleManualRun(source.id);
       // 일별 유니크 키가 복수 프로세스에서 같은 소스의 중복 예약을 막는다.
       const insert = await this.runsRepo

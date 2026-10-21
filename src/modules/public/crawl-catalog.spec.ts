@@ -160,6 +160,32 @@ describe('ticket discovery catalog', () => {
     expect(merged[0].posterUrl).toBe(
       'https://mintpaper.s3.ap-northeast-2.amazonaws.com/gmf.jpg',
     );
+    const wonderlivet = discoverySummaries([
+      {
+        candidate: {
+          name: 'WONDERLIVET 2026 (원더리벳 2026)',
+          date: '2026.11.20 - 2026.11.22',
+          venue: 'KINTEX HALL 7/8/9/10',
+          url: 'https://ticket.melon.com/performance/index.htm?prodId=213793',
+          posterUrl:
+            'https://cdnticket.melon.co.kr/resource/image/upload/product/2026/poster.png',
+        },
+      },
+    ]);
+    expect(wonderlivet[0].posterUrl).toBe(
+      'https://cdnticket.melon.co.kr/resource/image/upload/product/2026/poster.png',
+    );
+    expect(
+      discoverySummaries([
+        {
+          candidate: {
+            ...base,
+            posterUrl:
+              'https://cdnticket.melon.co.kr/resource/image/web/common/logo.png',
+          },
+        },
+      ])[0],
+    ).not.toHaveProperty('posterUrl');
     expect(
       discoverySummaries([
         { candidate: base },

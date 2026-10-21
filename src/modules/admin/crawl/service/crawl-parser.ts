@@ -335,6 +335,58 @@ function melonFestivalCandidates(
   return [...candidates.values()];
 }
 
+function melonSearchCandidates(
+  body: string,
+  base: string,
+): FestivalCandidate[] | null {
+  const source = new URL(base);
+  if (
+    source.hostname !== 'ticket.melon.com' ||
+    source.pathname !== '/search/index.htm'
+  )
+    return null;
+  const candidates = new Map<string, FestivalCandidate>();
+  for (const row of body
+    .slice(0, 2_000_000)
+    .matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)) {
+    const id =
+      /href=["'][^"']*\/performance\/index\.htm\?prodId=(\d+)["']/i.exec(
+        row[1],
+      )?.[1];
+    const title =
+      /class=["'][^"']*\bshow_title\b[^"']*["'][^>]*>([\s\S]*?)<\/a>/i.exec(
+        row[1],
+      )?.[1];
+    const name = title && plainText(title);
+    if (
+      !id ||
+      !name ||
+      CONCERT_TITLE.test(name) ||
+      !(isFestivalTitle(name) || VERIFIED_FESTIVAL_BRAND.test(name))
+    )
+      continue;
+    const date = classText(row[1], 'show_date');
+    if (!date || !DATE_TEXT.test(date)) continue;
+    const candidate: FestivalCandidate = {
+      name,
+      url: new URL(
+        `/performance/index.htm?prodId=${id}`,
+        source.origin,
+      ).toString(),
+      date,
+    };
+    const venue = classText(row[1], 'show_loc');
+    if (venue) candidate.venue = venue;
+    const poster = /<img\b[^>]*\bsrc=["'](https:\/\/[^"']+)["']/i.exec(
+      row[1],
+    )?.[1];
+    if (poster) candidate.posterUrl = poster;
+    candidates.set(candidate.url, candidate);
+    if (candidates.size >= 100) break;
+  }
+  return [...candidates.values()];
+}
+
 function yes24FestivalCandidates(
   body: string,
   base: string,
@@ -391,6 +443,8 @@ function yes24FestivalCandidates(
 function ticketCandidates(body: string, base: string): FestivalCandidate[] {
   const mintPaper = mintPaperCandidates(body, base);
   if (mintPaper) return mintPaper;
+  const melonSearch = melonSearchCandidates(body, base);
+  if (melonSearch) return melonSearch;
   const melon = melonFestivalCandidates(body, base);
   if (melon) return melon;
   const yes24 = yes24FestivalCandidates(body, base);
