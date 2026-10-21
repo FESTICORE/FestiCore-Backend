@@ -117,6 +117,44 @@ describe('Public festival API', () => {
       .expect(304);
   });
 
+  it('includes crawled discoveries when no festival pack has been published', async () => {
+    queryBuilder.getMany.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+    const candidates = [
+      {
+        candidate: {
+          name: '2026 대구힙합페스티벌',
+          venue: '대구 엑스코',
+          date: '2026.12.25 - 2026.12.26',
+          url: 'https://ticket.melon.com/performance/index.htm?prodId=213665',
+        },
+      },
+    ];
+    dataSource.query
+      .mockResolvedValueOnce(candidates)
+      .mockResolvedValueOnce(candidates);
+    const first = await request(server)
+      .get('/api/v1/festivals?limit=1')
+      .expect(200);
+    const body = first.body as { items: { id: string }[] };
+    expect(body.items).toEqual([
+      expect.objectContaining({
+        name: '2026 대구힙합페스티벌',
+        packVersion: 0,
+        status: 'discovered',
+        firstDate: '2026-12-25',
+        lastDate: '2026-12-26',
+        sourceUrl:
+          'https://ticket.melon.com/performance/index.htm?prodId=213665',
+      }),
+    ]);
+    const id = body.items[0].id;
+    await request(server).get(`/api/v1/festivals/${id}/pack`).expect(404);
+    await request(server)
+      .get('/api/v1/festivals?limit=1')
+      .set('If-None-Match', first.headers.etag)
+      .expect(304);
+  });
+
   it('serves only the published pack with exact version ETag', async () => {
     const first = await request(server)
       .get(`/api/v1/festivals/${pack.id}/pack`)

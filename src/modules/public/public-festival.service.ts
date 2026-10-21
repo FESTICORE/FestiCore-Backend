@@ -5,10 +5,11 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { AdminFestival } from '../admin/festival/festival.entity';
 import { festivalSetId } from '../admin/festival/festival-set-id';
 import { Flag } from '../flags/flag.entity';
+import { discoverySummaries, DiscoveryRow } from './crawl-catalog';
 
 type Document = Record<string, unknown>;
 
@@ -161,6 +162,7 @@ export class PublicFestivalService {
     private readonly festivals: Repository<AdminFestival>,
     @InjectRepository(Flag)
     private readonly flagRecords: Repository<Flag>,
+    private readonly dataSource: DataSource,
   ) {}
 
   async published(id: string): Promise<Document> {
@@ -276,6 +278,7 @@ export class PublicFestivalService {
           venue: pack.venue,
           firstDate,
           startsAt,
+          sortAt: startsAt,
           lastDate,
           packVersion: row.publishedVersion,
           flagsEnabled: pack.flagsEnabled,
@@ -289,7 +292,31 @@ export class PublicFestivalService {
         },
       ];
     });
-    const items = summaries.slice(0, limit).map((summary) => ({
+    const discoveryRows = await this.dataSource.query<DiscoveryRow[]>(
+      `SELECT item->'after' AS candidate
+       FROM crawl_proposals p
+       CROSS JOIN LATERAL jsonb_array_elements(p.items) item
+       WHERE p.kind = 'festival.new'
+         AND p.status IN ('open', 'partial', 'applied')
+         AND item->>'decision' IN ('pending', 'accepted')
+         AND NOT EXISTS (
+           SELECT 1 FROM admin_festivals f
+           WHERE f.published IS NOT NULL
+             AND f."publishedVersion" > 0
+             AND f.published->'source'->>'url' = item->'after'->>'url'
+         )`,
+    );
+    const discovered = discoverySummaries(discoveryRows).filter((entry) => {
+      if (entry.lastDate < floor) return false;
+      if (!cursor) return true;
+      const sort = Date.parse(entry.sortAt) - Date.parse(cursor[2]);
+      return sort > 0 || (sort === 0 && entry.id > cursor[3]);
+    });
+    const ordered = [...summaries, ...discovered].sort(
+      (a, b) =>
+        Date.parse(a.sortAt) - Date.parse(b.sortAt) || a.id.localeCompare(b.id),
+    );
+    const items = ordered.slice(0, limit).map((summary) => ({
       id: summary.id,
       name: summary.name,
       venue: summary.venue,
@@ -299,10 +326,11 @@ export class PublicFestivalService {
       flagsEnabled: summary.flagsEnabled,
       thumbUrl: summary.thumbUrl,
       status: summary.status,
+      ...('sourceUrl' in summary ? { sourceUrl: summary.sourceUrl } : {}),
     }));
     const nextCursor =
-      summaries.length > limit
-        ? `${floor}~${summaries[limit - 1].startsAt}~${summaries[limit - 1].id}`
+      ordered.length > limit
+        ? `${floor}~${ordered[limit - 1].sortAt}~${ordered[limit - 1].id}`
         : null;
     return { items, nextCursor };
   }
