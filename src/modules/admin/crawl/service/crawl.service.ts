@@ -11,6 +11,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, LessThan, Repository } from 'typeorm';
 import { AdminFestival } from '../../festival/festival.entity';
+import { AdminAuditService } from '../../audit/admin-audit.service';
 import { ImageStorageService } from '../../../storage/image-storage.service';
 import {
   CreateCrawlSourceDto,
@@ -78,6 +79,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     private readonly dataSource: DataSource,
     private readonly imageStorage: ImageStorageService,
     private readonly alerts: CrawlAlertService,
+    private readonly audit: AdminAuditService,
   ) {}
 
   onModuleInit() {
@@ -107,7 +109,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     return { items: await qb.orderBy('source.createdAt', 'DESC').getMany() };
   }
 
-  async createSource(dto: CreateCrawlSourceDto) {
+  async createSource(dto: CreateCrawlSourceDto, actor: string | null) {
     const parsers: Record<CrawlSource['kind'], CrawlSource['parser']> = {
       discovery: 'ticket-list',
       timetable: 'html-table',
@@ -137,30 +139,70 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       throw new UnprocessableEntityException('축제 초안을 찾을 수 없습니다.');
     }
     await this.checkRobots(dto.url);
-    return this.sourcesRepo.save(
-      this.sourcesRepo.create({
-        festivalId: dto.festivalId ?? null,
-        kind: dto.kind,
-        url: dto.url,
-        parser: dto.parser,
-        parserConfig: dto.parserConfig,
-        enabled: true,
-        status: 'ok',
-      }),
-    );
+    return this.dataSource.transaction(async (manager) => {
+      const saved = await manager.getRepository(CrawlSource).save(
+        manager.getRepository(CrawlSource).create({
+          festivalId: dto.festivalId ?? null,
+          kind: dto.kind,
+          url: dto.url,
+          parser: dto.parser,
+          parserConfig: dto.parserConfig,
+          enabled: true,
+          status: 'ok',
+        }),
+      );
+      await this.audit.record(manager, {
+        actor,
+        action: 'crawl.source.created',
+        target: `crawl-source:${saved.id}`,
+        before: null,
+        after: this.sourceAuditSnapshot(saved),
+      });
+      return saved;
+    });
   }
 
-  async updateSource(id: string, dto: UpdateCrawlSourceDto) {
+  async updateSource(
+    id: string,
+    dto: UpdateCrawlSourceDto,
+    actor: string | null,
+  ) {
     const source = await this.getSource(id);
     if (dto.url && dto.url !== source.url) await this.checkRobots(dto.url);
-    Object.assign(source, dto);
-    if (dto.enabled !== undefined)
-      source.status = dto.enabled ? 'ok' : 'disabled';
-    return this.sourcesRepo.save(source);
+    return this.dataSource.transaction(async (manager) => {
+      const repo = manager.getRepository(CrawlSource);
+      const locked = await repo.findOne({
+        where: { id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!locked) throw new NotFoundException('크롤 소스를 찾을 수 없습니다.');
+      const before = this.sourceAuditSnapshot(locked);
+      Object.assign(locked, dto);
+      if (dto.enabled !== undefined)
+        locked.status = dto.enabled ? 'ok' : 'disabled';
+      const saved = await repo.save(locked);
+      await this.audit.record(manager, {
+        actor,
+        action: 'crawl.source.updated',
+        target: `crawl-source:${id}`,
+        before,
+        after: this.sourceAuditSnapshot(saved),
+      });
+      return saved;
+    });
   }
 
-  async runNow(id: string) {
+  async runNow(id: string, actor: string | null = null) {
     const source = await this.getSource(id);
+    await this.dataSource.transaction((manager) =>
+      this.audit.record(manager, {
+        actor,
+        action: 'crawl.run.requested',
+        target: `crawl-source:${id}`,
+        before: null,
+        after: { sourceId: id },
+      }),
+    );
     await this.failStaleManualRun(source.id);
     const insert = await this.runsRepo
       .createQueryBuilder()
@@ -184,6 +226,19 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       this.logger.error('수동 크롤 실패', error),
     );
     return { runId: run.id };
+  }
+
+  private sourceAuditSnapshot(source: CrawlSource) {
+    return {
+      id: source.id,
+      festivalId: source.festivalId,
+      kind: source.kind,
+      url: source.url,
+      parser: source.parser,
+      parserConfig: source.parserConfig,
+      enabled: source.enabled,
+      status: source.status,
+    };
   }
 
   async testSource(id: string) {

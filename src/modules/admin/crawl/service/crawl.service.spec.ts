@@ -3,10 +3,24 @@ import { CrawlSource } from '../entity/crawl-source.entity';
 import { CrawlRun } from '../entity/crawl-run.entity';
 import { NotFoundException } from '@nestjs/common';
 import { In } from 'typeorm';
+import {
+  CreateCrawlSourceDto,
+  UpdateCrawlSourceDto,
+} from '../dto/crawl-source.dto';
 
 type PrivateCrawl = {
   scheduleDue(): Promise<void>;
   runNow(id: string): Promise<{ runId: string }>;
+  createSource(
+    dto: CreateCrawlSourceDto,
+    actor: string | null,
+  ): Promise<CrawlSource>;
+  updateSource(
+    id: string,
+    dto: UpdateCrawlSourceDto,
+    actor: string | null,
+  ): Promise<CrawlSource>;
+  checkRobots(url: string): Promise<void>;
   snapshot(id: string): Promise<{ body: string }>;
   proposalItems(
     source: CrawlSource,
@@ -27,6 +41,9 @@ function harness() {
     enabled: true,
     status: 'ok',
     url: 'https://tickets.example.com/events',
+    parser: 'ticket-list',
+    parserConfig: { sourceName: 'Tickets' },
+    festivalId: null,
     consecutiveFailures: 2,
   } as CrawlSource;
   const run = { id: 'run-1', sourceId: source.id } as CrawlRun;
@@ -70,11 +87,15 @@ function harness() {
   const dataSource = {
     query: jest.fn().mockResolvedValue([]),
     getRepository: jest.fn(),
+    transaction: jest.fn((callback: (manager: unknown) => Promise<unknown>) =>
+      callback({}),
+    ),
   };
   const imageStorage = { readCrawlSnapshot: jest.fn() };
   const alerts = {
     recordThresholdFailure: jest.fn().mockResolvedValue(undefined),
   };
+  const audit = { record: jest.fn().mockResolvedValue(undefined) };
   const service = new CrawlService(
     sourcesRepo as never,
     runsRepo as never,
@@ -84,6 +105,7 @@ function harness() {
     dataSource as never,
     imageStorage as never,
     alerts as never,
+    audit as never,
   ) as unknown as PrivateCrawl;
   const execute = jest.spyOn(service, 'execute').mockResolvedValue(undefined);
   return {
@@ -96,6 +118,7 @@ function harness() {
     snapshotsRepo,
     imageStorage,
     alerts,
+    audit,
     insertQb,
     insertResult,
     updateQb,
@@ -179,6 +202,109 @@ describe('CrawlService scheduled runs', () => {
     await service.scheduleDue();
 
     expect(execute).not.toHaveBeenCalled();
+  });
+});
+
+describe('CrawlService source audit', () => {
+  it('records a new source in the same transaction', async () => {
+    const { service, dataSource, audit } = harness();
+    jest.spyOn(service, 'checkRobots').mockResolvedValue(undefined);
+    const repo = {
+      create: jest.fn((value: CrawlSource) => value),
+      save: jest.fn((value: CrawlSource) =>
+        Promise.resolve({ ...value, id: 'source-new' }),
+      ),
+    };
+    const manager = { getRepository: jest.fn(() => repo) };
+    dataSource.transaction.mockImplementation(
+      (callback: (manager: typeof manager) => Promise<unknown>) =>
+        callback(manager),
+    );
+    const dto = {
+      kind: 'discovery',
+      url: 'https://tickets.example.com/events',
+      parser: 'ticket-list',
+      parserConfig: { sourceName: 'Tickets' },
+    } as CreateCrawlSourceDto;
+
+    await expect(service.createSource(dto, 'admin-1')).resolves.toMatchObject({
+      id: 'source-new',
+    });
+    expect(audit.record).toHaveBeenCalledWith(manager, {
+      actor: 'admin-1',
+      action: 'crawl.source.created',
+      target: 'crawl-source:source-new',
+      before: null,
+      after: {
+        id: 'source-new',
+        festivalId: null,
+        kind: 'discovery',
+        url: dto.url,
+        parser: 'ticket-list',
+        parserConfig: dto.parserConfig,
+        enabled: true,
+        status: 'ok',
+      },
+    });
+  });
+
+  it('records the previous and new source settings', async () => {
+    const { service, source, dataSource, audit } = harness();
+    const checkRobots = jest
+      .spyOn(service, 'checkRobots')
+      .mockResolvedValue(undefined);
+    const repo = {
+      findOne: jest.fn().mockResolvedValue(source),
+      save: jest.fn((value: CrawlSource) => Promise.resolve(value)),
+    };
+    const manager = { getRepository: jest.fn(() => repo) };
+    dataSource.transaction.mockImplementation(
+      (callback: (manager: typeof manager) => Promise<unknown>) =>
+        callback(manager),
+    );
+
+    await service.updateSource(
+      source.id,
+      { enabled: false, url: source.url },
+      'admin-1',
+    );
+
+    expect(checkRobots).not.toHaveBeenCalled();
+    expect(audit.record).toHaveBeenCalledWith(manager, {
+      actor: 'admin-1',
+      action: 'crawl.source.updated',
+      target: `crawl-source:${source.id}`,
+      before: {
+        id: source.id,
+        festivalId: null,
+        kind: 'discovery',
+        url: source.url,
+        parser: 'ticket-list',
+        parserConfig: source.parserConfig,
+        enabled: true,
+        status: 'ok',
+      },
+      after: {
+        id: source.id,
+        festivalId: null,
+        kind: 'discovery',
+        url: source.url,
+        parser: 'ticket-list',
+        parserConfig: source.parserConfig,
+        enabled: false,
+        status: 'disabled',
+      },
+    });
+  });
+
+  it('does not start a manual run when the request audit fails', async () => {
+    const { service, source, audit, insertQb } = harness();
+    audit.record.mockRejectedValueOnce(new Error('audit unavailable'));
+
+    await expect(service.runNow(source.id)).rejects.toThrow(
+      'audit unavailable',
+    );
+    expect(insertQb.execute).not.toHaveBeenCalled();
   });
 });
 
