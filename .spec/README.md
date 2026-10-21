@@ -16,6 +16,7 @@
 - [schedule.md](./schedule.md) — 축제별 개인 일정 조회·수정
 - [devices.md](./devices.md) — 기기 등록·축제 알림 구독·Live Activity 토큰
 - [crawl.md](./crawl.md) — 관리자 크롤 소스·실행·제안 검토
+- [crawl-catalog.md](./crawl-catalog.md) — 수집된 축제의 공개 목록과 오프라인 갱신 계약
 
 ## 작성 규칙
 

@@ -85,15 +85,15 @@ export class PublicFestivalController {
 
   @Get()
   @ApiOperation({
-    summary: '발행 축제 목록',
+    summary: '축제 목록',
     description:
-      '첫날 시작 시각·축제 ID 순서로 발행된 축제만 조회합니다. 요청 본문은 없습니다.',
+      '발행 축제와 판매처에서 발견한 축제를 함께 조회합니다. 발견 항목은 status=discovered, packVersion=0이며 팩은 아직 없습니다. 발견 항목의 날짜는 공연 날짜만 뜻하고 시작 시각은 확인되지 않았습니다. 요청 본문은 없습니다.',
   })
   @ApiQuery({
     name: 'after',
     required: false,
     description:
-      '시작 날짜 YYYY-MM-DD 또는 이전 응답의 nextCursor(조회 하한 날짜~시작 ISO8601 시각~축제 ID, URL 인코딩 필요)',
+      '조회 하한 날짜 YYYY-MM-DD 또는 이전 응답의 nextCursor(조회 하한 날짜~정렬 ISO8601 시각~축제 ID, URL 인코딩 필요). 발견 항목의 정렬 시각은 공연 시작 시각이 아닙니다.',
     example: '2026-10-21',
   })
   @ApiQuery({
@@ -109,7 +109,7 @@ export class PublicFestivalController {
   })
   @ApiResponse({
     status: 200,
-    description: '발행 축제 요약과 다음 페이지 커서',
+    description: '발행 축제 및 발견 항목 요약과 다음 페이지 커서',
     schema: {
       type: 'object',
       example: {
@@ -121,6 +121,19 @@ export class PublicFestivalController {
             lastDate: '2026-10-24',
             packVersion: 1,
             status: 'upcoming',
+          },
+          {
+            id: 'fst_1234567890abcdef',
+            name: '겨울 페스티벌',
+            venue: '공연장',
+            firstDate: '2026-12-25',
+            lastDate: '2026-12-26',
+            packVersion: 0,
+            flagsEnabled: false,
+            thumbUrl: null,
+            status: 'discovered',
+            sourceUrl:
+              'https://ticket.melon.com/performance/index.htm?prodId=12345',
           },
         ],
         nextCursor: null,
