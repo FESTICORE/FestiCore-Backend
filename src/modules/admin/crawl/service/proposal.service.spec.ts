@@ -67,18 +67,47 @@ function harness(
       fn(manager),
     ),
   };
-  const service = new ProposalService({} as never, dataSource as never);
-  return { service, proposal, item, festivalRepo, proposalRepo, manager };
+  const audit = { record: jest.fn().mockResolvedValue(undefined) };
+  const service = new ProposalService(
+    {} as never,
+    dataSource as never,
+    audit as never,
+  );
+  return {
+    service,
+    proposal,
+    item,
+    festivalRepo,
+    proposalRepo,
+    manager,
+    audit,
+  };
 }
 
 describe('ProposalService festival discovery', () => {
-  it('creates an unpublished validated draft for a complete accepted entry', async () => {
-    const { service, item, festivalRepo, proposalRepo } = harness({
-      name: '가을 페스티벌',
-      venue: '서울 공연장',
-      days: [day],
-      url: 'https://tickets.example.com/festival/1',
+  it('audits dismissal in the proposal transaction', async () => {
+    const { service, proposal, manager, audit } = harness({});
+
+    await expect(
+      service.dismiss(proposal.id, ' duplicate ', 'admin-1'),
+    ).resolves.toBe(proposal);
+    expect(audit.record).toHaveBeenCalledWith(manager, {
+      actor: 'admin-1',
+      action: 'crawl.proposal.dismissed',
+      target: `proposal:${proposal.id}`,
+      before: { status: 'open', pendingItemIds: ['0'] },
+      after: { status: 'rejected', reason: 'duplicate' },
     });
+  });
+
+  it('creates an unpublished validated draft for a complete accepted entry', async () => {
+    const { service, item, festivalRepo, proposalRepo, manager, audit } =
+      harness({
+        name: '가을 페스티벌',
+        venue: '서울 공연장',
+        days: [day],
+        url: 'https://tickets.example.com/festival/1',
+      });
 
     const result = await service.decide(
       'proposal-1',
@@ -102,6 +131,29 @@ describe('ProposalService festival discovery', () => {
       'https://tickets.example.com/festival/1',
     );
     expect(proposalRepo.save).toHaveBeenCalledTimes(1);
+    expect(audit.record).toHaveBeenCalledWith(manager, {
+      actor: 'admin-1',
+      action: 'festival.created',
+      target: `festival:${saved.id}`,
+      before: null,
+      after: { draftVersion: 1, draft: saved.draft },
+    });
+    expect(audit.record).toHaveBeenCalledWith(manager, {
+      actor: 'admin-1',
+      action: 'crawl.proposal.decided',
+      target: 'proposal:proposal-1',
+      before: {
+        status: 'open',
+        decisions: [{ itemId: '0', decision: 'pending' }],
+      },
+      after: {
+        status: 'applied',
+        decisions: [{ itemId: '0', decision: 'accepted' }],
+        festivalId: saved.id,
+        draftVersion: 1,
+        conflicts: [],
+      },
+    });
   });
 
   it('keeps an incomplete discovery entry pending for review', async () => {
@@ -272,6 +324,7 @@ describe('ProposalService timetable removals', () => {
         source: { name: 'Official', verifiedAt: '2026-11-18T12:00:00+09:00' },
       },
     } as unknown as AdminFestival;
+    const originalDraft = structuredClone(festival.draft);
     const proposal = {
       id: 'proposal-1',
       festivalId: festival.id,
@@ -322,7 +375,12 @@ describe('ProposalService timetable removals', () => {
         fn(manager),
       ),
     };
-    const service = new ProposalService({} as never, dataSource as never);
+    const audit = { record: jest.fn().mockResolvedValue(undefined) };
+    const service = new ProposalService(
+      {} as never,
+      dataSource as never,
+      audit as never,
+    );
 
     const result = await service.decide(
       'proposal-1',
@@ -336,5 +394,12 @@ describe('ProposalService timetable removals', () => {
     expect(result.conflicts).toEqual([]);
     expect(festival.draft.sets).toEqual([]);
     expect(result.proposal.status).toBe('applied');
+    expect(audit.record).toHaveBeenCalledWith(manager, {
+      actor: 'admin-1',
+      action: 'festival.draft.updated',
+      target: `festival:${festival.id}`,
+      before: { draftVersion: 1, draft: originalDraft },
+      after: { draftVersion: 2, draft: festival.draft },
+    });
   });
 });

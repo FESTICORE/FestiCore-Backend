@@ -11,6 +11,7 @@ import {
   FestivalDocument,
 } from '../../festival/festival.entity';
 import { validateDraft } from '../../festival/festival-validation';
+import { AdminAuditService } from '../../audit/admin-audit.service';
 import { Proposal, ProposalItem } from '../entity/proposal.entity';
 import { CrawlSource } from '../entity/crawl-source.entity';
 
@@ -175,6 +176,7 @@ export class ProposalService {
     @InjectRepository(Proposal)
     private readonly proposals: Repository<Proposal>,
     private readonly dataSource: DataSource,
+    private readonly audit: AdminAuditService,
   ) {}
 
   async list(festivalId?: string, status = 'open') {
@@ -237,6 +239,13 @@ export class ProposalService {
       if (!proposal) throw new NotFoundException('제안을 찾을 수 없습니다.');
       if (!['open', 'partial'].includes(proposal.status))
         throw new BadRequestException('이미 결정된 제안입니다.');
+      const before = {
+        status: proposal.status,
+        decisions: proposal.items.map(({ id: itemId, decision }) => ({
+          itemId,
+          decision,
+        })),
+      };
       const festival = proposal.festivalId
         ? await manager.getRepository(AdminFestival).findOne({
             where: { id: proposal.festivalId },
@@ -248,9 +257,13 @@ export class ProposalService {
             .getRepository(CrawlSource)
             .findOneBy({ id: proposal.sourceId })
         : null;
+      const originalDraft = festival ? structuredClone(festival.draft) : null;
+      const originalDraftVersion = festival?.draftVersion ?? null;
       let draft = festival?.draft;
       let changed = false;
       let createdDraftVersion: number | null = null;
+      let createdFestivalId: string | null = null;
+      const createdDrafts: FestivalDocument[] = [];
       const conflicts: { itemId: string; reason: string }[] = [];
       const now = new Date().toISOString();
       for (const decision of decisions) {
@@ -313,6 +326,8 @@ export class ProposalService {
               }),
             );
             createdDraftVersion = 1;
+            createdFestivalId = next.id as string;
+            createdDrafts.push(next);
           } catch (error) {
             conflicts.push({
               itemId: item.id,
@@ -384,6 +399,22 @@ export class ProposalService {
         festival.draftVersion++;
         festival.draftUpdatedBy = actor;
         await manager.getRepository(AdminFestival).save(festival);
+        await this.audit.record(manager, {
+          actor,
+          action: 'festival.draft.updated',
+          target: `festival:${festival.id}`,
+          before: { draftVersion: originalDraftVersion, draft: originalDraft },
+          after: { draftVersion: festival.draftVersion, draft },
+        });
+      }
+      for (const created of createdDrafts) {
+        await this.audit.record(manager, {
+          actor,
+          action: 'festival.created',
+          target: `festival:${String(created.id)}`,
+          before: null,
+          after: { draftVersion: 1, draft: created },
+        });
       }
       const pending = proposal.items.some(
         (item) => item.decision === 'pending',
@@ -400,6 +431,22 @@ export class ProposalService {
             ? 'applied'
             : 'rejected';
       await repo.save(proposal);
+      await this.audit.record(manager, {
+        actor,
+        action: 'crawl.proposal.decided',
+        target: `proposal:${id}`,
+        before,
+        after: {
+          status: proposal.status,
+          decisions: proposal.items.map(({ id: itemId, decision }) => ({
+            itemId,
+            decision,
+          })),
+          festivalId: proposal.festivalId ?? createdFestivalId,
+          draftVersion: festival?.draftVersion ?? createdDraftVersion,
+          conflicts,
+        },
+      });
       return {
         proposal,
         conflicts,
@@ -421,6 +468,12 @@ export class ProposalService {
       if (!proposal) throw new NotFoundException('제안을 찾을 수 없습니다.');
       if (!['open', 'partial'].includes(proposal.status))
         throw new BadRequestException('이미 결정된 제안입니다.');
+      const before = {
+        status: proposal.status,
+        pendingItemIds: proposal.items
+          .filter((item) => item.decision === 'pending')
+          .map((item) => item.id),
+      };
       const now = new Date().toISOString();
       for (const item of proposal.items) {
         if (item.decision === 'pending')
@@ -439,7 +492,15 @@ export class ProposalService {
         ...proposal.evidence,
         dismissReason: reason.trim(),
       } as Proposal['evidence'];
-      return repo.save(proposal);
+      const saved = await repo.save(proposal);
+      await this.audit.record(manager, {
+        actor,
+        action: 'crawl.proposal.dismissed',
+        target: `proposal:${id}`,
+        before,
+        after: { status: proposal.status, reason: reason.trim() },
+      });
+      return saved;
     });
   }
 }

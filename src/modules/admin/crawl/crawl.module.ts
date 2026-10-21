@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ImageStorageService } from '../../storage/image-storage.service';
+import { AdminAuditModule } from '../audit/admin-audit.module';
 import { CrawlController } from './controller/crawl.controller';
 import { CrawlAlertController } from './controller/crawl-alert.controller';
 import { CrawlAlert } from './entity/crawl-alert.entity';
@@ -16,6 +17,7 @@ import { ProposalService } from './service/proposal.service';
 
 @Module({
   imports: [
+    AdminAuditModule,
     TypeOrmModule.forFeature([
       CrawlSource,
       CrawlRun,
