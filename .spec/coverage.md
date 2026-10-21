@@ -7,7 +7,7 @@
 | 1 | `POST /metrics/events`, `GET /admin/metrics` (API 명세 p27) | 코드 구현 | 입력 제한·집계·권한·테스트 통과. 실제 DB 마이그레이션·배포 검증은 남음 |
 | 2 | 축제 발행·롤백 `pack.updated`, 깃발·크루 상태 푸시 (p16, p19–21, p25, p31) | 코드 구현 | APNs 작업 생성·취소·중복 방지·테스트. 실기기 전송 검증은 남음 |
 | 3 | 지도 업로드 `POST /admin/festivals/:id/draft/map` (p30) | 코드 구현 | WebP 300KB 변환·비율·스토리지·공개 조회 테스트 통과. 실제 Railway 버킷 연동 검증은 남음 |
-| 4 | 타임테이블 이미지 입력 `POST /admin/festivals/:id/pack/import-image` (p26, p31) | 미구현 | 업로드 OCR 미리보기 `{draft, confidence, unparsed}` 반환, 초안 자동 변경 방지. 정기 크롤만 `sets.diff` 제안 생성 |
+| 4 | 타임테이블 이미지 입력 `POST /admin/festivals/:id/pack/import-image` (p26, p31) | 코드 구현 | Tesseract 기반 업로드 OCR 미리보기 `{draft, confidence, unparsed}` 반환, 초안 자동 변경 방지. 실제 이미지 정확도는 운영 데이터 검증 필요. 정기 크롤의 `sets.diff` 제안은 별개 |
 | 5 | `POST /admin/flags/:id/force-status`, `POST /admin/push/test` (p32) | 상태 강제 변경·등록 기기 테스트 푸시 구현 | 관리자 역할·존·상태 조합·테스트 푸시 감사 기록. 실제 DB 마이그레이션·실기기 APNs 수신 검증은 남음 |
 | 6 | `GET /admin/audit`, 관리자 목록·초대·삭제 (p32) | 코드 구현 | owner 권한·필터·페이지 검증. 기존 편집 API의 감사 기록 연결은 남음 |
 | 7 | `GET /festivals` 캐시 계약 (p9) | 부분 구현 | 현재 60초, 문서 3600초와 차이 정리 |
@@ -23,4 +23,4 @@
 3. 모든 명세 경로를 현재 라우트와 다시 대조하고, CI를 통과한 기능 PR부터 차례로 스쿼시 머지한다.
 4. Railway 장애가 해제되면 개발 서버에서 마이그레이션·Swagger·API 응답을 검증한다.
 
-이미지 입력 미리보기는 실제 OCR 엔진이 있어야 `draft`와 `confidence`를 생성할 수 있다. 현재 서버에 OCR 런타임·제공자 설정이 없으므로 성공을 가장한 빈 응답이나 503 전용 경로를 만들지 않았다.
+이미지 입력 미리보기는 Docker 런타임의 Tesseract 한국어·영어 OCR을 사용한다. 추출 결과가 불명확하면 초안을 만들지 않고 원문을 `unparsed`에 보존한다.

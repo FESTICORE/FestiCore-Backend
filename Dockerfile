@@ -17,7 +17,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 
 # Sharp's prebuilt libvips cannot decode HEVC-based HEIC photos.
-RUN apk add --no-cache libheif-tools
+RUN apk add --no-cache libheif-tools tesseract-ocr tesseract-ocr-data-kor tesseract-ocr-data-eng
 
 COPY package*.json ./
 RUN npm ci --omit=dev
