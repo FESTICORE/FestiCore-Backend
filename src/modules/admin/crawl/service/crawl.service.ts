@@ -325,6 +325,9 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       if (response.status !== 200) throw new Error(`HTTP ${response.status}`);
       run.contentHash = createHash('sha256')
         .update(response.body)
+        // Parser behavior is part of the snapshot identity. A parser release
+        // must reprocess unchanged ticket pages instead of skipping them.
+        .update(source.parser === 'ticket-list' ? 'ticket-list:v2' : '')
         .digest('hex');
       const objectKey = `crawl/snapshots/${randomUUID()}.txt`;
       await this.imageStorage.saveCrawlSnapshot(
