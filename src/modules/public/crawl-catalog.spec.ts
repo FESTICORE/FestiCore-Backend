@@ -6,6 +6,14 @@ describe('ticket discovery catalog', () => {
       firstDate: '2026-12-25',
       lastDate: '2026-12-26',
     });
+    expect(ticketDateRange('2026.12.25 ~ 12.27')).toEqual({
+      firstDate: '2026-12-25',
+      lastDate: '2026-12-27',
+    });
+    expect(ticketDateRange('2026.12.31 ~ 01.01')).toEqual({
+      firstDate: '2026-12-31',
+      lastDate: '2027-01-01',
+    });
     expect(ticketDateRange('Dec 31, 2026')).toEqual({
       firstDate: '2026-12-31',
       lastDate: '2026-12-31',
@@ -15,6 +23,7 @@ describe('ticket discovery catalog', () => {
       lastDate: '2028-07-14',
     });
     expect(ticketDateRange('2026.02.30')).toBeNull();
+    expect(ticketDateRange('2026.12.26 ~ 12.25')).toBeNull();
   });
 
   it('merges ticket sale tiers and rejects untrusted or incomplete candidates', () => {
@@ -62,6 +71,24 @@ describe('ticket discovery catalog', () => {
       status: 'discovered',
     });
     expect(entries[0]).not.toHaveProperty('startsAt');
+  });
+
+  it('includes discoveries whose ticket date omits the end year', () => {
+    const entries = discoverySummaries([
+      {
+        candidate: {
+          name: '연말 페스티벌',
+          venue: '광장',
+          date: '2026.12.31 ~ 01.01',
+          url: 'https://ticket.yes24.com/Perf/12345',
+        },
+      },
+    ]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      firstDate: '2026-12-31',
+      lastDate: '2027-01-01',
+    });
   });
 
   it('uses only the newest proposal for a URL and removes all tiers after publication', () => {

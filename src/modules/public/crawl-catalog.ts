@@ -134,14 +134,18 @@ export function ticketDateRange(raw: unknown): DateRange | null {
   const korean = raw
     .trim()
     .match(
-      /^(\d{4})[./-](\d{1,2})[./-](\d{1,2})(?:\s*[-~–]\s*(\d{4})[./-](\d{1,2})[./-](\d{1,2}))?$/,
+      /^(\d{4})[./-](\d{1,2})[./-](\d{1,2})(?:\s*[-~–]\s*(?:(\d{4})[./-])?(\d{1,2})[./-](\d{1,2}))?$/,
     );
   let first: string | null = null;
   let last: string | null = null;
   if (korean) {
     first = date(Number(korean[1]), Number(korean[2]), Number(korean[3]));
-    last = korean[4]
-      ? date(Number(korean[4]), Number(korean[5]), Number(korean[6]))
+    const endYear = korean[4]
+      ? Number(korean[4])
+      : Number(korean[1]) +
+        (korean[5] && Number(korean[5]) < Number(korean[2]) ? 1 : 0);
+    last = korean[5]
+      ? date(endYear, Number(korean[5]), Number(korean[6]))
       : first;
   } else {
     const english = raw
