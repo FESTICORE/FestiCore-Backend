@@ -175,7 +175,7 @@ export class PublicFestivalController {
     @Res() response: Response,
   ) {
     const body = await this.service.list(after, limit);
-    response.setHeader('Cache-Control', 'public, max-age=60');
+    response.setHeader('Cache-Control', 'public, max-age=3600');
     this.send(
       response,
       body,
