@@ -85,4 +85,16 @@ export const API_DOMAINS: ApiDomain[] = [
     description: '축제 시작·팩 변경 알림 구독',
     pathPrefix: 'notifications',
   },
+  {
+    slug: 'metrics',
+    title: 'Metrics',
+    description: '앱 관측 이벤트 일괄 수집',
+    pathPrefix: 'metrics',
+  },
+  {
+    slug: 'admin-metrics',
+    title: 'Admin Metrics',
+    description: '축제별 앱 관측 지표 집계',
+    pathPrefix: 'admin/metrics',
+  },
 ];

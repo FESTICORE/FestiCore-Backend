@@ -7,6 +7,7 @@
 
 ## 목록
 
+- [coverage.md](./coverage.md) — 제공된 명세서와 현재 구현의 대조 및 남은 검증
 - [health.md](./health.md) — 헬스체크
 - [auth.md](./auth.md) — Google/Apple 통합 로그인, 프로필, Apple 웹 콜백
 - [me.md](./me.md) — 내 정보 조회·닉네임 변경·회원 탈퇴 요청 본문
@@ -18,6 +19,7 @@
 - [schedule.md](./schedule.md) — 축제별 개인 일정 조회·수정
 - [devices.md](./devices.md) — 기기 등록·조회·삭제와 Live Activity 토큰
 - [notifications.md](./notifications.md) — 축제 알림 구독·예약·APNs 발송
+- [metrics.md](./metrics.md) — 앱 이벤트 수집과 관리자 지표 집계
 - [crawl.md](./crawl.md) — 관리자 크롤 소스·실행·제안 검토
 - [crawl-catalog.md](./crawl-catalog.md) — 수집된 축제의 공개 목록과 오프라인 갱신 계약
 
