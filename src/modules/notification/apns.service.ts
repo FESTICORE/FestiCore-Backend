@@ -15,6 +15,9 @@ export interface ApnsSendResult {
   reason?: string;
 }
 
+export type TestPushType =
+  'flag.status' | 'crew.status' | 'crew.gather' | 'pack.updated';
+
 const REQUEST_TIMEOUT_MS = 8_000;
 const PROVIDER_TOKEN_LIFETIME_MS = 40 * 60_000;
 const PERMANENT_TOKEN_REASONS = new Set([
@@ -45,6 +48,61 @@ export class ApnsService {
     environment: 'sandbox' | 'production',
     input: { title: string; body: string; eventKey: string },
   ): Promise<ApnsSendResult> {
+    return this.send(
+      token,
+      environment,
+      {
+        aps: {
+          alert: { title: input.title, body: input.body },
+          sound: 'default',
+        },
+        eventKey: input.eventKey,
+      },
+      { pushType: 'alert', priority: '10', collapseKey: input.eventKey },
+    );
+  }
+
+  async sendTestNotification(
+    token: string,
+    environment: 'sandbox' | 'production',
+    type: TestPushType,
+  ): Promise<ApnsSendResult> {
+    const background = type === 'pack.updated';
+    const gather = type === 'crew.gather';
+    const payload = background
+      ? { aps: { 'content-available': 1 }, type, route: '/' }
+      : {
+          aps: {
+            alert: {
+              title: 'FestiCore 테스트 알림',
+              body: `${type} 테스트 푸시입니다.`,
+            },
+            ...(gather
+              ? { sound: 'default' }
+              : { 'interruption-level': 'passive' }),
+          },
+          type,
+          route: '/',
+        };
+    return this.send(token, environment, payload, {
+      pushType: background ? 'background' : 'alert',
+      priority: gather ? '10' : '5',
+      collapseKey: `test:${type}`,
+      expirationSeconds: background ? 24 * 60 * 60 : gather ? 15 * 60 : 30 * 60,
+    });
+  }
+
+  private async send(
+    token: string,
+    environment: 'sandbox' | 'production',
+    body: object,
+    options: {
+      pushType: 'alert' | 'background';
+      priority: '5' | '10';
+      collapseKey: string;
+      expirationSeconds?: number;
+    },
+  ): Promise<ApnsSendResult> {
     if (!/^[a-f\d]{2,512}$/i.test(token) || token.length % 2 !== 0) {
       return { accepted: false, permanent: true, reason: 'BadDeviceToken' };
     }
@@ -58,13 +116,7 @@ export class ApnsService {
       };
     }
 
-    const payload = JSON.stringify({
-      aps: {
-        alert: { title: input.title, body: input.body },
-        sound: 'default',
-      },
-      eventKey: input.eventKey,
-    });
+    const payload = JSON.stringify(body);
     if (Buffer.byteLength(payload, 'utf8') > 4096) {
       return { accepted: false, permanent: false, reason: 'PayloadTooLarge' };
     }
@@ -85,7 +137,7 @@ export class ApnsService {
         ? 'https://api.sandbox.push.apple.com'
         : 'https://api.push.apple.com';
     const collapseId = createHash('sha256')
-      .update(input.eventKey)
+      .update(options.collapseKey)
       .digest('hex');
 
     try {
@@ -96,9 +148,16 @@ export class ApnsService {
           ':path': `/3/device/${token}`,
           authorization: `bearer ${authorization}`,
           'apns-topic': bundleId,
-          'apns-push-type': 'alert',
-          'apns-priority': '10',
+          'apns-push-type': options.pushType,
+          'apns-priority': options.priority,
           'apns-collapse-id': collapseId,
+          ...(options.expirationSeconds
+            ? {
+                'apns-expiration': String(
+                  Math.floor(Date.now() / 1000) + options.expirationSeconds,
+                ),
+              }
+            : {}),
           'content-type': 'application/json',
         },
         payload,

@@ -110,6 +110,23 @@ describe('AdminAuthService', () => {
     expect(Date.now() - startedAt).toBeGreaterThanOrEqual(1400);
   });
 
+  it('reports preparation failure to a trusted invite but masks it from public login', async () => {
+    const logError = jest.spyOn(Logger.prototype, 'error').mockImplementation();
+    links.save.mockRejectedValue(new Error('database unavailable'));
+
+    await expect(
+      service.requestInviteLink(account.email, '127.0.0.1'),
+    ).resolves.toBe(false);
+    await expect(
+      service.requestMagicLink(account.email, '127.0.0.1'),
+    ).resolves.toBeUndefined();
+    expect(send).not.toHaveBeenCalled();
+    expect(logError).toHaveBeenCalledWith(
+      'Admin magic-link preparation failed.',
+    );
+    logError.mockRestore();
+  });
+
   it('stores only a hash and consumes a magic link once', async () => {
     const startedAt = Date.now();
     await service.requestMagicLink('OWNER@example.com', '127.0.0.1');

@@ -1,6 +1,7 @@
 import { INestApplication } from '@nestjs/common';
 import { OpenAPIObject, SwaggerModule } from '@nestjs/swagger';
 import { setupSwagger } from './swagger';
+import { AdminPushModule } from './modules/admin/push/admin-push.module';
 
 jest.mock('./modules/auth/auth.module', () => ({ AuthModule: class {} }));
 jest.mock('./modules/health/health.module', () => ({ HealthModule: class {} }));
@@ -9,6 +10,9 @@ jest.mock('./modules/admin/auth/admin-auth.module', () => ({
 }));
 jest.mock('./modules/admin/festival/admin-festival.module', () => ({
   AdminFestivalModule: class {},
+}));
+jest.mock('./modules/admin/push/admin-push.module', () => ({
+  AdminPushModule: class {},
 }));
 jest.mock('./modules/flags/flags.module', () => ({ FlagsModule: class {} }));
 jest.mock('./modules/metrics/metrics.module', () => ({
@@ -224,5 +228,42 @@ describe('Swagger 문서 분리', () => {
     ).toBeUndefined();
     expect(documents.has('api-docs/admin-auth')).toBe(false);
     expect(documents.has('admin/api-docs/auth')).toBe(true);
+  });
+
+  it('테스트 푸시를 관리자 전체 및 전용 Swagger 문서에 포함한다', () => {
+    jest
+      .spyOn(SwaggerModule, 'createDocument')
+      .mockImplementation((_app, config, options) => ({
+        openapi: '3.0.0',
+        info: { title: 'test', version: '1', description: '' },
+        paths: options?.include?.includes(AdminPushModule)
+          ? {
+              '/api/v1/admin/push/test': {
+                post: { responses: { 201: { description: 'Accepted' } } },
+              },
+            }
+          : {},
+        components: config.components,
+      }));
+    const setup = jest.spyOn(SwaggerModule, 'setup').mockImplementation();
+    setupSwagger({ use: jest.fn() } as unknown as INestApplication, {
+      port: 3000,
+      isProd: false,
+    });
+    const documents = new Map(
+      setup.mock.calls.map(([route, , document]) => [
+        route,
+        document as OpenAPIObject,
+      ]),
+    );
+    expect(documents.get('admin/api-docs')?.paths).toHaveProperty(
+      '/api/v1/admin/push/test',
+    );
+    expect(documents.get('admin/api-docs/push')?.paths).toHaveProperty(
+      '/api/v1/admin/push/test',
+    );
+    expect(documents.get('api-docs')?.paths).not.toHaveProperty(
+      '/api/v1/admin/push/test',
+    );
   });
 });
