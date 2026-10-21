@@ -81,6 +81,8 @@ type FestivalCandidate = {
   url: string;
   date?: string;
   venue?: string;
+  posterUrl?: string;
+  officialInstagramUrl?: string;
 };
 
 const FESTIVAL_TITLE = /(?:페스티벌|축제|festival|\bfest\b)/i;
@@ -92,6 +94,122 @@ const VERIFIED_FESTIVAL_BRAND =
   /^(?:WONDERLIVET|원더리벳|COUNTDOWN FANTASY)(?:\s|$)/i;
 const DATE_TEXT =
   /\b20\d{2}[.\-/]\s?(?:0?[1-9]|1[0-2])[.\-/]\s?(?:[0-2]?\d|3[01])(?:\s?[-~–]\s?(?:(?:20\d{2})[.\-/]\s?)?(?:0?[1-9]|1[0-2])[.\-/]\s?(?:[0-2]?\d|3[01]))?/;
+
+function mintPaperCandidates(
+  body: string,
+  base: string,
+): FestivalCandidate[] | null {
+  const source = new URL(base);
+  if (
+    source.hostname !== 'mintpaper.co.kr' ||
+    !/^\/festivals(?:\/\d+(?:\/lineup)?)?\/?$/.test(source.pathname)
+  )
+    return null;
+  if (body.length > 2_000_000) return [];
+  const script =
+    /<script\b[^>]*\bid=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i.exec(
+      body,
+    )?.[1];
+  if (!script) return [];
+  let payload: unknown;
+  try {
+    payload = JSON.parse(script);
+  } catch {
+    return [];
+  }
+  const record = (value: unknown): Record<string, unknown> | null =>
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
+  const props = record(record(payload)?.props);
+  const data = record(record(props?.apolloState)?.data);
+  const root = record(data?.ROOT_QUERY);
+  if (!data || !root) return [];
+  const refs: unknown[] = [];
+  if (source.pathname === '/festivals' || source.pathname === '/festivals/') {
+    for (const [key, value] of Object.entries(root)) {
+      if (key.startsWith('festivals(') && Array.isArray(value))
+        refs.push(...(value as unknown[]).slice(0, 100));
+    }
+  } else {
+    const id = source.pathname.match(
+      /^\/festivals\/(\d+)(?:\/lineup)?\/?$/,
+    )?.[1];
+    if (id) refs.push({ __ref: `Festival:${id}` });
+  }
+  const candidates = new Map<string, FestivalCandidate>();
+  for (const item of refs.slice(0, 100)) {
+    const ref = record(item)?.__ref;
+    if (typeof ref !== 'string' || !/^Festival:\d+$/.test(ref)) continue;
+    const festival = record(data[ref]);
+    if (!festival || String(festival.id) !== ref.slice(9)) continue;
+    const name =
+      typeof festival.title === 'string'
+        ? festival.title.normalize('NFKC').replace(/\s+/g, ' ').trim()
+        : '';
+    if (!name || name.length > 160) continue;
+    const url = new URL(`/festivals/${ref.slice(9)}`, source.origin).toString();
+    const candidate: FestivalCandidate = { name, url };
+    const start = festival.startDate;
+    const end = festival.endDate;
+    if (
+      typeof start === 'string' &&
+      typeof end === 'string' &&
+      /^20\d\d-\d\d-\d\dT/.test(start) &&
+      /^20\d\d-\d\d-\d\dT/.test(end) &&
+      !Number.isNaN(Date.parse(start)) &&
+      !Number.isNaN(Date.parse(end))
+    ) {
+      candidate.date = `${start.slice(0, 10)} ~ ${end.slice(0, 10)}`;
+    }
+    if (typeof festival.place === 'string' && festival.place.trim())
+      candidate.venue = festival.place.normalize('NFKC').trim();
+    const coverRef = record(festival.coverImage)?.__ref;
+    const poster =
+      typeof coverRef === 'string' ? record(data[coverRef])?.url : undefined;
+    if (typeof poster === 'string') {
+      try {
+        const image = new URL(poster);
+        if (image.protocol === 'https:' && !image.username && !image.password)
+          candidate.posterUrl = image.toString();
+      } catch {
+        /* Ignore malformed remote image URLs. */
+      }
+    }
+    // Only the festival's own info field can identify its official account.
+    // Links in lineup or the site footer often belong to artists or the organizer.
+    if (typeof festival.info === 'string') {
+      for (const match of festival.info.matchAll(
+        /<a\b[^>]*\bhref=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi,
+      )) {
+        try {
+          const account = new URL(match[1].replace(/&amp;/g, '&'));
+          const handle = account.pathname.replace(/^\/|\/$/g, '').toLowerCase();
+          const titleHandle = name
+            .toLowerCase()
+            .replace(/\b20\d{2}\b/g, '')
+            .replace(/[^a-z0-9가-힣]/g, '');
+          const normalizedHandle = handle.replace(/[^a-z0-9가-힣]/g, '');
+          if (
+            account.protocol === 'https:' &&
+            (account.hostname === 'instagram.com' ||
+              account.hostname === 'www.instagram.com') &&
+            /^\/[A-Za-z0-9._]+\/?$/.test(account.pathname) &&
+            titleHandle.length >= 8 &&
+            normalizedHandle === titleHandle
+          ) {
+            candidate.officialInstagramUrl = `${account.origin}${account.pathname}`;
+            break;
+          }
+        } catch {
+          /* Ignore malformed remote links. */
+        }
+      }
+    }
+    candidates.set(url, candidate);
+  }
+  return [...candidates.values()];
+}
 
 function taggedText(html: string, tagOrClass: string): string | undefined {
   const match = new RegExp(
@@ -246,6 +364,8 @@ function yes24FestivalCandidates(
 }
 
 function ticketCandidates(body: string, base: string): FestivalCandidate[] {
+  const mintPaper = mintPaperCandidates(body, base);
+  if (mintPaper) return mintPaper;
   const melon = melonFestivalCandidates(body, base);
   if (melon) return melon;
   const yes24 = yes24FestivalCandidates(body, base);

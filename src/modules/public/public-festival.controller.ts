@@ -152,6 +152,8 @@ export class PublicFestivalController {
               status: 'discovered',
               sourceUrl:
                 'https://ticket.melon.com/performance/index.htm?prodId=12345',
+              officialInstagramUrl:
+                'https://www.instagram.com/grandmintfestival/',
             },
           ],
           nextCursor: null,

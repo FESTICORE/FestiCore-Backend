@@ -195,6 +195,143 @@ describe('crawl parsers', () => {
     ]);
   });
 
+  it('reads Mint Paper festival records and their official cover images from SSR data', async () => {
+    const mint = source('ticket-list', 'discovery');
+    mint.url = 'https://mintpaper.co.kr/festivals';
+    const html = `<script id="__NEXT_DATA__" type="application/json">${JSON.stringify(
+      {
+        props: {
+          apolloState: {
+            data: {
+              ROOT_QUERY: {
+                'festivals({"where":{"year":2026}})': [
+                  { __ref: 'Festival:178' },
+                  { __ref: 'Festival:172' },
+                  { __ref: 'Other:1' },
+                ],
+              },
+              'Festival:178': {
+                id: '178',
+                title: '𝗖𝗢𝗨𝗡𝗧𝗗𝗢𝗪𝗡 𝗙𝗔𝗡𝗧𝗔𝗦𝗬 𝟮𝟬𝟮𝟲-𝟮𝟬𝟮𝟳',
+                place: 'KINTEX',
+                startDate: '2026-12-31T03:00:00.000Z',
+                endDate: '2027-01-01T03:00:00.000Z',
+                coverImage: { __ref: 'UploadFile:1' },
+              },
+              'Festival:172': {
+                id: '172',
+                title: 'Grand Mint Festival 2026',
+                place: 'Olympic Park',
+                startDate: '2026-10-17T03:00:00.000Z',
+                endDate: '2026-10-18T03:00:00.000Z',
+              },
+              'UploadFile:1': {
+                url: 'https://mintpaper.s3.ap-northeast-2.amazonaws.com/poster.jpg',
+              },
+            },
+          },
+        },
+      },
+    )}</script>`;
+    expect(await parseCrawl(mint, html)).toEqual([
+      {
+        name: 'COUNTDOWN FANTASY 2026-2027',
+        url: 'https://mintpaper.co.kr/festivals/178',
+        date: '2026-12-31 ~ 2027-01-01',
+        venue: 'KINTEX',
+        posterUrl:
+          'https://mintpaper.s3.ap-northeast-2.amazonaws.com/poster.jpg',
+      },
+      {
+        name: 'Grand Mint Festival 2026',
+        url: 'https://mintpaper.co.kr/festivals/172',
+        date: '2026-10-17 ~ 2026-10-18',
+        venue: 'Olympic Park',
+      },
+    ]);
+  });
+
+  it('reads only a Mint Paper festival detail info link as its Instagram account', async () => {
+    const mint = source('ticket-list', 'discovery');
+    mint.url = 'https://mintpaper.co.kr/festivals/178';
+    const html = `<a href="https://www.instagram.com/mintpaper_">footer</a>
+      <script id="__NEXT_DATA__" type="application/json">${JSON.stringify({
+        props: {
+          apolloState: {
+            data: {
+              ROOT_QUERY: {
+                'festival({"id":"178"})': { __ref: 'Festival:178' },
+              },
+              'Festival:178': {
+                id: '178',
+                title: 'COUNTDOWN FANTASY 2026-2027',
+                place: 'KINTEX',
+                startDate: '2026-12-31T03:00:00.000Z',
+                endDate: '2027-01-01T03:00:00.000Z',
+                info: '<a href="https://www.instagram.com/singer_account/">아티스트 공식 인스타그램</a><a href="https://www.instagram.com/countdown_fantasy/?utm_source=site">공식 인스타그램</a>',
+                lineup: [
+                  { instagram: 'https://www.instagram.com/singer_account/' },
+                ],
+              },
+            },
+          },
+        },
+      })}</script>`;
+    expect(await parseCrawl(mint, html)).toEqual([
+      {
+        name: 'COUNTDOWN FANTASY 2026-2027',
+        url: 'https://mintpaper.co.kr/festivals/178',
+        date: '2026-12-31 ~ 2027-01-01',
+        venue: 'KINTEX',
+        officialInstagramUrl: 'https://www.instagram.com/countdown_fantasy/',
+      },
+    ]);
+    await expect(
+      parseCrawl(mint, '<script id="__NEXT_DATA__">{bad}</script>'),
+    ).rejects.toThrow('공개 예매 링크');
+  });
+
+  it('recognizes a festival-named Instagram account in Mint Paper detail info', async () => {
+    const mint = source('ticket-list', 'discovery');
+    mint.url = 'https://mintpaper.co.kr/festivals/172';
+    const html = `<script id="__NEXT_DATA__" type="application/json">${JSON.stringify(
+      {
+        props: {
+          apolloState: {
+            data: {
+              ROOT_QUERY: {
+                'festival({"id":"172"})': { __ref: 'Festival:172' },
+              },
+              'Festival:172': {
+                id: '172',
+                title: 'Grand Mint Festival 2026',
+                info: '<a href="https://www.instagram.com/grandmintfestival/">@grandmintfestival</a>',
+                lineup: [
+                  { instagram: 'https://www.instagram.com/singer_account/' },
+                ],
+              },
+            },
+          },
+        },
+      },
+    )}</script>`;
+    expect(await parseCrawl(mint, html)).toEqual([
+      {
+        name: 'Grand Mint Festival 2026',
+        url: 'https://mintpaper.co.kr/festivals/172',
+        officialInstagramUrl: 'https://www.instagram.com/grandmintfestival/',
+      },
+    ]);
+    mint.url = 'https://mintpaper.co.kr/festivals/172/lineup';
+    expect(await parseCrawl(mint, html)).toEqual([
+      {
+        name: 'Grand Mint Festival 2026',
+        url: 'https://mintpaper.co.kr/festivals/172',
+        officialInstagramUrl: 'https://www.instagram.com/grandmintfestival/',
+      },
+    ]);
+  });
+
   it('rejects a listing without a real festival candidate', async () => {
     await expect(
       parseCrawl(

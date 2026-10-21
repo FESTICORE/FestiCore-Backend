@@ -27,10 +27,45 @@ export interface DiscoverySummary {
   lastDate: string;
   packVersion: 0;
   flagsEnabled: false;
-  thumbUrl: null;
+  thumbUrl: string | null;
   status: 'discovered';
   sourceUrl: string;
+  officialInstagramUrl?: string;
+  posterUrl?: string;
   sortAt: string;
+}
+
+function officialInstagramUrl(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  try {
+    const url = new URL(raw);
+    if (
+      url.protocol !== 'https:' ||
+      !['www.instagram.com', 'instagram.com'].includes(url.hostname) ||
+      url.username ||
+      url.password ||
+      !/^\/[A-Za-z0-9._]+\/?$/.test(url.pathname)
+    )
+      return null;
+    return `https://www.instagram.com${url.pathname.endsWith('/') ? url.pathname : `${url.pathname}/`}`;
+  } catch {
+    return null;
+  }
+}
+
+function officialPosterUrl(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  try {
+    const url = new URL(raw);
+    return url.protocol === 'https:' &&
+      url.hostname === 'mintpaper.s3.ap-northeast-2.amazonaws.com' &&
+      !url.username &&
+      !url.password
+      ? url.toString()
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 const months: Record<string, number> = {
@@ -117,7 +152,36 @@ export function discoverySummaries(
     )
       continue;
     const url = (row.candidate as Record<string, unknown>).url;
-    if (typeof url === 'string' && !byUrl.has(url)) byUrl.set(url, row);
+    if (typeof url !== 'string') continue;
+    const existing = byUrl.get(url);
+    if (!existing) {
+      byUrl.set(url, row);
+      continue;
+    }
+    if (row.decision === 'rejected' || row.proposalStatus === 'rejected')
+      continue;
+    const account = officialInstagramUrl(
+      (row.candidate as Record<string, unknown>).officialInstagramUrl,
+    );
+    const poster = officialPosterUrl(
+      (row.candidate as Record<string, unknown>).posterUrl,
+    );
+    if (existing.candidate && typeof existing.candidate === 'object') {
+      const first = existing.candidate as Record<string, unknown>;
+      const additions = {
+        ...(account && !officialInstagramUrl(first.officialInstagramUrl)
+          ? { officialInstagramUrl: account }
+          : {}),
+        ...(poster && !officialPosterUrl(first.posterUrl)
+          ? { posterUrl: poster }
+          : {}),
+      };
+      if (Object.keys(additions).length)
+        byUrl.set(url, {
+          ...existing,
+          candidate: { ...first, ...additions },
+        });
+    }
   }
   const publishedKeys = new Set<string>();
   for (const row of published) {
@@ -169,14 +233,26 @@ export function discoverySummaries(
       url.protocol !== 'https:' ||
       url.username ||
       url.password ||
-      !['ticket.melon.com', 'ticket.yes24.com', 'nol.yanolja.com'].includes(
-        url.hostname,
-      )
+      ![
+        'ticket.melon.com',
+        'ticket.yes24.com',
+        'nol.yanolja.com',
+        'mintpaper.co.kr',
+      ].includes(url.hostname)
     )
       continue;
     const name = cleanName(value.name);
     const key = candidateKey(name, value.venue, dates);
-    if (found.has(key) || publishedKeys.has(key)) continue;
+    if (publishedKeys.has(key)) continue;
+    const instagramUrl = officialInstagramUrl(value.officialInstagramUrl);
+    const posterUrl = officialPosterUrl(value.posterUrl);
+    const existing = found.get(key);
+    if (existing) {
+      if (instagramUrl && !existing.officialInstagramUrl)
+        existing.officialInstagramUrl = instagramUrl;
+      if (posterUrl && !existing.posterUrl) existing.posterUrl = posterUrl;
+      continue;
+    }
     const id = `fst_${createHash('sha256').update(key).digest('hex').slice(0, 16)}`;
     found.set(key, {
       id,
@@ -188,6 +264,8 @@ export function discoverySummaries(
       thumbUrl: null,
       status: 'discovered',
       sourceUrl: url.toString(),
+      ...(instagramUrl ? { officialInstagramUrl: instagramUrl } : {}),
+      ...(posterUrl ? { posterUrl } : {}),
       // 정렬 전용 날짜 하한. 실제 공연 시작 시각으로 반환하지 않는다.
       sortAt: `${dates.firstDate}T00:00:00+09:00`,
     });

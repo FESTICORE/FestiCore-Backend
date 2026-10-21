@@ -26,6 +26,7 @@
 - [crawl.md](./crawl.md) — 관리자 크롤 소스·실행·제안 검토
 - [crawl-catalog.md](./crawl-catalog.md) — 수집된 축제의 공개 목록과 오프라인 갱신 계약
 - [festival-discovery.md](./festival-discovery.md) — 판매처별 축제 발견과 원더리벳 수집 기준
+- [mintpaper-discovery.md](./mintpaper-discovery.md) — Mint Paper 공식 축제·이미지·계정 수집
 
 ## 작성 규칙
 

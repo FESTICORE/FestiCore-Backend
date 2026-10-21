@@ -36,6 +36,27 @@ describe('crawl image safety', () => {
     ]);
   });
 
+  it('stores only referenced official Mint Paper festival covers', () => {
+    const html = `<script id="__NEXT_DATA__" type="application/json">${JSON.stringify(
+      {
+        props: {
+          apolloState: {
+            data: {
+              'Festival:172': { coverImage: { __ref: 'UploadFile:cover' } },
+              'UploadFile:cover': {
+                url: 'https://mintpaper.s3.ap-northeast-2.amazonaws.com/gmf.jpg',
+              },
+              'UploadFile:other': { url: 'https://evil.example/other.jpg' },
+            },
+          },
+        },
+      },
+    )}</script><img src="/images/logo.png">`;
+    expect(
+      discoverImageUrls(html, 'https://mintpaper.co.kr/festivals').map(String),
+    ).toEqual(['https://mintpaper.s3.ap-northeast-2.amazonaws.com/gmf.jpg']);
+  });
+
   it('normalizes a valid image to content-addressed WebP without trusting its extension', async () => {
     const png = await sharp({
       create: { width: 16, height: 16, channels: 3, background: '#ff0000' },
