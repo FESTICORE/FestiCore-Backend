@@ -14,9 +14,6 @@ export class Device {
   @Column({ type: 'uuid', nullable: true })
   userId!: string | null;
 
-  @Column({ type: 'varchar', length: 64, select: false })
-  deviceSecretHash!: string;
-
   @Column({ type: 'varchar', length: 256, nullable: true, select: false })
   apnsToken!: string | null;
 
