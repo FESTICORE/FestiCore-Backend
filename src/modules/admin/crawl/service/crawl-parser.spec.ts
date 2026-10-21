@@ -180,6 +180,32 @@ describe('crawl parsers', () => {
     ]);
   });
 
+  it('reads the Melon search result row for Wonderlivet with dates and venue', async () => {
+    const melon = source('ticket-list', 'discovery');
+    melon.url = 'https://ticket.melon.com/search/index.htm?q=WONDERLIVET';
+    const html = `<table><tr>
+      <td><div class="show_infor">
+        <a href="../performance/index.htm?prodId=213793" class="inner">
+          <img src="https://cdnticket.melon.co.kr/poster.png" alt="WONDERLIVET" />
+        </a>
+        <a href="../performance/index.htm?prodId=213793" class="inner">
+          <span class="show_title"><span>WONDERLIVET</span> 2026 (원더리벳 2026)</span>
+        </a>
+      </div></td>
+      <td class="show_date">2026.11.20 - 2026.11.22</td>
+      <td class="show_loc">KINTEX HALL 7/8/9/10</td>
+    </tr></table>`;
+    expect(await parseCrawl(melon, html)).toEqual([
+      {
+        name: 'WONDERLIVET 2026 (원더리벳 2026)',
+        url: 'https://ticket.melon.com/performance/index.htm?prodId=213793',
+        date: '2026.11.20 - 2026.11.22',
+        venue: 'KINTEX HALL 7/8/9/10',
+        posterUrl: 'https://cdnticket.melon.co.kr/poster.png',
+      },
+    ]);
+  });
+
   it('reads the YES24 Korean festival category cards without requiring a festival word', async () => {
     const yes24 = source('ticket-list', 'discovery');
     yes24.url =
