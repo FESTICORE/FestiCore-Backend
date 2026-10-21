@@ -6,7 +6,58 @@ const MAX_INPUT_BYTES = 5 * 1024 * 1024;
 const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
 const MAX_IMAGES_PER_RUN = 8;
 
+function mintPaperImages(html: string, pageUrl: string): URL[] | null {
+  const page = new URL(pageUrl);
+  if (
+    page.hostname !== 'mintpaper.co.kr' ||
+    !page.pathname.startsWith('/festivals')
+  )
+    return null;
+  const script =
+    /<script\b[^>]*id=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i.exec(
+      html,
+    )?.[1];
+  if (!script || script.length > 2_000_000) return [];
+  try {
+    const payload = JSON.parse(script) as {
+      props?: { apolloState?: { data?: Record<string, unknown> } };
+    };
+    const data = payload.props?.apolloState?.data;
+    if (!data) return [];
+    const urls: URL[] = [];
+    const seen = new Set<string>();
+    const add = (ref: unknown) => {
+      if (!ref || typeof ref !== 'object' || !('__ref' in ref)) return;
+      const key = ref.__ref;
+      if (typeof key !== 'string' || !key.startsWith('UploadFile:')) return;
+      const image = data[key];
+      if (!image || typeof image !== 'object' || !('url' in image)) return;
+      if (typeof image.url !== 'string') return;
+      try {
+        const url = checkedUrl(image.url);
+        if (!seen.has(url.toString())) {
+          seen.add(url.toString());
+          urls.push(url);
+        }
+      } catch {
+        // Ignore untrusted image locations.
+      }
+    };
+    for (const [key, value] of Object.entries(data)) {
+      if (!key.startsWith('Festival:') || !value || typeof value !== 'object')
+        continue;
+      if ('coverImage' in value) add(value.coverImage);
+      if (urls.length >= MAX_IMAGES_PER_RUN) break;
+    }
+    return urls.slice(0, MAX_IMAGES_PER_RUN);
+  } catch {
+    return [];
+  }
+}
+
 export function discoverImageUrls(html: string, pageUrl: string): URL[] {
+  const officialImages = mintPaperImages(html, pageUrl);
+  if (officialImages) return officialImages;
   const urls: URL[] = [];
   const seen = new Set<string>();
   if (

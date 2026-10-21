@@ -109,4 +109,69 @@ describe('ticket discovery catalog', () => {
       ]),
     ).toEqual([]);
   });
+
+  it('returns official festival sources and verified Instagram account links', () => {
+    const base = {
+      name: 'GRAND MINT FESTIVAL 2026',
+      date: '2026.10.17 - 2026.10.18',
+      venue: '올림픽공원',
+      url: 'https://mintpaper.co.kr/festivals/172/lineup',
+    };
+    expect(
+      discoverySummaries([
+        {
+          candidate: {
+            ...base,
+            officialInstagramUrl:
+              'https://www.instagram.com/grandmintfestival/',
+          },
+        },
+      ])[0],
+    ).toMatchObject({
+      name: base.name,
+      officialInstagramUrl: 'https://www.instagram.com/grandmintfestival/',
+    });
+    expect(
+      discoverySummaries([
+        {
+          candidate: {
+            ...base,
+            officialInstagramUrl:
+              'https://www.instagram.com/grandmintfestival/p/abc',
+          },
+        },
+      ])[0],
+    ).not.toHaveProperty('officialInstagramUrl');
+    const merged = discoverySummaries([
+      { candidate: base },
+      {
+        candidate: {
+          ...base,
+          officialInstagramUrl: 'https://www.instagram.com/grandmintfestival/',
+          posterUrl:
+            'https://mintpaper.s3.ap-northeast-2.amazonaws.com/gmf.jpg',
+        },
+      },
+    ]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].officialInstagramUrl).toBe(
+      'https://www.instagram.com/grandmintfestival/',
+    );
+    expect(merged[0].posterUrl).toBe(
+      'https://mintpaper.s3.ap-northeast-2.amazonaws.com/gmf.jpg',
+    );
+    expect(
+      discoverySummaries([
+        { candidate: base },
+        {
+          candidate: {
+            ...base,
+            officialInstagramUrl:
+              'https://www.instagram.com/grandmintfestival/',
+          },
+          decision: 'rejected',
+        },
+      ])[0],
+    ).not.toHaveProperty('officialInstagramUrl');
+  });
 });

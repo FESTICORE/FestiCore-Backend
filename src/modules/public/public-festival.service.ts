@@ -301,15 +301,38 @@ export class PublicFestivalService {
       ];
     });
     const discoveryRows = await this.dataSource.query<DiscoveryRow[]>(
-      `SELECT DISTINCT ON (item->'after'->>'url')
-         item->'after' AS candidate,
-         item->>'decision' AS decision,
-         p.status AS "proposalStatus"
-       FROM crawl_proposals p
-       CROSS JOIN LATERAL jsonb_array_elements(p.items) item
-       WHERE p.kind = 'festival.new'
-         AND item->'after'->>'url' IS NOT NULL
-       ORDER BY item->'after'->>'url', p."createdAt" DESC, p.id DESC`,
+      `WITH candidates AS (
+         SELECT item->'after' AS candidate,
+           item->'after'->>'url' AS url,
+           item->>'decision' AS decision,
+           p.status AS "proposalStatus",
+           p."createdAt" AS created_at,
+           p.id AS proposal_id
+         FROM crawl_proposals p
+         CROSS JOIN LATERAL jsonb_array_elements(p.items) item
+         WHERE p.kind = 'festival.new'
+           AND item->'after'->>'url' IS NOT NULL
+       ), latest AS (
+         SELECT DISTINCT ON (url) * FROM candidates
+         ORDER BY url, created_at DESC, proposal_id DESC
+       ), details AS (
+         SELECT url,
+           (array_agg(candidate->>'officialInstagramUrl' ORDER BY created_at DESC, proposal_id DESC)
+             FILTER (WHERE decision IS DISTINCT FROM 'rejected'
+               AND "proposalStatus" IS DISTINCT FROM 'rejected'
+               AND candidate->>'officialInstagramUrl' IS NOT NULL))[1] AS account,
+           (array_agg(candidate->>'posterUrl' ORDER BY created_at DESC, proposal_id DESC)
+             FILTER (WHERE decision IS DISTINCT FROM 'rejected'
+               AND "proposalStatus" IS DISTINCT FROM 'rejected'
+               AND candidate->>'posterUrl' IS NOT NULL))[1] AS poster
+         FROM candidates GROUP BY url
+       )
+       SELECT latest.candidate || jsonb_strip_nulls(jsonb_build_object(
+           'officialInstagramUrl', details.account, 'posterUrl', details.poster
+         )) AS candidate,
+         latest.decision,
+         latest."proposalStatus"
+       FROM latest JOIN details USING (url)`,
     );
     const publishedRows = await this.dataSource.query<PublishedDiscoveryRow[]>(
       `SELECT published->>'name' AS name,
@@ -328,6 +351,34 @@ export class PublicFestivalService {
         return sort > 0 || (sort === 0 && entry.id > cursor[3]);
       },
     );
+    const posterUrls = [
+      ...new Set(
+        discovered.flatMap((entry) =>
+          entry.posterUrl ? [entry.posterUrl] : [],
+        ),
+      ),
+    ];
+    if (posterUrls.length) {
+      const images = await this.dataSource.query<
+        { originUrl: string; id: string }[]
+      >(
+        `SELECT DISTINCT ON ("originUrl") "originUrl", id
+         FROM crawl_images
+         WHERE "originUrl" = ANY($1::text[])
+         ORDER BY "originUrl", "lastSeenAt" DESC`,
+        [posterUrls],
+      );
+      const imageByUrl = new Map(
+        images.map((image) => [image.originUrl, image.id]),
+      );
+      for (const entry of discovered) {
+        const imageId = entry.posterUrl
+          ? imageByUrl.get(entry.posterUrl)
+          : null;
+        if (imageId)
+          entry.thumbUrl = `/api/v1/festivals/images/${imageId}.webp`;
+      }
+    }
     const ordered = [...summaries, ...discovered].sort(
       (a, b) =>
         Date.parse(a.sortAt) - Date.parse(b.sortAt) || a.id.localeCompare(b.id),
@@ -343,6 +394,9 @@ export class PublicFestivalService {
       thumbUrl: summary.thumbUrl,
       status: summary.status,
       ...('sourceUrl' in summary ? { sourceUrl: summary.sourceUrl } : {}),
+      ...('officialInstagramUrl' in summary
+        ? { officialInstagramUrl: summary.officialInstagramUrl }
+        : {}),
     }));
     const nextCursor =
       ordered.length > limit

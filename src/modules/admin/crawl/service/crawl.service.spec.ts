@@ -157,6 +157,27 @@ describe('CrawlService scheduled runs', () => {
 });
 
 describe('CrawlService manual runs and snapshots', () => {
+  it('allows an unavailable 4xx robots file but fails closed on 5xx', async () => {
+    const { service } = harness();
+    const crawler = service as unknown as {
+      checkRobots(url: string): Promise<void>;
+      limitedGet(url: URL): Promise<{ status: number; body: string }>;
+    };
+    const get = jest.spyOn(crawler, 'limitedGet');
+    get.mockResolvedValueOnce({ status: 403, body: '' });
+    await expect(
+      crawler.checkRobots(
+        'https://mintpaper.s3.ap-northeast-2.amazonaws.com/poster.jpg',
+      ),
+    ).resolves.toBeUndefined();
+    get.mockResolvedValueOnce({ status: 503, body: '' });
+    await expect(
+      crawler.checkRobots(
+        'https://mintpaper.s3.ap-northeast-2.amazonaws.com/poster.jpg',
+      ),
+    ).rejects.toThrow('robots.txt 확인에 실패');
+  });
+
   it('marks an abandoned manual run failed before reserving a replacement', async () => {
     jest.useFakeTimers().setSystemTime(new Date('2026-10-20T15:00:00Z'));
     try {

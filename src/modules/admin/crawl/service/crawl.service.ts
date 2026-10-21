@@ -359,6 +359,27 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         run.result = 'unchanged';
       } else {
         const parsed = await parseCrawl(source, response.body);
+        if (
+          source.url === 'https://mintpaper.co.kr/festivals' &&
+          Array.isArray(parsed)
+        ) {
+          for (const item of parsed as unknown[]) {
+            if (
+              !item ||
+              typeof item !== 'object' ||
+              !('url' in item) ||
+              typeof item.url !== 'string' ||
+              !/^https:\/\/mintpaper\.co\.kr\/festivals\/\d+$/.test(item.url)
+            )
+              continue;
+            await this.dataSource.query(
+              `INSERT INTO crawl_sources ("kind", "url", "parser", "parserConfig", "createdAt")
+               SELECT 'discovery', $1::varchar, 'ticket-list', '{"seed":"mintpaper-detail"}', now() - interval '1 day'
+               WHERE NOT EXISTS (SELECT 1 FROM crawl_sources WHERE "url" = $1)`,
+              [item.url],
+            );
+          }
+        }
         const candidate = await this.proposalItems(source, parsed);
         if (candidate.items.length) {
           const proposal = await this.proposalsRepo.save(
@@ -580,13 +601,13 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     }
     const robotsUrl = new URL('/robots.txt', url);
     const robots = await this.limitedGet(robotsUrl);
-    if (robots.status !== 200 && robots.status !== 404) {
+    // RFC 9309 treats 4xx robots.txt responses as unavailable: crawling may
+    // continue. Network errors and 5xx remain fail-closed.
+    if (robots.status >= 400 && robots.status < 500) return;
+    if (robots.status !== 200) {
       throw new UnprocessableEntityException('robots.txt 확인에 실패했습니다.');
     }
-    if (
-      robots.status === 200 &&
-      !robotsAllows(robots.body, `${url.pathname}${url.search}`)
-    ) {
+    if (!robotsAllows(robots.body, `${url.pathname}${url.search}`)) {
       throw new UnprocessableEntityException({
         code: 'ROBOTS_DISALLOW',
         message: 'robots.txt가 수집을 금지합니다.',
