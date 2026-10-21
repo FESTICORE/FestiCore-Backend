@@ -11,6 +11,7 @@ import { PublicFestivalModule } from './modules/public/public-festival.module';
 import { CrewModule } from './modules/crews/crew.module';
 import { ScheduleModule } from './modules/schedule/schedule.module';
 import { CrawlModule } from './modules/admin/crawl/crawl.module';
+import { DeviceModule } from './modules/device/device.module';
 
 /** SwaggerModule.createDocument 의 include 가 받는 모듈 클래스 타입. */
 type ModuleClass = new (...args: never[]) => unknown;
@@ -27,6 +28,7 @@ const MODULES_BY_SLUG: Record<string, ModuleClass[]> = {
   festivals: [PublicFestivalModule],
   crews: [CrewModule],
   schedule: [ScheduleModule],
+  devices: [DeviceModule],
 };
 
 const DOMAIN_DOCS = API_DOMAINS.map((d) => ({

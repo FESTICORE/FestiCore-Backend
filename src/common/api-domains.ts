@@ -73,4 +73,10 @@ export const API_DOMAINS: ApiDomain[] = [
     description: '내 페스티벌 일정 저장과 조회',
     pathPrefix: 'me/schedule',
   },
+  {
+    slug: 'devices',
+    title: 'Devices',
+    description: '기기 등록·축제 구독·Live Activity 토큰',
+    pathPrefix: 'devices',
+  },
 ];

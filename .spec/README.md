@@ -14,6 +14,7 @@
 - [public-festivals.md](./public-festivals.md) — 발행 축제 목록·팩·깃발·라이브 조회
 - [crews.md](./crews.md) — 비공개 크루·초대·상태·집결·멤버 관리
 - [schedule.md](./schedule.md) — 축제별 개인 일정 조회·수정
+- [devices.md](./devices.md) — 기기 등록·축제 알림 구독·Live Activity 토큰
 - [crawl.md](./crawl.md) — 관리자 크롤 소스·실행·제안 검토
 
 ## 작성 규칙

@@ -251,6 +251,20 @@ export class AuthService {
         [userId],
       );
       await manager.delete(RefreshToken, { userId });
+      await manager.query(
+        `DELETE FROM "device_subscriptions" WHERE "deviceId" IN (
+          SELECT "id" FROM "devices" WHERE "userId" = $1
+        )`,
+        [userId],
+      );
+      await manager.query(
+        `UPDATE "devices" SET "apnsToken" = NULL,
+         "liveActivityPushToStartToken" = NULL,
+         "liveActivityFestivalId" = NULL, "liveActivityId" = NULL,
+         "liveActivityPushToken" = NULL, "updatedAt" = now()
+         WHERE "userId" = $1`,
+        [userId],
+      );
       await manager.delete(User, { id: userId });
       for (const flag of affectedFlags) {
         await manager.query(
