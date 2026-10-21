@@ -4,6 +4,9 @@ import { NestFactory } from '@nestjs/core';
 import request from 'supertest';
 
 jest.mock('@nestjs/core', () => ({ NestFactory: { create: jest.fn() } }));
+jest.mock('./gateway/public-websocket.adapter', () => ({
+  PublicWebSocketAdapter: class {},
+}));
 jest.mock('./app.module', () => ({ AppModule: class {} }));
 jest.mock('./swagger', () => ({ setupSwagger: jest.fn() }));
 
@@ -20,6 +23,7 @@ describe('Railway client IP', () => {
       }),
       getHttpAdapter: () => ({ getInstance: () => expressApp }),
       setGlobalPrefix: jest.fn(),
+      useWebSocketAdapter: jest.fn(),
       use: (middleware: RequestHandler) => expressApp.use(middleware),
       useGlobalPipes: jest.fn(),
       enableCors: jest.fn(),

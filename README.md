@@ -15,6 +15,7 @@
 | flags         | 공개 깃발, 팔로우·기수·상태·사진·관리자 신고 처리                                |
 | devices       | 기기 등록·조회·삭제와 Live Activity 토큰 관리                                    |
 | notifications | 축제 시작 알림 구독·예약 작업·APNs 발송                                          |
+| public        | 축제 목록·오프라인 팩과 공개 팩 갱신 WebSocket                                    |
 | health        | `GET /api/v1/health` — DB 실패 시 503                                            |
 
 구조와 규칙은 [아키텍처 문서](./docs/architecture/ARCHITECTURE.md), 엔드포인트 계약은 [.spec/](./.spec/README.md),
@@ -29,6 +30,7 @@ npm run start:dev
 ```
 
 - API: `http://localhost:3000/api/v1`
+- 공개 팩 갱신 WebSocket: `ws://localhost:3000/api/v1/festivals/updates` ([계약](./.spec/festival-websocket.md))
 - 공개 Swagger: `http://localhost:3000/api-docs` (JSON: `/api-docs-json`)
 - 관리자 Swagger: `http://localhost:3000/admin/api-docs` (JSON: `/admin/api-docs-json`)
 - 개발: [공개](https://festicore-dev.up.railway.app/api-docs) · [관리자](https://festicore-dev.up.railway.app/admin/api-docs)
