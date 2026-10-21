@@ -250,6 +250,14 @@ describe('AuthService 회원 탈퇴의 크루 소유권', () => {
       ['successor', 'crew-1'],
     );
     expect(remove).toHaveBeenCalledWith(User, { id: userId });
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining('DELETE FROM "device_subscriptions"'),
+      [userId],
+    );
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining('UPDATE "devices" SET "apnsToken" = NULL'),
+      [userId],
+    );
   });
 
   it('다른 멤버가 없으면 크루를 지우고 계정을 삭제한다', async () => {
