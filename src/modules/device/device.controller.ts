@@ -2,11 +2,12 @@ import {
   Body,
   Controller,
   Delete,
-  Headers,
   HttpCode,
   Param,
   Put,
+  Req,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import {
   ApiBody,
   ApiHeader,
@@ -27,10 +28,15 @@ import { DeviceService } from './device.service';
 @Public()
 @Controller('devices')
 @ApiHeader({
+  name: 'X-Device-Id',
+  required: true,
+  description: 'Keychain에 보관한 UUID v4 기기 ID. 기기 API에서만 사용합니다.',
+})
+@ApiHeader({
   name: 'X-Device-Secret',
   required: false,
   description:
-    '첫 등록 시 응답으로 받은 비밀값. 이후 모든 기기 변경 요청에 필수입니다.',
+    '첫 등록 시 한 번 발급되는 비밀값. 기존 기기의 변경 요청에 필수입니다.',
 })
 @ApiHeader({
   name: 'Authorization',
@@ -38,14 +44,10 @@ import { DeviceService } from './device.service';
   description:
     '선택: Bearer access JWT. 로그인 계정에 기기를 연결할 때 보냅니다.',
 })
-@ApiParam({
-  name: 'deviceId',
-  description: 'Keychain에 보관한 UUID v4 기기 ID',
-})
 export class DeviceController {
   constructor(private readonly service: DeviceService) {}
 
-  @Put(':deviceId')
+  @Put()
   @ApiOperation({
     summary: '기기 등록 또는 토큰 갱신',
     description:
@@ -85,56 +87,45 @@ export class DeviceController {
       },
     },
   })
-  async register(
-    @Param('deviceId') id: string,
-    @Body() body: RegisterDeviceDto,
-    @Headers('authorization') auth?: string,
-    @Headers('x-device-secret') secret?: string,
-  ) {
+  async register(@Body() body: RegisterDeviceDto, @Req() request: Request) {
     return this.service.register(
-      id,
+      this.deviceId(request),
       body,
-      await this.service.optionalUser(auth),
-      secret,
+      await this.service.optionalUser(request.header('authorization')),
+      request.header('x-device-secret'),
     );
   }
 
-  @Put(':deviceId/live-activity')
+  @Put('live-activity')
   @HttpCode(204)
   @ApiOperation({ summary: 'Live Activity 토큰 등록 또는 교체' })
   @ApiBody({ type: LiveActivityDto })
   @ApiResponse({ status: 204, description: '등록됨' })
   async startLiveActivity(
-    @Param('deviceId') id: string,
     @Body() body: LiveActivityDto,
-    @Headers('authorization') auth?: string,
-    @Headers('x-device-secret') secret?: string,
+    @Req() request: Request,
   ) {
     await this.service.startLiveActivity(
-      id,
+      this.deviceId(request),
       body,
-      await this.service.optionalUser(auth),
-      secret,
+      await this.service.optionalUser(request.header('authorization')),
+      request.header('x-device-secret'),
     );
   }
 
-  @Delete(':deviceId/live-activity')
+  @Delete('live-activity')
   @HttpCode(204)
   @ApiOperation({ summary: 'Live Activity 토큰 삭제' })
   @ApiResponse({ status: 204, description: '삭제됨' })
-  async stopLiveActivity(
-    @Param('deviceId') id: string,
-    @Headers('authorization') auth?: string,
-    @Headers('x-device-secret') secret?: string,
-  ) {
+  async stopLiveActivity(@Req() request: Request) {
     await this.service.stopLiveActivity(
-      id,
-      await this.service.optionalUser(auth),
-      secret,
+      this.deviceId(request),
+      await this.service.optionalUser(request.header('authorization')),
+      request.header('x-device-secret'),
     );
   }
 
-  @Put(':deviceId/subscriptions/:festivalId')
+  @Put('subscriptions/:festivalId')
   @ApiOperation({ summary: '축제 팩 변경 알림 구독 설정' })
   @ApiParam({ name: 'festivalId', description: '발행된 축제 ID' })
   @ApiBody({ type: DeviceSubscriptionDto })
@@ -157,18 +148,20 @@ export class DeviceController {
     },
   })
   async subscribe(
-    @Param('deviceId') id: string,
     @Param('festivalId') festivalId: string,
     @Body() body: DeviceSubscriptionDto,
-    @Headers('authorization') auth?: string,
-    @Headers('x-device-secret') secret?: string,
+    @Req() request: Request,
   ) {
     return this.service.subscribe(
-      id,
+      this.deviceId(request),
       festivalId,
       body,
-      await this.service.optionalUser(auth),
-      secret,
+      await this.service.optionalUser(request.header('authorization')),
+      request.header('x-device-secret'),
     );
+  }
+
+  private deviceId(request: Request): string {
+    return request.header('x-device-id') ?? '';
   }
 }

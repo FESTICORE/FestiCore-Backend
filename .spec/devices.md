@@ -1,8 +1,10 @@
 # 기기·축제 구독 API
 
-기기 ID는 앱이 생성해 Keychain에 보관하는 UUID v4다. `PUT /api/v1/devices/{deviceId}` 최초 호출 시 서버가 256비트 `deviceSecret`을 한 번 반환한다. 앱은 이 값을 Keychain에 보관하고 이후 모든 기기 API 요청에 `X-Device-Secret` 헤더로 보낸다. 서버에는 SHA-256 해시만 저장한다. 계정 로그인 전에는 Authorization 헤더를 생략하고, 로그인 후에는 `Bearer` access token을 보내면 기기를 계정에 연결한다. 계정 변경도 같은 기기 비밀값이 필요하다. 잘못된 JWT는 익명 요청으로 취급하지 않고 401을 반환한다.
+기기 ID는 앱이 생성해 Keychain에 보관하는 UUID v4다. 모든 기기 API는 `X-Device-Id` 헤더로 이 ID를 받는다. 축제 팩 조회 API에는 기기 헤더가 필요 없다. `PUT /api/v1/devices` 최초 호출 시 서버가 256비트 `deviceSecret`을 한 번 반환한다. 앱은 이 값을 Keychain에 보관하고 이후 기기 변경 요청에 `X-Device-Secret` 헤더로 보낸다. 서버에는 SHA-256 해시만 저장한다. 계정 로그인 전에는 Authorization 헤더를 생략하고, 로그인 후에는 `Bearer` access token을 보내면 기기를 계정에 연결한다. 계정 변경도 같은 기기 비밀값이 필요하다. 잘못된 JWT는 익명 요청으로 취급하지 않고 401을 반환한다. UUID만으로는 타인의 APNs 토큰을 교체할 수 있으므로 비밀값 검증을 유지한다.
 
-## `PUT /api/v1/devices/{deviceId}`
+기존 `/devices/{deviceId}` 호출은 지원하지 않는다. 앱은 경로에서 기기 ID를 제거하고 `X-Device-Id` 헤더로 옮겨야 한다. 이 계약은 API 명세서 v0.1의 경로보다 최신 기기 헤더 요청을 우선한다.
+
+## `PUT /api/v1/devices`
 
 기존 기기를 인증 없이 갱신하면 계정 연결은 유지한다. `liveActivityPushToStartToken`을 생략하면 기존 값이 유지되고, 명시적 `null`을 보내면 삭제한다. `apnsToken` 키는 항상 보내며 값이 없으면 `null`을 보낸다.
 
@@ -23,11 +25,11 @@ APNs 토큰은 제공할 때 2~256자 짝수 길이 hex 문자열이다. JSON �
 
 ## Live Activity
 
-- `PUT /api/v1/devices/{deviceId}/live-activity`: `{"festivalId":"fst_...","activityId":"앱 Activity ID","pushToken":"hex"}`. 공개된 축제의 활성 Activity 하나를 등록 또는 교체한다. 성공 204.
-- `DELETE /api/v1/devices/{deviceId}/live-activity`: 현재 Activity 토큰을 삭제한다. 성공 204.
+- `PUT /api/v1/devices/live-activity`: `{"festivalId":"fst_...","activityId":"앱 Activity ID","pushToken":"hex"}`. 공개된 축제의 활성 Activity 하나를 등록 또는 교체한다. 성공 204.
+- `DELETE /api/v1/devices/live-activity`: 현재 Activity 토큰을 삭제한다. 성공 204.
 
 ## 축제 팩 변경 구독
 
-`PUT /api/v1/devices/{deviceId}/subscriptions/{festivalId}` 본문은 `{"packUpdates":true}`다. 공개된 축제에 대해서만 저장한다. 성공 응답의 `data`는 `{"festivalId":"fst_...","packUpdates":true}`다. 회원 탈퇴 시 해당 계정 기기의 구독과 푸시 토큰을 삭제한다.
+`PUT /api/v1/devices/subscriptions/{festivalId}` 본문은 `{"packUpdates":true}`다. 경로의 `festivalId`는 구독 대상이며 기기 식별과 무관하다. 공개된 축제에 대해서만 저장한다. 성공 응답의 `data`는 `{"festivalId":"fst_...","packUpdates":true}`다. 회원 탈퇴 시 해당 계정 기기의 구독과 푸시 토큰을 삭제한다.
 
 공개 Swagger: `/api-docs/devices`. 관리자 Swagger에는 포함하지 않는다.
