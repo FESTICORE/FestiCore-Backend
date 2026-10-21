@@ -1,4 +1,9 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, QueryFailedError, Repository } from 'typeorm';
 import { SocialLoginDto } from '../dto/social-login.dto';
@@ -53,6 +58,7 @@ export class AuthService {
   async login(dto: SocialLoginDto): Promise<LoginResult> {
     const profile = await this.verify(dto);
     const { user, isNew } = await this.findOrCreate(profile);
+    await this.bindVerifiedAdminGrant(profile, user.id);
     await this.storeOauthRefreshToken(user, dto);
     const tokens = await this.token.issue(user);
     return { ...tokens, newUser: isNew, user: this.toView(user) };
@@ -64,6 +70,7 @@ export class AuthService {
     grant?: OauthGrant,
   ): Promise<{ userId: string; newUser: boolean }> {
     const { user, isNew } = await this.findOrCreate(profile);
+    await this.bindVerifiedAdminGrant(profile, user.id);
     if (grant?.refreshToken && grant.subject === profile.providerId) {
       const updated = await this.userRepo.update(
         { id: user.id },
@@ -109,12 +116,21 @@ export class AuthService {
     await this.token.revokeAllForUser(userId);
   }
 
-  async me(userId: string): Promise<UserView> {
+  async me(
+    userId: string,
+  ): Promise<UserView & { admin: { id: string; role: string } | null }> {
     const user = await this.userRepo.findOne({ where: { id: userId } });
     if (!user) {
       throw new NotFoundException('사용자를 찾을 수 없습니다.');
     }
-    return this.toView(user);
+    const admins =
+      user.provider === 'google'
+        ? await this.dataSource.query<{ id: string; role: string }[]>(
+            `SELECT "id", "role" FROM "admin_accounts" WHERE "userId" = $1 AND "active" = true`,
+            [userId],
+          )
+        : [];
+    return { ...this.toView(user), admin: admins[0] ?? null };
   }
 
   async updateMe(userId: string, nickname: string): Promise<UserView> {
@@ -130,6 +146,9 @@ export class AuthService {
    */
   async withdraw(userId: string): Promise<void> {
     await this.dataSource.transaction(async (manager) => {
+      await manager.query(
+        `SELECT pg_advisory_xact_lock(hashtext('admin_account_management'))`,
+      );
       // 갱신된 OAuth grant를 놓치지 않도록 사용자 행을 잠근 뒤 최신 토큰을 읽는다.
       const [user] = await manager.query<User[]>(
         `SELECT "id", "provider", "oauthRefreshToken", "oauthClientId",
@@ -138,6 +157,35 @@ export class AuthService {
         [userId],
       );
       if (!user) throw new NotFoundException('사용자를 찾을 수 없습니다.');
+      const [admin] = await manager.query<{ id: string; role: string }[]>(
+        `SELECT "id", "role" FROM "admin_accounts" WHERE "userId" = $1 AND "active" = true FOR UPDATE`,
+        [userId],
+      );
+      if (admin?.role === 'owner') {
+        const [{ count }] = await manager.query<{ count: number }[]>(
+          `SELECT count(*)::int AS count FROM "admin_accounts" WHERE "role" = 'owner' AND "active" = true`,
+        );
+        if (count <= 1)
+          throw new ConflictException(
+            '마지막 owner 계정은 탈퇴할 수 없습니다.',
+          );
+      }
+      if (admin) {
+        await manager.query(
+          `UPDATE "admin_accounts" SET "active" = false WHERE "id" = $1`,
+          [admin.id],
+        );
+        await manager.query(
+          `INSERT INTO "admin_audit" ("actor", "action", "target", "before", "after")
+           VALUES ($1, 'admin.withdraw', $2, $3::jsonb, $4::jsonb)`,
+          [
+            admin.id,
+            `admin:${admin.id}`,
+            JSON.stringify({ role: admin.role, active: true }),
+            JSON.stringify({ role: admin.role, active: false }),
+          ],
+        );
+      }
       const failedAppleRevokes: { token: string; clientId?: string }[] = [];
       if (user.oauthRefreshToken) {
         if (user.provider === 'google') {
@@ -387,6 +435,47 @@ export class AuthService {
       (error.driverError as { code?: string } | undefined)?.code ===
         UNIQUE_VIOLATION
     );
+  }
+
+  private async bindVerifiedAdminGrant(
+    profile: SocialProfile,
+    userId: string,
+  ): Promise<void> {
+    if (
+      profile.provider !== 'google' ||
+      !profile.emailVerified ||
+      !profile.email
+    )
+      return;
+    const email = profile.email.trim().toLowerCase();
+    await this.dataSource.transaction(async (manager) => {
+      await manager.query(
+        `SELECT pg_advisory_xact_lock(hashtext('admin_account_management'))`,
+      );
+      const [currentUser] = await manager.query<{ id: string }[]>(
+        `SELECT "id" FROM "users" WHERE "id" = $1 FOR KEY SHARE`,
+        [userId],
+      );
+      if (!currentUser) return;
+      const [bound] = await manager.query<{ id: string; role: string }[]>(
+        `UPDATE "admin_accounts" SET "userId" = $1
+         WHERE "email" = $2 AND "userId" IS NULL AND "active" = true
+           AND NOT EXISTS (SELECT 1 FROM "admin_accounts" WHERE "userId" = $1)
+         RETURNING "id", "role"`,
+        [userId, email],
+      );
+      if (!bound) return;
+      await manager.query(
+        `INSERT INTO "admin_audit" ("actor", "action", "target", "before", "after")
+         VALUES ($1, 'admin.bind', $2, $3::jsonb, $4::jsonb)`,
+        [
+          bound.id,
+          `admin:${bound.id}`,
+          JSON.stringify({ email, role: bound.role, userId: null }),
+          JSON.stringify({ email, role: bound.role, userId }),
+        ],
+      );
+    });
   }
 
   private toView(user: User): UserView {

@@ -16,7 +16,7 @@ import { DataSource } from 'typeorm';
 import {
   ApiBody,
   ApiConsumes,
-  ApiCookieAuth,
+  ApiBearerAuth,
   ApiOperation,
   ApiParam,
   ApiResponse,
@@ -33,7 +33,7 @@ import { AdminFestivalService } from './admin-festival.service';
 type AdminRequest = Request & { admin?: { id: string } };
 
 @ApiTags('Admin Festivals')
-@ApiCookieAuth('admin-session')
+@ApiBearerAuth()
 @Controller('admin/festivals')
 export class AdminFestivalMapController {
   private readonly logger = new Logger(AdminFestivalMapController.name);
@@ -80,7 +80,7 @@ export class AdminFestivalMapController {
     },
   })
   @ApiResponse({ status: 400, description: '축제 ID 또는 이미지 오류' })
-  @ApiResponse({ status: 401, description: '관리자 세션이 없습니다.' })
+  @ApiResponse({ status: 401, description: '유효한 access JWT가 없습니다.' })
   @ApiResponse({ status: 403, description: 'editor 권한이 없습니다.' })
   @ApiResponse({ status: 404, description: '축제를 찾을 수 없습니다.' })
   @ApiResponse({

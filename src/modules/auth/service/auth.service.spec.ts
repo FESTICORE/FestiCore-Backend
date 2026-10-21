@@ -16,6 +16,111 @@ import { GoogleService } from './google.service';
 import { TokenService } from './token.service';
 
 describe('AuthService web grant replacement', () => {
+  it('binds a pending admin grant only after Google verifies the email', async () => {
+    const user = {
+      id: 'user-id',
+      provider: 'google',
+      providerId: 'subject',
+    } as User;
+    const query = jest
+      .fn()
+      .mockImplementation((sql: string) =>
+        sql.includes('FROM "users"')
+          ? [{ id: 'user-id' }]
+          : sql.includes('UPDATE "admin_accounts"')
+            ? [{ id: 'admin-id', role: 'owner' }]
+            : [],
+      );
+    const transaction = jest
+      .fn()
+      .mockImplementation(
+        (work: (manager: EntityManager) => Promise<unknown>) =>
+          work({ query } as unknown as EntityManager),
+      );
+    const verify = jest.fn();
+    const google = { verify } as unknown as GoogleService;
+    const service = new AuthService(
+      google,
+      {} as AppleService,
+      {
+        issue: jest.fn().mockResolvedValue({
+          accessToken: 'access',
+          refreshToken: 'refresh',
+        }),
+      } as unknown as TokenService,
+      {
+        findOne: jest.fn().mockResolvedValue(user),
+      } as unknown as Repository<User>,
+      { transaction } as unknown as DataSource,
+      {} as AppleRevokeRetryService,
+      {} as FlagPackSyncService,
+    );
+    verify.mockResolvedValueOnce({
+      provider: 'google',
+      providerId: 'subject',
+      email: 'OWNER@EXAMPLE.COM',
+      emailVerified: false,
+    });
+    await service.login({ provider: 'google', token: 'unverified' });
+    expect(transaction).not.toHaveBeenCalled();
+    verify.mockResolvedValueOnce({
+      provider: 'google',
+      providerId: 'subject',
+      email: 'OWNER@EXAMPLE.COM',
+      emailVerified: true,
+    });
+    await service.login({ provider: 'google', token: 'verified' });
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining('"userId" IS NULL'),
+      ['user-id', 'owner@example.com'],
+    );
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining('INSERT INTO "admin_audit"'),
+      [
+        'admin-id',
+        'admin:admin-id',
+        JSON.stringify({
+          email: 'owner@example.com',
+          role: 'owner',
+          userId: null,
+        }),
+        JSON.stringify({
+          email: 'owner@example.com',
+          role: 'owner',
+          userId: 'user-id',
+        }),
+      ],
+    );
+  });
+
+  it('exposes live admin role in me without trusting the user email', async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([{ id: 'admin-id', role: 'editor' }]);
+    const service = new AuthService(
+      {} as GoogleService,
+      {} as AppleService,
+      {} as TokenService,
+      {
+        findOne: jest.fn().mockResolvedValue({
+          id: 'user-id',
+          provider: 'google',
+          email: 'stale@example.com',
+        }),
+      } as unknown as Repository<User>,
+      { query } as unknown as DataSource,
+      {} as AppleRevokeRetryService,
+      {} as FlagPackSyncService,
+    );
+    await expect(service.me('user-id')).resolves.toMatchObject({
+      admin: { id: 'admin-id', role: 'editor' },
+    });
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining('"userId" = $1'),
+      ['user-id'],
+    );
+  });
+
   it('uses one account for Google app and web login with the same subject', async () => {
     const users: User[] = [];
     const repo = {
@@ -201,10 +306,12 @@ describe('AuthService web grant replacement', () => {
 describe('AuthService 회원 탈퇴의 크루 소유권', () => {
   const userId = 'departing-user';
 
-  function setup(successor?: string) {
+  function setup(successor?: string, admin?: { id: string; role: string }) {
     const query = jest.fn().mockImplementation((sql: string) => {
       if (sql.includes('FROM "users"') && sql.includes('FOR UPDATE'))
         return [{ id: userId, provider: 'google' }];
+      if (sql.includes('FROM "admin_accounts"') && sql.includes('"userId"'))
+        return admin ? [admin] : [];
       if (sql.includes('FROM "crews"')) return [{ id: 'crew-1' }];
       if (sql.includes('FROM "crew_members"'))
         return successor ? [{ userId: successor }] : [];
@@ -271,13 +378,51 @@ describe('AuthService 회원 탈퇴의 크루 소유권', () => {
     expect(remove).toHaveBeenCalledWith(User, { id: userId });
   });
 
-  it('탈퇴 트랜잭션은 사용자 행을 먼저 잠근다', async () => {
+  it('연결된 관리자 권한을 비활성화하고 같은 트랜잭션에 감사 기록을 남긴다', async () => {
+    const { service, query, remove } = setup(undefined, {
+      id: 'admin-1',
+      role: 'viewer',
+    });
+    await service.withdraw(userId);
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining('UPDATE "admin_accounts" SET "active" = false'),
+      ['admin-1'],
+    );
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining('INSERT INTO "admin_audit"'),
+      [
+        'admin-1',
+        'admin:admin-1',
+        JSON.stringify({ role: 'viewer', active: true }),
+        JSON.stringify({ role: 'viewer', active: false }),
+      ],
+    );
+    expect(remove).toHaveBeenCalledWith(User, { id: userId });
+  });
+
+  it('탈퇴 트랜잭션은 관리자 잠금을 잡은 뒤 사용자 행을 잠근다', async () => {
     const { service, query } = setup();
     await service.withdraw(userId);
     expect(query.mock.calls[0]).toEqual([
+      expect.stringContaining('pg_advisory_xact_lock'),
+    ]);
+    expect(query.mock.calls[1]).toEqual([
       expect.stringContaining('FROM "users" WHERE "id" = $1 FOR UPDATE'),
       [userId],
     ]);
+  });
+
+  it('마지막 활성 owner는 회원 탈퇴 전에 거부한다', async () => {
+    const { service, query, remove } = setup();
+    query
+      .mockImplementationOnce(() => [])
+      .mockImplementationOnce(() => [{ id: userId, provider: 'google' }])
+      .mockImplementationOnce(() => [{ id: 'admin-id', role: 'owner' }])
+      .mockImplementationOnce(() => [{ count: 1 }]);
+    await expect(service.withdraw(userId)).rejects.toMatchObject({
+      status: 409,
+    });
+    expect(remove).not.toHaveBeenCalled();
   });
 });
 

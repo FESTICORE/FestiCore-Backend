@@ -13,7 +13,7 @@ import {
   Req,
 } from '@nestjs/common';
 import {
-  ApiCookieAuth,
+  ApiBearerAuth,
   ApiOperation,
   ApiParam,
   ApiQuery,
@@ -31,8 +31,8 @@ import { CrawlService } from '../service/crawl.service';
 type AdminRequest = Request & { admin?: { id: string } };
 
 @ApiTags('Admin Crawl')
-@ApiCookieAuth('admin-session')
-@ApiResponse({ status: 401, description: '관리자 세션이 없습니다.' })
+@ApiBearerAuth()
+@ApiResponse({ status: 401, description: '유효한 access JWT가 없습니다.' })
 @ApiResponse({
   status: 403,
   description: '권한이 부족하거나 관리자 요청 출처가 허용되지 않았습니다.',

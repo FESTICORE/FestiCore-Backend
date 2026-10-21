@@ -4,7 +4,7 @@
 
 ## `POST /api/v1/admin/festivals/{id}/draft/map`
 
-- `editor` 이상 관리자 세션이 필요하다.
+- Bearer JWT와 `editor` 이상 관리자 권한이 필요하다.
 - 요청은 `multipart/form-data`이며 `map` 파일 1개를 보낸다. JPEG·PNG·WebP·HEIC/HEIF를 받으며 원본 5MB와 디코딩 픽셀 수를 제한한다.
 - 서버는 이미지를 다시 인코딩해 메타데이터를 제거하고, 최대 300KB인 WebP로 축소해 Railway 이미지 저장소에 보관한다.
 - 성공 시 공통 `{code,data,message}` 응답의 `data`로 `{mapImageUrl: HTTPS URL, mapAspect: width/height}`를 돌려준다.

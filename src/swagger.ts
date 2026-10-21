@@ -24,7 +24,7 @@ type ModuleClass = new (...args: never[]) => unknown;
 const MODULES_BY_SLUG: Record<string, ModuleClass[]> = {
   health: [HealthModule],
   auth: [AuthModule],
-  'admin-auth': [AdminAuthModule],
+  'admin-accounts': [AdminAuthModule],
   'admin-festivals': [AdminFestivalModule],
   'admin-crawl': [CrawlModule],
   'admin-proposals': [CrawlModule],
@@ -176,22 +176,12 @@ function onlyAudience(document: OpenAPIObject, admin: boolean): OpenAPIObject {
     }
   }
   if (admin) {
-    for (const [path, pathItem] of Object.entries(document.paths)) {
+    for (const pathItem of Object.values(document.paths)) {
       for (const method of ['get', 'post', 'put', 'patch', 'delete'] as const) {
         const operation = pathItem?.[method];
         if (!operation) continue;
-        const publicLogin =
-          (method === 'post' && path.endsWith('/admin/auth/magic-link')) ||
-          (path.endsWith('/admin/auth/callback') &&
-            (method === 'get' || method === 'post'));
-        if (publicLogin) continue;
-        if (
-          !operation.security?.some((security) => 'admin-session' in security)
-        ) {
-          operation.security = [
-            ...(operation.security ?? []),
-            { 'admin-session': [] },
-          ];
+        if (!operation.security?.some((security) => 'bearer' in security)) {
+          operation.security = [...(operation.security ?? []), { bearer: [] }];
         }
       }
     }
@@ -235,21 +225,13 @@ export function setupSwagger(
     return opts.publicUrl.replace(/\/$/, '');
   };
 
-  const build = (title: string, description: string, admin = false) => {
+  const build = (title: string, description: string) => {
     const builder = new DocumentBuilder()
       .setTitle(title)
       .setDescription(description)
       .setVersion('1.0.0')
       .addServer(gatewayServer(), 'Gateway');
-    if (admin) {
-      builder.addCookieAuth(
-        'festicore_admin_session',
-        { type: 'apiKey', in: 'cookie', name: 'festicore_admin_session' },
-        'admin-session',
-      );
-    } else {
-      builder.addBearerAuth();
-    }
+    builder.addBearerAuth();
     return builder.build();
   };
 
@@ -293,8 +275,7 @@ export function setupSwagger(
         app,
         build(
           'FestiCore Admin API',
-          '관리자 로그인·세션, 축제 관리, 기수 코드와 신고 처리 API',
-          true,
+          '관리자 권한·축제 관리·기수 코드와 신고 처리 API',
         ),
         {
           deepScanRoutes: false,
@@ -314,11 +295,10 @@ export function setupSwagger(
   ]) {
     for (const doc of docs) {
       const document = onlyAudience(
-        SwaggerModule.createDocument(
-          app,
-          build(doc.title, doc.description, admin),
-          { deepScanRoutes: false, include: doc.modules },
-        ),
+        SwaggerModule.createDocument(app, build(doc.title, doc.description), {
+          deepScanRoutes: false,
+          include: doc.modules,
+        }),
         admin,
       );
       if (

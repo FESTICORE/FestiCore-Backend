@@ -8,7 +8,7 @@ import {
   Req,
 } from '@nestjs/common';
 import {
-  ApiCookieAuth,
+  ApiBearerAuth,
   ApiOperation,
   ApiParam,
   ApiQuery,
@@ -20,8 +20,8 @@ import { AdminRoles } from '../../auth/admin-roles.decorator';
 import { CrawlAlertService } from '../service/crawl-alert.service';
 
 @ApiTags('Admin Crawl')
-@ApiCookieAuth('admin-session')
-@ApiResponse({ status: 401, description: '관리자 세션이 없습니다.' })
+@ApiBearerAuth()
+@ApiResponse({ status: 401, description: '유효한 access JWT가 없습니다.' })
 @ApiResponse({
   status: 403,
   description: '관리자 권한 또는 요청 출처가 허용되지 않았습니다.',
@@ -58,7 +58,7 @@ export class CrawlAlertController {
   @ApiOperation({
     summary: '크롤 장애 알림 확인',
     description:
-      'editor 이상. 관리자 세션의 계정 ID와 확인 시각을 저장합니다. 중복 확인은 기존 결과를 반환합니다.',
+      'editor 이상. JWT 사용자에 연결된 관리자 계정 ID와 확인 시각을 저장합니다. 중복 확인은 기존 결과를 반환합니다.',
   })
   @ApiParam({ name: 'id', format: 'uuid', description: '알림 ID' })
   @ApiResponse({ status: 200, description: '확인된 알림' })

@@ -698,6 +698,7 @@ export class MyFlagsController {
 }
 
 @ApiTags('Admin Flags')
+@ApiBearerAuth()
 @Controller('admin')
 export class AdminFlagsController {
   constructor(private readonly service: FlagsService) {}
@@ -753,7 +754,7 @@ export class AdminFlagsController {
     },
   })
   @ApiResponse({ status: 400, description: '잘못된 상태 조합' })
-  @ApiResponse({ status: 401, description: '관리자 세션 없음 또는 만료' })
+  @ApiResponse({ status: 401, description: '유효한 access JWT가 없습니다.' })
   @ApiResponse({ status: 403, description: 'editor/owner 권한 없음' })
   @ApiResponse({ status: 404, description: '깃발 또는 존을 찾을 수 없음' })
   forceStatus(
@@ -762,7 +763,7 @@ export class AdminFlagsController {
     @Body() body: unknown,
   ) {
     if (!request.admin?.id)
-      throw new UnauthorizedException('관리자 세션이 필요합니다.');
+      throw new UnauthorizedException('관리자 인증이 필요합니다.');
     return this.service.forceStatus(id, request.admin.id, body);
   }
   @Post('festivals/:festivalId/bearer-codes')
@@ -771,7 +772,7 @@ export class AdminFlagsController {
   @ApiOperation({
     summary: '기수 등록 코드 생성',
     description:
-      '관리자 세션 쿠키와 editor/owner 역할이 필요합니다. 생성된 코드는 30일간 유효합니다.',
+      'Bearer JWT와 editor/owner 역할이 필요합니다. 생성된 코드는 30일간 유효합니다.',
   })
   @ApiBody({
     schema: {
@@ -806,7 +807,7 @@ export class AdminFlagsController {
     status: 400,
     description: 'count가 1~100 정수가 아니거나 label이 100자를 초과함',
   })
-  @ApiResponse({ status: 401, description: '관리자 세션 없음 또는 만료' })
+  @ApiResponse({ status: 401, description: '유효한 access JWT가 없습니다.' })
   @ApiResponse({ status: 403, description: 'editor/owner 권한 없음' })
   @ApiResponse({ status: 404, description: '축제를 찾을 수 없음' })
   createCodes(
@@ -824,7 +825,7 @@ export class AdminFlagsController {
   @ApiOperation({
     summary: '기수 등록 코드 목록',
     description:
-      '관리자 세션 쿠키와 viewer 이상 역할이 필요합니다. 원문 코드와 사용 상태를 반환하므로 응답을 저장하지 마세요.',
+      'Bearer JWT와 viewer 이상 역할이 필요합니다. 원문 코드와 사용 상태를 반환하므로 응답을 저장하지 마세요.',
   })
   @ApiResponse({
     status: 200,
@@ -844,7 +845,7 @@ export class AdminFlagsController {
       },
     },
   })
-  @ApiResponse({ status: 401, description: '관리자 세션 없음 또는 만료' })
+  @ApiResponse({ status: 401, description: '유효한 access JWT가 없습니다.' })
   @ApiResponse({ status: 403, description: 'viewer 이상 권한 없음' })
   codes(
     @Param('festivalId') id: string,
@@ -859,13 +860,13 @@ export class AdminFlagsController {
   @ApiOperation({
     summary: '축제 깃발 관리 목록',
     description:
-      '관리자 세션 쿠키와 viewer 이상 역할이 필요합니다. 해당 축제의 모든 깃발과 신고 수, 숨김 여부를 조회합니다.',
+      'Bearer JWT와 viewer 이상 역할이 필요합니다. 해당 축제의 모든 깃발과 신고 수, 숨김 여부를 조회합니다.',
   })
   @ApiResponse({
     status: 200,
     description: '깃발 프로필, 숨김 여부, 신고 수와 현장 상태 목록',
   })
-  @ApiResponse({ status: 401, description: '관리자 세션 없음 또는 만료' })
+  @ApiResponse({ status: 401, description: '유효한 access JWT가 없습니다.' })
   @ApiResponse({ status: 403, description: 'viewer 이상 권한 없음' })
   flags(@Param('festivalId') id: string) {
     return this.service.adminFlags(id);
@@ -875,7 +876,7 @@ export class AdminFlagsController {
   @ApiOperation({
     summary: '신고된 깃발 조회',
     description:
-      '관리자 세션 쿠키와 viewer 이상 역할이 필요합니다. 기본적으로 신고가 3건 이상인 깃발을 조회합니다.',
+      'Bearer JWT와 viewer 이상 역할이 필요합니다. 기본적으로 신고가 3건 이상인 깃발을 조회합니다.',
   })
   @ApiQuery({
     name: 'festivalId',
@@ -898,7 +899,7 @@ export class AdminFlagsController {
     status: 400,
     description: 'minReports가 1 이상의 정수가 아님',
   })
-  @ApiResponse({ status: 401, description: '관리자 세션 없음 또는 만료' })
+  @ApiResponse({ status: 401, description: '유효한 access JWT가 없습니다.' })
   @ApiResponse({ status: 403, description: 'viewer 이상 권한 없음' })
   reported(
     @Query('festivalId') festivalId?: string,
@@ -915,14 +916,14 @@ export class AdminFlagsController {
   @ApiOperation({
     summary: '깃발 공개 숨김',
     description:
-      '관리자 세션 쿠키와 editor/owner 역할이 필요합니다. 숨긴 깃발은 공개 상세와 사진에서 조회되지 않습니다.',
+      'Bearer JWT와 editor/owner 역할이 필요합니다. 숨긴 깃발은 공개 상세와 사진에서 조회되지 않습니다.',
   })
   @ApiResponse({
     status: 201,
     description: '숨김 적용 결과',
     schema: { example: { flagId: 'flg_123', hidden: true } },
   })
-  @ApiResponse({ status: 401, description: '관리자 세션 없음 또는 만료' })
+  @ApiResponse({ status: 401, description: '유효한 access JWT가 없습니다.' })
   @ApiResponse({ status: 403, description: 'editor/owner 권한 없음' })
   @ApiResponse({ status: 404, description: '깃발을 찾을 수 없음' })
   hide(@Param('flagId') id: string, @Req() request: AdminRequest) {
@@ -937,14 +938,14 @@ export class AdminFlagsController {
   })
   @ApiOperation({
     summary: '깃발 공개 숨김 해제',
-    description: '관리자 세션 쿠키와 editor/owner 역할이 필요합니다.',
+    description: 'Bearer JWT와 editor/owner 역할이 필요합니다.',
   })
   @ApiResponse({
     status: 201,
     description: '숨김 해제 결과',
     schema: { example: { flagId: 'flg_123', hidden: false } },
   })
-  @ApiResponse({ status: 401, description: '관리자 세션 없음 또는 만료' })
+  @ApiResponse({ status: 401, description: '유효한 access JWT가 없습니다.' })
   @ApiResponse({ status: 403, description: 'editor/owner 권한 없음' })
   @ApiResponse({ status: 404, description: '깃발을 찾을 수 없음' })
   unhide(@Param('flagId') id: string, @Req() request: AdminRequest) {

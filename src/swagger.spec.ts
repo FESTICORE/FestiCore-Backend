@@ -65,11 +65,8 @@ describe('Swagger 문서 분리', () => {
       '/api/v1/admin/audit': {
         get: { responses: { 200: { description: 'OK' } } },
       },
-      '/api/v1/admin/auth/session': {
+      '/api/v1/admin/admins': {
         get: { responses: { 200: { description: 'OK' } } },
-      },
-      '/api/v1/admin/auth/magic-link': {
-        post: { responses: { 202: { description: 'Accepted' } } },
       },
       '/api/v1/admin/flags/reported': {
         get: { responses: { 200: { description: 'OK' } } },
@@ -129,8 +126,7 @@ describe('Swagger 문서 분리', () => {
     expect(adminPaths).toEqual([
       '/api/v1/admin/metrics',
       '/api/v1/admin/audit',
-      '/api/v1/admin/auth/session',
-      '/api/v1/admin/auth/magic-link',
+      '/api/v1/admin/admins',
       '/api/v1/admin/flags/reported',
     ]);
     expect(Object.keys(documents.get('api-docs/flags')!.paths)).toEqual(
@@ -160,24 +156,20 @@ describe('Swagger 문서 분리', () => {
     );
     const admin = documents.get('admin/api-docs')!;
     expect(admin.components.schemas).toHaveProperty('Flag');
-    expect(admin.components.securitySchemes?.['admin-session']).toEqual({
-      type: 'apiKey',
-      in: 'cookie',
-      name: 'festicore_admin_session',
-    });
-    expect(admin.components.securitySchemes).not.toHaveProperty('bearer');
+    expect(admin.components.securitySchemes).toHaveProperty('bearer');
+    expect(admin.components.securitySchemes).not.toHaveProperty(
+      'admin-session',
+    );
     expect(
       documents.get('api-docs')!.components.securitySchemes,
     ).toHaveProperty('bearer');
-    expect(
-      admin.paths['/api/v1/admin/auth/session'].get?.security,
-    ).toContainEqual({
-      'admin-session': [],
+    expect(admin.paths['/api/v1/admin/admins'].get?.security).toContainEqual({
+      bearer: [],
     });
     expect(
       admin.paths['/api/v1/admin/flags/reported'].get?.security,
     ).toContainEqual({
-      'admin-session': [],
+      bearer: [],
     });
     expect(
       documents.get('api-docs')!.paths['/api/v1/health'].get?.responses['200'],
@@ -214,20 +206,8 @@ describe('Swagger 문서 분리', () => {
         },
       },
     });
-    expect(
-      admin.paths['/api/v1/admin/auth/magic-link'].post?.responses['202'],
-    ).toMatchObject({
-      content: {
-        'application/json': {
-          schema: { properties: { code: { example: 'SUCCESS' } } },
-        },
-      },
-    });
-    expect(
-      admin.paths['/api/v1/admin/auth/magic-link'].post?.security,
-    ).toBeUndefined();
-    expect(documents.has('api-docs/admin-auth')).toBe(false);
-    expect(documents.has('admin/api-docs/auth')).toBe(true);
+    expect(documents.has('api-docs/admin-accounts')).toBe(false);
+    expect(documents.has('admin/api-docs/accounts')).toBe(true);
   });
 
   it('테스트 푸시를 관리자 전체 및 전용 Swagger 문서에 포함한다', () => {

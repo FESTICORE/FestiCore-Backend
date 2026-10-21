@@ -56,6 +56,7 @@ export class GoogleService {
         provider: 'google',
         providerId: payload.sub,
         email: payload.email,
+        emailVerified: payload.email_verified === true,
         name: payload.name,
         picture: payload.picture,
       };

@@ -13,7 +13,7 @@ import {
 } from '@nestjs/common';
 import {
   ApiBody,
-  ApiCookieAuth,
+  ApiBearerAuth,
   ApiHeader,
   ApiOperation,
   ApiParam,
@@ -103,10 +103,10 @@ const festivalId = {
 };
 
 @ApiTags('Admin Festivals')
-@ApiCookieAuth('admin-session')
+@ApiBearerAuth()
 @ApiResponse({
   status: 401,
-  description: '관리자 세션 쿠키가 없거나 만료되었습니다.',
+  description: '유효한 access JWT가 없습니다.',
 })
 @ApiResponse({ status: 403, description: '필요한 관리자 역할이 없습니다.' })
 @Controller('admin/festivals')
@@ -117,7 +117,7 @@ export class AdminFestivalController {
   @ApiOperation({
     summary: '관리자 축제 목록',
     description:
-      '최근 생성 순서로 초안·발행 버전과 열린 크롤 제안 수를 조회합니다. 관리자 세션이 필요합니다.',
+      '최근 생성 순서로 초안·발행 버전과 열린 크롤 제안 수를 조회합니다. 관리자 권한이 필요합니다.',
   })
   @ApiResponse({
     status: 200,

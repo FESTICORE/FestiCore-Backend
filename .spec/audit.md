@@ -2,7 +2,7 @@
 
 ## GET `/api/v1/admin/audit`
 
-- 관리자 세션의 `owner` 권한이 필요하다.
+- Bearer JWT와 활성 관리자 `owner` 권한이 필요하다.
 - 선택 필터: `actor`(관리자 ID 정확히 일치), `from`, `to`(시간대 포함 ISO8601), `limit`(1~100, 기본 50), `offset`(0~10000, 기본 0).
 - `from`과 `to`는 양 끝을 포함한다. 최신순으로 조회한다.
 - 응답 `data.items`의 각 항목은 `at`, `actor`, `action`, `target`, `before`, `after`를 담는다. 전역 응답 형식은 `code`, `data`, `message`다.

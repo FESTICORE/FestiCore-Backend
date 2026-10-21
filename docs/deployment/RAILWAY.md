@@ -104,15 +104,15 @@ APNs HTTP 200은 Apple 서버의 수락 결과이며 실기기 수신 증거는 
 
 ## 관리자 인증 배포 조건
 
-관리자 인증에는 환경별로 `ADMIN_WEB_URL`, `ADMIN_API_PUBLIC_URL`,
-`ADMIN_OWNER_EMAIL`, `ADMIN_RESEND_API_KEY`, `ADMIN_EMAIL_FROM`,
-`ADMIN_SESSION_SAME_SITE`를 설정한다. 관리자 웹의 origin은 `CORS_ORIGINS`에도
-포함한다.
+관리자 권한에는 환경별로 `ADMIN_OWNER_EMAIL`과 `ADMIN_WEB_URL`을 설정하고,
+관리자 웹의 origin을 `CORS_ORIGINS`에도 포함한다. 최초 owner는 해당 이메일의
+확인된 Google 로그인이 완료된 뒤 사용자 ID에 연결된다. 기존 관리자 계정의
+미연결 행은 연결 전까지 관리자 API에 접근할 수 없다.
 
-관리자 세션은 브라우저 쿠키를 사용한다. 관리자 웹과 API를 같은 사이트의 HTTPS
-도메인(예: `admin.example.com`, `api.example.com`)에 배치하거나 관리자 웹에서
-API를 동일 origin으로 프록시해야 한다. 서로 다른 사이트의 Railway 기본 도메인과
-별도 웹 호스팅 도메인에서는 제3자 쿠키 차단으로 로그인이 유지되지 않는다.
+관리자 웹은 일반 `POST /api/v1/auth/login`으로 받은 Bearer access JWT를 사용한다.
+별도 관리자 쿠키·매직 링크 설정은 필요하지 않다. 일반 로그아웃은 refresh 토큰을
+폐기하며 이미 발급된 access JWT는 만료까지 유효하다. 관리자 권한 비활성화는
+다음 요청부터 적용된다.
 
 ## 4. 배포 설정
 
@@ -141,8 +141,8 @@ API를 동일 origin으로 프록시해야 한다. 서로 다른 사이트의 Ra
 - 개발 Swagger: `https://festicore-dev.up.railway.app/api-docs`
 - 운영 Swagger: `https://festicore.up.railway.app/api-docs`
 - OpenAPI JSON: 각 도메인의 `/api-docs-json`; 도메인별 문서는
-  `/api-docs/health`, `/api-docs/auth`, `/api-docs/admin-auth`,
-  `/api-docs/admin-festivals`에 있다.
+  `/api-docs/health`, `/api-docs/auth`, `/admin/api-docs/accounts`,
+  `/admin/api-docs/festivals`에 있다.
 
 2026-10-21 기준 두 환경 모두 `/api-docs`와 `/api-docs-json`이 HTTP 200을
 반환했다. 응답 확인은 최신 코드가 해당 환경에 배포되었다는 증거와 구분한다.

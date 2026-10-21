@@ -10,7 +10,7 @@
 | gateway       | 전역 Throttler·JwtAuthGuard(`@Public` 예외)·필터·인터셉터                        |
 | swagger       | `/api-docs` 공개 API, `/admin/api-docs` 관리자 API. 각 경로에 도메인별 문서 제공 |
 | auth          | Google·Apple 통합 로그인, JWT access/refresh 회전, 회원 탈퇴                     |
-| admin         | 관리자 매직 링크 인증, 축제 초안·발행·롤백                                       |
+| admin         | 일반 로그인 JWT의 관리자 권한 검사, 축제 초안·발행·롤백                           |
 | storage       | Railway 비공개 버킷의 WebP 사진 저장·읽기                                        |
 | flags         | 공개 깃발, 팔로우·기수·상태·사진·관리자 신고 처리                                |
 | devices       | 기기 등록·조회·삭제와 Live Activity 토큰 관리                                    |

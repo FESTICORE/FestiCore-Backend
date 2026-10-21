@@ -2,8 +2,6 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
-  HttpException,
-  HttpStatus,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -12,11 +10,11 @@ import { DataSource, Repository } from 'typeorm';
 import { AdminAuditService } from '../audit/admin-audit.service';
 import type { AdminRole } from './admin-roles.decorator';
 import { AdminAccount } from './admin.entity';
-import { AdminAuthService } from './admin-auth.service';
 
 export interface AdminAccountView {
   id: string;
   email: string;
+  userId: string | null;
   role: AdminRole;
   active: boolean;
   createdAt: Date;
@@ -29,7 +27,6 @@ export class AdminAccountsService {
     private readonly accounts: Repository<AdminAccount>,
     private readonly dataSource: DataSource,
     private readonly audit: AdminAuditService,
-    private readonly auth: AdminAuthService,
   ) {}
 
   async list(): Promise<{ items: AdminAccountView[] }> {
@@ -43,9 +40,8 @@ export class AdminAccountsService {
     actorId: string,
     emailInput: string,
     role: AdminRole,
-    ipAddress: string | null,
-  ): Promise<AdminAccountView & { loginLinkRequested: boolean }> {
-    const email = emailInput.trim().toLowerCase();
+  ): Promise<AdminAccountView> {
+    const email = emailInput?.trim().toLowerCase();
     if (!email || !['viewer', 'editor', 'owner'].includes(role)) {
       throw new BadRequestException('관리자 계정 입력이 올바르지 않습니다.');
     }
@@ -61,35 +57,27 @@ export class AdminAccountsService {
       const before = existing
         ? { role: existing.role, active: existing.active }
         : null;
-      const row = existing ?? repo.create({ email, role, active: true });
+      const row =
+        existing ?? repo.create({ email, userId: null, role, active: true });
       row.role = role;
       row.active = true;
+      row.userId = null;
       const saved = await repo.save(row);
       await this.audit.record(manager, {
         actor: actorId,
         action: 'admin.invite',
         target: `admin:${saved.id}`,
         before,
-        after: { email: saved.email, role: saved.role, active: true },
+        after: {
+          email: saved.email,
+          userId: saved.userId,
+          role: saved.role,
+          active: true,
+        },
       });
       return saved;
     });
-    let loginLinkRequested = true;
-    try {
-      loginLinkRequested = await this.auth.requestInviteLink(email, ipAddress);
-    } catch (error) {
-      if (
-        !(error instanceof HttpException) ||
-        ![
-          HttpStatus.TOO_MANY_REQUESTS,
-          HttpStatus.SERVICE_UNAVAILABLE,
-        ].includes(error.getStatus())
-      ) {
-        throw error;
-      }
-      loginLinkRequested = false;
-    }
-    return { ...this.view(account), loginLinkRequested };
+    return this.view(account);
   }
 
   async disable(actorId: string, id: string): Promise<void> {
@@ -116,23 +104,23 @@ export class AdminAccountsService {
           );
         }
       }
-      await repo.update({ id, active: true }, { active: false });
-      await manager.query(
-        `UPDATE "admin_sessions" SET "revokedAt" = now()
-         WHERE "adminId" = $1 AND "revokedAt" IS NULL`,
-        [id],
-      );
-      await manager.query(
-        `UPDATE "admin_magic_links" SET "consumedAt" = now()
-         WHERE "adminId" = $1 AND "consumedAt" IS NULL`,
-        [id],
-      );
+      await repo.update({ id, active: true }, { active: false, userId: null });
       await this.audit.record(manager, {
         actor: actorId,
         action: 'admin.disable',
         target: `admin:${id}`,
-        before: { email: account.email, role: account.role, active: true },
-        after: { email: account.email, role: account.role, active: false },
+        before: {
+          email: account.email,
+          userId: account.userId,
+          role: account.role,
+          active: true,
+        },
+        after: {
+          email: account.email,
+          userId: null,
+          role: account.role,
+          active: false,
+        },
       });
     });
   }
@@ -141,6 +129,7 @@ export class AdminAccountsService {
     return {
       id: account.id,
       email: account.email,
+      userId: account.userId,
       role: account.role,
       active: account.active,
       createdAt: account.createdAt,

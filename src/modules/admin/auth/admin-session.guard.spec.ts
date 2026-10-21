@@ -1,126 +1,100 @@
-import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
+import { ExecutionContext, ForbiddenException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Reflector } from '@nestjs/core';
-import { ExecutionContext } from '@nestjs/common';
 import { AdminAuthService } from './admin-auth.service';
 import { AdminSessionGuard } from './admin-session.guard';
 
-describe('AdminSessionGuard', () => {
-  const admin = {
-    id: 'adm-1',
-    email: 'admin@example.com',
-    role: 'viewer' as const,
-  };
-  const auth = { validateSession: jest.fn().mockResolvedValue(admin) };
+describe('admin JWT authorization', () => {
+  const auth = { findActiveByUserId: jest.fn() };
   const reflector = { getAllAndOverride: jest.fn() };
   const guard = new AdminSessionGuard(
     auth as unknown as AdminAuthService,
-    {
-      get: (key: string) =>
-        key === 'ADMIN_API_PUBLIC_URL'
-          ? 'https://api.example.com'
-          : 'https://admin.example.com',
-    } as unknown as ConfigService,
+    { get: () => 'https://admin.example.com' } as unknown as ConfigService,
     reflector as unknown as Reflector,
   );
-
-  function context(
+  const context = (
     method: string,
-    path: string,
-    cookie?: string,
+    user?: { userId: string; provider: string },
     origin?: string,
-    authorization?: string,
-  ): ExecutionContext {
+  ) => {
     const request = {
       method,
-      path,
-      headers: { cookie, origin, authorization },
+      path: '/api/v1/admin/festivals',
+      headers: { origin, cookie: 'festicore_admin_session=legacy' },
+      user,
     };
     return {
-      getType: () => 'http',
-      switchToHttp: () => ({ getRequest: () => request }),
-      getHandler: () => undefined,
-      getClass: () => undefined,
-    } as unknown as ExecutionContext;
-  }
+      request,
+      execution: {
+        getType: () => 'http',
+        switchToHttp: () => ({ getRequest: () => request }),
+        getHandler: () => null,
+        getClass: () => null,
+      } as unknown as ExecutionContext,
+    };
+  };
 
   beforeEach(() => {
     jest.clearAllMocks();
     reflector.getAllAndOverride.mockReturnValue(undefined);
+    auth.findActiveByUserId.mockResolvedValue({
+      id: 'admin-id',
+      email: 'owner@example.com',
+      role: 'owner',
+    });
   });
 
-  it('requires an admin session even when an app access token could exist', async () => {
+  it('rejects a legacy cookie without a validated Google JWT user', async () => {
+    await expect(
+      guard.canActivate(context('GET').execution),
+    ).rejects.toBeInstanceOf(ForbiddenException);
     await expect(
       guard.canActivate(
-        context(
-          'GET',
-          '/api/v1/admin/festivals',
-          undefined,
-          undefined,
-          'Bearer app-jwt',
-        ),
+        context('GET', { userId: 'apple-id', provider: 'apple' }).execution,
       ),
-    ).rejects.toBeInstanceOf(UnauthorizedException);
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(auth.findActiveByUserId).not.toHaveBeenCalled();
   });
 
-  it('enforces the role hierarchy', async () => {
+  it('checks the current account on every request and attaches stable admin ID', async () => {
+    const first = context('GET', { userId: 'google-id', provider: 'google' });
+    await expect(guard.canActivate(first.execution)).resolves.toBe(true);
+    expect(auth.findActiveByUserId).toHaveBeenCalledWith('google-id');
+    expect(first.request).toHaveProperty('admin.id', 'admin-id');
+    auth.findActiveByUserId.mockRejectedValueOnce(new ForbiddenException());
+    await expect(
+      guard.canActivate(
+        context('GET', { userId: 'google-id', provider: 'google' }).execution,
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('enforces role hierarchy and Origin on writes', async () => {
+    auth.findActiveByUserId.mockResolvedValue({ id: 'viewer', role: 'viewer' });
     reflector.getAllAndOverride.mockReturnValue(['editor']);
     await expect(
       guard.canActivate(
         context(
-          'PATCH',
-          '/api/v1/admin/festivals/a/draft',
-          'festicore_admin_session=token',
+          'POST',
+          { userId: 'google-id', provider: 'google' },
           'https://admin.example.com',
-        ),
+        ).execution,
       ),
     ).rejects.toBeInstanceOf(ForbiddenException);
-  });
-
-  it('rejects a write from an untrusted origin', async () => {
+    auth.findActiveByUserId.mockResolvedValue({ id: 'owner', role: 'owner' });
+    await expect(
+      guard.canActivate(
+        context('POST', { userId: 'google-id', provider: 'google' }).execution,
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenException);
     await expect(
       guard.canActivate(
         context(
           'POST',
-          '/api/v1/admin/auth/logout',
-          'festicore_admin_session=token',
+          { userId: 'google-id', provider: 'google' },
           'https://evil.example.com',
-        ),
+        ).execution,
       ),
     ).rejects.toBeInstanceOf(ForbiddenException);
-  });
-
-  it('rejects an admin read from another CORS-allowed origin', async () => {
-    await expect(
-      guard.canActivate(
-        context(
-          'GET',
-          '/api/v1/admin/auth/me',
-          'festicore_admin_session=token',
-          'https://app.example.com',
-        ),
-      ),
-    ).rejects.toBeInstanceOf(ForbiddenException);
-  });
-
-  it('allows public magic link requests without a session', async () => {
-    await expect(
-      guard.canActivate(context('POST', '/api/v1/admin/auth/magic-link')),
-    ).resolves.toBe(true);
-  });
-
-  it('accepts callback confirmation GET without consuming or requiring a session', async () => {
-    await expect(
-      guard.canActivate(context('GET', '/api/v1/admin/auth/callback')),
-    ).resolves.toBe(true);
-    expect(auth.validateSession).not.toHaveBeenCalled();
-  });
-
-  it('lets callback POST reach the controller cookie check', async () => {
-    await expect(
-      guard.canActivate(
-        context('POST', '/api/v1/admin/auth/callback', undefined, 'null'),
-      ),
-    ).resolves.toBe(true);
   });
 });

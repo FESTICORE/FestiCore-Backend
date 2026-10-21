@@ -1,7 +1,7 @@
 # 내 계정 API
 
 모든 경로는 `/api/v1` 기준이며 앱 access 토큰을 `Authorization: Bearer <token>`으로 보낸다.
-관리자 세션이나 refresh 토큰은 사용할 수 없다.
+refresh 토큰은 사용할 수 없다. 관리자도 동일한 Bearer access JWT로 호출한다.
 
 | 메서드 | 경로 | 요청 본문 | 성공 |
 | --- | --- | --- | --- |

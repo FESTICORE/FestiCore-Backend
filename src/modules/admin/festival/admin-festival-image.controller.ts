@@ -12,7 +12,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApiBody,
   ApiConsumes,
-  ApiCookieAuth,
+  ApiBearerAuth,
   ApiOperation,
   ApiParam,
   ApiResponse,
@@ -24,7 +24,7 @@ import { TimetableImageService } from './timetable-image.service';
 import type { FestivalDocument } from './festival.entity';
 
 @ApiTags('Admin Festivals')
-@ApiCookieAuth('admin-session')
+@ApiBearerAuth()
 @Controller('admin/festivals')
 export class AdminFestivalImageController {
   constructor(
@@ -84,7 +84,7 @@ export class AdminFestivalImageController {
     status: 400,
     description: '날짜 또는 이미지가 유효하지 않습니다.',
   })
-  @ApiResponse({ status: 401, description: '관리자 세션이 없습니다.' })
+  @ApiResponse({ status: 401, description: '유효한 access JWT가 없습니다.' })
   @ApiResponse({ status: 403, description: 'editor 권한이 없습니다.' })
   @ApiResponse({ status: 404, description: '축제를 찾을 수 없습니다.' })
   @ApiResponse({ status: 413, description: '이미지 크기 10MB 초과' })
