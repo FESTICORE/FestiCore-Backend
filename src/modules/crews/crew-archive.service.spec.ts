@@ -1,6 +1,11 @@
 import { Repository } from 'typeorm';
 import { AdminFestival } from '../admin/festival/festival.entity';
-import { Crew, CrewGather, CrewMember } from './crew.entity';
+import {
+  Crew,
+  CrewGather,
+  CrewMember,
+  CrewStatusIdempotency,
+} from './crew.entity';
 import { CrewArchiveService } from './crew-archive.service';
 
 describe('CrewArchiveService', () => {
@@ -24,11 +29,13 @@ describe('CrewArchiveService', () => {
         published: { days: [{ endsAt: end.toISOString() }] },
       }),
     };
+    const idempotency = { delete: jest.fn().mockResolvedValue(undefined) };
     const service = new CrewArchiveService(
       crews as unknown as Repository<Crew>,
       members as unknown as Repository<CrewMember>,
       gathers as unknown as Repository<CrewGather>,
       festivals as unknown as Repository<AdminFestival>,
+      idempotency as unknown as Repository<CrewStatusIdempotency>,
     );
     await service.run(new Date(end.getTime() + 24 * 60 * 60_000));
     expect(crews.save).toHaveBeenCalledWith(crew);
@@ -40,5 +47,6 @@ describe('CrewArchiveService', () => {
       { zoneId: null, state: null, statusUpdatedAt: null },
     );
     expect(gathers.delete).toHaveBeenCalledWith({ crewId: crew.id });
+    expect(idempotency.delete).toHaveBeenCalledTimes(2);
   });
 });

@@ -5,9 +5,14 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { LessThan, Repository } from 'typeorm';
 import { AdminFestival } from '../admin/festival/festival.entity';
-import { Crew, CrewGather, CrewMember } from './crew.entity';
+import {
+  Crew,
+  CrewGather,
+  CrewMember,
+  CrewStatusIdempotency,
+} from './crew.entity';
 
 const DAY_MS = 24 * 60 * 60_000;
 
@@ -24,6 +29,8 @@ export class CrewArchiveService implements OnModuleInit, OnModuleDestroy {
     private readonly gathers: Repository<CrewGather>,
     @InjectRepository(AdminFestival)
     private readonly festivals: Repository<AdminFestival>,
+    @InjectRepository(CrewStatusIdempotency)
+    private readonly idempotency: Repository<CrewStatusIdempotency>,
   ) {}
 
   onModuleInit() {
@@ -43,6 +50,7 @@ export class CrewArchiveService implements OnModuleInit, OnModuleDestroy {
   }
 
   async run(now = new Date()): Promise<void> {
+    await this.idempotency.delete({ expiresAt: LessThan(now) });
     const crews = await this.crews.find();
     for (const crew of crews) {
       if (!crew.archivedAt) {

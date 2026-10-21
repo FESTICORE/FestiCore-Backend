@@ -7,7 +7,12 @@ import {
 import { Repository } from 'typeorm';
 import { AdminFestival } from '../admin/festival/festival.entity';
 import { User } from '../auth/entity/user.entity';
-import { Crew, CrewGather, CrewMember } from './crew.entity';
+import {
+  Crew,
+  CrewGather,
+  CrewMember,
+  CrewStatusIdempotency,
+} from './crew.entity';
 import { CrewService } from './crew.service';
 
 const ownerId = '00000000-0000-4000-8000-000000000001';
@@ -181,6 +186,76 @@ describe('CrewService authorization and invitations', () => {
       updatedAt: clientAt,
     });
     expect(locked.save).not.toHaveBeenCalled();
+  });
+
+  it('replays a keyed status once and rejects reusing the key with another body', async () => {
+    const { service, crewRepository, memberRepository } = setup();
+    const member = {
+      crewId: crew.id,
+      userId: ownerId,
+      zoneId: null,
+      state: null,
+      statusUpdatedAt: null,
+    };
+    memberRepository.findOne.mockResolvedValue(member);
+    let saved: Partial<CrewStatusIdempotency> | null = null;
+    const idempotency = {
+      findOne: jest.fn().mockImplementation(() => Promise.resolve(saved)),
+      save: jest.fn().mockImplementation((row: CrewStatusIdempotency) => {
+        saved = { ...row };
+        return Promise.resolve(row);
+      }),
+    };
+    const memberRows = {
+      findOne: jest.fn().mockResolvedValue(member),
+      save: jest
+        .fn()
+        .mockImplementation((row: CrewMember) => Promise.resolve(row)),
+    };
+    const testManager = {
+      query: jest.fn().mockResolvedValue([]),
+      getRepository: (entity: unknown) =>
+        entity === Crew
+          ? { findOne: jest.fn().mockResolvedValue(crew) }
+          : entity === CrewMember
+            ? memberRows
+            : idempotency,
+    };
+    Object.assign(crewRepository, {
+      manager: {
+        transaction: (
+          work: (manager: typeof testManager) => Promise<unknown>,
+        ) => work(testManager),
+      },
+    });
+    const body = { state: 'here' as const, clientAt: new Date().toISOString() };
+    const first = await service.status(crew.id, ownerId, body, 'request-1');
+    await expect(
+      service.status(crew.id, ownerId, body, 'request-1'),
+    ).resolves.toEqual(first);
+    await expect(
+      service.status(
+        crew.id,
+        ownerId,
+        { clientAt: body.clientAt, state: 'here' },
+        'request-1',
+      ),
+    ).resolves.toEqual(first);
+    expect(memberRows.save).toHaveBeenCalledTimes(1);
+    expect(idempotency.save).toHaveBeenCalledTimes(1);
+    await expect(
+      service.status(
+        crew.id,
+        ownerId,
+        { ...body, state: 'eating' },
+        'request-1',
+      ),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(memberRows.save).toHaveBeenCalledTimes(1);
+    memberRows.findOne.mockResolvedValueOnce(null);
+    await expect(
+      service.status(crew.id, ownerId, body, 'request-1'),
+    ).rejects.toBeInstanceOf(ForbiddenException);
   });
 
   it('returns the current leaving status when a retry includes an ignored zoneId', async () => {

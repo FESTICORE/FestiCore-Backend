@@ -96,9 +96,15 @@ describe('Crew HTTP contract', () => {
     );
     const create = document.paths['/api/v1/crews']?.post;
     const invite = document.paths['/api/v1/crews/invite/{code}']?.get;
+    const status = document.paths['/api/v1/crews/{crewId}/status']?.post;
     expect(create?.requestBody).toBeDefined();
     expect(create?.security).toEqual([{ bearer: [] }]);
     expect(invite?.security).toBeUndefined();
+    expect(status?.parameters).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'Idempotency-Key', required: true }),
+      ]),
+    );
   });
 
   it('validates and describes create request at runtime', async () => {
@@ -133,11 +139,18 @@ describe('Crew HTTP contract', () => {
     await request(server)
       .post(`/api/v1/crews/${id}/status`)
       .auth(token, { type: 'bearer' })
+      .send({ state: 'here', clientAt: new Date().toISOString() })
+      .expect(400);
+    await request(server)
+      .post(`/api/v1/crews/${id}/status`)
+      .auth(token, { type: 'bearer' })
+      .set('Idempotency-Key', 'invalid-date')
       .send({ state: 'here', clientAt: 'no-date' })
       .expect(400);
     await request(server)
       .post(`/api/v1/crews/${id}/status`)
       .auth(token, { type: 'bearer' })
+      .set('Idempotency-Key', 'unknown-field')
       .send({
         state: 'here',
         clientAt: new Date().toISOString(),
@@ -170,6 +183,7 @@ describe('Crew HTTP contract', () => {
     await request(server)
       .post(`/api/v1/crews/${id}/status`)
       .auth(token, { type: 'bearer' })
+      .set('Idempotency-Key', 'crew-status-001')
       .send({ state: 'here', clientAt: new Date().toISOString() })
       .expect(200);
     await request(server)
@@ -208,6 +222,7 @@ describe('Crew HTTP contract', () => {
       id,
       userId,
       expect.objectContaining({ state: 'here' }),
+      'crew-status-001',
     );
     expect(service.detail).toHaveBeenCalledWith(id, userId);
     expect(service.removeMember).toHaveBeenCalledWith(id, userId, userId);
