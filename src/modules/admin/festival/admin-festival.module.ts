@@ -7,9 +7,13 @@ import { AdminFestivalService } from './admin-festival.service';
 import { TimetableImageService } from './timetable-image.service';
 import { AdminFestival, AdminFestivalVersion } from './festival.entity';
 import { ImageStorageService } from '../../storage/image-storage.service';
+import { AdminAuditModule } from '../audit/admin-audit.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([AdminFestival, AdminFestivalVersion])],
+  imports: [
+    TypeOrmModule.forFeature([AdminFestival, AdminFestivalVersion]),
+    AdminAuditModule,
+  ],
   controllers: [
     AdminFestivalController,
     AdminFestivalMapController,

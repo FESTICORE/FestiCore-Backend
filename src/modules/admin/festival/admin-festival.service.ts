@@ -14,6 +14,7 @@ import {
   FestivalDocument,
 } from './festival.entity';
 import { mergeDraft, validateDraft } from './festival-validation';
+import { AdminAuditService } from '../audit/admin-audit.service';
 
 const alphabet = '0123456789abcdefghjkmnpqrstvwxyz';
 function newId(): string {
@@ -41,6 +42,7 @@ export class AdminFestivalService {
     @InjectRepository(AdminFestivalVersion)
     private readonly versions: Repository<AdminFestivalVersion>,
     private readonly dataSource: DataSource,
+    private readonly audit: AdminAuditService,
   ) {}
 
   async list() {
@@ -123,7 +125,16 @@ export class AdminFestivalService {
       published: null,
       publishedVersion: 0,
     });
-    await this.festivals.save(row);
+    await this.dataSource.transaction(async (manager) => {
+      await manager.getRepository(AdminFestival).save(row);
+      await this.audit.record(manager, {
+        actor,
+        action: 'festival.created',
+        target: `festival:${row.id}`,
+        before: null,
+        after: { draftVersion: row.draftVersion, draft: row.draft },
+      });
+    });
     return this.draftResponse(row);
   }
 
@@ -154,10 +165,18 @@ export class AdminFestivalService {
           message: errors.join('; '),
           errors,
         });
+      const before = { draftVersion: row.draftVersion, draft: row.draft };
       row.draft = next;
       row.draftVersion++;
       row.draftUpdatedBy = actor;
       await repo.save(row);
+      await this.audit.record(manager, {
+        actor,
+        action: 'festival.draft.updated',
+        target: `festival:${id}`,
+        before,
+        after: { draftVersion: row.draftVersion, draft: row.draft },
+      });
       return { ...this.draftResponse(row), warnings: [] };
     });
   }
@@ -222,6 +241,7 @@ export class AdminFestivalService {
       )
         throw new BadRequestException('압축된 팩이 200KB를 초과합니다.');
       const sizeBytes = Buffer.byteLength(JSON.stringify(pack));
+      const previousVersion = row.publishedVersion;
       row.published = pack;
       row.publishedVersion = packVersion;
       await repo.save(row);
@@ -238,6 +258,13 @@ export class AdminFestivalService {
         id,
         packVersion,
       );
+      await this.audit.record(manager, {
+        actor,
+        action: 'festival.published',
+        target: `festival:${id}`,
+        before: { packVersion: previousVersion },
+        after: { packVersion, note },
+      });
       return { packVersion, etag: `"v${packVersion}"`, pushedDevices };
     });
   }
@@ -286,6 +313,7 @@ export class AdminFestivalService {
         200 * 1024
       )
         throw new BadRequestException('압축된 팩이 200KB를 초과합니다.');
+      const previousVersion = row.publishedVersion;
       row.published = pack;
       row.publishedVersion = packVersion;
       await repo.save(row);
@@ -302,6 +330,13 @@ export class AdminFestivalService {
         id,
         packVersion,
       );
+      await this.audit.record(manager, {
+        actor,
+        action: 'festival.rolled_back',
+        target: `festival:${id}`,
+        before: { packVersion: previousVersion },
+        after: { packVersion, toVersion },
+      });
       return { packVersion, etag: `"v${packVersion}"`, pushedDevices };
     });
   }
