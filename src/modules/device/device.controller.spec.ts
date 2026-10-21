@@ -1,16 +1,29 @@
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import { ConfigService } from '@nestjs/config';
+import { APP_GUARD } from '@nestjs/core';
+import { JwtService } from '@nestjs/jwt';
+import { getRepositoryToken } from '@nestjs/typeorm';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { DeviceController } from './device.controller';
 import { DeviceService } from './device.service';
 import { NotificationSubscriptionController } from './notification-subscription.controller';
+import { JwtAuthGuard } from '../auth/guard/jwt-auth.guard';
+import { User } from '../auth/entity/user.entity';
 
 describe('기기 API 경로와 헤더 계약', () => {
   let app: INestApplication;
+  const verifyAsync = jest.fn((token: string) => {
+    if (token !== 'valid') return Promise.reject(new Error('invalid'));
+    return Promise.resolve({
+      sub: 'user-a',
+      typ: 'access',
+      provider: 'google',
+    });
+  });
   const service = {
-    optionalUser: jest.fn().mockResolvedValue(null),
     register: jest.fn().mockResolvedValue({ deviceId: 'device-id' }),
     get: jest.fn().mockResolvedValue({ deviceId: 'device-id' }),
     remove: jest.fn().mockResolvedValue(undefined),
@@ -28,7 +41,19 @@ describe('기기 API 경로와 헤더 계약', () => {
   beforeAll(async () => {
     const module = await Test.createTestingModule({
       controllers: [DeviceController, NotificationSubscriptionController],
-      providers: [{ provide: DeviceService, useValue: service }],
+      providers: [
+        { provide: DeviceService, useValue: service },
+        { provide: APP_GUARD, useClass: JwtAuthGuard },
+        { provide: JwtService, useValue: { verifyAsync } },
+        { provide: ConfigService, useValue: { get: () => 'test-secret' } },
+        {
+          provide: getRepositoryToken(User),
+          useValue: {
+            findOne: () =>
+              Promise.resolve({ id: 'user-a', provider: 'google' }),
+          },
+        },
+      ],
     }).compile();
     app = module.createNestApplication();
     app.setGlobalPrefix('api/v1');
@@ -50,14 +75,13 @@ describe('기기 API 경로와 헤더 계약', () => {
     await request(app.getHttpServer() as App)
       .put('/api/v1/devices')
       .set('X-Device-Id', 'header-device')
-      .set('X-Device-Secret', 'secret')
+      .set('Authorization', 'Bearer valid')
       .send(body)
       .expect(200);
     expect(service.register).toHaveBeenCalledWith(
       'header-device',
       body,
-      null,
-      'secret',
+      'user-a',
     );
     await request(app.getHttpServer() as App)
       .put('/api/v1/devices/path-device')
@@ -69,15 +93,14 @@ describe('기기 API 경로와 헤더 계약', () => {
     await request(app.getHttpServer() as App)
       .put('/api/v1/notifications/subscriptions/fst_test')
       .set('X-Device-Id', 'header-device')
-      .set('X-Device-Secret', 'secret')
+      .set('Authorization', 'Bearer valid')
       .send({ packUpdates: true, festivalStarts: true })
       .expect(200);
     expect(service.subscribe).toHaveBeenCalledWith(
       'header-device',
       'fst_test',
       { packUpdates: true, festivalStarts: true },
-      null,
-      'secret',
+      'user-a',
     );
     await request(app.getHttpServer() as App)
       .put('/api/v1/devices/subscriptions/fst_test')
@@ -88,7 +111,11 @@ describe('기기 API 경로와 헤더 계약', () => {
   it('Swagger에 헤더를 중복 표기하거나 deviceId 경로 변수를 남기지 않는다', () => {
     const document = SwaggerModule.createDocument(
       app,
-      new DocumentBuilder().setTitle('Devices').setVersion('1').build(),
+      new DocumentBuilder()
+        .setTitle('Devices')
+        .setVersion('1')
+        .addBearerAuth()
+        .build(),
     );
     const paths = Object.keys(document.paths);
     expect(paths).toContain('/api/v1/devices');
@@ -99,18 +126,42 @@ describe('기기 API 경로와 헤더 계약', () => {
         const operation = document.paths[path][method];
         if (!operation) continue;
         const parameters = operation.parameters ?? [];
-        for (const name of [
-          'X-Device-Id',
-          'X-Device-Secret',
-          'Authorization',
-        ]) {
+        for (const name of ['X-Device-Id']) {
           expect(
             parameters.filter(
               (param) => 'name' in param && param.name === name,
             ),
           ).toHaveLength(1);
         }
+        expect(
+          parameters.some(
+            (param) => 'name' in param && param.name === 'X-Device-Secret',
+          ),
+        ).toBe(false);
+        expect(operation.security).toEqual([{ bearer: [] }]);
       }
+    }
+  });
+
+  it('rejects missing and invalid Bearer tokens on every device route', async () => {
+    const routes = [
+      ['put', '/api/v1/devices'],
+      ['get', '/api/v1/devices'],
+      ['delete', '/api/v1/devices'],
+      ['put', '/api/v1/devices/live-activity'],
+      ['delete', '/api/v1/devices/live-activity'],
+      ['get', '/api/v1/notifications/subscriptions'],
+      ['put', '/api/v1/notifications/subscriptions/fst_test'],
+      ['delete', '/api/v1/notifications/subscriptions/fst_test'],
+    ] as const;
+    for (const [method, path] of routes) {
+      await request(app.getHttpServer() as App)
+        [method](path)
+        .expect(401);
+      await request(app.getHttpServer() as App)
+        [method](path)
+        .set('Authorization', 'Bearer invalid')
+        .expect(401);
     }
   });
 });

@@ -6,7 +6,7 @@
 
 ## 기기 및 구독 API
 
-모든 기기 요청은 `X-Device-Id` UUID v4 헤더로 기기를 선택한다. 기존 기기에는 최초 등록 때 발급된 `X-Device-Secret`을 함께 보낸다. 계정 JWT는 `Authorization: Bearer`로 선택적으로 보낼 수 있으며, 잘못된 JWT는 401이다. 기기 비밀값은 응답에 재노출하지 않는다.
+모든 기기·구독 요청은 `Authorization: Bearer <access JWT>`와 `X-Device-Id` UUID v4 헤더로 인증 사용자 소유의 기기를 선택한다. 기기 비밀값은 발급하거나 요구하지 않는다. 누락되거나 잘못된 JWT는 401, 다른 계정의 기기 ID는 403이다.
 
 - `PUT /api/v1/devices`: 기존 본문에 `apnsEnvironment` (`sandbox` 또는 `production`)를 필수로 추가한다. APNs 토큰의 대상 환경을 서버 배포 환경과 별도로 기록한다.
 - `GET /api/v1/notifications/subscriptions`: 현재 기기의 공개 축제 구독 목록을 반환한다. 응답 `data.items[]`는 `festivalId`, `festivalStarts`, `packUpdates`를 포함한다.

@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import {
   ApiBody,
+  ApiBearerAuth,
   ApiHeader,
   ApiOperation,
   ApiParam,
@@ -17,40 +18,53 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import type { Request } from 'express';
-import { Public } from '../auth/decorator/public.decorator';
+import { CurrentUser } from '../auth/decorator/current-user.decorator';
+import type { AuthUser } from '../auth/types/social-profile';
 import { DeviceSubscriptionDto } from './device.dto';
 import { DeviceService } from './device.service';
 
 @ApiTags('Notifications')
-@Public()
 @Controller('notifications/subscriptions')
+@ApiBearerAuth()
 @ApiHeader({
   name: 'X-Device-Id',
   required: true,
   description: 'Keychain에 보관한 UUID v4 기기 ID',
-})
-@ApiHeader({
-  name: 'X-Device-Secret',
-  required: true,
-  description: '최초 기기 등록 시 발급된 비밀값',
-})
-@ApiHeader({
-  name: 'Authorization',
-  required: false,
-  description: '선택: Bearer access JWT',
 })
 export class NotificationSubscriptionController {
   constructor(private readonly devices: DeviceService) {}
 
   @Get()
   @ApiOperation({ summary: '현재 기기의 축제 알림 구독 목록' })
-  @ApiResponse({ status: 200, description: '축제 시작·팩 변경 알림 설정 목록' })
-  async list(@Req() request: Request) {
-    return this.devices.listSubscriptions(
-      this.deviceId(request),
-      await this.devices.optionalUser(request.header('authorization')),
-      request.header('x-device-secret'),
-    );
+  @ApiResponse({
+    status: 200,
+    description: '축제 시작·팩 변경 알림 설정 목록',
+    schema: {
+      type: 'object',
+      properties: {
+        code: { type: 'string', example: 'SUCCESS' },
+        data: {
+          type: 'object',
+          properties: {
+            items: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  festivalId: { type: 'string', example: 'fst_example' },
+                  packUpdates: { type: 'boolean' },
+                  festivalStarts: { type: 'boolean' },
+                },
+              },
+            },
+          },
+        },
+        message: { type: 'string', example: '성공적으로 처리되었습니다.' },
+      },
+    },
+  })
+  async list(@Req() request: Request, @CurrentUser() user: AuthUser) {
+    return this.devices.listSubscriptions(this.deviceId(request), user.userId);
   }
 
   @Put(':festivalId')
@@ -62,13 +76,13 @@ export class NotificationSubscriptionController {
     @Param('festivalId') festivalId: string,
     @Body() body: DeviceSubscriptionDto,
     @Req() request: Request,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.devices.subscribe(
       this.deviceId(request),
       festivalId,
       body,
-      await this.devices.optionalUser(request.header('authorization')),
-      request.header('x-device-secret'),
+      user.userId,
     );
   }
 
@@ -80,12 +94,12 @@ export class NotificationSubscriptionController {
   async unsubscribe(
     @Param('festivalId') festivalId: string,
     @Req() request: Request,
+    @CurrentUser() user: AuthUser,
   ) {
     await this.devices.unsubscribe(
       this.deviceId(request),
       festivalId,
-      await this.devices.optionalUser(request.header('authorization')),
-      request.header('x-device-secret'),
+      user.userId,
     );
   }
 
