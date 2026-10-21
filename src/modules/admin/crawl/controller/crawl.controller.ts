@@ -10,6 +10,7 @@ import {
   Patch,
   Post,
   Query,
+  Req,
 } from '@nestjs/common';
 import {
   ApiCookieAuth,
@@ -20,11 +21,14 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { AdminRoles } from '../../auth/admin-roles.decorator';
+import { Request } from 'express';
 import {
   CreateCrawlSourceDto,
   UpdateCrawlSourceDto,
 } from '../dto/crawl-source.dto';
 import { CrawlService } from '../service/crawl.service';
+
+type AdminRequest = Request & { admin?: { id: string } };
 
 @ApiTags('Admin Crawl')
 @ApiCookieAuth('admin-session')
@@ -76,8 +80,8 @@ export class CrawlController {
     status: 422,
     description: 'robots.txt 금지·접근 실패 또는 축제 ID 누락입니다.',
   })
-  create(@Body() dto: CreateCrawlSourceDto) {
-    return this.crawl.createSource(dto);
+  create(@Body() dto: CreateCrawlSourceDto, @Req() req: AdminRequest) {
+    return this.crawl.createSource(dto, req.admin?.id ?? null);
   }
 
   @Patch('sources/:id')
@@ -93,8 +97,9 @@ export class CrawlController {
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateCrawlSourceDto,
+    @Req() req: AdminRequest,
   ) {
-    return this.crawl.updateSource(id, dto);
+    return this.crawl.updateSource(id, dto, req.admin?.id ?? null);
   }
 
   @Post('sources/:id/run')
@@ -111,8 +116,8 @@ export class CrawlController {
     description: '실행 요청 접수',
     schema: { example: { runId: '931aaccc-4a2a-4d20-8c97-a7741d1fe818' } },
   })
-  run(@Param('id', ParseUUIDPipe) id: string) {
-    return this.crawl.runNow(id);
+  run(@Param('id', ParseUUIDPipe) id: string, @Req() req: AdminRequest) {
+    return this.crawl.runNow(id, req.admin?.id ?? null);
   }
 
   @Post('sources/:id/test')

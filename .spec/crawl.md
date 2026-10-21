@@ -55,6 +55,8 @@
 
 `kind`는 `timetable`, `notice`, `directions`, `days`, `discovery` 중 하나다. `discovery`만 `festivalId`를 생략할 수 있다. 현재 등록 가능한 `parser`는 `html-table`, `html-text`, `regex-days`, `ticket-list`다. OCR 연동 전에는 `image-ocr` 소스 등록을 거절한다. 소스 종류와 파서 조합이 맞지 않으면 422를 반환한다.
 
+소스 생성·변경은 설정 전후값과 관리자 ID를 같은 DB 트랜잭션의 감사 기록에 남긴다. 수동 실행은 크롤 작업을 시작하기 전에 요청을 감사 기록하며, 기록에 실패하면 실행하지 않는다. 파싱 시험은 데이터를 변경하지 않는다.
+
 ## 제안 검토와 초안 반영
 
 | 메서드 | 경로                           | 역할   | 본문·쿼리                                | 결과                                |
