@@ -5,6 +5,7 @@ describe('RegisterDeviceDto APNs 토큰', () => {
   const make = (apnsToken: string | null) =>
     Object.assign(new RegisterDeviceDto(), {
       apnsToken,
+      apnsEnvironment: 'sandbox',
       appVersion: '1.0.0',
       osVersion: '18.0',
       locale: 'ko-KR',
@@ -33,5 +34,21 @@ describe('RegisterDeviceDto APNs 토큰', () => {
         Object.assign(make(null), { locale: `ko-${'a'.repeat(40)}` }),
       ),
     ).not.toHaveLength(0);
+  });
+
+  it('APNs 환경을 앱 토큰에 맞춰 명시해야 한다', async () => {
+    expect(
+      await validate(
+        Object.assign(make(null), { apnsEnvironment: 'production' }),
+      ),
+    ).toHaveLength(0);
+    expect(
+      await validate(
+        Object.assign(make(null), { apnsEnvironment: 'development' }),
+      ),
+    ).not.toHaveLength(0);
+    const missing = make(null);
+    Reflect.deleteProperty(missing, 'apnsEnvironment');
+    expect(await validate(missing)).not.toHaveLength(0);
   });
 });

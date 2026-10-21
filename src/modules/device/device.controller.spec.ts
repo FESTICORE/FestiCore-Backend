@@ -5,23 +5,29 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import { DeviceController } from './device.controller';
 import { DeviceService } from './device.service';
+import { NotificationSubscriptionController } from './notification-subscription.controller';
 
 describe('기기 API 경로와 헤더 계약', () => {
   let app: INestApplication;
   const service = {
     optionalUser: jest.fn().mockResolvedValue(null),
     register: jest.fn().mockResolvedValue({ deviceId: 'device-id' }),
+    get: jest.fn().mockResolvedValue({ deviceId: 'device-id' }),
+    remove: jest.fn().mockResolvedValue(undefined),
     startLiveActivity: jest.fn().mockResolvedValue(undefined),
     stopLiveActivity: jest.fn().mockResolvedValue(undefined),
+    listSubscriptions: jest.fn().mockResolvedValue({ items: [] }),
+    unsubscribe: jest.fn().mockResolvedValue(undefined),
     subscribe: jest.fn().mockResolvedValue({
       festivalId: 'fst_test',
       packUpdates: true,
+      festivalStarts: true,
     }),
   };
 
   beforeAll(async () => {
     const module = await Test.createTestingModule({
-      controllers: [DeviceController],
+      controllers: [DeviceController, NotificationSubscriptionController],
       providers: [{ provide: DeviceService, useValue: service }],
     }).compile();
     app = module.createNestApplication();
@@ -35,6 +41,7 @@ describe('기기 API 경로와 헤더 계약', () => {
   it('헤더의 기기 ID로 등록하고 경로의 기기 ID는 사용하지 않는다', async () => {
     const body = {
       apnsToken: null,
+      apnsEnvironment: 'sandbox',
       appVersion: '1.0.0',
       osVersion: '18.0',
       locale: 'ko-KR',
@@ -60,18 +67,22 @@ describe('기기 API 경로와 헤더 계약', () => {
 
   it('구독 대상 축제 ID와 헤더의 기기 ID를 분리한다', async () => {
     await request(app.getHttpServer() as App)
-      .put('/api/v1/devices/subscriptions/fst_test')
+      .put('/api/v1/notifications/subscriptions/fst_test')
       .set('X-Device-Id', 'header-device')
       .set('X-Device-Secret', 'secret')
-      .send({ packUpdates: true })
+      .send({ packUpdates: true, festivalStarts: true })
       .expect(200);
     expect(service.subscribe).toHaveBeenCalledWith(
       'header-device',
       'fst_test',
-      { packUpdates: true },
+      { packUpdates: true, festivalStarts: true },
       null,
       'secret',
     );
+    await request(app.getHttpServer() as App)
+      .put('/api/v1/devices/subscriptions/fst_test')
+      .send({ packUpdates: true, festivalStarts: true })
+      .expect(404);
   });
 
   it('Swagger에 헤더를 중복 표기하거나 deviceId 경로 변수를 남기지 않는다', () => {
@@ -81,10 +92,10 @@ describe('기기 API 경로와 헤더 계약', () => {
     );
     const paths = Object.keys(document.paths);
     expect(paths).toContain('/api/v1/devices');
-    expect(paths).toContain('/api/v1/devices/subscriptions/{festivalId}');
+    expect(paths).toContain('/api/v1/notifications/subscriptions/{festivalId}');
     expect(paths.some((path) => path.includes('{deviceId}'))).toBe(false);
     for (const path of paths) {
-      for (const method of ['put', 'delete'] as const) {
+      for (const method of ['get', 'put', 'delete'] as const) {
         const operation = document.paths[path][method];
         if (!operation) continue;
         const parameters = operation.parameters ?? [];

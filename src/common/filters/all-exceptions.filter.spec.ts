@@ -97,6 +97,25 @@ describe('AllExceptionsFilter', () => {
     expect(logged).not.toContain('apple-nonce-raw');
   });
 
+  it('기기 등록 오류의 APNs 토큰을 진단 로그에 남기지 않는다', () => {
+    const { host } = hostFor(
+      {
+        apnsToken: 'private-apns-token',
+        pushToken: 'private-push-token',
+        liveActivityPushToStartToken: 'private-live-token',
+      },
+      '/api/v1/devices',
+    );
+    new AllExceptionsFilter(configOf({ NODE_ENV: 'development' })).catch(
+      new BadRequestException('bad'),
+      host,
+    );
+    const logged = String((warn.mock.calls as unknown[][])[0][0]);
+    expect(logged).not.toContain('private-apns-token');
+    expect(logged).not.toContain('private-push-token');
+    expect(logged).not.toContain('private-live-token');
+  });
+
   it('Railway production 환경은 진단 바디를 기록하지 않는다', () => {
     const { host } = hostFor(badLogin);
     new AllExceptionsFilter(

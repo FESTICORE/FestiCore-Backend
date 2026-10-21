@@ -5,6 +5,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AdminFestival } from '../admin/festival/festival.entity';
 import { User } from '../auth/entity/user.entity';
 import { DeviceController } from './device.controller';
+import { NotificationSubscriptionController } from './notification-subscription.controller';
 import { Device, DeviceSubscription } from './device.entity';
 import { DeviceService } from './device.service';
 
@@ -14,7 +15,7 @@ import { DeviceService } from './device.service';
     JwtModule.register({}),
     ConfigModule,
   ],
-  controllers: [DeviceController],
+  controllers: [DeviceController, NotificationSubscriptionController],
   providers: [DeviceService],
   exports: [TypeOrmModule],
 })

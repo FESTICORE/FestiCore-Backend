@@ -4,16 +4,18 @@
 
 ## 구성
 
-| 영역    | 내용                                                                |
-| ------- | ------------------------------------------------------------------- |
-| common  | 표준 응답/에러 형식, 예외 필터, 로깅·응답 인터셉터, API 도메인 목록 |
-| gateway | 전역 Throttler·JwtAuthGuard(`@Public` 예외)·필터·인터셉터           |
-| swagger | `/api-docs` 공개 API, `/admin/api-docs` 관리자 API. 각 경로에 도메인별 문서 제공 |
-| auth    | Google·Apple 통합 로그인, JWT access/refresh 회전, 회원 탈퇴      |
-| admin   | 관리자 매직 링크 인증, 축제 초안·발행·롤백                       |
-| storage | Railway 비공개 버킷의 WebP 사진 저장·읽기                       |
-| flags   | 공개 깃발, 팔로우·기수·상태·사진·관리자 신고 처리              |
-| health  | `GET /api/v1/health` — DB 실패 시 503                               |
+| 영역          | 내용                                                                             |
+| ------------- | -------------------------------------------------------------------------------- |
+| common        | 표준 응답/에러 형식, 예외 필터, 로깅·응답 인터셉터, API 도메인 목록              |
+| gateway       | 전역 Throttler·JwtAuthGuard(`@Public` 예외)·필터·인터셉터                        |
+| swagger       | `/api-docs` 공개 API, `/admin/api-docs` 관리자 API. 각 경로에 도메인별 문서 제공 |
+| auth          | Google·Apple 통합 로그인, JWT access/refresh 회전, 회원 탈퇴                     |
+| admin         | 관리자 매직 링크 인증, 축제 초안·발행·롤백                                       |
+| storage       | Railway 비공개 버킷의 WebP 사진 저장·읽기                                        |
+| flags         | 공개 깃발, 팔로우·기수·상태·사진·관리자 신고 처리                                |
+| devices       | 기기 등록·조회·삭제와 Live Activity 토큰 관리                                    |
+| notifications | 축제 시작 알림 구독·예약 작업·APNs 발송                                          |
+| health        | `GET /api/v1/health` — DB 실패 시 503                                            |
 
 구조와 규칙은 [아키텍처 문서](./docs/architecture/ARCHITECTURE.md), 엔드포인트 계약은 [.spec/](./.spec/README.md),
 배포는 [Railway 문서](./docs/deployment/RAILWAY.md)를 본다. 문서 전체 목록은 [docs/](./docs/README.md)에 있다.

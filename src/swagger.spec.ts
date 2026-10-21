@@ -43,6 +43,12 @@ describe('Swagger 문서 분리', () => {
           },
         },
       },
+      '/api/v1/devices': {
+        put: { responses: { 200: { description: 'OK' } } },
+      },
+      '/api/v1/notifications/subscriptions': {
+        get: { responses: { 200: { description: 'OK' } } },
+      },
       '/api/v1/admin/auth/session': {
         get: { responses: { 200: { description: 'OK' } } },
       },
@@ -81,6 +87,8 @@ describe('Swagger 문서 분리', () => {
       '/api/v1/auth/login',
       '/api/v1/flags',
       '/api/v1/festivals',
+      '/api/v1/devices',
+      '/api/v1/notifications/subscriptions',
     ]);
     expect(adminPaths).toEqual([
       '/api/v1/admin/auth/session',
@@ -89,6 +97,12 @@ describe('Swagger 문서 분리', () => {
     ]);
     expect(Object.keys(documents.get('api-docs/flags')!.paths)).toEqual(
       publicPaths,
+    );
+    expect(Object.keys(documents.get('api-docs/devices')!.paths)).toEqual([
+      '/api/v1/devices',
+    ]);
+    expect(Object.keys(documents.get('api-docs/notifications')!.paths)).toEqual(
+      ['/api/v1/notifications/subscriptions'],
     );
     expect(Object.keys(documents.get('admin/api-docs/flags')!.paths)).toEqual(
       adminPaths,

@@ -1,4 +1,8 @@
-import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { DeviceService } from './device.service';
 
@@ -10,14 +14,16 @@ describe('DeviceService ownership', () => {
     osVersion: '18.0',
     locale: 'ko-KR',
     timezone: 'Asia/Seoul',
+    apnsEnvironment: 'sandbox' as const,
   };
   const devices = {
     findOne: jest.fn(),
     insert: jest.fn(),
     update: jest.fn(),
+    delete: jest.fn(),
     save: jest.fn(),
   };
-  const subscriptions = { find: jest.fn(), save: jest.fn() };
+  const subscriptions = { find: jest.fn(), save: jest.fn(), delete: jest.fn() };
   const festivals = { findOne: jest.fn() };
   const users = { findOne: jest.fn() };
   const jwt = { verifyAsync: jest.fn() };
@@ -36,6 +42,8 @@ describe('DeviceService ownership', () => {
     subscriptions.find.mockResolvedValue([]);
     devices.insert.mockResolvedValue(undefined);
     devices.update.mockResolvedValue({ affected: 1 });
+    devices.delete.mockResolvedValue({ affected: 1 });
+    subscriptions.delete.mockResolvedValue({ affected: 1 });
     devices.save.mockImplementation((value: unknown) => Promise.resolve(value));
     users.findOne.mockResolvedValue({ id: 'user-a', provider: 'google' });
   });
@@ -44,6 +52,37 @@ describe('DeviceService ownership', () => {
     jwt.verifyAsync.mockRejectedValue(new Error('bad signature'));
     await expect(service.optionalUser('Bearer invalid')).rejects.toBeInstanceOf(
       UnauthorizedException,
+    );
+  });
+
+  it('rejects a malformed device ID before registration', async () => {
+    await expect(
+      service.register('not-a-uuid', body, null),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(devices.insert).not.toHaveBeenCalled();
+  });
+
+  it('returns device metadata without tokens and deletes only with ownership proof', async () => {
+    const secret = 'a'.repeat(64);
+    devices.findOne.mockResolvedValue({
+      id,
+      userId: null,
+      appVersion: body.appVersion,
+      osVersion: body.osVersion,
+      locale: body.locale,
+      timezone: body.timezone,
+      apnsEnvironment: 'sandbox',
+      apnsToken: body.apnsToken,
+    });
+    await expect(service.remove(id, null)).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+    const info = await service.get(id, null, secret);
+    expect(info).not.toHaveProperty('apnsToken');
+    expect(info).not.toHaveProperty('deviceSecretHash');
+    await service.remove(id, null, secret);
+    expect(devices.delete).toHaveBeenCalledWith(
+      expect.objectContaining({ id }),
     );
   });
 
@@ -103,7 +142,12 @@ describe('DeviceService ownership', () => {
       ForbiddenException,
     );
     await expect(
-      service.subscribe(id, 'fst_test', { packUpdates: true }, null),
+      service.subscribe(
+        id,
+        'fst_test',
+        { packUpdates: true, festivalStarts: true },
+        null,
+      ),
     ).rejects.toBeInstanceOf(ForbiddenException);
     expect(devices.save).not.toHaveBeenCalled();
     expect(subscriptions.save).not.toHaveBeenCalled();
@@ -151,7 +195,7 @@ describe('DeviceService ownership', () => {
     await service.subscribe(
       id,
       'fst_test',
-      { packUpdates: true },
+      { packUpdates: true, festivalStarts: true },
       null,
       secret,
     );
@@ -163,6 +207,7 @@ describe('DeviceService ownership', () => {
       deviceId: id,
       festivalId: 'fst_test',
       packUpdates: true,
+      festivalStarts: true,
     });
   });
 
@@ -172,7 +217,12 @@ describe('DeviceService ownership', () => {
       ForbiddenException,
     );
     await expect(
-      service.subscribe(id, 'fst_test', { packUpdates: true }, 'user-b'),
+      service.subscribe(
+        id,
+        'fst_test',
+        { packUpdates: true, festivalStarts: true },
+        'user-b',
+      ),
     ).rejects.toBeInstanceOf(ForbiddenException);
     expect(devices.save).not.toHaveBeenCalled();
     expect(subscriptions.save).not.toHaveBeenCalled();

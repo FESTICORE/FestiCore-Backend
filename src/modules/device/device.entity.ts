@@ -20,6 +20,9 @@ export class Device {
   @Column({ type: 'varchar', length: 256, nullable: true, select: false })
   apnsToken!: string | null;
 
+  @Column({ type: 'varchar', length: 10, nullable: true })
+  apnsEnvironment!: 'sandbox' | 'production' | null;
+
   @Column({ type: 'varchar', length: 256, nullable: true, select: false })
   liveActivityPushToStartToken!: string | null;
 
@@ -61,4 +64,7 @@ export class DeviceSubscription {
 
   @Column({ type: 'boolean' })
   packUpdates!: boolean;
+
+  @Column({ type: 'boolean', default: false })
+  festivalStarts!: boolean;
 }

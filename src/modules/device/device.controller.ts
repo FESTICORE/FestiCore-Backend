@@ -2,8 +2,8 @@ import {
   Body,
   Controller,
   Delete,
+  Get,
   HttpCode,
-  Param,
   Put,
   Req,
 } from '@nestjs/common';
@@ -12,16 +12,11 @@ import {
   ApiBody,
   ApiHeader,
   ApiOperation,
-  ApiParam,
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
 import { Public } from '../auth/decorator/public.decorator';
-import {
-  DeviceSubscriptionDto,
-  LiveActivityDto,
-  RegisterDeviceDto,
-} from './device.dto';
+import { LiveActivityDto, RegisterDeviceDto } from './device.dto';
 import { DeviceService } from './device.service';
 
 @ApiTags('Devices')
@@ -78,6 +73,7 @@ export class DeviceController {
                 properties: {
                   festivalId: { type: 'string' },
                   packUpdates: { type: 'boolean' },
+                  festivalStarts: { type: 'boolean' },
                 },
               },
             },
@@ -91,6 +87,32 @@ export class DeviceController {
     return this.service.register(
       this.deviceId(request),
       body,
+      await this.service.optionalUser(request.header('authorization')),
+      request.header('x-device-secret'),
+    );
+  }
+
+  @Get()
+  @ApiOperation({ summary: '현재 기기 등록 상태 조회' })
+  @ApiResponse({
+    status: 200,
+    description: '비밀값과 푸시 토큰을 제외한 기기 정보',
+  })
+  async get(@Req() request: Request) {
+    return this.service.get(
+      this.deviceId(request),
+      await this.service.optionalUser(request.header('authorization')),
+      request.header('x-device-secret'),
+    );
+  }
+
+  @Delete()
+  @HttpCode(204)
+  @ApiOperation({ summary: '현재 기기와 모든 알림 구독 삭제' })
+  @ApiResponse({ status: 204, description: '삭제됨' })
+  async remove(@Req() request: Request) {
+    await this.service.remove(
+      this.deviceId(request),
       await this.service.optionalUser(request.header('authorization')),
       request.header('x-device-secret'),
     );
@@ -120,42 +142,6 @@ export class DeviceController {
   async stopLiveActivity(@Req() request: Request) {
     await this.service.stopLiveActivity(
       this.deviceId(request),
-      await this.service.optionalUser(request.header('authorization')),
-      request.header('x-device-secret'),
-    );
-  }
-
-  @Put('subscriptions/:festivalId')
-  @ApiOperation({ summary: '축제 팩 변경 알림 구독 설정' })
-  @ApiParam({ name: 'festivalId', description: '발행된 축제 ID' })
-  @ApiBody({ type: DeviceSubscriptionDto })
-  @ApiResponse({
-    status: 200,
-    description: '축제 ID와 packUpdates 설정',
-    schema: {
-      type: 'object',
-      properties: {
-        code: { type: 'string', example: 'SUCCESS' },
-        data: {
-          type: 'object',
-          properties: {
-            festivalId: { type: 'string', example: 'fst_01234567' },
-            packUpdates: { type: 'boolean', example: true },
-          },
-        },
-        message: { type: 'string', example: '성공적으로 처리되었습니다.' },
-      },
-    },
-  })
-  async subscribe(
-    @Param('festivalId') festivalId: string,
-    @Body() body: DeviceSubscriptionDto,
-    @Req() request: Request,
-  ) {
-    return this.service.subscribe(
-      this.deviceId(request),
-      festivalId,
-      body,
       await this.service.optionalUser(request.header('authorization')),
       request.header('x-device-secret'),
     );
