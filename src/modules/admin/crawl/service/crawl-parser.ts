@@ -94,6 +94,30 @@ const VERIFIED_FESTIVAL_BRAND =
   /^(?:WONDERLIVET|원더리벳|COUNTDOWN FANTASY)(?:\s|$)/i;
 const DATE_TEXT =
   /\b20\d{2}[.\-/]\s?(?:0?[1-9]|1[0-2])[.\-/]\s?(?:[0-2]?\d|3[01])(?:\s?[-~–]\s?(?:(?:20\d{2})[.\-/]\s?)?(?:0?[1-9]|1[0-2])[.\-/]\s?(?:[0-2]?\d|3[01]))?/;
+const NOL_EVENT_DATE =
+  /^(20\d{2}|\d{2})\.(\d{2})\.(\d{2})(?:\s*[~–-]\s*(?:(20\d{2}|\d{2})\.)?(\d{2})\.(\d{2}))?$/;
+
+function nolEventDate(value: string): string | undefined {
+  const match = NOL_EVENT_DATE.exec(value.trim());
+  if (!match) return undefined;
+  const valid = (year: string, month: string, day: string) => {
+    const fullYear = Number(year.length === 2 ? `20${year}` : year);
+    const date = new Date(Date.UTC(fullYear, Number(month) - 1, Number(day)));
+    return (
+      date.getUTCFullYear() === fullYear &&
+      date.getUTCMonth() + 1 === Number(month) &&
+      date.getUTCDate() === Number(day)
+    );
+  };
+  if (!valid(match[1], match[2], match[3])) return undefined;
+  const year = (part: string) => (part.length === 2 ? `20${part}` : part);
+  const first = `${year(match[1])}.${match[2]}.${match[3]}`;
+  if (!match[5]) return first;
+  const lastYear = match[4] ?? match[1];
+  if (!valid(lastYear, match[5], match[6])) return undefined;
+  const last = `${year(lastYear)}.${match[5]}.${match[6]}`;
+  return last >= first ? `${first} - ${last}` : undefined;
+}
 
 function mintPaperCandidates(
   body: string,
@@ -435,12 +459,11 @@ function ticketCandidates(body: string, base: string): FestivalCandidate[] {
       candidates.set(entry.url, entry);
     if (candidates.size >= 100) break;
   }
-  // Some ticket listings render cards without anchors and serialize the product
-  // action in their page data. dateInfo is often the ticket opening time, so it
-  // must not be presented as the festival date.
+  // Some ticket listings serialize product cards without anchors. NOL dateInfo
+  // can also be the ticket opening time, so accept only complete calendar dates.
   const pageData = body.replace(/\\"/g, '"');
   for (const match of pageData.matchAll(
-    /"action":\{[^{}]{0,500}?"web":"([^"]+)"\}[^{}]{0,1000}?"title":"([^"]+)"/g,
+    /"action":\{[^{}]{0,500}?"web":"([^"]+)"\}[^{}]{0,1000}?"title":"([^"]+)"([^{}]{0,500})/g,
   )) {
     let url: URL;
     try {
@@ -457,8 +480,23 @@ function ticketCandidates(body: string, base: string): FestivalCandidate[] {
     )
       continue;
     url.hash = '';
-    if (!candidates.has(url.toString()))
-      candidates.set(url.toString(), { name, url: url.toString() });
+    const entry: FestivalCandidate = { name, url: url.toString() };
+    if (
+      sourceUrl.hostname === 'nol.yanolja.com' &&
+      url.hostname === 'nol.yanolja.com' &&
+      /^\/ticket\/products\/\d+$/.test(url.pathname)
+    ) {
+      const dateInfo = /"dateInfo":"([^"]{1,80})"/.exec(match[3])?.[1];
+      const date = dateInfo && nolEventDate(dateInfo);
+      if (date) entry.date = date;
+      const location = /"locationDetails":\["([^"]{1,160})"\]/
+        .exec(match[3])?.[1]
+        ?.trim();
+      if (location && !/[<>\\]/.test(location)) entry.venue = location;
+    }
+    const previous = candidates.get(entry.url);
+    if (!previous || Object.keys(entry).length > Object.keys(previous).length)
+      candidates.set(entry.url, entry);
     if (candidates.size >= 100) break;
   }
   return [...candidates.values()];

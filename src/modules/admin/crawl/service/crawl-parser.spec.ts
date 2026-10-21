@@ -84,6 +84,41 @@ describe('crawl parsers', () => {
     ]);
   });
 
+  it('reads verified NOL event dates and venues without treating opening times as event dates', async () => {
+    const nol = source('ticket-list', 'discovery');
+    nol.url = 'https://nol.yanolja.com/ticket';
+    const html = String.raw`<script>self.__next_f.push([1,"action":{"web":"https://nol.yanolja.com/ticket/products/26013510"},"title":"ASEAN-Korea Music Festival 2026 ROUND in Korea","dateInfo":"26.11.07 ~ 26.11.08","locationDetails":["인천남동체육관"]},{"action":{"web":"https://nol.yanolja.com/ticket/products/26015181"},"title":"썸띵 뉴 뮤직 페스티벌 2026","dateInfo":"10.23(금) 17:00","locationDetails":[]}]);</script>`;
+    expect(await parseCrawl(nol, html)).toEqual([
+      {
+        name: 'ASEAN-Korea Music Festival 2026 ROUND in Korea',
+        url: 'https://nol.yanolja.com/ticket/products/26013510',
+        date: '2026.11.07 - 2026.11.08',
+        venue: '인천남동체육관',
+      },
+      {
+        name: '썸띵 뉴 뮤직 페스티벌 2026',
+        url: 'https://nol.yanolja.com/ticket/products/26015181',
+      },
+    ]);
+  });
+
+  it('omits invalid NOL dates and does not attach another product’s venue', async () => {
+    const nol = source('ticket-list', 'discovery');
+    nol.url = 'https://nol.yanolja.com/ticket';
+    const html = String.raw`<script>self.__next_f.push([1,"action":{"web":"https://nol.yanolja.com/ticket/products/1"},"title":"서울 페스티벌","dateInfo":"26.02.30 ~ 26.03.01","locationDetails":[]},{"action":{"web":"https://nol.yanolja.com/ticket/products/2"},"title":"부산 페스티벌","dateInfo":"26.13.01","locationDetails":["부산 공연장"]}]);</script>`;
+    expect(await parseCrawl(nol, html)).toEqual([
+      {
+        name: '서울 페스티벌',
+        url: 'https://nol.yanolja.com/ticket/products/1',
+      },
+      {
+        name: '부산 페스티벌',
+        url: 'https://nol.yanolja.com/ticket/products/2',
+        venue: '부산 공연장',
+      },
+    ]);
+  });
+
   it('reads the Melon festival category JSON and rejects concerts included in the category', async () => {
     const melon = source('ticket-list', 'discovery');
     melon.url =
