@@ -128,9 +128,32 @@ async function decodeHeif(bytes: Buffer): Promise<Buffer> {
   const decoded = join(directory, 'decoded.jpg');
   try {
     await writeFile(source, bytes, { mode: 0o600 });
+    const { stdout } = await execFileAsync('heif-info', [source], {
+      timeout: 3_000,
+      maxBuffer: 64 * 1024,
+      env: { ...process.env },
+    });
+    const primary = stdout
+      .split('\n')
+      .find((line) => /^\s*image:.*\bprimary\b/.test(line));
+    const dimensions = primary?.match(/\b(\d+)x(\d+)\b/);
+    const width = Number(dimensions?.[1]);
+    const height = Number(dimensions?.[2]);
+    if (
+      !Number.isSafeInteger(width) ||
+      !Number.isSafeInteger(height) ||
+      width < 1 ||
+      height < 1
+    )
+      throw new UnsupportedMediaTypeException(
+        'HEIC/HEIF 이미지 크기를 확인할 수 없습니다.',
+      );
+    if (width * height > 40_000_000)
+      throw new PayloadTooLargeException('사진 해상도가 너무 큽니다.');
     await execFileAsync('heif-dec', ['-q', '90', source, decoded], {
       timeout: 10_000,
       maxBuffer: 64 * 1024,
+      env: { ...process.env },
     });
     if ((await stat(decoded)).size > MAX_IMAGE_BYTES * 10)
       throw new PayloadTooLargeException('변환된 사진이 너무 큽니다.');

@@ -1,7 +1,16 @@
 import { ConfigService } from '@nestjs/config';
 import { Buffer } from 'buffer';
 import { createHash, randomUUID } from 'crypto';
-import { existsSync, readFileSync } from 'fs';
+import { execFileSync } from 'child_process';
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'fs';
+import { tmpdir } from 'os';
 import { join } from 'path';
 import { Readable } from 'stream';
 import sharp from 'sharp';
@@ -169,6 +178,81 @@ describe('flag image storage', () => {
       expect((await sharp(result.thumbnail).metadata()).width).toBe(128);
     },
   );
+
+  it('checks primary HEIF dimensions before invoking the decoder', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'festicore-heif-test-'));
+    const originalPath = process.env.PATH;
+    const originalJpeg = process.env.FESTICORE_HEIF_TEST_JPEG;
+    const heic = readFileSync(join(__dirname, 'fixtures/valid-320.heic'));
+    const info = join(directory, 'heif-info');
+    const decoder = join(directory, 'heif-dec');
+    const marker = join(directory, 'decoder-ran');
+    try {
+      const jpeg = await sharp({
+        create: { width: 320, height: 320, channels: 3, background: '#0077aa' },
+      })
+        .jpeg()
+        .toBuffer();
+      const jpegPath = join(directory, 'valid.jpg');
+      writeFileSync(jpegPath, jpeg);
+      writeFileSync(
+        decoder,
+        `#!/bin/sh\ntouch '${marker}'\ncp "$FESTICORE_HEIF_TEST_JPEG" "$4"\n`,
+      );
+      chmodSync(decoder, 0o700);
+      process.env.PATH = `${directory}:${originalPath ?? ''}`;
+      process.env.FESTICORE_HEIF_TEST_JPEG = jpegPath;
+
+      for (const output of [
+        'image: 10000x5000 (id=42), primary',
+        'image: 42 (10000x5000), primary',
+      ]) {
+        writeFileSync(info, `#!/bin/sh\nprintf '%s\\n' '${output}'\n`);
+        chmodSync(info, 0o700);
+        expect(process.env.PATH).toContain(directory);
+        expect(existsSync(info)).toBe(true);
+        expect(execFileSync(info, ['unused'], { encoding: 'utf8' })).toContain(
+          output,
+        );
+        expect(
+          execFileSync('heif-info', ['unused'], {
+            encoding: 'utf8',
+            env: { ...process.env },
+          }),
+        ).toContain(output);
+        await expect(
+          prepareFlagPhoto(heic, 'image/heic'),
+        ).rejects.toMatchObject({
+          status: 413,
+        });
+        expect(existsSync(marker)).toBe(false);
+      }
+
+      writeFileSync(
+        info,
+        "#!/bin/sh\nprintf '%s\\n' 'image: invalid, primary'\n",
+      );
+      await expect(prepareFlagPhoto(heic, 'image/heic')).rejects.toMatchObject({
+        status: 415,
+      });
+      expect(existsSync(marker)).toBe(false);
+
+      writeFileSync(
+        info,
+        "#!/bin/sh\nprintf '%s\\n' 'image: 320x320 (id=42), primary'\n",
+      );
+      const result = await prepareFlagPhoto(heic, 'image/heic');
+      expect(result.photo).toBeInstanceOf(Buffer);
+      expect(result.thumbnail).toBeInstanceOf(Buffer);
+      expect(existsSync(marker)).toBe(true);
+    } finally {
+      process.env.PATH = originalPath;
+      if (originalJpeg === undefined)
+        delete process.env.FESTICORE_HEIF_TEST_JPEG;
+      else process.env.FESTICORE_HEIF_TEST_JPEG = originalJpeg;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
 
   it('rejects keys from another flag before contacting storage', async () => {
     const service = new ImageStorageService({} as ConfigService);
