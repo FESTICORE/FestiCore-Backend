@@ -20,12 +20,19 @@ describe('FestivalStartService', () => {
   function setup() {
     const query = jest.fn<Promise<unknown>, [string, unknown[]?]>();
     const sendStartNotification = jest.fn();
+    const sendPackUpdated = jest.fn();
     const isConfigured = jest.fn().mockReturnValue(true);
     const service = new FestivalStartService(
       { query } as never,
-      { sendStartNotification, isConfigured } as never,
+      { sendStartNotification, sendPackUpdated, isConfigured } as never,
     );
-    return { service, query, sendStartNotification, isConfigured };
+    return {
+      service,
+      query,
+      sendStartNotification,
+      sendPackUpdated,
+      isConfigured,
+    };
   }
 
   it('enqueues only upcoming published days for subscribed devices', async () => {
@@ -133,6 +140,54 @@ describe('FestivalStartService', () => {
 
     expect(sendStartNotification).not.toHaveBeenCalled();
     expect(query.mock.calls[0][0]).toContain('s."festivalStarts" = true');
+    expect(query.mock.calls[1][1]).toEqual([
+      job.id,
+      leaseUntil,
+      'cancelled',
+      'TARGET_UNAVAILABLE',
+    ]);
+  });
+
+  it('sends a silent pack update only for the current published version', async () => {
+    const { service, query, sendPackUpdated } = setup();
+    const update = { ...job, eventKey: `pack-updated:${festivalId}:3` };
+    query.mockResolvedValueOnce([
+      {
+        apnsToken: 'token',
+        apnsEnvironment: 'production',
+        publishedVersion: 3,
+      },
+    ]);
+    sendPackUpdated.mockResolvedValueOnce({ accepted: true });
+    query.mockResolvedValueOnce([]);
+
+    await service.deliver(update, scheduledAt);
+
+    expect(query.mock.calls[0][0]).toContain('s."packUpdates" = true');
+    expect(sendPackUpdated).toHaveBeenCalledWith(
+      'token',
+      'production',
+      festivalId,
+      3,
+    );
+    expect(query.mock.calls[1][1]).toEqual([job.id, leaseUntil, 'sent', null]);
+  });
+
+  it('cancels an outdated pack update before APNs delivery', async () => {
+    const { service, query, sendPackUpdated } = setup();
+    query.mockResolvedValueOnce([
+      {
+        apnsToken: 'token',
+        apnsEnvironment: 'production',
+        publishedVersion: 4,
+      },
+    ]);
+    query.mockResolvedValueOnce([]);
+    await service.deliver(
+      { ...job, eventKey: `pack-updated:${festivalId}:3` },
+      scheduledAt,
+    );
+    expect(sendPackUpdated).not.toHaveBeenCalled();
     expect(query.mock.calls[1][1]).toEqual([
       job.id,
       leaseUntil,

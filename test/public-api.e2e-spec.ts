@@ -195,6 +195,9 @@ describe('Public festival API', () => {
     const first = await request(server)
       .get(`/api/v1/festivals/${pack.id}/pack`)
       .expect(200);
+    expect(first.headers['cache-control']).toBe(
+      'public, no-cache, must-revalidate',
+    );
     expect(successData(first.body)).toEqual(
       expect.objectContaining({
         id: pack.id,

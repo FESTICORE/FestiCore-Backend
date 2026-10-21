@@ -263,7 +263,7 @@ export class PublicFestivalController {
   })
   async version(@Param('id') id: string, @Res() response: Response) {
     const body = await this.service.version(id);
-    response.setHeader('Cache-Control', 'public, max-age=300');
+    response.setHeader('Cache-Control', 'public, no-cache, must-revalidate');
     this.send(response, body);
   }
 
@@ -315,10 +315,7 @@ export class PublicFestivalController {
     @Res() response: Response,
   ) {
     const body = await this.service.published(id);
-    response.setHeader(
-      'Cache-Control',
-      'public, max-age=3600, stale-while-revalidate=86400',
-    );
+    response.setHeader('Cache-Control', 'public, no-cache, must-revalidate');
     response.setHeader('Date', new Date().toUTCString());
     response.setHeader('Vary', 'Accept-Encoding');
     const etag = envelopeEtag(`"v${body.packVersion as number}"`);

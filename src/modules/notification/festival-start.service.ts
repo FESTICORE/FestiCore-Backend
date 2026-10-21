@@ -39,6 +39,7 @@ interface DeliveryTarget {
   apnsEnvironment: 'sandbox' | 'production' | null;
   name: string | null;
   days: unknown;
+  publishedVersion: number;
 }
 
 function validDays(value: unknown): Day[] {
@@ -185,14 +186,18 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
   }
 
   async deliver(job: Delivery, now = new Date()): Promise<void> {
+    const packUpdate = job.eventKey.startsWith(
+      `pack-updated:${job.festivalId}:`,
+    );
     const rows = await this.db.query<DeliveryTarget[]>(
       `
       SELECT d."apnsToken", d."apnsEnvironment",
-        f."published"->>'name' AS "name", f."published"->'days' AS "days"
+        f."published"->>'name' AS "name", f."published"->'days' AS "days",
+        f."publishedVersion" AS "publishedVersion"
       FROM "notification_deliveries" n
       JOIN "devices" d ON d."id" = n."deviceId"
       JOIN "device_subscriptions" s ON s."deviceId" = n."deviceId"
-        AND s."festivalId" = n."festivalId" AND s."festivalStarts" = true
+        AND s."festivalId" = n."festivalId" AND s."${packUpdate ? 'packUpdates' : 'festivalStarts'}" = true
       JOIN "admin_festivals" f ON f."id" = n."festivalId"
         AND f."published" IS NOT NULL AND f."publishedVersion" > 0
       WHERE n."id" = $1 AND n."status" = 'leased'
@@ -200,6 +205,29 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
       [job.id, job.leaseUntil],
     );
     const target = rows[0];
+    if (packUpdate) {
+      const expectedVersion = Number(
+        job.eventKey.slice(`pack-updated:${job.festivalId}:`.length),
+      );
+      if (
+        !target?.apnsToken ||
+        !target.apnsEnvironment ||
+        !Number.isSafeInteger(expectedVersion) ||
+        Number(target.publishedVersion) !== expectedVersion
+      ) {
+        await this.finish(job, 'cancelled', 'TARGET_UNAVAILABLE');
+        return;
+      }
+      await this.sendDelivery(job, () =>
+        this.apns.sendPackUpdated(
+          target.apnsToken!,
+          target.apnsEnvironment!,
+          job.festivalId,
+          expectedVersion,
+        ),
+      );
+      return;
+    }
     const date = job.eventKey.slice(`festival-start:${job.festivalId}:`.length);
     const day = validDays(target?.days).find((item) => item.date === date);
     const currentStart = day && new Date(day.startsAt);
@@ -224,17 +252,28 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
       );
       return;
     }
-    let result: Awaited<ReturnType<ApnsService['sendStartNotification']>>;
-    try {
-      result = await this.apns.sendStartNotification(
-        target.apnsToken,
-        target.apnsEnvironment,
+    await this.sendDelivery(job, () =>
+      this.apns.sendStartNotification(
+        target.apnsToken!,
+        target.apnsEnvironment!,
         {
           title: `${target.name} 시작`,
           body: '페스티벌이 시작됐어요.',
           eventKey: job.eventKey,
         },
-      );
+      ),
+    );
+  }
+
+  private async sendDelivery(
+    job: Delivery,
+    send: () => Promise<
+      Awaited<ReturnType<ApnsService['sendStartNotification']>>
+    >,
+  ): Promise<void> {
+    let result: Awaited<ReturnType<ApnsService['sendStartNotification']>>;
+    try {
+      result = await send();
     } catch {
       if (job.attempts + 1 >= MAX_ATTEMPTS)
         await this.finish(job, 'failed', 'APNS_ERROR');
