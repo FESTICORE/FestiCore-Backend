@@ -1,5 +1,5 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { CrawlAlert } from '../entity/crawl-alert.entity';
 import { CrawlAlertService } from './crawl-alert.service';
 
@@ -31,8 +31,22 @@ describe('CrawlAlertService', () => {
     findOneBy: jest.fn(),
     findOneByOrFail: jest.fn(),
   };
+  const alertRepo = {
+    findOne: jest.fn(),
+    save: jest.fn((value: CrawlAlert) => Promise.resolve(value)),
+  };
+  const manager = { getRepository: jest.fn(() => alertRepo) };
+  const dataSource = {
+    transaction: jest.fn(
+      (callback: (manager: typeof manager) => Promise<unknown>) =>
+        callback(manager),
+    ),
+  };
+  const audit = { record: jest.fn().mockResolvedValue(undefined) };
   const service = new CrawlAlertService(
     repository as unknown as Repository<CrawlAlert>,
+    dataSource as unknown as DataSource,
+    audit as never,
   );
 
   beforeEach(() => {
@@ -77,25 +91,49 @@ describe('CrawlAlertService', () => {
   });
 
   it('acknowledges once and preserves the original acknowledgement', async () => {
-    execute
-      .mockResolvedValueOnce({ affected: 1 })
-      .mockResolvedValueOnce({ affected: 0 });
-    const alert = { id: 'alert', acknowledgedBy: 'admin' };
-    repository.findOneByOrFail.mockResolvedValue(alert);
-    repository.findOneBy.mockResolvedValue(alert);
+    const alert = {
+      id: 'alert',
+      acknowledgedAt: null as Date | null,
+      acknowledgedBy: null as string | null,
+    } as CrawlAlert;
+    alertRepo.findOne.mockResolvedValue(alert);
     expect(await service.acknowledge('alert', 'admin')).toBe(alert);
     expect(await service.acknowledge('alert', 'other')).toBe(alert);
-    expect(where).toHaveBeenCalledWith(
-      'id = :id AND "acknowledgedAt" IS NULL',
-      { id: 'alert' },
-    );
+    expect(alert.acknowledgedBy).toBe('admin');
+    expect(alert.acknowledgedAt).toBeInstanceOf(Date);
+    expect(alertRepo.save).toHaveBeenCalledTimes(1);
+    expect(audit.record).toHaveBeenCalledTimes(1);
+    expect(audit.record).toHaveBeenCalledWith(manager, {
+      actor: 'admin',
+      action: 'crawl.alert.acknowledged',
+      target: 'crawl-alert:alert',
+      before: { acknowledgedAt: null, acknowledgedBy: null },
+      after: {
+        acknowledgedAt: alert.acknowledgedAt,
+        acknowledgedBy: 'admin',
+      },
+    });
   });
 
   it('returns 404 for an unknown alert', async () => {
-    execute.mockResolvedValue({ affected: 0 });
-    repository.findOneBy.mockResolvedValue(null);
+    alertRepo.findOne.mockResolvedValue(null);
     await expect(service.acknowledge('missing', 'admin')).rejects.toThrow(
       NotFoundException,
     );
+  });
+
+  it('rejects acknowledgement when the audit record fails', async () => {
+    const alert = {
+      id: 'alert',
+      acknowledgedAt: null,
+      acknowledgedBy: null,
+    } as CrawlAlert;
+    alertRepo.findOne.mockResolvedValue(alert);
+    audit.record.mockRejectedValueOnce(new Error('audit unavailable'));
+
+    await expect(service.acknowledge('alert', 'admin')).rejects.toThrow(
+      'audit unavailable',
+    );
+    expect(alertRepo.save).toHaveBeenCalledTimes(1);
   });
 });

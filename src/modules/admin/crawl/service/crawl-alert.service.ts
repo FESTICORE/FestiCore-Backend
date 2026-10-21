@@ -4,7 +4,8 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
+import { AdminAuditService } from '../../audit/admin-audit.service';
 import { CrawlAlert } from '../entity/crawl-alert.entity';
 
 @Injectable()
@@ -12,6 +13,8 @@ export class CrawlAlertService {
   constructor(
     @InjectRepository(CrawlAlert)
     private readonly alerts: Repository<CrawlAlert>,
+    private readonly dataSource: DataSource,
+    private readonly audit: AdminAuditService,
   ) {}
 
   async recordThresholdFailure(
@@ -46,18 +49,28 @@ export class CrawlAlertService {
   }
 
   async acknowledge(id: string, adminId: string) {
-    const result = await this.alerts
-      .createQueryBuilder()
-      .update()
-      .set({ acknowledgedAt: new Date(), acknowledgedBy: adminId })
-      .where('id = :id AND "acknowledgedAt" IS NULL', { id })
-      .execute();
-    if (!result.affected) {
-      const existing = await this.alerts.findOneBy({ id });
-      if (!existing)
-        throw new NotFoundException('크롤 알림을 찾을 수 없습니다.');
-      return existing;
-    }
-    return this.alerts.findOneByOrFail({ id });
+    return this.dataSource.transaction(async (manager) => {
+      const repo = manager.getRepository(CrawlAlert);
+      const alert = await repo.findOne({
+        where: { id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!alert) throw new NotFoundException('크롤 알림을 찾을 수 없습니다.');
+      if (alert.acknowledgedAt) return alert;
+      alert.acknowledgedAt = new Date();
+      alert.acknowledgedBy = adminId;
+      const saved = await repo.save(alert);
+      await this.audit.record(manager, {
+        actor: adminId,
+        action: 'crawl.alert.acknowledged',
+        target: `crawl-alert:${id}`,
+        before: { acknowledgedAt: null, acknowledgedBy: null },
+        after: {
+          acknowledgedAt: saved.acknowledgedAt,
+          acknowledgedBy: saved.acknowledgedBy,
+        },
+      });
+      return saved;
+    });
   }
 }
