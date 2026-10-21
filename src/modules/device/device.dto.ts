@@ -1,6 +1,7 @@
 import {
   IsBoolean,
   IsDefined,
+  IsIn,
   IsOptional,
   IsString,
   Matches,
@@ -12,6 +13,13 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 const hexToken = /^(?:[0-9a-fA-F]{2}){1,128}$/;
 
 export class RegisterDeviceDto {
+  @ApiProperty({
+    enum: ['sandbox', 'production'],
+    description: '앱의 APNs entitlement 환경. Railway 배포 환경과 별개입니다.',
+  })
+  @IsIn(['sandbox', 'production'])
+  apnsEnvironment!: 'sandbox' | 'production';
+
   @ApiProperty({
     nullable: true,
     example: 'a'.repeat(64),
@@ -71,6 +79,10 @@ export class LiveActivityDto {
 }
 
 export class DeviceSubscriptionDto {
+  @ApiProperty({ example: true, description: '축제 개최일 시작 알림' })
+  @IsBoolean()
+  festivalStarts!: boolean;
+
   @ApiProperty({ example: true })
   @IsBoolean()
   packUpdates!: boolean;

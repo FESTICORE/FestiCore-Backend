@@ -52,6 +52,10 @@ APPLE_WEB_REDIRECT_URI=https://<환경별-도메인>/api/v1/auth/apple/callback
 APPLE_TEAM_ID=
 APPLE_KEY_ID=
 APPLE_PRIVATE_KEY=                          # 개행은 \n
+APNS_TEAM_ID=                              # APNs Auth Key의 Apple Team ID
+APNS_KEY_ID=                               # APNs Auth Key ID
+APNS_PRIVATE_KEY=                          # APNs .p8 키, 개행은 \n
+APNS_BUNDLE_ID=                            # iOS 앱 bundle ID (apns-topic)
 APPLE_REVOKE_ENCRYPTION_KEY=                # Apple 폐기 재시도 토큰 암호화: 32바이트 base64 또는 64자리 hex, 환경별 별도 키
 RAILWAY_BUCKET_NAME=                        # 각 환경의 비공개 이미지 버킷
 RAILWAY_BUCKET_REGION=
@@ -90,6 +94,13 @@ Apple 토큰 폐기가 실패하면 탈퇴 트랜잭션에서 암호화된 재�
 작업자는 1분마다 최대 10건을 처리하고 최대 12회 지수 간격으로 재시도한다.
 12회 실패한 작업은 `apple_revoke_retries.exhaustedAt`에 표시되며 운영 점검이 필요하다.
 기존 암호문이 남아 있는 동안 키를 변경하면 복호화할 수 없으므로 키를 보존해야 한다.
+
+축제 시작 알림은 발행된 팩의 `days[].startsAt`에서 예약되며 서버 프로세스가
+매분 대기 작업을 확인한다. `APNS_*` 네 변수는 develop/production 서비스에 각각
+설정한다. 키의 topic·환경 권한이 실제 iOS 앱과 일치해야 한다. 기기 등록 API의
+`apnsEnvironment`는 앱 entitlement를 기준으로 `sandbox` 또는 `production`을
+보내며 Railway 환경명으로 추측하지 않는다. TestFlight 토큰은 `production`이다.
+APNs HTTP 200은 Apple 서버의 수락 결과이며 실기기 수신 증거는 아니다.
 
 ## 관리자 인증 배포 조건
 

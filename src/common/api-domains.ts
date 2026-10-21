@@ -76,7 +76,13 @@ export const API_DOMAINS: ApiDomain[] = [
   {
     slug: 'devices',
     title: 'Devices',
-    description: '기기 등록·축제 구독·Live Activity 토큰',
+    description: '기기 등록·조회·삭제와 Live Activity 토큰',
     pathPrefix: 'devices',
+  },
+  {
+    slug: 'notifications',
+    title: 'Notifications',
+    description: '축제 시작·팩 변경 알림 구독',
+    pathPrefix: 'notifications',
   },
 ];

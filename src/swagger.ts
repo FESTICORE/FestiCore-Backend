@@ -29,6 +29,7 @@ const MODULES_BY_SLUG: Record<string, ModuleClass[]> = {
   crews: [CrewModule],
   schedule: [ScheduleModule],
   devices: [DeviceModule],
+  notifications: [DeviceModule],
 };
 
 const DOMAIN_DOCS = API_DOMAINS.map((d) => ({
@@ -306,6 +307,12 @@ export function setupSwagger(
       );
       if (admin && (doc.slug === 'crawl' || doc.slug === 'proposals')) {
         const prefix = new RegExp(`^/(?:api/v1/)?admin/${doc.slug}(?:/|$)`);
+        document.paths = Object.fromEntries(
+          Object.entries(document.paths).filter(([path]) => prefix.test(path)),
+        );
+      }
+      if (!admin && (doc.slug === 'devices' || doc.slug === 'notifications')) {
+        const prefix = new RegExp(`^/(?:api/v1/)?${doc.slug}(?:/|$)`);
         document.paths = Object.fromEntries(
           Object.entries(document.paths).filter(([path]) => prefix.test(path)),
         );

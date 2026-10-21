@@ -85,6 +85,7 @@ export class DeviceService {
       osVersion: body.osVersion,
       locale: body.locale,
       timezone: body.timezone,
+      apnsEnvironment: body.apnsEnvironment,
     };
     const device = await this.devices.findOne({ where: { id } });
     let issuedSecret: string | undefined;
@@ -125,11 +126,36 @@ export class DeviceService {
       deviceId: id,
       userId: userId ?? device?.userId ?? null,
       ...(issuedSecret ? { deviceSecret: issuedSecret } : {}),
-      subscriptions: subscriptions.map(({ festivalId, packUpdates }) => ({
-        festivalId,
-        packUpdates,
-      })),
+      subscriptions: subscriptions.map(
+        ({ festivalId, packUpdates, festivalStarts }) => ({
+          festivalId,
+          packUpdates,
+          festivalStarts,
+        }),
+      ),
     };
+  }
+
+  async get(id: string, userId: string | null, secret?: string) {
+    const device = await this.ownedDevice(id, userId, secret);
+    return {
+      deviceId: device.id,
+      userId: device.userId,
+      appVersion: device.appVersion,
+      osVersion: device.osVersion,
+      locale: device.locale,
+      timezone: device.timezone,
+      apnsEnvironment: device.apnsEnvironment,
+    };
+  }
+
+  async remove(id: string, userId: string | null, secret?: string) {
+    await this.ownedDevice(id, userId, secret);
+    const result = await this.devices.delete(
+      this.ownershipWhere(id, userId, secret),
+    );
+    if (result.affected !== 1)
+      throw new ForbiddenException('기기 소유권을 확인할 수 없습니다.');
   }
 
   async startLiveActivity(
@@ -179,8 +205,39 @@ export class DeviceService {
       deviceId: id,
       festivalId,
       packUpdates: body.packUpdates,
+      festivalStarts: body.festivalStarts,
     });
-    return { festivalId, packUpdates: body.packUpdates };
+    return {
+      festivalId,
+      packUpdates: body.packUpdates,
+      festivalStarts: body.festivalStarts,
+    };
+  }
+
+  async listSubscriptions(id: string, userId: string | null, secret?: string) {
+    await this.ownedDevice(id, userId, secret);
+    const subscriptions = await this.subscriptions.find({
+      where: { deviceId: id },
+    });
+    return {
+      items: subscriptions.map(
+        ({ festivalId, packUpdates, festivalStarts }) => ({
+          festivalId,
+          packUpdates,
+          festivalStarts,
+        }),
+      ),
+    };
+  }
+
+  async unsubscribe(
+    id: string,
+    festivalId: string,
+    userId: string | null,
+    secret?: string,
+  ) {
+    await this.ownedDevice(id, userId, secret);
+    await this.subscriptions.delete({ deviceId: id, festivalId });
   }
 
   private requireId(id: string) {
