@@ -30,6 +30,7 @@ describe('FlagsService security boundaries', () => {
     tags: ['newbie'],
     plan: [],
     planVisible: true,
+    hidden: false,
   } as Flag;
   const flags = {
     findOne: jest.fn().mockResolvedValue(flag),
@@ -55,9 +56,26 @@ describe('FlagsService security boundaries', () => {
     }),
     find: jest.fn().mockImplementation(() => Promise.resolve(savedCodes)),
   };
+  const transactionalFlags = {
+    findOne: jest.fn().mockResolvedValue(flag),
+    save: jest.fn().mockImplementation((value: Flag) => Promise.resolve(value)),
+  };
+  const manager = {
+    getRepository: jest.fn((entity: unknown) => {
+      if (entity === FlagBearerCode) return codes;
+      if (entity === Flag) return transactionalFlags;
+      throw new Error('Unexpected repository');
+    }),
+  };
+  const db = {
+    transaction: jest.fn((work: (value: typeof manager) => Promise<unknown>) =>
+      work(manager),
+    ),
+  };
+  const audit = { record: jest.fn().mockResolvedValue(undefined) };
   const sync = jest.fn().mockResolvedValue(undefined);
   const service = new FlagsService(
-    {} as DataSource,
+    db as unknown as DataSource,
     { get: () => 'a-long-test-refresh-secret' } as unknown as ConfigService,
     flags as unknown as Repository<Flag>,
     {} as Repository<FlagFollow>,
@@ -71,17 +89,23 @@ describe('FlagsService security boundaries', () => {
     {} as Repository<User>,
     {} as ImageStorageService,
     { sync } as unknown as FlagPackSyncService,
-    {} as AdminAuditService,
+    audit as unknown as AdminAuditService,
   );
 
   beforeEach(() => {
     jest.clearAllMocks();
     savedCodes.length = 0;
+    flag.hidden = false;
+    audit.record.mockResolvedValue(undefined);
     festivals.findOne.mockResolvedValue({ published: { zones: [], sets: [] } });
   });
 
   it('encrypts generated codes at rest and returns retrievable codes to admin', async () => {
-    const created = await service.createCodes('fest_1', { count: 1 });
+    const created = await service.createCodes(
+      'fest_1',
+      { count: 1 },
+      'admin-1',
+    );
     const plaintext = created.codes[0].code;
     expect(savedCodes[0].codeCiphertext).not.toContain(plaintext);
     expect(savedCodes[0].codeHash).not.toBe(plaintext);
@@ -92,6 +116,65 @@ describe('FlagsService security boundaries', () => {
     expect((await service.listCodes('fest_1')).items[0]).not.toHaveProperty(
       'codeHash',
     );
+    expect(audit.record).toHaveBeenCalledWith(
+      manager,
+      expect.objectContaining({
+        actor: 'admin-1',
+        action: 'flag.bearer-codes.created',
+        target: 'festival:fest_1',
+        after: {
+          count: 1,
+          label: null,
+          expiresAt: created.codes[0].expiresAt,
+        },
+      }),
+    );
+    expect(JSON.stringify(audit.record.mock.calls)).not.toContain(plaintext);
+    expect(JSON.stringify(audit.record.mock.calls)).not.toContain(
+      savedCodes[0].codeCiphertext,
+    );
+  });
+
+  it('does not return generated codes if audit recording fails', async () => {
+    audit.record.mockRejectedValueOnce(new Error('audit failed'));
+    await expect(
+      service.createCodes('fest_1', { count: 1 }, 'admin-1'),
+    ).rejects.toThrow('audit failed');
+  });
+
+  it('records flag visibility changes before refreshing the pack', async () => {
+    await expect(service.setHidden('flg_1', true, 'admin-1')).resolves.toEqual({
+      flagId: 'flg_1',
+      hidden: true,
+    });
+    expect(transactionalFlags.save).toHaveBeenCalledWith(
+      expect.objectContaining({ hidden: true }),
+    );
+    expect(audit.record).toHaveBeenCalledWith(manager, {
+      actor: 'admin-1',
+      action: 'flag.hidden',
+      target: 'flag:flg_1',
+      before: { hidden: false },
+      after: { hidden: true },
+    });
+    expect(sync).toHaveBeenCalledWith('flg_1', manager);
+  });
+
+  it('does not refresh the pack when the visibility audit fails', async () => {
+    audit.record.mockRejectedValueOnce(new Error('audit failed'));
+    await expect(service.setHidden('flg_1', true, 'admin-1')).rejects.toThrow(
+      'audit failed',
+    );
+    expect(sync).not.toHaveBeenCalled();
+  });
+
+  it('propagates pack refresh failure from the visibility transaction', async () => {
+    sync.mockRejectedValueOnce(new Error('pack failed'));
+    await expect(service.setHidden('flg_1', true, 'admin-1')).rejects.toThrow(
+      'pack failed',
+    );
+    expect(audit.record).toHaveBeenCalled();
+    expect(db.transaction).toHaveBeenCalled();
   });
 
   it('rejects an invitation by a co-bearer', async () => {
