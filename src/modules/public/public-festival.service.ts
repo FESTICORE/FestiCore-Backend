@@ -8,10 +8,12 @@ import { createHash } from 'crypto';
 import { DataSource, Repository } from 'typeorm';
 import { AdminFestival } from '../admin/festival/festival.entity';
 import { festivalSetId } from '../admin/festival/festival-set-id';
+import { PUBLIC_CRAWL_IMAGE_SQL } from './crawl-image-policy';
 import { Flag } from '../flags/flag.entity';
 import {
   discoverySummaries,
   DiscoveryRow,
+  DiscoverySummary,
   PublishedDiscoveryRow,
 } from './crawl-catalog';
 
@@ -180,6 +182,131 @@ export class PublicFestivalService {
     return projectPack(row.published);
   }
 
+  private async discoveryCatalog(): Promise<DiscoverySummary[]> {
+    const discoveryRows = await this.dataSource.query<DiscoveryRow[]>(
+      `WITH candidates AS (
+         SELECT item->'after' AS candidate,
+           item->'after'->>'url' AS url,
+           item->>'decision' AS decision,
+           p.status AS "proposalStatus",
+           p."createdAt" AS created_at,
+           p.id AS proposal_id
+         FROM crawl_proposals p
+         CROSS JOIN LATERAL jsonb_array_elements(p.items) item
+         WHERE p.kind = 'festival.new'
+           AND item->'after'->>'url' IS NOT NULL
+       ), latest AS (
+         SELECT DISTINCT ON (url) * FROM candidates
+         ORDER BY url, created_at DESC, proposal_id DESC
+       ), details AS (
+         SELECT url,
+           (array_agg(candidate->>'officialInstagramUrl' ORDER BY created_at DESC, proposal_id DESC)
+             FILTER (WHERE decision IS DISTINCT FROM 'rejected'
+               AND "proposalStatus" IS DISTINCT FROM 'rejected'
+               AND candidate->>'officialInstagramUrl' IS NOT NULL))[1] AS account,
+           (array_agg(candidate->>'posterUrl' ORDER BY created_at DESC, proposal_id DESC)
+             FILTER (WHERE decision IS DISTINCT FROM 'rejected'
+               AND "proposalStatus" IS DISTINCT FROM 'rejected'
+               AND candidate->>'posterUrl' IS NOT NULL))[1] AS poster,
+           (array_agg(candidate->'artists' ORDER BY created_at DESC, proposal_id DESC)
+             FILTER (WHERE decision IS DISTINCT FROM 'rejected'
+               AND "proposalStatus" IS DISTINCT FROM 'rejected'
+               AND jsonb_array_length(CASE WHEN jsonb_typeof(candidate->'artists') = 'array'
+                 THEN candidate->'artists' ELSE '[]'::jsonb END) > 0))[1] AS artists
+         FROM candidates GROUP BY url
+       )
+       SELECT latest.candidate || jsonb_strip_nulls(jsonb_build_object(
+           'officialInstagramUrl', details.account, 'posterUrl', details.poster,
+           'artists', details.artists
+         )) AS candidate,
+         latest.decision,
+         latest."proposalStatus"
+       FROM latest JOIN details USING (url)`,
+    );
+    const publishedRows = await this.dataSource.query<PublishedDiscoveryRow[]>(
+      `SELECT published->>'name' AS name,
+         published->>'venue' AS venue,
+         published->'days'->0->>'date' AS "firstDate",
+         published->'days'->-1->>'date' AS "lastDate",
+         published->'source'->>'url' AS "sourceUrl"
+       FROM admin_festivals
+       WHERE published IS NOT NULL AND "publishedVersion" > 0`,
+    );
+    return discoverySummaries(discoveryRows, publishedRows);
+  }
+
+  private async attachStoredImages(entries: DiscoverySummary[]): Promise<void> {
+    const imageUrls = [
+      ...new Set(
+        entries.flatMap((entry) => [
+          ...(entry.posterUrl ? [entry.posterUrl] : []),
+          ...(entry.artists?.flatMap((artist) =>
+            artist.sourceUrl ? [artist.sourceUrl] : [],
+          ) ?? []),
+        ]),
+      ),
+    ];
+    if (!imageUrls.length) return;
+    const images = await this.dataSource.query<
+      { originUrl: string; id: string }[]
+    >(
+      `SELECT DISTINCT ON (image."originUrl") image."originUrl", image.id
+       FROM crawl_images image
+       JOIN crawl_sources source ON source.id = image."sourceId"
+       WHERE image."originUrl" = ANY($1::text[])
+         AND ${PUBLIC_CRAWL_IMAGE_SQL}
+       ORDER BY image."originUrl", image."lastSeenAt" DESC`,
+      [imageUrls],
+    );
+    const imageByUrl = new Map(
+      images.map((image) => [image.originUrl, image.id]),
+    );
+    for (const entry of entries) {
+      const posterId = entry.posterUrl && imageByUrl.get(entry.posterUrl);
+      if (posterId)
+        entry.thumbUrl = `/api/v1/festivals/images/${posterId}.webp`;
+      entry.artists = entry.artists?.map((artist) => {
+        const imageId = artist.sourceUrl && imageByUrl.get(artist.sourceUrl);
+        return {
+          ...artist,
+          imageUrl: imageId ? `/api/v1/festivals/images/${imageId}.webp` : null,
+        };
+      });
+    }
+  }
+
+  async detail(id: string) {
+    if (!/^fst_[0-9a-z]+$/.test(id))
+      throw new NotFoundException('축제를 찾을 수 없습니다.');
+    const published = await this.festivals.findOne({ where: { id } });
+    if (published?.published && published.publishedVersion > 0)
+      return projectPack(published.published);
+    const entry = (await this.discoveryCatalog()).find(
+      (item) => item.id === id,
+    );
+    if (!entry) throw new NotFoundException('축제를 찾을 수 없습니다.');
+    await this.attachStoredImages([entry]);
+    return {
+      id: entry.id,
+      name: entry.name,
+      venue: entry.venue,
+      firstDate: entry.firstDate,
+      lastDate: entry.lastDate,
+      status: entry.status,
+      packVersion: entry.packVersion,
+      flagsEnabled: entry.flagsEnabled,
+      thumbUrl: entry.thumbUrl,
+      sourceUrl: entry.sourceUrl,
+      officialInstagramUrl: entry.officialInstagramUrl ?? null,
+      artists:
+        entry.artists?.map((artist) => ({
+          name: artist.name,
+          imageUrl: artist.imageUrl ?? null,
+        })) ?? [],
+      timetable: [],
+    };
+  }
+
   async list(
     after: string | undefined,
     limitValue: string | undefined,
@@ -300,85 +427,13 @@ export class PublicFestivalService {
         },
       ];
     });
-    const discoveryRows = await this.dataSource.query<DiscoveryRow[]>(
-      `WITH candidates AS (
-         SELECT item->'after' AS candidate,
-           item->'after'->>'url' AS url,
-           item->>'decision' AS decision,
-           p.status AS "proposalStatus",
-           p."createdAt" AS created_at,
-           p.id AS proposal_id
-         FROM crawl_proposals p
-         CROSS JOIN LATERAL jsonb_array_elements(p.items) item
-         WHERE p.kind = 'festival.new'
-           AND item->'after'->>'url' IS NOT NULL
-       ), latest AS (
-         SELECT DISTINCT ON (url) * FROM candidates
-         ORDER BY url, created_at DESC, proposal_id DESC
-       ), details AS (
-         SELECT url,
-           (array_agg(candidate->>'officialInstagramUrl' ORDER BY created_at DESC, proposal_id DESC)
-             FILTER (WHERE decision IS DISTINCT FROM 'rejected'
-               AND "proposalStatus" IS DISTINCT FROM 'rejected'
-               AND candidate->>'officialInstagramUrl' IS NOT NULL))[1] AS account,
-           (array_agg(candidate->>'posterUrl' ORDER BY created_at DESC, proposal_id DESC)
-             FILTER (WHERE decision IS DISTINCT FROM 'rejected'
-               AND "proposalStatus" IS DISTINCT FROM 'rejected'
-               AND candidate->>'posterUrl' IS NOT NULL))[1] AS poster
-         FROM candidates GROUP BY url
-       )
-       SELECT latest.candidate || jsonb_strip_nulls(jsonb_build_object(
-           'officialInstagramUrl', details.account, 'posterUrl', details.poster
-         )) AS candidate,
-         latest.decision,
-         latest."proposalStatus"
-       FROM latest JOIN details USING (url)`,
-    );
-    const publishedRows = await this.dataSource.query<PublishedDiscoveryRow[]>(
-      `SELECT published->>'name' AS name,
-         published->>'venue' AS venue,
-         published->'days'->0->>'date' AS "firstDate",
-         published->'days'->-1->>'date' AS "lastDate",
-         published->'source'->>'url' AS "sourceUrl"
-       FROM admin_festivals
-       WHERE published IS NOT NULL AND "publishedVersion" > 0`,
-    );
-    const discovered = discoverySummaries(discoveryRows, publishedRows).filter(
-      (entry) => {
-        if (entry.lastDate < floor) return false;
-        if (!cursor) return true;
-        const sort = Date.parse(entry.sortAt) - Date.parse(cursor[2]);
-        return sort > 0 || (sort === 0 && entry.id > cursor[3]);
-      },
-    );
-    const posterUrls = [
-      ...new Set(
-        discovered.flatMap((entry) =>
-          entry.posterUrl ? [entry.posterUrl] : [],
-        ),
-      ),
-    ];
-    if (posterUrls.length) {
-      const images = await this.dataSource.query<
-        { originUrl: string; id: string }[]
-      >(
-        `SELECT DISTINCT ON ("originUrl") "originUrl", id
-         FROM crawl_images
-         WHERE "originUrl" = ANY($1::text[])
-         ORDER BY "originUrl", "lastSeenAt" DESC`,
-        [posterUrls],
-      );
-      const imageByUrl = new Map(
-        images.map((image) => [image.originUrl, image.id]),
-      );
-      for (const entry of discovered) {
-        const imageId = entry.posterUrl
-          ? imageByUrl.get(entry.posterUrl)
-          : null;
-        if (imageId)
-          entry.thumbUrl = `/api/v1/festivals/images/${imageId}.webp`;
-      }
-    }
+    const discovered = (await this.discoveryCatalog()).filter((entry) => {
+      if (entry.lastDate < floor) return false;
+      if (!cursor) return true;
+      const sort = Date.parse(entry.sortAt) - Date.parse(cursor[2]);
+      return sort > 0 || (sort === 0 && entry.id > cursor[3]);
+    });
+    await this.attachStoredImages(discovered);
     const ordered = [...summaries, ...discovered].sort(
       (a, b) =>
         Date.parse(a.sortAt) - Date.parse(b.sortAt) || a.id.localeCompare(b.id),

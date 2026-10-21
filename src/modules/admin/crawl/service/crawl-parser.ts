@@ -83,6 +83,7 @@ type FestivalCandidate = {
   venue?: string;
   posterUrl?: string;
   officialInstagramUrl?: string;
+  artists?: { name: string; sourceUrl?: string }[];
 };
 
 const FESTIVAL_TITLE = /(?:페스티벌|축제|festival|\bfest\b)/i;
@@ -387,6 +388,157 @@ function melonSearchCandidates(
   return [...candidates.values()];
 }
 
+function melonDetailCandidates(
+  body: string,
+  base: string,
+): FestivalCandidate[] | null {
+  const source = new URL(base);
+  if (
+    source.hostname !== 'ticket.melon.com' ||
+    source.pathname !== '/performance/index.htm' ||
+    !/^\d+$/.test(source.searchParams.get('prodId') ?? '')
+  )
+    return null;
+  const rawName = classText(body, 'tit');
+  const name = rawName?.replace(/&#40;/g, '(').replace(/&#41;/g, ')').trim();
+  const date = classText(body, 'txt_info') || undefined;
+  const venue = classText(body, 'place');
+  if (
+    !name ||
+    CONCERT_TITLE.test(name) ||
+    !(isFestivalTitle(name) || VERIFIED_FESTIVAL_BRAND.test(name)) ||
+    !date ||
+    !DATE_TEXT.test(date) ||
+    !venue
+  )
+    return [];
+  const candidate: FestivalCandidate = {
+    name,
+    url: source.toString(),
+    date,
+    venue,
+  };
+  const poster =
+    /<meta\b[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i.exec(
+      body,
+    )?.[1];
+  if (poster) {
+    try {
+      const image = new URL(poster, source);
+      if (
+        image.protocol === 'https:' &&
+        image.hostname === 'cdnticket.melon.co.kr'
+      )
+        candidate.posterUrl = image.toString();
+    } catch {
+      /* Ignore malformed poster URLs. */
+    }
+  }
+  const artistList =
+    /<ul\b[^>]*class=["'][^"']*\blist_artist\b[^"']*["'][^>]*>([\s\S]*?)<\/ul>/i.exec(
+      body,
+    )?.[1];
+  if (artistList) {
+    const artists = new Map<string, { name: string; sourceUrl?: string }>();
+    for (const row of artistList.matchAll(/<li\b[^>]*>([\s\S]*?)<\/li>/gi)) {
+      const artistName = classText(row[1], 'singer');
+      if (!artistName || artistName.length > 160) continue;
+      const artist: { name: string; sourceUrl?: string } = { name: artistName };
+      const rawImage = /<img\b[^>]*\bsrc=["']([^"']+)["']/i.exec(row[1])?.[1];
+      if (rawImage) {
+        try {
+          const image = new URL(rawImage, source);
+          if (
+            image.protocol === 'https:' &&
+            image.hostname === 'cdnimg.melon.co.kr'
+          )
+            artist.sourceUrl = image.toString();
+        } catch {
+          /* Ignore malformed artist images. */
+        }
+      }
+      artists.set(artistName, artist);
+      if (artists.size >= 80) break;
+    }
+    if (artists.size) candidate.artists = [...artists.values()];
+  }
+  return [candidate];
+}
+
+export function yes24EventJson(body: string): Record<string, unknown> | null {
+  const scripts = body.matchAll(
+    /<script\b[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi,
+  );
+  let examined = 0;
+  for (const match of scripts) {
+    if (++examined > 10) break;
+    if (match[1].length > 20_000) continue;
+    try {
+      const value = JSON.parse(match[1]) as unknown;
+      if (
+        value &&
+        typeof value === 'object' &&
+        !Array.isArray(value) &&
+        (value as Record<string, unknown>)['@type'] === 'Event'
+      )
+        return value as Record<string, unknown>;
+    } catch {
+      /* Ignore malformed structured data. */
+    }
+  }
+  return null;
+}
+
+function yes24DetailCandidates(
+  body: string,
+  base: string,
+): FestivalCandidate[] | null {
+  const source = new URL(base);
+  if (
+    source.hostname !== 'ticket.yes24.com' ||
+    !/^\/Perf\/\d+$/.test(source.pathname)
+  )
+    return null;
+  const event = yes24EventJson(body);
+  if (!event) return [];
+  const name = event.name;
+  const start = event.startDate;
+  const end = event.endDate;
+  const location = event.location;
+  const venue =
+    location && typeof location === 'object' && 'name' in location
+      ? location.name
+      : null;
+  if (
+    typeof name !== 'string' ||
+    CONCERT_TITLE.test(name) ||
+    !(isFestivalTitle(name) || VERIFIED_FESTIVAL_BRAND.test(name)) ||
+    typeof start !== 'string' ||
+    typeof end !== 'string' ||
+    !/^20\d\d-\d\d-\d\d$/.test(start) ||
+    !/^20\d\d-\d\d-\d\d$/.test(end) ||
+    typeof venue !== 'string' ||
+    !venue.trim()
+  )
+    return [];
+  const candidate: FestivalCandidate = {
+    name,
+    url: source.toString(),
+    date: `${start} ~ ${end}`,
+    venue: venue.trim(),
+  };
+  if (typeof event.image === 'string') {
+    try {
+      const image = new URL(event.image, source);
+      if (image.protocol === 'https:' && image.hostname === 'tkfile.yes24.com')
+        candidate.posterUrl = image.toString();
+    } catch {
+      /* Ignore malformed poster URLs. */
+    }
+  }
+  return [candidate];
+}
+
 function yes24FestivalCandidates(
   body: string,
   base: string,
@@ -429,6 +581,22 @@ function yes24FestivalCandidates(
     };
     if (details[0] && DATE_TEXT.test(details[0])) candidate.date = details[0];
     if (details[1]) candidate.venue = details[1];
+    const rawPoster = /<img\b[^>]*\bdata-src=["']([^"']+)["']/i.exec(
+      match[3],
+    )?.[1];
+    if (rawPoster) {
+      try {
+        const image = new URL(rawPoster, source);
+        if (
+          image.protocol === 'https:' &&
+          image.hostname === 'tkfile.yes24.com' &&
+          image.pathname.startsWith('/upload2/PerfBlog/')
+        )
+          candidate.posterUrl = image.toString();
+      } catch {
+        /* Ignore malformed poster URLs. */
+      }
+    }
     const previous = candidates.get(candidate.url);
     if (
       !previous ||
@@ -445,6 +613,10 @@ function ticketCandidates(body: string, base: string): FestivalCandidate[] {
   if (mintPaper) return mintPaper;
   const melonSearch = melonSearchCandidates(body, base);
   if (melonSearch) return melonSearch;
+  const melonDetail = melonDetailCandidates(body, base);
+  if (melonDetail) return melonDetail;
+  const yes24Detail = yes24DetailCandidates(body, base);
+  if (yes24Detail) return yes24Detail;
   const melon = melonFestivalCandidates(body, base);
   if (melon) return melon;
   const yes24 = yes24FestivalCandidates(body, base);

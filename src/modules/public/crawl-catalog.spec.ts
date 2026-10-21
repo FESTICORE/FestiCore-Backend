@@ -110,6 +110,41 @@ describe('ticket discovery catalog', () => {
     ).toEqual([]);
   });
 
+  it('merges verified detail artists and a YES24 poster into one festival', () => {
+    const base = {
+      name: 'WONDERLIVET 2026',
+      venue: 'KINTEX',
+      date: '2026.11.20 - 2026.11.22',
+    };
+    const entries = discoverySummaries([
+      {
+        candidate: {
+          ...base,
+          url: 'https://ticket.yes24.com/Perf/59840',
+          posterUrl: 'https://tkfile.yes24.com/upload2/PerfBlog/poster.jpg',
+        },
+      },
+      {
+        candidate: {
+          ...base,
+          url: 'https://ticket.melon.com/performance/index.htm?prodId=213793',
+          artists: [
+            { name: 'Band', sourceUrl: 'https://cdnimg.melon.co.kr/band.jpg' },
+            { name: 'Bad', sourceUrl: 'https://evil.example/bad.jpg' },
+          ],
+        },
+      },
+    ]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].posterUrl).toBe(
+      'https://tkfile.yes24.com/upload2/PerfBlog/poster.jpg',
+    );
+    expect(entries[0].artists).toEqual([
+      { name: 'Band', sourceUrl: 'https://cdnimg.melon.co.kr/band.jpg' },
+      { name: 'Bad' },
+    ]);
+  });
+
   it('returns official festival sources and verified Instagram account links', () => {
     const base = {
       name: 'GRAND MINT FESTIVAL 2026',

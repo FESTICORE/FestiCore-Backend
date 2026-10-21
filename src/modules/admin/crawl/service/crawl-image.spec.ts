@@ -1,5 +1,9 @@
 import sharp from 'sharp';
-import { discoverImageUrls, prepareCrawlImage } from './crawl-image';
+import {
+  discoverImageUrls,
+  prepareCrawlImage,
+  selectRunImages,
+} from './crawl-image';
 
 describe('crawl image safety', () => {
   it('discovers only bounded public HTTPS image candidates', () => {
@@ -55,6 +59,30 @@ describe('crawl image safety', () => {
     expect(
       discoverImageUrls(html, 'https://mintpaper.co.kr/festivals').map(String),
     ).toEqual(['https://mintpaper.s3.ap-northeast-2.amazonaws.com/gmf.jpg']);
+  });
+
+  it('selects only YES24 detail poster from structured data', () => {
+    const html = `<script type="application/ld+json">{"@type":"Organization"}</script><script type="application/ld+json">{"@type":"Event","image":"https://tkfile.yes24.com/upload2/PerfBlog/cdf.jpg"}</script><img src="https://evil.example/a.jpg">`;
+    expect(
+      discoverImageUrls(html, 'https://ticket.yes24.com/Perf/60590').map(
+        String,
+      ),
+    ).toEqual(['https://tkfile.yes24.com/upload2/PerfBlog/cdf.jpg']);
+  });
+
+  it('limits each Melon detail run and rotates artist images across days', () => {
+    const urls = Array.from(
+      { length: 22 },
+      (_, index) => new URL(`https://cdnimg.melon.co.kr/${index}.jpg`),
+    );
+    const page = 'https://ticket.melon.com/performance/index.htm?prodId=213793';
+    const first = selectRunImages(urls, page, '2026-10-21');
+    const second = selectRunImages(urls, page, '2026-10-22');
+    expect(first).toHaveLength(8);
+    expect(second).toHaveLength(8);
+    expect(first[0]).toBe(urls[0]);
+    expect(second[0]).toBe(urls[0]);
+    expect(second.slice(1).map(String)).not.toEqual(first.slice(1).map(String));
   });
 
   it('normalizes a valid image to content-addressed WebP without trusting its extension', async () => {

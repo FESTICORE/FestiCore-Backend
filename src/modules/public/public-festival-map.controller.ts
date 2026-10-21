@@ -11,6 +11,7 @@ import type { Response } from 'express';
 import { DataSource } from 'typeorm';
 import { ImageStorageService } from '../storage/image-storage.service';
 import { Public } from '../auth/decorator/public.decorator';
+import { PUBLIC_CRAWL_IMAGE_SQL } from './crawl-image-policy';
 
 @ApiTags('Public Festivals')
 @Public()
@@ -41,11 +42,7 @@ export class PublicFestivalMapController {
       `SELECT image."objectKey" FROM crawl_images image
        JOIN crawl_sources source ON source.id = image."sourceId"
        WHERE image.id = $1
-         AND (
-           source.url LIKE 'https://mintpaper.co.kr/festivals%'
-           OR (source.url = 'https://ticket.melon.com/search/index.htm?q=WONDERLIVET'
-             AND image."originUrl" LIKE 'https://cdnticket.melon.co.kr/resource/image/upload/product/%')
-         )`,
+         AND ${PUBLIC_CRAWL_IMAGE_SQL}`,
       [imageId],
     );
     if (!rows[0]) throw new NotFoundException('포스터를 찾을 수 없습니다.');
