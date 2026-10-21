@@ -1,6 +1,6 @@
 import { ConflictException } from '@nestjs/common';
 import { Flag } from './flag.entity';
-import { nextStatus, validateProfilePatch } from './flag-rules';
+import { forcedStatus, nextStatus, validateProfilePatch } from './flag-rules';
 
 const now = new Date('2026-11-20T09:00:00.000Z');
 const flag = (status: Flag['status']): Flag =>
@@ -82,5 +82,31 @@ describe('Flag status rules', () => {
   it('rejects unknown profile keys and duplicate tags', () => {
     expect(() => validateProfilePatch({ ownerId: 'other-user' })).toThrow();
     expect(() => validateProfilePatch({ tags: ['slam', 'slam'] })).toThrow();
+  });
+
+  it('accepts a complete forced state and rejects invalid or server-owned fields', () => {
+    expect(
+      forcedStatus({ status: 'active', zoneId: 'zon_a', activity: 'sing' }),
+    ).toEqual({ status: 'active', zoneId: 'zon_a', activity: 'sing' });
+    expect(
+      forcedStatus({ status: 'ended', zoneId: null, activity: null }),
+    ).toEqual({ status: 'ended', zoneId: null, activity: null });
+    expect(() =>
+      forcedStatus({ status: 'active', zoneId: null, activity: 'sing' }),
+    ).toThrow();
+    expect(() =>
+      forcedStatus({ status: 'resting', zoneId: 'zon_a', activity: 'sing' }),
+    ).toThrow();
+    expect(() =>
+      forcedStatus({ status: 'ended', zoneId: 'zon_a', activity: null }),
+    ).toThrow();
+    expect(() =>
+      forcedStatus({
+        status: 'ended',
+        zoneId: null,
+        activity: null,
+        updatedAt: now.toISOString(),
+      }),
+    ).toThrow();
   });
 });

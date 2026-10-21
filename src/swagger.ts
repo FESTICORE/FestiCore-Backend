@@ -14,6 +14,7 @@ import { ScheduleModule } from './modules/schedule/schedule.module';
 import { CrawlModule } from './modules/admin/crawl/crawl.module';
 import { DeviceModule } from './modules/device/device.module';
 import { MetricsModule } from './modules/metrics/metrics.module';
+import { AdminAuditModule } from './modules/admin/audit/admin-audit.module';
 
 /** SwaggerModule.createDocument 의 include 가 받는 모듈 클래스 타입. */
 type ModuleClass = new (...args: never[]) => unknown;
@@ -34,6 +35,7 @@ const MODULES_BY_SLUG: Record<string, ModuleClass[]> = {
   notifications: [DeviceModule],
   metrics: [MetricsModule],
   'admin-metrics': [MetricsModule],
+  'admin-audit': [AdminAuditModule],
 };
 
 const DOMAIN_DOCS = API_DOMAINS.map((d) => ({

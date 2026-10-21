@@ -234,6 +234,64 @@ export function nextStatus(
   };
 }
 
+/** 관리자 강제 변경은 일반 기수의 전이 제한을 우회하되 상태 조합은 검증한다. */
+export function forcedStatus(
+  input: unknown,
+): Pick<Flag, 'status' | 'zoneId' | 'activity'> {
+  if (
+    !isRecord(input) ||
+    Object.keys(input).some(
+      (key) => !['status', 'zoneId', 'activity'].includes(key),
+    )
+  ) {
+    throw new BadRequestException({
+      code: 'VALIDATION',
+      message: '상태 요청 형식이 올바르지 않습니다.',
+    });
+  }
+  const { status, zoneId, activity } = input;
+  if (!['scheduled', 'active', 'resting', 'ended'].includes(status as string)) {
+    throw new BadRequestException({
+      code: 'VALIDATION',
+      message: 'status가 올바르지 않습니다.',
+    });
+  }
+  if (
+    status === 'active' &&
+    (typeof zoneId !== 'string' ||
+      !zoneId ||
+      !ACTIVITIES.has(activity as string))
+  ) {
+    throw new BadRequestException({
+      code: 'VALIDATION',
+      message: '활동 중 상태에는 존과 활동이 필요합니다.',
+    });
+  }
+  if (
+    status === 'resting' &&
+    (typeof zoneId !== 'string' || !zoneId || activity !== 'resting')
+  ) {
+    throw new BadRequestException({
+      code: 'VALIDATION',
+      message: '휴식 중 상태에는 존과 resting 활동이 필요합니다.',
+    });
+  }
+  if (
+    (status === 'scheduled' || status === 'ended') &&
+    (zoneId !== null || activity !== null)
+  ) {
+    throw new BadRequestException({
+      code: 'VALIDATION',
+      message: '대기/종료 상태의 존과 활동은 null이어야 합니다.',
+    });
+  }
+  return {
+    status: status as FlagLifecycle,
+    zoneId: zoneId as string | null,
+    activity: activity as FlagActivity | null,
+  };
+}
+
 export function statusView(flag: Flag) {
   return {
     flagId: flag.id,

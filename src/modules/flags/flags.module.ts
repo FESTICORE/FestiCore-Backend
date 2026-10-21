@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AdminFestival } from '../admin/festival/festival.entity';
+import { AdminAuditModule } from '../admin/audit/admin-audit.module';
 import { User } from '../auth/entity/user.entity';
 import {
   BearerController,
@@ -28,6 +29,7 @@ import { FlagPackSyncService } from './flag-pack-sync.service';
 
 @Module({
   imports: [
+    AdminAuditModule,
     TypeOrmModule.forFeature([
       Flag,
       FlagFollow,
