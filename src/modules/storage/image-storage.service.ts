@@ -24,6 +24,9 @@ import sharp from 'sharp';
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
+const MAX_MAP_BYTES = 300 * 1024;
+const FESTIVAL_MAP_KEY =
+  /^festivals\/(fst_[0-9a-z]{8,16})\/maps\/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.webp$/;
 const CRAWL_IMAGE_KEY = /^crawl\/[0-9a-f]{64}\.webp$/;
 const CRAWL_SNAPSHOT_KEY =
   /^crawl\/snapshots\/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.txt$/;
@@ -32,6 +35,76 @@ const execFileAsync = promisify(execFile);
 export interface PreparedFlagPhoto {
   photo: Buffer;
   thumbnail: Buffer;
+}
+
+export async function prepareFestivalMap(
+  bytes: Buffer,
+  declaredType: string,
+): Promise<{ image: Buffer; aspect: number }> {
+  if (!bytes.length)
+    throw new BadRequestException('지도 이미지가 비어 있습니다.');
+  if (bytes.length > MAX_IMAGE_BYTES) throw new PayloadTooLargeException();
+  const kind =
+    bytes.toString('ascii', 0, 4) === 'RIFF' &&
+    bytes.toString('ascii', 8, 12) === 'WEBP'
+      ? 'webp'
+      : imageType(bytes);
+  if (
+    !kind ||
+    !{
+      jpeg: ['image/jpeg'],
+      png: ['image/png'],
+      webp: ['image/webp'],
+      heif: ['image/heic', 'image/heif'],
+    }[kind].includes(declaredType.toLowerCase())
+  )
+    throw new UnsupportedMediaTypeException(
+      'JPEG, PNG, WebP 또는 HEIC/HEIF 이미지만 허용됩니다.',
+    );
+  try {
+    const source = sharp(kind === 'heif' ? await decodeHeif(bytes) : bytes, {
+      failOn: 'error',
+      limitInputPixels: 20_000_000,
+    });
+    const metadata = await source.metadata();
+    if (!metadata.width || !metadata.height)
+      throw new BadRequestException('지도 이미지 크기를 확인할 수 없습니다.');
+    // Rotating before resize makes the returned aspect match the stored WebP.
+    for (const [size, quality] of [
+      [2048, 80],
+      [1600, 65],
+      [1200, 50],
+    ]) {
+      const oriented = await source
+        .clone()
+        .rotate()
+        .resize({
+          width: size,
+          height: size,
+          fit: 'inside',
+          withoutEnlargement: true,
+        })
+        .webp({ quality, effort: 5 })
+        .toBuffer({ resolveWithObject: true });
+      if (oriented.data.length <= MAX_MAP_BYTES)
+        return {
+          image: oriented.data,
+          aspect: oriented.info.width / oriented.info.height,
+        };
+    }
+    throw new PayloadTooLargeException(
+      '변환된 지도 이미지가 300KB를 초과합니다.',
+    );
+  } catch (error) {
+    if (
+      error instanceof BadRequestException ||
+      error instanceof PayloadTooLargeException
+    )
+      throw error;
+    throw new UnsupportedMediaTypeException(
+      '지도 이미지를 디코딩할 수 없습니다.',
+    );
+  }
 }
 
 function imageType(bytes: Buffer): 'jpeg' | 'png' | 'heif' | null {
@@ -189,6 +262,38 @@ export class ImageStorageService {
   async readFlagPhoto(flagId: string, key: string): Promise<Buffer> {
     if (!key.startsWith(`flags/${flagId}/`) || !key.endsWith('.webp'))
       throw new BadRequestException('잘못된 사진 키입니다.');
+    return this.read(key);
+  }
+
+  async saveFestivalMap(festivalId: string, image: Buffer): Promise<string> {
+    if (!/^fst_[0-9a-z]{8,16}$/.test(festivalId))
+      throw new BadRequestException('잘못된 축제 ID입니다.');
+    if (!image.length || image.length > MAX_MAP_BYTES)
+      throw new PayloadTooLargeException(
+        '지도 이미지는 300KB 이하여야 합니다.',
+      );
+    const key = `festivals/${festivalId}/maps/${randomUUID()}.webp`;
+    const client = this.client();
+    try {
+      await client.send(
+        new PutObjectCommand({
+          Bucket: this.value('RAILWAY_BUCKET_NAME', 'AWS_S3_BUCKET_NAME'),
+          Key: key,
+          Body: image,
+          ContentType: 'image/webp',
+          CacheControl: 'public, max-age=31536000, immutable',
+        }),
+      );
+      return key;
+    } finally {
+      client.destroy();
+    }
+  }
+
+  async readFestivalMap(festivalId: string, imageId: string): Promise<Buffer> {
+    const key = `festivals/${festivalId}/maps/${imageId}.webp`;
+    if (!FESTIVAL_MAP_KEY.test(key))
+      throw new BadRequestException('잘못된 지도 이미지 경로입니다.');
     return this.read(key);
   }
 

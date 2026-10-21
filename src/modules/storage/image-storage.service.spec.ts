@@ -5,8 +5,108 @@ import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { Readable } from 'stream';
 import sharp from 'sharp';
-import { S3Client } from '@aws-sdk/client-s3';
-import { ImageStorageService, prepareFlagPhoto } from './image-storage.service';
+import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import {
+  ImageStorageService,
+  prepareFestivalMap,
+  prepareFlagPhoto,
+} from './image-storage.service';
+
+describe('festival map image storage', () => {
+  it('applies EXIF rotation, strips metadata, and returns actual WebP aspect', async () => {
+    const source = await sharp({
+      create: { width: 400, height: 800, channels: 3, background: '#0066aa' },
+    })
+      .jpeg()
+      .withMetadata({ orientation: 6 })
+      .toBuffer();
+    const result = await prepareFestivalMap(source, 'image/jpeg');
+    const metadata = await sharp(result.image).metadata();
+    expect(metadata.format).toBe('webp');
+    expect(metadata.width).toBe(800);
+    expect(metadata.height).toBe(400);
+    expect(result.aspect).toBe(2);
+    expect(result.image.length).toBeLessThanOrEqual(300 * 1024);
+    expect(metadata.exif).toBeUndefined();
+  });
+
+  it('accepts a WebP source and re-encodes it for map delivery', async () => {
+    const source = await sharp({
+      create: { width: 600, height: 300, channels: 3, background: '#225588' },
+    })
+      .webp()
+      .toBuffer();
+    const result = await prepareFestivalMap(source, 'image/webp');
+    expect((await sharp(result.image).metadata()).format).toBe('webp');
+    expect(result.aspect).toBe(2);
+    expect(result.image.length).toBeLessThanOrEqual(300 * 1024);
+  });
+
+  it('rejects forged or oversized input and path traversal before storage', async () => {
+    const png = await sharp({
+      create: { width: 300, height: 400, channels: 3, background: '#aa6600' },
+    })
+      .png()
+      .toBuffer();
+    await expect(prepareFestivalMap(png, 'image/jpeg')).rejects.toMatchObject({
+      status: 415,
+    });
+    await expect(
+      prepareFestivalMap(Buffer.alloc(5 * 1024 * 1024 + 1), 'image/png'),
+    ).rejects.toMatchObject({ status: 413 });
+    const storage = new ImageStorageService({} as ConfigService);
+    await expect(
+      storage.readFestivalMap('fst_01234567', '../secret'),
+    ).rejects.toMatchObject({ status: 400 });
+    await expect(
+      storage.readFestivalMap('fst_01234567/other', randomUUID()),
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('saves a bounded map under a festival-scoped immutable key', async () => {
+    const values: Record<string, string> = {
+      RAILWAY_BUCKET_REGION: 'auto',
+      RAILWAY_BUCKET_ENDPOINT: 'https://storage.example.test',
+      RAILWAY_BUCKET_ACCESS_KEY_ID: 'test-key',
+      RAILWAY_BUCKET_SECRET_ACCESS_KEY: 'test-secret',
+      RAILWAY_BUCKET_NAME: 'private-images',
+    };
+    const storage = new ImageStorageService({
+      get: (key: string) => values[key],
+    } as ConfigService);
+    const bytes = await sharp({
+      create: { width: 300, height: 400, channels: 3, background: '#cc6600' },
+    })
+      .webp()
+      .toBuffer();
+    const send = jest.spyOn(S3Client.prototype, 'send');
+    try {
+      send.mockResolvedValueOnce({} as never);
+      const key = await storage.saveFestivalMap('fst_01234567', bytes);
+      expect(key).toMatch(/^festivals\/fst_01234567\/maps\/[0-9a-f-]+\.webp$/);
+      const command = send.mock.calls[0][0] as PutObjectCommand;
+      expect(command.input).toMatchObject({
+        Bucket: 'private-images',
+        Key: key,
+        ContentType: 'image/webp',
+        Body: bytes,
+      });
+      send.mockResolvedValueOnce({
+        Body: Readable.from([bytes]),
+        ContentLength: bytes.length,
+      } as never);
+      const imageId = key
+        .split('/')
+        .at(-1)!
+        .replace(/\.webp$/, '');
+      await expect(
+        storage.readFestivalMap('fst_01234567', imageId),
+      ).resolves.toEqual(bytes);
+    } finally {
+      send.mockRestore();
+    }
+  });
+});
 
 describe('flag image storage', () => {
   it('validates JPEG bytes and produces square WebP variants', async () => {

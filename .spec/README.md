@@ -20,6 +20,7 @@
 - [devices.md](./devices.md) — 기기 등록·조회·삭제와 Live Activity 토큰
 - [notifications.md](./notifications.md) — 축제 알림 구독·예약·APNs 발송
 - [metrics.md](./metrics.md) — 앱 이벤트 수집과 관리자 지표 집계
+- [map-upload.md](./map-upload.md) — 관리자 축제 지도 업로드와 공개 WebP 제공
 - [crawl.md](./crawl.md) — 관리자 크롤 소스·실행·제안 검토
 - [crawl-catalog.md](./crawl-catalog.md) — 수집된 축제의 공개 목록과 오프라인 갱신 계약
 

@@ -1,0 +1,18 @@
+# 관리자 축제 지도 업로드
+
+출처: 페스티벌 앱 API 명세서 v0.1 p30, 축제 팩의 지도 필드 p5.
+
+## `POST /api/v1/admin/festivals/{id}/draft/map`
+
+- `editor` 이상 관리자 세션이 필요하다.
+- 요청은 `multipart/form-data`이며 `map` 파일 1개를 보낸다. JPEG·PNG·WebP·HEIC/HEIF를 받으며 원본 5MB와 디코딩 픽셀 수를 제한한다.
+- 서버는 이미지를 다시 인코딩해 메타데이터를 제거하고, 최대 300KB인 WebP로 축소해 Railway 이미지 저장소에 보관한다.
+- 성공 시 공통 `{code,data,message}` 응답의 `data`로 `{mapImageUrl: HTTPS URL, mapAspect: width/height}`를 돌려준다.
+- 업로드만으로 초안을 바꾸지 않는다. 관리자는 현재 초안의 `draftVersion`을 확인한 뒤 `PATCH /admin/festivals/{id}/draft`에 두 값을 함께 저장한다. 그 뒤 발행하면 팩에 반영된다.
+- 잘못된 파일, 허용되지 않는 형식, 저장소 오류, 존재하지 않는 축제는 각각 명확한 오류를 반환한다. 저장 URL을 앱에서 읽을 수 있도록 공개 이미지 읽기 경로를 제공한다.
+
+## 검증
+
+- 실제 이미지에 대해 WebP 재인코딩, 300KB 상한, 가로세로 비율, 메타데이터 제거를 검사한다.
+- 잘못된 형식·빈 파일·과대 파일·경로 변조·미존재 축제·비관리자 접근을 검사한다.
+- 저장 키와 공개 URL은 개발·운영 환경의 `PUBLIC_URL`에 따라 생성하며, 공개 읽기 경로로 같은 WebP를 돌려준다.
