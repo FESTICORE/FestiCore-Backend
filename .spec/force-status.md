@@ -4,7 +4,7 @@
 
 ## API
 
-`POST /api/v1/admin/flags/{flagId}/force-status`는 관리자 세션 `editor` 또는 `owner`만 호출한다. 요청 JSON은 `status`, `zoneId`, `activity`를 모두 보낸다. `active`는 발행된 축제의 존과 `slam|sing|train|calm` 중 하나, `resting`은 존과 `resting`, `scheduled|ended`는 두 값을 `null`로 보낸다. `flagId`와 `updatedAt`은 서버가 정하며 요청 본문에서 받지 않는다.
+`POST /api/v1/admin/flags/{flagId}/force-status`는 Bearer JWT와 관리자 `editor` 또는 `owner` 권한으로 호출한다. 요청 JSON은 `status`, `zoneId`, `activity`를 모두 보낸다. `active`는 발행된 축제의 존과 `slam|sing|train|calm` 중 하나, `resting`은 존과 `resting`, `scheduled|ended`는 두 값을 `null`로 보낸다. `flagId`와 `updatedAt`은 서버가 정하며 요청 본문에서 받지 않는다.
 
 성공 HTTP 200의 `data`는 `{flagId,status,zoneId,activity,updatedAt}`이고 전체 JSON은 공통 `{code,data,message}` 형식이다. 깃발 또는 존이 없으면 404, 상태 조합이 잘못되면 400, 관리자 권한이 없으면 401/403이다.
 

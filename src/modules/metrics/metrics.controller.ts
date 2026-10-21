@@ -10,7 +10,7 @@ import {
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import {
-  ApiCookieAuth,
+  ApiBearerAuth,
   ApiHeader,
   ApiOperation,
   ApiQuery,
@@ -55,7 +55,7 @@ export class MetricsController {
 }
 
 @ApiTags('Admin Metrics')
-@ApiCookieAuth('admin-session')
+@ApiBearerAuth()
 @Controller('admin/metrics')
 export class AdminMetricsController {
   constructor(private readonly metrics: MetricsService) {}
@@ -65,7 +65,7 @@ export class AdminMetricsController {
   @ApiOperation({
     summary: '축제 클라이언트 관측 집계',
     description:
-      'viewer 이상 관리자 세션 필요. 기본 기간은 발행된 축제의 첫 시작부터 마지막 종료까지입니다. 비율은 0~1입니다.',
+      'Bearer JWT와 viewer 이상 관리자 권한이 필요합니다. 기본 기간은 발행된 축제의 첫 시작부터 마지막 종료까지입니다. 비율은 0~1입니다.',
   })
   @ApiQuery({ name: 'festivalId', required: true, example: 'fst_01234567' })
   @ApiQuery({
@@ -77,7 +77,7 @@ export class AdminMetricsController {
   @ApiQuery({ name: 'bucket', required: false, enum: ['1h', '1d'] })
   @ApiResponse({ status: 200, description: '시간 버킷별 집계' })
   @ApiResponse({ status: 400, description: '조회 범위 또는 축제 ID 오류' })
-  @ApiResponse({ status: 401, description: '관리자 세션 없음' })
+  @ApiResponse({ status: 401, description: '유효한 access JWT가 없습니다.' })
   @ApiResponse({ status: 404, description: '발행된 축제 없음' })
   report(
     @Query('festivalId') festivalId: string,

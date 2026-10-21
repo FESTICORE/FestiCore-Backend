@@ -14,7 +14,7 @@ Source: Festival app API specification v0.1, page 27.
 
 ## GET `/api/v1/admin/metrics`
 
-- Existing admin session, viewer role or above.
+- 일반 로그인 Bearer access JWT와 활성 관리자 `viewer` 이상 권한.
 - Query: required `festivalId`; optional `from` and `to` ISO8601 timestamps, defaulting to the festival's first and last published day; `bucket=1h|1d` (default `1h`). The end must follow the start.
 - `200`: `{ "buckets": [{ "at", "activeDevices", "liveRequests", "live304Rate", "liveErrorRate", "statusUpdates", "follows", "crewJoins", "offlineOpens", "coldStartP95Ms" }] }` inside the standard `code/data/message` envelope.
 - Rates are fractions between zero and one; P95 is milliseconds or null when no cold-start sample exists. `follows` and `crewJoins` come from server-owned follow and crew-member timestamps, not client claims.

@@ -5,6 +5,7 @@ export interface SocialProfile {
   provider: SocialProvider;
   providerId: string; // provider 고유 식별자(sub)
   email?: string;
+  emailVerified?: boolean;
   name?: string;
   picture?: string; // provider가 제공하는 프로필 사진 원본 URL
 }

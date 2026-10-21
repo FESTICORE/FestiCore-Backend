@@ -26,10 +26,10 @@ export const API_DOMAINS: ApiDomain[] = [
     pathPrefix: 'auth',
   },
   {
-    slug: 'admin-auth',
-    title: 'Admin Auth',
-    description: '관리자 매직 링크 로그인과 세션',
-    pathPrefix: 'admin/auth',
+    slug: 'admin-accounts',
+    title: 'Admin Accounts',
+    description: '일반 로그인 사용자에게 관리자 권한 부여·조회·회수',
+    pathPrefix: 'admin/admins',
   },
   {
     slug: 'admin-festivals',

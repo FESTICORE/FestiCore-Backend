@@ -1,4 +1,4 @@
-import { INestApplication } from '@nestjs/common';
+import { ForbiddenException, INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { JwtModule, JwtService } from '@nestjs/jwt';
@@ -33,11 +33,9 @@ describe('Flags HTTP authorization (e2e)', () => {
     listCodes: jest.fn().mockResolvedValue({ items: [] }),
   };
   const adminAuth = {
-    validateSession: jest.fn().mockResolvedValue({
-      id: 'admin-1',
-      email: 'admin@example.com',
-      role: 'viewer',
-    }),
+    findActiveByUserId: jest
+      .fn()
+      .mockRejectedValue(new ForbiddenException('관리자 권한이 없습니다.')),
   };
   const accessSecret = 'flags-test-access-secret';
 
@@ -75,8 +73,8 @@ describe('Flags HTTP authorization (e2e)', () => {
         },
         { provide: APP_FILTER, useClass: AllExceptionsFilter },
         { provide: APP_INTERCEPTOR, useClass: ResponseInterceptor },
-        { provide: APP_GUARD, useExisting: AdminSessionGuard },
         { provide: APP_GUARD, useExisting: JwtAuthGuard },
+        { provide: APP_GUARD, useExisting: AdminSessionGuard },
       ],
     }).compile();
     jwt = moduleRef.get(JwtService);
@@ -92,11 +90,9 @@ describe('Flags HTTP authorization (e2e)', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    adminAuth.validateSession.mockResolvedValue({
-      id: 'admin-1',
-      email: 'admin@example.com',
-      role: 'viewer',
-    });
+    adminAuth.findActiveByUserId.mockRejectedValue(
+      new ForbiddenException('관리자 권한이 없습니다.'),
+    );
   });
 
   const accessToken = async () =>
@@ -152,25 +148,31 @@ describe('Flags HTTP authorization (e2e)', () => {
     });
   });
 
-  it('앱 access JWT만으로 관리자 코드 목록에 접근할 수 없다', async () => {
+  it('관리자 권한이 없는 사용자 JWT는 관리자 코드 목록을 거부한다', async () => {
     await request(server)
       .get('/api/v1/admin/festivals/festival-1/bearer-codes')
       .set('Authorization', `Bearer ${await accessToken()}`)
-      .expect(401);
+      .expect(403);
     expect(service.listCodes).not.toHaveBeenCalled();
   });
 
-  it('viewer 관리자 세션은 코드 생성이 금지되고 editor 세션은 허용된다', async () => {
+  it('viewer JWT는 코드 생성을 거부하고 editor JWT는 허용한다', async () => {
+    const token = await accessToken();
     const create = () =>
       request(server)
         .post('/api/v1/admin/festivals/festival-1/bearer-codes')
-        .set('Cookie', 'festicore_admin_session=session-1')
+        .set('Authorization', `Bearer ${token}`)
         .set('Origin', 'https://admin.example.com')
         .send({ count: 1 });
+    adminAuth.findActiveByUserId.mockResolvedValueOnce({
+      id: 'admin-1',
+      email: 'admin@example.com',
+      role: 'viewer',
+    });
     await create().expect(403);
     expect(service.createCodes).not.toHaveBeenCalled();
 
-    adminAuth.validateSession.mockResolvedValueOnce({
+    adminAuth.findActiveByUserId.mockResolvedValueOnce({
       id: 'admin-1',
       email: 'admin@example.com',
       role: 'editor',

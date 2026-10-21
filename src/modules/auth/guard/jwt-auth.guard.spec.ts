@@ -79,12 +79,12 @@ describe('JwtAuthGuard', () => {
     await expect(guard.canActivate(context().execution)).rejects.toBe(failure);
   });
 
-  it('공개 및 관리자 경로는 사용자 조회를 건너뛴다', async () => {
+  it('공개 경로만 사용자 조회를 건너뛰고 관리자 경로도 JWT를 검증한다', async () => {
     isPublic.mockReturnValueOnce(true);
     await expect(guard.canActivate(context().execution)).resolves.toBe(true);
     await expect(
       guard.canActivate(context('/api/v1/admin/flags').execution),
     ).resolves.toBe(true);
-    expect(findOne).not.toHaveBeenCalled();
+    expect(findOne).toHaveBeenCalledTimes(1);
   });
 });

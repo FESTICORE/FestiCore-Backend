@@ -34,7 +34,7 @@ export class MeController {
   @ApiOperation({
     summary: '내 프로필 조회',
     description:
-      '현재 access 토큰의 사용자 정보를 조회합니다. 다른 사용자의 프로필은 조회하지 않습니다.',
+      '현재 access 토큰의 사용자 정보와 활성 관리자 권한(admin: {id, role} 또는 null)을 조회합니다.',
   })
   @ApiResponse({ status: 200, description: '현재 사용자 정보' })
   @ApiResponse({

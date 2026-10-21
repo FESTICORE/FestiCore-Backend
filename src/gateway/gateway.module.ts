@@ -27,8 +27,8 @@ import { User } from '../modules/auth/entity/user.entity';
     { provide: APP_INTERCEPTOR, useClass: LoggingInterceptor },
     { provide: APP_INTERCEPTOR, useClass: ResponseInterceptor },
     { provide: APP_GUARD, useClass: ThrottlerGuard },
-    { provide: APP_GUARD, useExisting: AdminSessionGuard },
     { provide: APP_GUARD, useClass: JwtAuthGuard },
+    { provide: APP_GUARD, useExisting: AdminSessionGuard },
   ],
 })
 export class GatewayModule {}

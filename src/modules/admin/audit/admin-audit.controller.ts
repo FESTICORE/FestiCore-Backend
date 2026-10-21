@@ -1,7 +1,7 @@
 import { Controller, Get, Query, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import {
-  ApiCookieAuth,
+  ApiBearerAuth,
   ApiOperation,
   ApiQuery,
   ApiResponse,
@@ -11,7 +11,7 @@ import { AdminRoles } from '../auth/admin-roles.decorator';
 import { AdminAuditService } from './admin-audit.service';
 
 @ApiTags('Admin Audit')
-@ApiCookieAuth('admin-session')
+@ApiBearerAuth()
 @Controller('admin/audit')
 export class AdminAuditController {
   constructor(private readonly audit: AdminAuditService) {}
@@ -41,7 +41,7 @@ export class AdminAuditController {
     description: 'items에 at, actor, action, target, before, after 반환',
   })
   @ApiResponse({ status: 400, description: '조회 필터 형식 오류' })
-  @ApiResponse({ status: 401, description: '관리자 세션 없음' })
+  @ApiResponse({ status: 401, description: '유효한 access JWT가 없습니다.' })
   @ApiResponse({ status: 403, description: 'owner 권한 또는 요청 출처 불일치' })
   list(
     @Res({ passthrough: true }) response: Response,

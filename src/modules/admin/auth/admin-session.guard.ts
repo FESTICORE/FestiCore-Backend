@@ -3,19 +3,17 @@ import {
   ExecutionContext,
   ForbiddenException,
   Injectable,
-  UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
 import { AdminAuthService, AuthenticatedAdmin } from './admin-auth.service';
+import type { AuthUser } from '../../auth/types/social-profile';
 import { ADMIN_ROLES_KEY, AdminRole } from './admin-roles.decorator';
 
-export const ADMIN_SESSION_COOKIE = 'festicore_admin_session';
-
 export type AdminRequest = Request & {
+  user?: AuthUser;
   admin?: AuthenticatedAdmin;
-  adminSessionToken?: string;
 };
 
 const rank: Record<AdminRole, number> = { viewer: 1, editor: 2, owner: 3 };
@@ -33,21 +31,10 @@ export class AdminSessionGuard implements CanActivate {
     const request = context.switchToHttp().getRequest<AdminRequest>();
     const path = request.path.toLowerCase();
     if (!/^\/api\/v1\/admin(?:\/|$)/.test(path)) return true;
-    if (
-      (request.method === 'POST' && path === '/api/v1/admin/auth/magic-link') ||
-      (request.method === 'GET' && path === '/api/v1/admin/auth/callback')
-    ) {
-      return true;
+    if (!request.user || request.user.provider !== 'google') {
+      throw new ForbiddenException('관리자 권한이 없습니다.');
     }
-    if (request.method === 'POST' && path === '/api/v1/admin/auth/callback') {
-      // 콜백 컨트롤러가 확인 쿠키와 서명된 nonce를 검증한다.
-      // no-referrer 정책에서는 브라우저가 Origin: null을 보낼 수 있다.
-      return true;
-    }
-
-    const token = this.extractCookie(request.headers.cookie);
-    if (!token) throw new UnauthorizedException('관리자 세션이 없습니다.');
-    const admin = await this.auth.validateSession(token);
+    const admin = await this.auth.findActiveByUserId(request.user.userId);
     const roles = this.reflector.getAllAndOverride<AdminRole[]>(
       ADMIN_ROLES_KEY,
       [context.getHandler(), context.getClass()],
@@ -68,15 +55,6 @@ export class AdminSessionGuard implements CanActivate {
       throw new ForbiddenException('허용되지 않은 관리자 요청 출처입니다.');
     }
     request.admin = admin;
-    request.adminSessionToken = token;
     return true;
-  }
-
-  private extractCookie(cookieHeader?: string): string | undefined {
-    return cookieHeader
-      ?.split(';')
-      .map((part) => part.trim())
-      .find((part) => part.startsWith(`${ADMIN_SESSION_COOKIE}=`))
-      ?.slice(ADMIN_SESSION_COOKIE.length + 1);
   }
 }
