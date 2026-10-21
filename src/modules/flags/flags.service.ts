@@ -930,7 +930,7 @@ export class FlagsService {
     });
   }
 
-  async createCodes(festivalId: string, input: unknown) {
+  async createCodes(festivalId: string, input: unknown, actor: string) {
     if (
       !isRecord(input) ||
       !Number.isInteger(input.count) ||
@@ -946,24 +946,39 @@ export class FlagsService {
     if (!(await this.festivals.exists({ where: { id: festivalId } })))
       throw new NotFoundException({ code: 'NOT_FOUND' });
     const expiresAt = new Date(Date.now() + 30 * 86_400_000);
-    const result: { code: string; expiresAt: string }[] = [];
-    for (let i = 0; i < (input.count as number); i++) {
-      const code = newCode();
-      await this.codes.save(
-        this.codes.create({
-          codeHash: this.hashCode(code),
-          codeCiphertext: this.encryptCode(code),
-          festivalId,
-          flagId: null,
-          label: input.label ?? null,
-          expiresAt,
-          usedBy: null,
-          usedAt: null,
-        }),
-      );
-      result.push({ code, expiresAt: expiresAt.toISOString() });
-    }
-    return { codes: result };
+    const label = typeof input.label === 'string' ? input.label : null;
+    return this.db.transaction(async (manager) => {
+      const codes = manager.getRepository(FlagBearerCode);
+      const result: { code: string; expiresAt: string }[] = [];
+      for (let i = 0; i < (input.count as number); i++) {
+        const code = newCode();
+        await codes.save(
+          codes.create({
+            codeHash: this.hashCode(code),
+            codeCiphertext: this.encryptCode(code),
+            festivalId,
+            flagId: null,
+            label,
+            expiresAt,
+            usedBy: null,
+            usedAt: null,
+          }),
+        );
+        result.push({ code, expiresAt: expiresAt.toISOString() });
+      }
+      await this.adminAudit.record(manager, {
+        actor,
+        action: 'flag.bearer-codes.created',
+        target: `festival:${festivalId}`,
+        before: null,
+        after: {
+          count: result.length,
+          label,
+          expiresAt: expiresAt.toISOString(),
+        },
+      });
+      return { codes: result };
+    });
   }
 
   async listCodes(festivalId: string) {
@@ -1010,10 +1025,26 @@ export class FlagsService {
     };
   }
 
-  async setHidden(id: string, hidden: boolean) {
-    const result = await this.flags.update({ id }, { hidden });
-    if (!result.affected) throw new NotFoundException({ code: 'NOT_FOUND' });
-    await this.packSync.sync(id);
+  async setHidden(id: string, hidden: boolean, actor: string) {
+    await this.db.transaction(async (manager) => {
+      const repo = manager.getRepository(Flag);
+      const flag = await repo.findOne({
+        where: { id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!flag) throw new NotFoundException({ code: 'NOT_FOUND' });
+      const before = { hidden: flag.hidden };
+      flag.hidden = hidden;
+      await repo.save(flag);
+      await this.adminAudit.record(manager, {
+        actor,
+        action: hidden ? 'flag.hidden' : 'flag.unhidden',
+        target: `flag:${id}`,
+        before,
+        after: { hidden },
+      });
+      await this.packSync.sync(id, manager);
+    });
     return { flagId: id, hidden };
   }
 

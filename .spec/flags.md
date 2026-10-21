@@ -30,12 +30,12 @@
 
 | 메서드 | 경로 | 최소 역할 | 결과 |
 | --- | --- | --- | --- |
-| POST | `/api/v1/admin/festivals/:festivalId/bearer-codes` | editor | 등록 코드 생성 |
+| POST | `/api/v1/admin/festivals/:festivalId/bearer-codes` | editor | 등록 코드 생성, 관리자 행위 감사 기록 |
 | GET | `/api/v1/admin/festivals/:festivalId/bearer-codes` | viewer | 코드 현황 |
 | GET | `/api/v1/admin/festivals/:festivalId/flags` | viewer | 깃발 현황 |
 | GET | `/api/v1/admin/flags/reported` | viewer | 신고된 깃발 |
-| POST | `/api/v1/admin/flags/:flagId/hide` | editor | 공개 숨김 |
-| POST | `/api/v1/admin/flags/:flagId/unhide` | editor | 숨김 해제 |
+| POST | `/api/v1/admin/flags/:flagId/hide` | editor | 공개 숨김, 변경 전후 감사 기록 |
+| POST | `/api/v1/admin/flags/:flagId/unhide` | editor | 숨김 해제, 변경 전후 감사 기록 |
 
 ## 실패·보안·검증
 
@@ -44,6 +44,9 @@
   서버의 refresh 비밀값에서 분리해 파생한 키를 사용한다. 코드 추측은 사용자·디바이스·IP별로 제한한다.
 - 등록 코드 원문을 반환하는 관리자 응답은 `Cache-Control: no-store`다. JWT refresh 비밀값을
   교체하면 이전 암호문을 복원할 수 없으므로, 기존 코드를 폐기하고 다시 발급해야 한다.
+- 코드 발급과 숨김 변경은 감사 기록을 같은 DB 트랜잭션에 저장한다. 감사 기록에는 코드 수,
+  라벨, 만료 시각만 남기며 코드 원문·해시·암호문은 남기지 않는다. 숨김 변경과 공개 깃발 팩
+  갱신도 같은 트랜잭션에서 처리한다. 코드 발급 응답은 `Cache-Control: no-store`다.
 - 팔로우·상태의 동일 멱등키에 다른 요청을 보내면 409다. 키는 24시간 보관한다.
 - 사진은 실제 바이트를 디코딩한 뒤 EXIF를 제거하고 WebP로 재인코딩한다.
 - 상태 변경의 `clientAt` 오래됨/미래 시간 검증과 소유권은

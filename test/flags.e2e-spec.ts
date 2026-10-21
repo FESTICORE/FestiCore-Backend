@@ -177,5 +177,11 @@ describe('Flags HTTP authorization (e2e)', () => {
     });
     const response = await create().expect(201);
     expect((response.body as { data: unknown }).data).toEqual({ codes: [] });
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(service.createCodes).toHaveBeenCalledWith(
+      'festival-1',
+      { count: 1 },
+      'admin-1',
+    );
   });
 });

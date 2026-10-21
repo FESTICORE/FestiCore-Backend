@@ -809,8 +809,14 @@ export class AdminFlagsController {
   @ApiResponse({ status: 401, description: '관리자 세션 없음 또는 만료' })
   @ApiResponse({ status: 403, description: 'editor/owner 권한 없음' })
   @ApiResponse({ status: 404, description: '축제를 찾을 수 없음' })
-  createCodes(@Param('festivalId') id: string, @Body() body: unknown) {
-    return this.service.createCodes(id, body);
+  createCodes(
+    @Param('festivalId') id: string,
+    @Body() body: unknown,
+    @Req() request: AdminRequest,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    response.setHeader('Cache-Control', 'no-store');
+    return this.service.createCodes(id, body, request.admin!.id);
   }
   @Get('festivals/:festivalId/bearer-codes')
   @AdminRoles('viewer', 'editor', 'owner')
@@ -919,8 +925,8 @@ export class AdminFlagsController {
   @ApiResponse({ status: 401, description: '관리자 세션 없음 또는 만료' })
   @ApiResponse({ status: 403, description: 'editor/owner 권한 없음' })
   @ApiResponse({ status: 404, description: '깃발을 찾을 수 없음' })
-  hide(@Param('flagId') id: string) {
-    return this.service.setHidden(id, true);
+  hide(@Param('flagId') id: string, @Req() request: AdminRequest) {
+    return this.service.setHidden(id, true, request.admin!.id);
   }
   @Post('flags/:flagId/unhide')
   @AdminRoles('editor', 'owner')
@@ -941,7 +947,7 @@ export class AdminFlagsController {
   @ApiResponse({ status: 401, description: '관리자 세션 없음 또는 만료' })
   @ApiResponse({ status: 403, description: 'editor/owner 권한 없음' })
   @ApiResponse({ status: 404, description: '깃발을 찾을 수 없음' })
-  unhide(@Param('flagId') id: string) {
-    return this.service.setHidden(id, false);
+  unhide(@Param('flagId') id: string, @Req() request: AdminRequest) {
+    return this.service.setHidden(id, false, request.admin!.id);
   }
 }
