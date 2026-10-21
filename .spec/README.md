@@ -3,6 +3,8 @@
 기능/도메인별 명세(Specification)를 이 폴더에 둔다. 구현 전 스펙을 먼저 작성하고,
 구현/테스트가 스펙을 충족하는지 검증한다.
 
+모든 JSON API 응답의 최상위 필드는 `{ "code": string, "data": unknown | null, "message": string }`이다. 성공 시 `code`는 `SUCCESS`, 오류 시 업무 코드 또는 HTTP 오류 코드다. HTTP 상태는 상태 줄에서 확인한다. 오류 상세(`errors`, `draft`, `retryAfter` 등)는 허용된 값만 `data`에 넣는다. 이미지·HTML·리디렉션과 204·304에는 JSON 본문을 강제하지 않는다.
+
 ## 목록
 
 - [health.md](./health.md) — 헬스체크

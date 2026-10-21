@@ -22,6 +22,27 @@ describe('Swagger 문서 분리', () => {
         post: { responses: { 200: { description: 'OK' } } },
       },
       '/api/v1/flags': { get: { responses: { 200: { description: 'OK' } } } },
+      '/api/v1/festivals': {
+        get: {
+          responses: {
+            200: {
+              description: 'OK',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    example: {
+                      code: 'SUCCESS',
+                      data: { items: [] },
+                      message: '성공적으로 처리되었습니다.',
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
       '/api/v1/admin/auth/session': {
         get: { responses: { 200: { description: 'OK' } } },
       },
@@ -59,6 +80,7 @@ describe('Swagger 문서 분리', () => {
       '/api/v1/health',
       '/api/v1/auth/login',
       '/api/v1/flags',
+      '/api/v1/festivals',
     ]);
     expect(adminPaths).toEqual([
       '/api/v1/admin/auth/session',
@@ -91,6 +113,50 @@ describe('Swagger 문서 분리', () => {
       admin.paths['/api/v1/admin/flags/reported'].get?.security,
     ).toContainEqual({
       'admin-session': [],
+    });
+    expect(
+      documents.get('api-docs')!.paths['/api/v1/health'].get?.responses['200'],
+    ).toMatchObject({
+      content: {
+        'application/json': {
+          schema: {
+            required: ['code', 'data', 'message'],
+            properties: { code: { example: 'SUCCESS' } },
+          },
+        },
+      },
+    });
+    expect(
+      documents.get('api-docs')!.paths['/api/v1/festivals'].get?.responses[
+        '200'
+      ],
+    ).toMatchObject({
+      content: {
+        'application/json': {
+          schema: {
+            required: ['code', 'data', 'message'],
+            properties: {
+              code: { type: 'string' },
+              data: { type: 'object' },
+              message: { type: 'string' },
+            },
+            example: {
+              code: 'SUCCESS',
+              data: { items: [] },
+              message: '성공적으로 처리되었습니다.',
+            },
+          },
+        },
+      },
+    });
+    expect(
+      admin.paths['/api/v1/admin/auth/magic-link'].post?.responses['202'],
+    ).toMatchObject({
+      content: {
+        'application/json': {
+          schema: { properties: { code: { example: 'SUCCESS' } } },
+        },
+      },
     });
     expect(
       admin.paths['/api/v1/admin/auth/magic-link'].post?.security,

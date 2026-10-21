@@ -19,7 +19,7 @@
 }
 ```
 
-APNs 토큰은 제공할 때 2~256자 짝수 길이 hex 문자열이다. 응답은 `{"deviceId":"UUID","userId":null,"subscriptions":[],"deviceSecret":"64자 hex"}` 형식이다. `deviceSecret`은 최초 등록 응답에만 존재한다. 비밀값 분실 시 임의의 기기 ID로 재등록할 수 없으므로 앱에서 새 UUID를 생성해야 한다. 소유권 증명 없이 기존 기기의 토큰을 교체하려는 요청은 403이다.
+APNs 토큰은 제공할 때 2~256자 짝수 길이 hex 문자열이다. JSON 응답은 `{"code":"SUCCESS","data":{"deviceId":"UUID","userId":null,"subscriptions":[],"deviceSecret":"64자 hex"},"message":"성공적으로 처리되었습니다."}` 형식이다. `deviceSecret`은 최초 등록 응답의 `data`에만 존재한다. 비밀값 분실 시 임의의 기기 ID로 재등록할 수 없으므로 앱에서 새 UUID를 생성해야 한다. 소유권 증명 없이 기존 기기의 토큰을 교체하려는 요청은 403이다.
 
 ## Live Activity
 
@@ -28,6 +28,6 @@ APNs 토큰은 제공할 때 2~256자 짝수 길이 hex 문자열이다. 응답�
 
 ## 축제 팩 변경 구독
 
-`PUT /api/v1/devices/{deviceId}/subscriptions/{festivalId}` 본문은 `{"packUpdates":true}`다. 공개된 축제에 대해서만 저장한다. 성공 응답은 `{"festivalId":"fst_...","packUpdates":true}`다. 회원 탈퇴 시 해당 계정 기기의 구독과 푸시 토큰을 삭제한다.
+`PUT /api/v1/devices/{deviceId}/subscriptions/{festivalId}` 본문은 `{"packUpdates":true}`다. 공개된 축제에 대해서만 저장한다. 성공 응답의 `data`는 `{"festivalId":"fst_...","packUpdates":true}`다. 회원 탈퇴 시 해당 계정 기기의 구독과 푸시 토큰을 삭제한다.
 
 공개 Swagger: `/api-docs/devices`. 관리자 Swagger에는 포함하지 않는다.

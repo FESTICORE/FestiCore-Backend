@@ -159,6 +159,10 @@ function dateInSeoul(now: Date): string {
   }).format(now);
 }
 
+export function envelopeEtag(etag: string): string {
+  return `"cdm1-${etag.slice(1, -1)}"`;
+}
+
 @Injectable()
 export class PublicFestivalService {
   constructor(
@@ -352,7 +356,7 @@ export class PublicFestivalService {
     return {
       packVersion: pack.packVersion as number,
       packUpdatedAt: pack.packUpdatedAt as string,
-      etag: `"v${pack.packVersion as number}"`,
+      etag: envelopeEtag(`"v${pack.packVersion as number}"`),
     };
   }
 

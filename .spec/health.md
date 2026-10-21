@@ -16,8 +16,7 @@
 
 ```json
 {
-  "success": true,
-  "statusCode": 200,
+  "code": "SUCCESS",
   "data": {
     "status": "ok",
     "uptime": 12.34,
@@ -32,8 +31,7 @@ DB 프로브(`SELECT 1`) 실패(503) — `AllExceptionsFilter` 표준 에러.
 
 ```json
 {
-  "success": false,
-  "statusCode": 503,
+  "code": "SERVICE_UNAVAILABLE",
   "data": null,
   "message": "데이터베이스에 연결할 수 없습니다."
 }
@@ -42,5 +40,5 @@ DB 프로브(`SELECT 1`) 실패(503) — `AllExceptionsFilter` 표준 에러.
 ## 검증 기준
 
 - DB 정상 → 200, `data.status === "ok"`, `data.db === "up"`
-- DB 실패 → 503, `success === false`
+- DB 실패 → 503, `code === "SERVICE_UNAVAILABLE"`, `data === null`
 - 대응 테스트: [test/health.e2e-spec.ts](../test/health.e2e-spec.ts)

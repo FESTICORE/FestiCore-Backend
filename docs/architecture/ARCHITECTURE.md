@@ -27,8 +27,9 @@ src/
 
 ## 공통 규약
 
-- **응답**: 모든 성공 응답은 `ResponseInterceptor`가 `{ success, statusCode, data, message }`로 감싼다.
-- **에러**: 모든 예외는 `AllExceptionsFilter`가 `{ success:false, statusCode, data:null, message }`로 변환.
+- **JSON 응답**: 성공 시 `ResponseInterceptor`가 `{ code: "SUCCESS", data, message }`로 감싼다. HTTP 상태는 응답 상태 줄에서 확인한다.
+- **JSON 에러**: `AllExceptionsFilter`가 `{ code, data, message }`로 변환한다. `code`는 명시된 업무 오류 코드 또는 HTTP 오류 코드이고, `data`는 허용된 오류 세부 정보가 없으면 `null`이다.
+- **본문 예외**: 204/304 응답은 본문이 없다. 이미지, HTML, 리디렉션 응답에는 JSON 형식을 적용하지 않는다.
 - **인증**: 전역 `JwtAuthGuard`가 기본. 공개 라우트만 `@Public()`.
 - **설정**: `ConfigService`로만 환경변수 접근. `process.env` 직접 사용 지양(config 팩토리·main 예외).
 - **API prefix**: 전역 `api/v1`. Swagger 문서는 `/api-docs`.

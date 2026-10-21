@@ -6,6 +6,8 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import request from 'supertest';
 import { DataSource } from 'typeorm';
 import type { Server } from 'http';
+import { AllExceptionsFilter } from '../src/common/filters/all-exceptions.filter';
+import { ResponseInterceptor } from '../src/common/interceptors/response.interceptor';
 import { AdminFestival } from '../src/modules/admin/festival/festival.entity';
 import { Crew, CrewGather, CrewMember } from '../src/modules/crews/crew.entity';
 import {
@@ -17,6 +19,27 @@ import {
 import { PublicFestivalController } from '../src/modules/public/public-festival.controller';
 import { PublicFestivalService } from '../src/modules/public/public-festival.service';
 import { PublicLiveService } from '../src/modules/public/public-live.service';
+
+function envelopeData<T>(body: unknown, code: string): T {
+  expect(body).toBeInstanceOf(Object);
+  expect(Object.keys(body as object).sort()).toEqual([
+    'code',
+    'data',
+    'message',
+  ]);
+  const envelope = body as { code: unknown; data: T; message: unknown };
+  expect(envelope.code).toBe(code);
+  expect(typeof envelope.message).toBe('string');
+  return envelope.data;
+}
+
+function successData<T>(body: unknown): T {
+  return envelopeData<T>(body, 'SUCCESS');
+}
+
+function errorData<T>(body: unknown, code: string): T {
+  return envelopeData<T>(body, code);
+}
 
 describe('Public festival API', () => {
   let app: INestApplication;
@@ -92,6 +115,8 @@ describe('Public festival API', () => {
       ],
     }).compile();
     app = moduleRef.createNestApplication();
+    app.useGlobalFilters(new AllExceptionsFilter());
+    app.useGlobalInterceptors(new ResponseInterceptor());
     app.setGlobalPrefix('api/v1');
     await app.listen(0);
     server = app.getHttpServer() as Server;
@@ -105,12 +130,17 @@ describe('Public festival API', () => {
     const first = await request(server)
       .get('/api/v1/festivals?after=2026-10-21&limit=20')
       .expect(200);
-    const listBody = first.body as { items: unknown[] };
+    const listBody = successData<{ items: unknown[] }>(first.body);
     expect(listBody.items).toEqual([
       expect.objectContaining({ id: pack.id, packVersion: 7 }),
     ]);
-    expect(first.headers['cache-control']).toBe('public, max-age=3600');
+    expect(first.headers['cache-control']).toBe('public, max-age=60');
     expect(first.headers.date).toBeDefined();
+    expect(first.headers.etag).toMatch(/^"cdm1-/);
+    await request(server)
+      .get('/api/v1/festivals?after=2026-10-21&limit=20')
+      .set('If-None-Match', first.headers.etag.replace('cdm1-', ''))
+      .expect(200);
     await request(server)
       .get('/api/v1/festivals?after=2026-10-21&limit=20')
       .set('If-None-Match', first.headers.etag)
@@ -137,7 +167,7 @@ describe('Public festival API', () => {
     const first = await request(server)
       .get('/api/v1/festivals?limit=1')
       .expect(200);
-    const body = first.body as { items: { id: string }[] };
+    const body = successData<{ items: { id: string }[] }>(first.body);
     expect(body.items).toEqual([
       expect.objectContaining({
         name: '2026 대구힙합페스티벌',
@@ -150,7 +180,10 @@ describe('Public festival API', () => {
       }),
     ]);
     const id = body.items[0].id;
-    await request(server).get(`/api/v1/festivals/${id}/pack`).expect(404);
+    const unavailablePack = await request(server)
+      .get(`/api/v1/festivals/${id}/pack`)
+      .expect(404);
+    expect(errorData<null>(unavailablePack.body, 'NOT_FOUND')).toBeNull();
     await request(server)
       .get('/api/v1/festivals?limit=1')
       .set('If-None-Match', first.headers.etag)
@@ -161,7 +194,7 @@ describe('Public festival API', () => {
     const first = await request(server)
       .get(`/api/v1/festivals/${pack.id}/pack`)
       .expect(200);
-    expect(first.body).toEqual(
+    expect(successData(first.body)).toEqual(
       expect.objectContaining({
         id: pack.id,
         name: pack.name,
@@ -169,13 +202,20 @@ describe('Public festival API', () => {
         packVersion: 7,
       }),
     );
-    expect(first.headers.etag).toBe('"v7"');
-    const unchanged = await request(server)
+    expect(first.headers.etag).toBe('"cdm1-v7"');
+    await request(server)
       .get(`/api/v1/festivals/${pack.id}/pack`)
       .set('If-None-Match', '"v7"')
+      .expect(200);
+    const unchanged = await request(server)
+      .get(`/api/v1/festivals/${pack.id}/pack`)
+      .set('If-None-Match', '"cdm1-v7"')
       .expect(304);
     expect(unchanged.text).toBe('');
-    await request(server).get('/api/v1/festivals/fst_unknown/pack').expect(404);
+    const missing = await request(server)
+      .get('/api/v1/festivals/fst_unknown/pack')
+      .expect(404);
+    expect(errorData<null>(missing.body, 'NOT_FOUND')).toBeNull();
   });
 
   it('does not expose a festival that has only an admin draft', async () => {
@@ -268,33 +308,34 @@ describe('Public festival API', () => {
     ])
       expect(serialized).not.toContain(secret);
     expect(
-      (
-        response.body as {
-          flags: { plan: string[]; thumbUrl: string | null }[];
-        }
-      ).flags[0],
+      successData<{
+        flags: { plan: string[]; thumbUrl: string | null }[];
+      }>(response.body).flags[0],
     ).toEqual(expect.objectContaining({ plan: [], thumbUrl: null }));
-    expect((response.body as { flags: unknown[] }).flags).toHaveLength(1);
+    expect(successData<{ flags: unknown[] }>(response.body).flags).toHaveLength(
+      1,
+    );
   });
 
   it('returns version and filters flag tags with OR semantics', async () => {
     const version = await request(server)
       .get(`/api/v1/festivals/${pack.id}/pack/version`)
       .expect(200);
-    expect(version.body).toEqual({
+    expect(successData(version.body)).toEqual({
       packVersion: 7,
       packUpdatedAt: pack.packUpdatedAt,
-      etag: '"v7"',
+      etag: '"cdm1-v7"',
     });
     const flags = await request(server)
       .get(`/api/v1/festivals/${pack.id}/flags?tag=slam&tag=newbie`)
       .expect(200);
-    const flagsBody = flags.body as { items: { id: string }[] };
+    const flagsBody = successData<{ items: { id: string }[] }>(flags.body);
     expect(flagsBody.items).toHaveLength(1);
     expect(flagsBody.items[0].id).toBe('flg_12345678');
-    await request(server)
+    const invalid = await request(server)
       .get(`/api/v1/festivals/${pack.id}/flags?tag=invalid`)
       .expect(400);
+    expect(errorData<null>(invalid.body, 'VALIDATION')).toBeNull();
   });
 
   it('uses backend image proxy URLs for stored public flag photos', async () => {
@@ -326,9 +367,9 @@ describe('Public festival API', () => {
     const response = await request(server)
       .get(`/api/v1/festivals/${pack.id}/flags`)
       .expect(200);
-    const body = response.body as {
+    const body = successData<{
       items: { id: string; photoUrl: string; thumbUrl: string }[];
-    };
+    }>(response.body);
     expect(body.items).toEqual([
       expect.objectContaining({
         id: 'flg_12345678',
@@ -364,7 +405,9 @@ describe('Public festival API', () => {
     const first = await request(server)
       .get('/api/v1/festivals?after=2026-10-21&limit=1')
       .expect(200);
-    const body = first.body as { items: { id: string }[]; nextCursor: string };
+    const body = successData<{ items: { id: string }[]; nextCursor: string }>(
+      first.body,
+    );
     expect(body.items[0].id).toBe('fst_12345678');
     expect(body.nextCursor).toBe(
       '2026-10-21~2026-11-20T12:00:00+09:00~fst_12345678',
@@ -385,9 +428,9 @@ describe('Public festival API', () => {
         `/api/v1/festivals?after=${encodeURIComponent(body.nextCursor)}&limit=1`,
       )
       .expect(200);
-    expect((second.body as { items: { id: string }[] }).items[0].id).toBe(
-      'fst_87654321',
-    );
+    expect(
+      successData<{ items: { id: string }[] }>(second.body).items[0].id,
+    ).toBe('fst_87654321');
     expect(queryBuilder.andWhere).toHaveBeenCalledWith(
       expect.stringContaining('festival.id > :cursorId'),
       { cursorAt: '2026-11-20T12:00:00+09:00', cursorId: 'fst_12345678' },
@@ -412,7 +455,9 @@ describe('Public festival API', () => {
     const first = await request(server)
       .get('/api/v1/festivals?after=2026-10-21&limit=1')
       .expect(200);
-    const body = first.body as { items: { id: string }[]; nextCursor: string };
+    const body = successData<{ items: { id: string }[]; nextCursor: string }>(
+      first.body,
+    );
     expect(body.items[0].id).toBe('fst_12345678');
     expect(body.nextCursor).toBe(
       '2026-10-21~2026-11-20T12:00:00+09:00~fst_12345678',
@@ -441,7 +486,7 @@ describe('Public festival API', () => {
     const first = await request(server)
       .get('/api/v1/festivals?after=2025-01-01&limit=1')
       .expect(200);
-    const cursor = (first.body as { nextCursor: string }).nextCursor;
+    const cursor = successData<{ nextCursor: string }>(first.body).nextCursor;
     expect(cursor).toMatch(/^2025-01-01~/);
     queryBuilder.andWhere.mockClear();
     queryBuilder.getMany.mockResolvedValueOnce([]);
@@ -480,7 +525,10 @@ describe('Public festival API', () => {
       .expect(200);
     expect(disabled.headers['content-encoding']).toBeUndefined();
     await request(server).get(url).set('If-None-Match', '*').expect(304);
-    await request(server).get(url).set('If-None-Match', '"v7"').expect(304);
+    await request(server)
+      .get(url)
+      .set('If-None-Match', '"cdm1-v7"')
+      .expect(304);
   });
 
   it('serves anonymous live state and 304 without refreshing server time', async () => {
@@ -490,7 +538,7 @@ describe('Public festival API', () => {
       .get(`/api/v1/festivals/${pack.id}/live`)
       .set('X-Device-Id', device)
       .expect(200);
-    expect((first.body as { me: null }).me).toBeNull();
+    expect(successData<{ me: null }>(first.body).me).toBeNull();
     expect(first.headers['x-poll-after']).toBe('30');
     expect(first.headers['cache-control']).toBe('private, max-age=30');
     expect(dataSource.query).toHaveBeenCalledWith(
@@ -526,7 +574,7 @@ describe('Public festival API', () => {
       .set('X-Device-Id', device)
       .set('Authorization', `Bearer ${token}`)
       .expect(200);
-    expect((personalized.body as { me: unknown }).me).toEqual({
+    expect(successData<{ me: unknown }>(personalized.body).me).toEqual({
       following: [],
       pinnedFlagId: null,
       crew: null,
@@ -538,13 +586,15 @@ describe('Public festival API', () => {
 
   it('rejects missing device ID, invalid token, and per-device excess polls', async () => {
     const url = `/api/v1/festivals/${pack.id}/live`;
-    await request(server).get(url).expect(400);
+    const missingDevice = await request(server).get(url).expect(400);
+    expect(errorData<null>(missingDevice.body, 'VALIDATION')).toBeNull();
     const device = '3f9a2c1d-2b77-4e7e-9a1b-2a0123456789';
-    await request(server)
+    const invalidToken = await request(server)
       .get(url)
       .set('X-Device-Id', device)
       .set('Authorization', 'Bearer invalid')
       .expect(401);
+    expect(errorData<null>(invalidToken.body, 'UNAUTHORIZED')).toBeNull();
     dataSource.query.mockResolvedValueOnce([{ count: 5 }]);
     const limited = await request(server)
       .get(url)
@@ -552,7 +602,8 @@ describe('Public festival API', () => {
       .expect(429);
     expect(limited.headers['retry-after']).toBeDefined();
     expect(Number(limited.headers['retry-after'])).toBe(
-      (limited.body as { retryAfter: number }).retryAfter,
+      errorData<{ retryAfter: number }>(limited.body, 'RATE_LIMITED')
+        .retryAfter,
     );
   });
 
