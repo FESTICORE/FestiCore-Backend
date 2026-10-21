@@ -33,6 +33,7 @@ npm run start:dev
 - 운영: [공개](https://festicore.up.railway.app/api-docs) · [관리자](https://festicore.up.railway.app/admin/api-docs)
 
 각 UI의 드롭다운에서 해당 영역의 전체·도메인별 문서를 선택할 수 있다.
+JSON API 응답은 `{ "code": "SUCCESS", "data": ..., "message": "성공적으로 처리되었습니다." }` 형식이며, 오류 코드와 상세 규칙은 [.spec/](./.spec/README.md)에 정리했다.
 공개 문서에는 `/api/v1/admin` 경로가 없고, 관리자 문서에는 관리자 경로만 표시된다.
 브라우저 호출에는 해당 환경의 유효한 인증 정보가 필요하다. 배포된 문서의 가용성과 최신 코드 반영 여부는 Railway 배포 상태로 확인한다.
 

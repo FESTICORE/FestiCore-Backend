@@ -18,8 +18,9 @@ import {
 } from '@nestjs/swagger';
 import { brotliCompressSync, gzipSync } from 'zlib';
 import type { Response } from 'express';
+import { apiSuccess } from '../../common/interfaces/api-response.interface';
 import { Public } from '../auth/decorator/public.decorator';
-import { PublicFestivalService } from './public-festival.service';
+import { envelopeEtag, PublicFestivalService } from './public-festival.service';
 import { PublicLiveService } from './public-live.service';
 
 function matchesEtag(header: string | undefined, etag: string): boolean {
@@ -59,6 +60,21 @@ const festivalId = {
   example: 'fst_01234567',
 };
 
+function jsonErrorSchema(code: string) {
+  return {
+    type: 'object' as const,
+    required: ['code', 'data', 'message'],
+    properties: {
+      code: { type: 'string' as const, example: code },
+      data: { nullable: true, example: null },
+      message: {
+        type: 'string' as const,
+        example: '요청을 처리할 수 없습니다.',
+      },
+    },
+  };
+}
+
 @ApiTags('Public Festivals')
 @Public()
 @Controller('festivals')
@@ -80,7 +96,7 @@ export class PublicFestivalController {
       response.status(304).end();
       return;
     }
-    response.json(body);
+    response.json(apiSuccess(body));
   }
 
   @Get()
@@ -113,35 +129,43 @@ export class PublicFestivalController {
     schema: {
       type: 'object',
       example: {
-        items: [
-          {
-            id: 'fst_01234567',
-            name: '가을 음악 축제',
-            firstDate: '2026-10-24',
-            lastDate: '2026-10-24',
-            packVersion: 1,
-            status: 'upcoming',
-          },
-          {
-            id: 'fst_1234567890abcdef',
-            name: '겨울 페스티벌',
-            venue: '공연장',
-            firstDate: '2026-12-25',
-            lastDate: '2026-12-26',
-            packVersion: 0,
-            flagsEnabled: false,
-            thumbUrl: null,
-            status: 'discovered',
-            sourceUrl:
-              'https://ticket.melon.com/performance/index.htm?prodId=12345',
-          },
-        ],
-        nextCursor: null,
+        code: 'SUCCESS',
+        data: {
+          items: [
+            {
+              id: 'fst_01234567',
+              name: '가을 음악 축제',
+              firstDate: '2026-10-24',
+              lastDate: '2026-10-24',
+              packVersion: 1,
+              status: 'upcoming',
+            },
+            {
+              id: 'fst_1234567890abcdef',
+              name: '겨울 페스티벌',
+              venue: '공연장',
+              firstDate: '2026-12-25',
+              lastDate: '2026-12-26',
+              packVersion: 0,
+              flagsEnabled: false,
+              thumbUrl: null,
+              status: 'discovered',
+              sourceUrl:
+                'https://ticket.melon.com/performance/index.htm?prodId=12345',
+            },
+          ],
+          nextCursor: null,
+        },
+        message: '성공적으로 처리되었습니다.',
       },
     },
   })
   @ApiResponse({ status: 304, description: '목록이 변경되지 않았습니다.' })
-  @ApiResponse({ status: 400, description: 'after 또는 limit 형식 오류' })
+  @ApiResponse({
+    status: 400,
+    description: 'after 또는 limit 형식 오류',
+    schema: jsonErrorSchema('VALIDATION'),
+  })
   async list(
     @Query('after') after: string | undefined,
     @Query('limit') limit: string | undefined,
@@ -149,8 +173,13 @@ export class PublicFestivalController {
     @Res() response: Response,
   ) {
     const body = await this.service.list(after, limit);
-    response.setHeader('Cache-Control', 'public, max-age=3600');
-    this.send(response, body, this.service.etag(body), ifNoneMatch);
+    response.setHeader('Cache-Control', 'public, max-age=60');
+    this.send(
+      response,
+      body,
+      envelopeEtag(this.service.etag(body)),
+      ifNoneMatch,
+    );
   }
 
   @Get(':id/pack/version')
@@ -166,13 +195,21 @@ export class PublicFestivalController {
     schema: {
       type: 'object',
       example: {
-        packVersion: 1,
-        packUpdatedAt: '2026-10-20T09:00:00Z',
-        etag: '"v1"',
+        code: 'SUCCESS',
+        data: {
+          packVersion: 1,
+          packUpdatedAt: '2026-10-20T09:00:00Z',
+          etag: '"cdm1-v1"',
+        },
+        message: '성공적으로 처리되었습니다.',
       },
     },
   })
-  @ApiResponse({ status: 404, description: '발행된 축제가 없습니다.' })
+  @ApiResponse({
+    status: 404,
+    description: '발행된 축제가 없습니다.',
+    schema: jsonErrorSchema('NOT_FOUND'),
+  })
   async version(@Param('id') id: string, @Res() response: Response) {
     const body = await this.service.version(id);
     response.setHeader('Cache-Control', 'public, max-age=300');
@@ -203,15 +240,23 @@ export class PublicFestivalController {
       type: 'object',
       additionalProperties: true,
       example: {
-        id: 'fst_01234567',
-        name: '가을 음악 축제',
-        days: [{ date: '2026-10-24' }],
-        packVersion: 1,
+        code: 'SUCCESS',
+        data: {
+          id: 'fst_01234567',
+          name: '가을 음악 축제',
+          days: [{ date: '2026-10-24' }],
+          packVersion: 1,
+        },
+        message: '성공적으로 처리되었습니다.',
       },
     },
   })
   @ApiResponse({ status: 304, description: '팩 버전이 변경되지 않았습니다.' })
-  @ApiResponse({ status: 404, description: '발행된 축제가 없습니다.' })
+  @ApiResponse({
+    status: 404,
+    description: '발행된 축제가 없습니다.',
+    schema: jsonErrorSchema('NOT_FOUND'),
+  })
   async pack(
     @Param('id') id: string,
     @Headers('if-none-match') ifNoneMatch: string | undefined,
@@ -225,13 +270,13 @@ export class PublicFestivalController {
     );
     response.setHeader('Date', new Date().toUTCString());
     response.setHeader('Vary', 'Accept-Encoding');
-    const etag = `"v${body.packVersion as number}"`;
+    const etag = envelopeEtag(`"v${body.packVersion as number}"`);
     response.setHeader('ETag', etag);
     if (matchesEtag(ifNoneMatch, etag)) {
       response.status(304).end();
       return;
     }
-    const raw = Buffer.from(JSON.stringify(body));
+    const raw = Buffer.from(JSON.stringify(apiSuccess(body)));
     response.type('application/json');
     if (acceptsEncoding(acceptEncoding, 'br')) {
       response.setHeader('Content-Encoding', 'br');
@@ -264,13 +309,25 @@ export class PublicFestivalController {
     schema: {
       type: 'object',
       example: {
-        items: [{ id: 'flg_01234567', name: '응원 깃발', tags: ['slam'] }],
-        packVersion: 1,
+        code: 'SUCCESS',
+        data: {
+          items: [{ id: 'flg_01234567', name: '응원 깃발', tags: ['slam'] }],
+          packVersion: 1,
+        },
+        message: '성공적으로 처리되었습니다.',
       },
     },
   })
-  @ApiResponse({ status: 400, description: 'tag 값 오류' })
-  @ApiResponse({ status: 404, description: '발행된 축제가 없습니다.' })
+  @ApiResponse({
+    status: 400,
+    description: 'tag 값 오류',
+    schema: jsonErrorSchema('VALIDATION'),
+  })
+  @ApiResponse({
+    status: 404,
+    description: '발행된 축제가 없습니다.',
+    schema: jsonErrorSchema('NOT_FOUND'),
+  })
   async flags(
     @Param('id') id: string,
     @Query('tag') tag: string | string[] | undefined,
@@ -318,28 +375,39 @@ export class PublicFestivalController {
     schema: {
       type: 'object',
       example: {
-        festivalId: 'fst_01234567',
-        setOverrides: [],
-        activeFlags: [],
-        me: null,
-        serverAt: '2026-10-20T09:00:00Z',
+        code: 'SUCCESS',
+        data: {
+          festivalId: 'fst_01234567',
+          setOverrides: [],
+          activeFlags: [],
+          me: null,
+          serverAt: '2026-10-20T09:00:00Z',
+        },
+        message: '성공적으로 처리되었습니다.',
       },
     },
   })
   @ApiResponse({ status: 304, description: '라이브 상태 변경 없음' })
-  @ApiResponse({ status: 400, description: '기기 UUID 형식 오류' })
+  @ApiResponse({
+    status: 400,
+    description: '기기 UUID 형식 오류',
+    schema: jsonErrorSchema('VALIDATION'),
+  })
   @ApiResponse({
     status: 401,
     description: '전달된 Bearer 토큰이 유효하지 않습니다.',
+    schema: jsonErrorSchema('UNAUTHORIZED'),
   })
   @ApiResponse({
     status: 429,
     description: '기기별 요청 횟수 초과. Retry-After 헤더를 확인하세요.',
+    schema: jsonErrorSchema('RATE_LIMITED'),
   })
   @ApiResponse({
     status: 503,
     description:
       '요청 제한 기록 정리를 확인할 수 없어 라이브 조회를 잠시 중단함',
+    schema: jsonErrorSchema('SERVICE_UNAVAILABLE'),
   })
   async live(
     @Param('id') id: string,
@@ -357,7 +425,7 @@ export class PublicFestivalController {
       response.setHeader('Cache-Control', 'private, max-age=30');
       response.setHeader('Vary', 'Authorization');
       response.setHeader('X-Poll-After', '30');
-      this.send(response, body, etag, ifNoneMatch);
+      this.send(response, body, envelopeEtag(etag), ifNoneMatch);
     } catch (error) {
       if (error instanceof HttpException && error.getStatus() === 429) {
         const detail = error.getResponse();

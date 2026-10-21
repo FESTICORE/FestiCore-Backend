@@ -5,8 +5,7 @@ import { createTestApp, TestContext } from './app-factory';
 import { AuthService } from '../src/modules/auth/service/auth.service';
 
 interface ApiBody {
-  success: boolean;
-  statusCode: number;
+  code: string;
   data: {
     accessToken: string;
     refreshToken: string;
@@ -134,8 +133,7 @@ describe('Auth (e2e)', () => {
   it('토큰 없이 me → 401 표준 에러', async () => {
     const res = await request(server).get('/api/v1/auth/me').expect(401);
     expect(bodyOf(res)).toMatchObject({
-      success: false,
-      statusCode: 401,
+      code: 'UNAUTHORIZED',
       data: null,
     });
   });
@@ -145,7 +143,7 @@ describe('Auth (e2e)', () => {
       .post('/api/v1/auth/login')
       .send({ provider: 'kakao', token: 'x' })
       .expect(400);
-    expect(bodyOf(res).success).toBe(false);
+    expect(bodyOf(res).code).toBe('BAD_REQUEST');
   });
 
   it('google login → find-or-create, 두 번째는 newUser=false', async () => {

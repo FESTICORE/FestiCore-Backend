@@ -61,6 +61,110 @@ function onlyAudience(document: OpenAPIObject, admin: boolean): OpenAPIObject {
       ([path]) => isAdminPath(path) === admin,
     ),
   );
+  for (const [path, pathItem] of Object.entries(document.paths)) {
+    for (const method of ['get', 'post', 'put', 'patch', 'delete'] as const) {
+      const operation = pathItem?.[method];
+      if (!operation) continue;
+      for (const [status, response] of Object.entries(
+        operation.responses ?? {},
+      )) {
+        const statusCode = Number(status);
+        if (
+          !Number.isInteger(statusCode) ||
+          statusCode < 200 ||
+          statusCode === 204 ||
+          statusCode === 205 ||
+          statusCode === 304 ||
+          (statusCode < 400 && statusCode >= 300) ||
+          (path.endsWith('/auth/web/result') && statusCode === 200) ||
+          !response ||
+          '$ref' in response
+        )
+          continue;
+        const content = response.content;
+        if (content && !content['application/json']) continue;
+        const json = content?.['application/json'];
+        const schema = json?.schema;
+        const example: unknown =
+          schema && 'example' in schema ? schema.example : null;
+        const envelopeExample =
+          example && typeof example === 'object' && !Array.isArray(example)
+            ? (example as Record<string, unknown>)
+            : null;
+        if (
+          schema &&
+          'properties' in schema &&
+          schema.properties?.code &&
+          schema.properties?.data &&
+          schema.properties?.message
+        )
+          continue;
+        if (
+          envelopeExample &&
+          'code' in envelopeExample &&
+          'data' in envelopeExample &&
+          'message' in envelopeExample
+        ) {
+          response.content = {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['code', 'data', 'message'],
+                additionalProperties: false,
+                properties: {
+                  code: { type: 'string', example: envelopeExample.code },
+                  data: {
+                    type: 'object',
+                    nullable: true,
+                    example: envelopeExample.data,
+                  },
+                  message: {
+                    type: 'string',
+                    example: envelopeExample.message,
+                  },
+                },
+                example: envelopeExample,
+              },
+            },
+          };
+          continue;
+        }
+        const businessCode =
+          statusCode >= 400 && typeof envelopeExample?.code === 'string'
+            ? envelopeExample.code
+            : null;
+        const errorDetails = businessCode
+          ? Object.fromEntries(
+              Object.entries(envelopeExample ?? {}).filter(
+                ([key]) => key !== 'code' && key !== 'message',
+              ),
+            )
+          : null;
+        response.content = {
+          'application/json': {
+            schema: {
+              type: 'object',
+              required: ['code', 'data', 'message'],
+              properties: {
+                code: businessCode
+                  ? { type: 'string', example: businessCode }
+                  : statusCode < 400
+                    ? { type: 'string', example: 'SUCCESS' }
+                    : { type: 'string' },
+                data: errorDetails
+                  ? { type: 'object', example: errorDetails }
+                  : (schema ?? { nullable: true }),
+                message:
+                  businessCode && typeof envelopeExample?.message === 'string'
+                    ? { type: 'string', example: envelopeExample.message }
+                    : { type: 'string' },
+              },
+            },
+          },
+        };
+      }
+    }
+  }
   if (admin) {
     for (const [path, pathItem] of Object.entries(document.paths)) {
       for (const method of ['get', 'post', 'put', 'patch', 'delete'] as const) {

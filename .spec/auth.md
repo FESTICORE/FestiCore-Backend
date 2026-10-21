@@ -61,8 +61,7 @@ Apple 웹 로그인 설정: `APPLE_WEB_REDIRECT_URI`는 환경별
 
 ```json
 {
-  "success": true,
-  "statusCode": 200,
+  "code": "SUCCESS",
   "data": {
     "accessToken": "…",
     "refreshToken": "…",
@@ -90,6 +89,8 @@ Apple 웹 로그인 설정: `APPLE_WEB_REDIRECT_URI`는 환경별
 - 알려진 한계: refresh 와 logout 이 ms 단위로 겹치면 logout 직후 새 토큰이 발급될 수 있다.
 
 ## 실패 응답
+
+JSON 오류도 `{ "code": "<업무 또는 HTTP 오류 코드>", "data": null, "message": "<오류 설명>" }` 형식이다. HTTP 상태는 응답 상태 줄에서 확인한다. 본문 없는 204 응답과 Apple 웹 로그인 HTML·리디렉션 응답에는 이 JSON 형식을 적용하지 않는다.
 
 | 상황                                    | 상태 |
 | --------------------------------------- | ---- |

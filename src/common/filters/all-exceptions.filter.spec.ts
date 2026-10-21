@@ -44,8 +44,7 @@ describe('AllExceptionsFilter', () => {
     new AllExceptionsFilter().catch(new BadRequestException('bad'), host);
     expect(response.status).toHaveBeenCalledWith(400);
     expect(json).toHaveBeenCalledWith({
-      success: false,
-      statusCode: 400,
+      code: 'BAD_REQUEST',
       data: null,
       message: 'bad',
     });
@@ -139,13 +138,9 @@ describe('AllExceptionsFilter', () => {
       host,
     );
     expect(json).toHaveBeenCalledWith({
-      success: false,
-      statusCode: 400,
-      data: null,
+      data: { draftVersion: 2, draft: { name: '현재 초안' } },
       message: '초안 충돌',
       code: 'DRAFT_CONFLICT',
-      draftVersion: 2,
-      draft: { name: '현재 초안' },
     });
   });
 
@@ -164,15 +159,14 @@ describe('AllExceptionsFilter', () => {
       host,
     );
     expect(json).toHaveBeenCalledWith({
-      success: false,
-      statusCode: 409,
-      data: null,
+      data: {
+        current: {
+          setIds: ['set_a1b2c3d4'],
+          updatedAt: '2026-10-20T03:00:00.000Z',
+        },
+      },
       code: 'STATUS_STALE',
       message: '더 최신 일정이 저장되어 있습니다.',
-      current: {
-        setIds: ['set_a1b2c3d4'],
-        updatedAt: '2026-10-20T03:00:00.000Z',
-      },
     });
   });
 });

@@ -59,8 +59,7 @@ export class DeviceController {
     schema: {
       type: 'object',
       properties: {
-        success: { type: 'boolean', example: true },
-        statusCode: { type: 'integer', example: 200 },
+        code: { type: 'string', example: 'SUCCESS' },
         data: {
           type: 'object',
           properties: {
@@ -82,7 +81,7 @@ export class DeviceController {
             },
           },
         },
-        message: { type: 'string' },
+        message: { type: 'string', example: '성공적으로 처리되었습니다.' },
       },
     },
   })
@@ -139,7 +138,24 @@ export class DeviceController {
   @ApiOperation({ summary: '축제 팩 변경 알림 구독 설정' })
   @ApiParam({ name: 'festivalId', description: '발행된 축제 ID' })
   @ApiBody({ type: DeviceSubscriptionDto })
-  @ApiResponse({ status: 200, description: '축제 ID와 packUpdates 설정' })
+  @ApiResponse({
+    status: 200,
+    description: '축제 ID와 packUpdates 설정',
+    schema: {
+      type: 'object',
+      properties: {
+        code: { type: 'string', example: 'SUCCESS' },
+        data: {
+          type: 'object',
+          properties: {
+            festivalId: { type: 'string', example: 'fst_01234567' },
+            packUpdates: { type: 'boolean', example: true },
+          },
+        },
+        message: { type: 'string', example: '성공적으로 처리되었습니다.' },
+      },
+    },
+  })
   async subscribe(
     @Param('deviceId') id: string,
     @Param('festivalId') festivalId: string,

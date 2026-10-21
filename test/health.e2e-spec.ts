@@ -19,8 +19,7 @@ describe('Health (e2e)', () => {
   it('DB 정상 → 200 표준 응답', async () => {
     const res = await request(server).get('/api/v1/health').expect(200);
     expect(res.body).toMatchObject({
-      success: true,
-      statusCode: 200,
+      code: 'SUCCESS',
       data: { status: 'ok', db: 'up' },
     });
   });
@@ -29,8 +28,7 @@ describe('Health (e2e)', () => {
     ctx.dataSource.query.mockRejectedValueOnce(new Error('down'));
     const res = await request(server).get('/api/v1/health').expect(503);
     expect(res.body).toMatchObject({
-      success: false,
-      statusCode: 503,
+      code: 'SERVICE_UNAVAILABLE',
       data: null,
     });
   });

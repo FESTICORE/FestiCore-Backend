@@ -37,7 +37,7 @@ const REDACTED_KEYS = new Set([
 ]);
 
 /**
- * 모든 예외를 { success:false, data:null, message } 표준 형식으로 변환한다.
+ * 모든 JSON 예외를 { code, data, message } 표준 형식으로 변환한다.
  */
 @Catch()
 export class AllExceptionsFilter implements ExceptionFilter {
@@ -52,24 +52,27 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
     let status = HttpStatus.INTERNAL_SERVER_ERROR;
     let message = '내부 서버 오류가 발생했습니다.';
+    let code = 'INTERNAL_SERVER_ERROR';
     const details: Record<string, unknown> = {};
 
     if (exception instanceof HttpException) {
       status = exception.getStatus();
+      code = HttpStatus[status] ?? `HTTP_${status}`;
       const body = exception.getResponse();
       if (typeof body === 'string') {
         message = body;
       } else if (typeof body === 'object' && body !== null) {
         const fields = body as Record<string, unknown>;
+        if (typeof fields.code === 'string') code = fields.code;
         const msg = fields.message as string | string[] | undefined;
         message = Array.isArray(msg) ? msg.join(', ') : (msg ?? message);
         // API 계약에 명시된 오류 필드만 노출한다. 임의 예외 객체의 비밀값은 내보내지 않는다.
         for (const key of [
-          'code',
           'draft',
           'draftVersion',
           'errors',
           'warnings',
+          'retryAfter',
         ]) {
           if (key in fields) details[key] = fields[key];
         }
@@ -116,11 +119,9 @@ export class AllExceptionsFilter implements ExceptionFilter {
     }
 
     response.status(status).json({
-      success: false,
-      statusCode: status,
-      data: null,
+      code,
+      data: Object.keys(details).length ? details : null,
       message,
-      ...details,
     });
   }
 
