@@ -18,6 +18,7 @@ describe('AdminFestivalService optimistic edits', () => {
       } as never,
       {} as never,
       { query } as never,
+      {} as never,
     );
 
     await expect(service.list()).resolves.toMatchObject({
@@ -41,6 +42,7 @@ describe('AdminFestivalService optimistic edits', () => {
           getRepository: () => ({ findOne: () => Promise.resolve(row), save }),
         }),
     } as never,
+    {} as never,
   );
 
   beforeEach(() => save.mockClear());
@@ -72,8 +74,116 @@ describe('AdminFestivalService optimistic edits', () => {
   });
 });
 
+describe('festival edit audit', () => {
+  const days = [
+    {
+      date: '2026-11-20',
+      startsAt: '2026-11-20T12:00:00+09:00',
+      endsAt: '2026-11-20T22:00:00+09:00',
+    },
+  ];
+
+  it('saves a new festival and its audit record in one transaction', async () => {
+    let savedDraft: unknown;
+    const save = jest.fn((row: AdminFestival): Promise<AdminFestival> => {
+      savedDraft = row.draft;
+      return Promise.resolve(row);
+    });
+    const manager = { getRepository: () => ({ save }) };
+    const record = jest.fn().mockResolvedValue(undefined);
+    const service = new AdminFestivalService(
+      { create: jest.fn((row: unknown): unknown => row) } as never,
+      {} as never,
+      {
+        transaction: (callback: (manager: unknown) => Promise<unknown>) =>
+          callback(manager),
+      } as never,
+      { record } as never,
+    );
+
+    const result = await service.create(
+      { name: 'Festival', venue: 'Venue', days },
+      'adm_12345678',
+    );
+
+    expect(result.id).toMatch(/^fst_/);
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(record).toHaveBeenCalledWith(manager, {
+      actor: 'adm_12345678',
+      action: 'festival.created',
+      target: `festival:${result.id}`,
+      before: null,
+      after: {
+        draftVersion: 1,
+        draft: savedDraft,
+      },
+    });
+  });
+
+  it('rejects an edit when its audit record cannot be written', async () => {
+    const row = {
+      id: 'fst_12345678',
+      draftVersion: 1,
+      draftUpdatedBy: null,
+      draft: {
+        id: 'fst_12345678',
+        name: 'Festival',
+        venue: 'Venue',
+        timezone: 'Asia/Seoul',
+        days,
+        flagsEnabled: false,
+        stages: [],
+        sets: [],
+        zones: [],
+        flags: [],
+        checklist: [],
+        rules: [],
+        mapImageUrl: null,
+        mapAspect: null,
+        source: { name: 'Official', verifiedAt: '2026-11-18T12:00:00+09:00' },
+      },
+    };
+    const initialDraft = row.draft;
+    const save = jest.fn().mockResolvedValue(row);
+    const manager = {
+      getRepository: () => ({
+        findOne: jest.fn().mockResolvedValue(row),
+        save,
+      }),
+    };
+    const record = jest.fn().mockRejectedValue(new Error('audit unavailable'));
+    const service = new AdminFestivalService(
+      {} as never,
+      {} as never,
+      {
+        transaction: (callback: (manager: unknown) => Promise<unknown>) =>
+          callback(manager),
+      } as never,
+      { record } as never,
+    );
+
+    await expect(
+      service.patch(row.id, { name: 'Updated' }, '"d1"', 'adm_12345678'),
+    ).rejects.toThrow('audit unavailable');
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(record).toHaveBeenCalledWith(manager, {
+      actor: 'adm_12345678',
+      action: 'festival.draft.updated',
+      target: `festival:${row.id}`,
+      before: {
+        draftVersion: 1,
+        draft: initialDraft,
+      },
+      after: {
+        draftVersion: 2,
+        draft: row.draft,
+      },
+    });
+  });
+});
+
 describe('pack update delivery queue', () => {
-  it('queues subscribers in the same transaction for publish and rollback', async () => {
+  it('queues subscribers and audits publish and rollback in the same transaction', async () => {
     const draft = {
       id: 'fst_12345678',
       name: 'Festival',
@@ -112,6 +222,7 @@ describe('pack update delivery queue', () => {
       findOneBy: jest.fn().mockResolvedValue({ pack: draft }),
     };
     const query = jest.fn().mockResolvedValue([{ id: 'one' }, { id: 'two' }]);
+    const record = jest.fn().mockResolvedValue(undefined);
     const manager = {
       getRepository: (entity: unknown) =>
         entity === AdminFestival ? festivalRepo : versionRepo,
@@ -124,6 +235,7 @@ describe('pack update delivery queue', () => {
         transaction: (callback: (manager: unknown) => Promise<unknown>) =>
           callback(manager),
       } as never,
+      { record } as never,
     );
 
     await expect(service.publish(draft.id, '', null)).resolves.toMatchObject({
@@ -133,10 +245,24 @@ describe('pack update delivery queue', () => {
     const calls = query.mock.calls as unknown[][];
     expect(calls[0][0]).toContain('s."packUpdates" = true');
     expect(calls[0][1]).toEqual([draft.id, `pack-updated:${draft.id}:1`]);
+    expect(record).toHaveBeenCalledWith(manager, {
+      actor: null,
+      action: 'festival.published',
+      target: `festival:${draft.id}`,
+      before: { packVersion: 0 },
+      after: { packVersion: 1, note: '' },
+    });
     await expect(service.rollback(draft.id, 1, null)).resolves.toMatchObject({
       packVersion: 2,
       pushedDevices: 2,
     });
     expect(calls[1][1]).toEqual([draft.id, `pack-updated:${draft.id}:2`]);
+    expect(record).toHaveBeenCalledWith(manager, {
+      actor: null,
+      action: 'festival.rolled_back',
+      target: `festival:${draft.id}`,
+      before: { packVersion: 1 },
+      after: { packVersion: 2, toVersion: 1 },
+    });
   });
 });

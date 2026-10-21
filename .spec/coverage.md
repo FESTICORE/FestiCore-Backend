@@ -23,7 +23,7 @@
 | 3    | 지도 업로드 `POST /admin/festivals/:id/draft/map` (p30)                         | 코드 구현                                 | WebP 300KB 변환·비율·스토리지·공개 조회 테스트 통과. 실제 Railway 버킷 연동 검증은 남음                                                                                       |
 | 4    | 타임테이블 이미지 입력 `POST /admin/festivals/:id/pack/import-image` (p26, p31) | 코드 구현                                 | Tesseract 기반 업로드 OCR 미리보기 `{draft, confidence, unparsed}` 반환, 초안 자동 변경 방지. 실제 이미지 정확도는 운영 데이터 검증 필요. 정기 크롤의 `sets.diff` 제안은 별개 |
 | 5    | `POST /admin/flags/:id/force-status`, `POST /admin/push/test` (p32)             | 상태 강제 변경·등록 기기 테스트 푸시 구현 | 관리자 역할·존·상태 조합·테스트 푸시 감사 기록. 실제 DB 마이그레이션·실기기 APNs 수신 검증은 남음                                                                             |
-| 6    | `GET /admin/audit`, 관리자 목록·초대·삭제 (p32)                                 | 코드 구현                                 | owner 권한·필터·페이지 검증. 기존 편집 API의 감사 기록 연결은 남음                                                                                                            |
+| 6    | `GET /admin/audit`, 관리자 목록·초대·삭제 (p32)                                 | 코드 구현                                 | owner 권한·필터·페이지 검증. 축제 생성·초안 수정·발행·롤백 감사 기록 연결 완료. 크롤 소스·제안 등 나머지 관리자 쓰기 경로는 감사 기록 연결이 남음                                     |
 | 7    | `GET /festivals` 캐시 계약 (p9)                                                 | 코드 구현                                 | 목록의 `Cache-Control: public, max-age=3600`과 ETag 재검증 테스트. 배포 후 헤더 검증은 남음                                                                                  |
 
 추가 사용자 요구: 원더리벳 등 티켓 소스 파싱과 실제 데이터 저장, WebSocket, Redis 캐시, 아티스트 이미지, 불안정한 네트워크용 오프라인 갱신, 개발·운영 배포 및 보안 검증. 이는 위의 API 라우트 존재와 별도로 완료 여부를 확인한다.
