@@ -40,7 +40,12 @@ export class PublicFestivalMapController {
     const rows = await this.dataSource.query<{ objectKey: string }[]>(
       `SELECT image."objectKey" FROM crawl_images image
        JOIN crawl_sources source ON source.id = image."sourceId"
-       WHERE image.id = $1 AND source.url LIKE 'https://mintpaper.co.kr/festivals%'`,
+       WHERE image.id = $1
+         AND (
+           source.url LIKE 'https://mintpaper.co.kr/festivals%'
+           OR (source.url = 'https://ticket.melon.com/search/index.htm?q=WONDERLIVET'
+             AND image."originUrl" LIKE 'https://cdnticket.melon.co.kr/resource/image/upload/product/%')
+         )`,
       [imageId],
     );
     if (!rows[0]) throw new NotFoundException('포스터를 찾을 수 없습니다.');
