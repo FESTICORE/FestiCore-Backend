@@ -154,13 +154,13 @@ describe('crawl parsers', () => {
         <p class='list-b-tit1 v2'>COUNTDOWN FANTASY 2026-2027</p>
         <p class='list-b-tit2 v2'>2026.12.31 ~ 2026.12.31</p>
         <p class='list-b-tit2 v2'>킨텍스 제2전시장 7홀, 8홀</p></div></a>
-      <a onclick='jsf_base_GoToPerfDetail(59840);'><div>
+      <a onclick='jsf_base_GoToPerfDetail(59840);' title='WONDERLIVET 2026 (원더리벳 2026)'><div class='list-bigger-wrap'><img class='lazyload' data-src='//tkfile.yes24.com/upload2/PerfBlog/202608/20260820/20260820-59840.png/dims/quality/70/' alt='WONDERLIVET 2026 (원더리벳 2026)' />
         <p class='list-b-tit1'>WONDERLIVET 2026 (원더리벳 2026)</p>
         <p class='list-b-tit2'>2026.11.20 ~ 2026.11.22</p>
         <p class='list-b-tit2'>KINTEX HALL 7/8/9/10</p></div></a>
       <a onclick='jsf_base_GoToPerfDetail(60000);'><div><p class='list-b-tit1'>단독 콘서트</p></div></a>
       <a onclick='jsf_base_GoToPerfDetail(60590);'><div><p class='list-b-tit1'>COUNTDOWN FANTASY 2026-2027</p></div></a>
-    </div>`;
+    </div><input name="ListTotalCnt" type="hidden" id="ListTotalCnt" value="4" />`;
     expect(await parseCrawl(yes24, html)).toEqual([
       {
         name: 'COUNTDOWN FANTASY 2026-2027',

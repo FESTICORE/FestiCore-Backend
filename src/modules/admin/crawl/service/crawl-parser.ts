@@ -323,7 +323,8 @@ function yes24FestivalCandidates(
   )
     return null;
   const candidates = new Map<string, FestivalCandidate>();
-  const bounded = body.slice(0, 2_000_000);
+  // Four individually bounded YES24 pages may be joined into one snapshot.
+  const bounded = body.slice(0, 8_000_003);
   for (const match of bounded.matchAll(
     /<a\b([^>]*\bonclick=["']jsf_base_GoToPerfDetail\((\d+)\);?["'][^>]*)>([\s\S]*?)<\/a>/gi,
   )) {

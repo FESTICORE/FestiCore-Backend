@@ -34,6 +34,28 @@ const kstDay = (date = new Date()) =>
     day: '2-digit',
   }).format(date);
 
+const YES24_PAGE_LIMIT = 4;
+
+function yes24PageCount(sourceUrl: string, body: string): number {
+  const url = new URL(sourceUrl);
+  if (
+    url.hostname !== 'ticket.yes24.com' ||
+    url.pathname !== '/New/Genre/Ajax/GenreList_Data.aspx' ||
+    url.searchParams.get('genre') !== '15464' ||
+    url.searchParams.get('pCurPage') !== '1'
+  )
+    return 1;
+  const pageSize = Number(url.searchParams.get('pPageSize'));
+  const total = Number(
+    /<input\b[^>]*\bid=["']ListTotalCnt["'][^>]*\bvalue=["'](\d+)["']/i.exec(
+      body,
+    )?.[1],
+  );
+  if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 100) return 1;
+  if (!Number.isSafeInteger(total) || total <= pageSize) return 1;
+  return Math.min(Math.ceil(total / pageSize), YES24_PAGE_LIMIT);
+}
+
 @Injectable()
 export class CrawlService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(CrawlService.name);
@@ -163,7 +185,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
   async testSource(id: string) {
     const source = await this.getSource(id);
     await this.checkRobots(source.url);
-    const response = await this.limitedGet(checkedUrl(source.url));
+    const response = await this.getListing(source);
     if (response.status !== 200)
       throw new UnprocessableEntityException(`HTTP ${response.status}`);
     return {
@@ -320,14 +342,22 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
           '이미지는 보관했지만 OCR 파서는 아직 연동되지 않았습니다.',
         );
       }
-      const response = await this.limitedGet(checkedUrl(source.url));
+      const response = await this.getListing(source);
       run.httpStatus = response.status;
       if (response.status !== 200) throw new Error(`HTTP ${response.status}`);
       run.contentHash = createHash('sha256')
         .update(response.body)
         // Parser behavior is part of the snapshot identity. A parser release
         // must reprocess unchanged ticket pages instead of skipping them.
-        .update(source.parser === 'ticket-list' ? 'ticket-list:v2' : '')
+        .update(
+          source.parser === 'ticket-list'
+            ? source.url.startsWith(
+                'https://ticket.yes24.com/New/Genre/Ajax/GenreList_Data.aspx',
+              )
+              ? 'ticket-list:v3'
+              : 'ticket-list:v2'
+            : '',
+        )
         .digest('hex');
       const objectKey = `crawl/snapshots/${randomUUID()}.txt`;
       await this.imageStorage.saveCrawlSnapshot(
@@ -617,6 +647,24 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
 
   private async limitedGet(url: URL) {
     return this.withHostLock(url, () => safeGet(url));
+  }
+
+  private async getListing(source: CrawlSource) {
+    const response = await this.limitedGet(checkedUrl(source.url));
+    if (response.status !== 200) return response;
+    const count = yes24PageCount(source.url, response.body);
+    if (count === 1) return response;
+    const pages = [response.body];
+    for (let page = 2; page <= count; page++) {
+      const url = checkedUrl(source.url);
+      url.searchParams.set('pCurPage', String(page));
+      await this.checkRobots(url.toString());
+      const next = await this.limitedGet(url);
+      if (next.status !== 200)
+        throw new Error(`YES24 목록 ${page}페이지 HTTP ${next.status}`);
+      pages.push(next.body);
+    }
+    return { status: response.status, body: pages.join('\n') };
   }
 
   private async limitedGetImage(url: URL) {

@@ -15,6 +15,7 @@ type PrivateCrawl = {
     items: { id: string; op: string; path: string; after: unknown }[];
   }>;
   execute(run: CrawlRun, source: CrawlSource): Promise<void>;
+  getListing(source: CrawlSource): Promise<{ status: number; body: string }>;
 };
 
 function harness() {
@@ -157,6 +158,49 @@ describe('CrawlService scheduled runs', () => {
 });
 
 describe('CrawlService manual runs and snapshots', () => {
+  it('fetches bounded YES24 category pages and combines their listings', async () => {
+    const { service, source } = harness();
+    source.url =
+      'https://ticket.yes24.com/New/Genre/Ajax/GenreList_Data.aspx?genre=15464&sort=0&area=&genretype=2&pCurPage=1&pPageSize=30';
+    const crawler = service as unknown as {
+      checkRobots(url: string): Promise<void>;
+      limitedGet(url: URL): Promise<{ status: number; body: string }>;
+    };
+    const robots = jest.spyOn(crawler, 'checkRobots').mockResolvedValue();
+    const get = jest
+      .spyOn(crawler, 'limitedGet')
+      .mockResolvedValueOnce({
+        status: 200,
+        body: '<input id="ListTotalCnt" value="99"/><a>first</a>',
+      })
+      .mockResolvedValue({ status: 200, body: '<a>next</a>' });
+
+    await expect(service.getListing(source)).resolves.toEqual({
+      status: 200,
+      body: '<input id="ListTotalCnt" value="99"/><a>first</a>\n<a>next</a>\n<a>next</a>\n<a>next</a>',
+    });
+    expect(get).toHaveBeenCalledTimes(4);
+    expect(
+      get.mock.calls.map(([url]) => url.searchParams.get('pCurPage')),
+    ).toEqual(['1', '2', '3', '4']);
+    expect(robots).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not request an extra YES24 page without a valid total', async () => {
+    const { service, source } = harness();
+    source.url =
+      'https://ticket.yes24.com/New/Genre/Ajax/GenreList_Data.aspx?genre=15464&pCurPage=1&pPageSize=30';
+    const crawler = service as unknown as {
+      limitedGet(url: URL): Promise<{ status: number; body: string }>;
+    };
+    const get = jest.spyOn(crawler, 'limitedGet').mockResolvedValue({
+      status: 200,
+      body: '<input id="ListTotalCnt" value="4"/>',
+    });
+    await service.getListing(source);
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
   it('allows an unavailable 4xx robots file but fails closed on 5xx', async () => {
     const { service } = harness();
     const crawler = service as unknown as {
