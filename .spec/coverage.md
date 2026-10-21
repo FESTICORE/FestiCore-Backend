@@ -6,8 +6,8 @@
 | --- | --- | --- | --- |
 | 1 | `POST /metrics/events`, `GET /admin/metrics` (API 명세 p27) | 이번 PR 구현 | 입력 제한·집계·권한·테스트 통과. 실제 DB 마이그레이션·배포 검증은 남음 |
 | 2 | 축제 발행·롤백 `pack.updated`, 깃발·크루 상태 푸시 (p16, p19–21, p25, p31) | 라우트만 구현 | APNs 작업 생성·취소·중복 방지·테스트 |
-| 3 | 지도 업로드 `POST /admin/festivals/:id/draft/map` (p30) | 미구현 | 이미지 형식·용량·비율·스토리지·테스트 |
-| 4 | 타임테이블 이미지 입력 `POST /admin/festivals/:id/pack/import-image` (p26, p31) | 미구현 | OCR 결과를 제안으로 저장, 초안 자동 변경 방지 |
+| 3 | 지도 업로드 `POST /admin/festivals/:id/draft/map` (p30) | 이번 PR 구현 | WebP 300KB 변환·비율·스토리지·공개 조회 테스트 통과. 실제 Railway 버킷 연동 검증은 남음 |
+| 4 | 타임테이블 이미지 입력 `POST /admin/festivals/:id/pack/import-image` (p26, p31) | 미구현 | 업로드 OCR 미리보기 `{draft, confidence, unparsed}` 반환, 초안 자동 변경 방지. 정기 크롤만 `sets.diff` 제안 생성 |
 | 5 | `POST /admin/flags/:id/force-status`, `POST /admin/push/test` (p32) | 미구현 | 관리자 권한·대상 검증·감사 기록 |
 | 6 | `GET /admin/audit`, 관리자 목록·초대·삭제 (p32) | 미구현 | 편집 전후 감사 기록·권한 검증 |
 | 7 | `GET /festivals` 캐시 계약 (p9) | 부분 구현 | 현재 60초, 문서 3600초와 차이 정리 |
