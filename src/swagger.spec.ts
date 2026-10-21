@@ -81,7 +81,26 @@ describe('Swagger 문서 분리', () => {
       }));
     const setup = jest.spyOn(SwaggerModule, 'setup').mockImplementation();
 
-    setupSwagger({} as INestApplication, { port: 3000, isProd: false });
+    type CacheMiddleware = (
+      request: { path: string },
+      response: { setHeader: jest.Mock },
+      next: jest.Mock,
+    ) => void;
+    const use = jest.fn<void, [CacheMiddleware]>();
+    setupSwagger({ use } as unknown as INestApplication, {
+      port: 3000,
+      isProd: false,
+    });
+    const cacheMiddleware = use.mock.calls[0][0];
+    const setHeader = jest.fn();
+    const next = jest.fn();
+    cacheMiddleware({ path: '/api-docs/festivals-json' }, { setHeader }, next);
+    expect(setHeader).toHaveBeenCalledWith(
+      'Cache-Control',
+      'no-store, max-age=0',
+    );
+    cacheMiddleware({ path: '/api/v1/festivals' }, { setHeader }, next);
+    expect(setHeader).toHaveBeenCalledTimes(1);
 
     const documents = new Map(
       setup.mock.calls.map(([route, , document]) => [
