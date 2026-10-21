@@ -38,6 +38,8 @@ Railway 프로젝트 **FestiCore** (Roy's Projects). Cider 프로젝트와 같�
 PORT=3000
 PUBLIC_URL=https://<환경별-도메인>          # Swagger 서버 표기용
 CORS_ORIGINS=https://<허용-origin>          # 쉼표 구분
+WS_MAX_CLIENTS=5000                         # 공개 축제 팩 WebSocket 인스턴스별 연결 상한
+WS_MAX_CLIENTS_PER_IP=500                  # 공용 Wi-Fi/NAT를 고려한 IP별 상한
 JWT_ACCESS_SECRET=<랜덤>                    # 필수
 JWT_REFRESH_SECRET=<다른 랜덤>              # 필수, access 와 달라야 함(같으면 부팅 실패)
 JWT_ACCESS_TTL=30m
@@ -68,6 +70,12 @@ AWS_S3_URL_STYLE=virtual                    # 엔드포인트가 경로 방식�
 ```
 
 로컬은 같은 키를 `.env`에 둔다(로컬 DB는 `DB_HOST/DB_PORT/DB_USERNAME/DB_PASSWORD/DB_NAME`, 기본 DB명 `festicore`).
+
+공개 팩 WebSocket은 `wss://<환경별-도메인>/api/v1/festivals/updates`에서 제공한다.
+브라우저 Origin은 `CORS_ORIGINS`에 있어야 하며 네이티브 앱의 Origin 없는 연결은 허용한다.
+연결이 끊겼거나 앱이 백그라운드에 있는 동안 놓친 변경은 저장된 팩 버전과
+`GET /api/v1/festivals`의 ETag를 비교해 다시 받아야 한다. Railway 프록시의
+실제 WSS 연결과 모바일 재접속은 각 환경에 배포된 뒤 확인한다.
 
 Google 웹은 Google Identity Services에서 받은 ID 토큰을 모바일 앱과 동일한
 `POST /api/v1/auth/login`에 `{ "provider": "google", "token": "<idToken>" }`으로 보낸다.

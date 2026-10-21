@@ -9,6 +9,7 @@ import { PublicFestivalMapController } from './public-festival-map.controller';
 import { ImageStorageService } from '../storage/image-storage.service';
 import { PublicFestivalService } from './public-festival.service';
 import { PublicLiveService } from './public-live.service';
+import { PublicFestivalUpdatesGateway } from './public-festival-updates.gateway';
 
 @Module({
   imports: [
@@ -25,6 +26,11 @@ import { PublicLiveService } from './public-live.service';
     ]),
   ],
   controllers: [PublicFestivalController, PublicFestivalMapController],
-  providers: [PublicFestivalService, PublicLiveService, ImageStorageService],
+  providers: [
+    PublicFestivalService,
+    PublicLiveService,
+    PublicFestivalUpdatesGateway,
+    ImageStorageService,
+  ],
 })
 export class PublicFestivalModule {}

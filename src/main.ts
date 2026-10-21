@@ -5,6 +5,8 @@ import type { Express, NextFunction, Request, Response } from 'express';
 import { isIP } from 'node:net';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
+import { PublicWebSocketAdapter } from './gateway/public-websocket.adapter';
+import { PublicFestivalUpdatesGateway } from './modules/public/public-festival-updates.gateway';
 import { setupSwagger } from './swagger';
 
 async function bootstrap() {
@@ -30,6 +32,9 @@ async function bootstrap() {
   }
 
   app.setGlobalPrefix('api/v1');
+  app.useWebSocketAdapter(
+    new PublicWebSocketAdapter(app, app.get(PublicFestivalUpdatesGateway)),
+  );
 
   // 보안 헤더. Swagger UI가 인라인 스크립트를 쓰므로 CSP는 끄고 나머지만 적용한다.
   app.use(helmet({ contentSecurityPolicy: false }));

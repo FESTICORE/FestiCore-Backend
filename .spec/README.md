@@ -15,6 +15,7 @@
 - [admin-festivals.md](./admin-festivals.md) — 축제 초안·발행·롤백
 - [flags.md](./flags.md) — 깃발·기수·팔로우·사진·신고
 - [public-festivals.md](./public-festivals.md) — 발행 축제 목록·팩·깃발·라이브 조회
+- [festival-websocket.md](./festival-websocket.md) — 공개 팩 갱신 WebSocket·재연결 계약
 - [crews.md](./crews.md) — 비공개 크루·초대·상태·집결·멤버 관리
 - [schedule.md](./schedule.md) — 축제별 개인 일정 조회·수정
 - [devices.md](./devices.md) — 기기 등록·조회·삭제와 Live Activity 토큰
