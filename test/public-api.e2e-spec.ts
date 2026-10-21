@@ -135,17 +135,19 @@ describe('Public festival API', () => {
     expect(listBody.items).toEqual([
       expect.objectContaining({ id: pack.id, packVersion: 7 }),
     ]);
-    expect(first.headers['cache-control']).toBe('public, max-age=60');
+    expect(first.headers['cache-control']).toBe('public, max-age=3600');
     expect(first.headers.date).toBeDefined();
     expect(first.headers.etag).toMatch(/^"cdm1-/);
     await request(server)
       .get('/api/v1/festivals?after=2026-10-21&limit=20')
       .set('If-None-Match', first.headers.etag.replace('cdm1-', ''))
       .expect(200);
-    await request(server)
+    const notModified = await request(server)
       .get('/api/v1/festivals?after=2026-10-21&limit=20')
       .set('If-None-Match', first.headers.etag)
+      .set('Cache-Control', 'no-cache')
       .expect(304);
+    expect(notModified.headers['cache-control']).toBe('public, max-age=3600');
   });
 
   it('includes crawled discoveries when no festival pack has been published', async () => {
