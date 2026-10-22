@@ -119,6 +119,47 @@ describe('crawl parsers', () => {
     ]);
   });
 
+  it('reads a NOL product detail event date and venue rather than ticket opening time', async () => {
+    const nol = source('ticket-list', 'discovery');
+    nol.url = 'https://nol.yanolja.com/ticket/products/26007651';
+    const html = `<html><head><title>NOL 티켓</title></head><body>
+      <p>오픈 예정 2026.10.01 12:00</p><h1>NOL FESTIVAL : DAY 1 - K-POP STAGE</h1>
+      <nav>공지사항 상품상세 장소</nav>
+      <dl><dt>장소</dt><dd>일산 킨텍스 제 2전시장</dd><dt>기간</dt><dd>2026.10.17</dd></dl>
+    </body></html>`;
+    expect(await parseCrawl(nol, html)).toEqual([
+      {
+        name: 'NOL FESTIVAL : DAY 1 - K-POP STAGE',
+        url: nol.url,
+        date: '2026.10.17',
+        venue: '일산 킨텍스 제 2전시장',
+      },
+    ]);
+  });
+
+  it('reads a NOL performance page only when its event date and venue are valid', async () => {
+    const nol = source('ticket-list', 'discovery');
+    nol.url =
+      'https://nol.yanolja.com/ticket/meta/performance/countdown-fantasy-2026';
+    const html = `<h1>COUNTDOWN FANTASY 2026-2027</h1>
+      <div>장르 콘서트 &gt; 페스티벌</div>
+      <div>장소 킨텍스 제2전시장 7홀, 8홀 일시 2026.12.31~2026.12.31</div>`;
+    expect(await parseCrawl(nol, html)).toEqual([
+      {
+        name: 'COUNTDOWN FANTASY 2026-2027',
+        url: nol.url,
+        date: '2026.12.31 - 2026.12.31',
+        venue: '킨텍스 제2전시장 7홀, 8홀',
+      },
+    ]);
+    await expect(
+      parseCrawl(
+        nol,
+        '<h1>COUNTDOWN FANTASY 2026-2027</h1><p>장소 킨텍스 일시 2026.02.30</p>',
+      ),
+    ).rejects.toThrow('공개 예매 링크를 찾지 못했습니다.');
+  });
+
   it('reads the Melon festival category JSON and rejects concerts included in the category', async () => {
     const melon = source('ticket-list', 'discovery');
     melon.url =

@@ -559,6 +559,56 @@ function yes24DetailCandidates(
   return [candidate];
 }
 
+function nolDetailCandidates(
+  body: string,
+  base: string,
+): FestivalCandidate[] | null {
+  const source = new URL(base);
+  if (
+    source.hostname !== 'nol.yanolja.com' ||
+    !/^\/ticket\/(?:products\/\d+|meta\/performance\/[\w%.-]+)$/.test(
+      source.pathname,
+    )
+  )
+    return null;
+  if (body.length > 2_000_000) return [];
+
+  const event = yes24EventJson(body);
+  const text = plainText(body);
+  const heading = /<h1\b[^>]*>([\s\S]*?)<\/h1>/i.exec(body)?.[1];
+  const name =
+    (typeof event?.name === 'string' ? event.name : null) ??
+    (heading ? plainText(heading) : '');
+  if (!(isFestivalTitle(name) || VERIFIED_FESTIVAL_BRAND.test(name))) return [];
+
+  const dateText =
+    /(?:^|\s)(?:기간|일시)\s+(20\d{2}\.\d{2}\.\d{2}(?:\s*[~–-]\s*20\d{2}\.\d{2}\.\d{2})?)/.exec(
+      text,
+    )?.[1];
+  const start = typeof event?.startDate === 'string' ? event.startDate : '';
+  const end = typeof event?.endDate === 'string' ? event.endDate : start;
+  const structuredDate =
+    /^20\d{2}-\d{2}-\d{2}$/.test(start) && /^20\d{2}-\d{2}-\d{2}$/.test(end)
+      ? nolEventDate(
+          `${start.replaceAll('-', '.')} ~ ${end.replaceAll('-', '.')}`,
+        )
+      : undefined;
+  const date = structuredDate ?? (dateText && nolEventDate(dateText));
+  const location = event?.location;
+  const structuredVenue =
+    location && typeof location === 'object' && 'name' in location
+      ? location.name
+      : null;
+  const venueText =
+    /(?:^|\s)장소\s+(.{2,160}?)\s+(?:기간|일시)\s+20\d{2}\./.exec(text)?.[1];
+  const venue =
+    typeof structuredVenue === 'string'
+      ? structuredVenue.trim()
+      : venueText?.replace(/^장소\s+/, '').trim();
+  if (!date || !venue || venue.length > 160 || /[<>\\]/.test(venue)) return [];
+  return [{ name, url: source.toString(), date, venue }];
+}
+
 function yes24FestivalCandidates(
   body: string,
   base: string,
@@ -637,6 +687,8 @@ function ticketCandidates(body: string, base: string): FestivalCandidate[] {
   if (melonDetail) return melonDetail;
   const yes24Detail = yes24DetailCandidates(body, base);
   if (yes24Detail) return yes24Detail;
+  const nolDetail = nolDetailCandidates(body, base);
+  if (nolDetail) return nolDetail;
   const melon = melonFestivalCandidates(body, base);
   if (melon) return melon;
   const yes24 = yes24FestivalCandidates(body, base);
