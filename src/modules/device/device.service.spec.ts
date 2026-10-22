@@ -53,8 +53,8 @@ describe('DeviceService ownership and pins', () => {
   };
   const dataSource = {
     query: jest.fn().mockResolvedValue([{ count: 1 }]),
-    transaction: jest.fn(
-      (work: (manager: typeof manager) => Promise<unknown>) => work(manager),
+    transaction: jest.fn((work: (tx: typeof manager) => Promise<unknown>) =>
+      work(manager),
     ),
   };
   const service = new DeviceService(

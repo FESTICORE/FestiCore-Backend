@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Request, Response } from 'express';
+import { QueryFailedError } from 'typeorm';
 
 // 요청 바디에 실려도 로그에 남기면 안 되는 민감 키(소문자 정확 일치).
 const REDACTED_KEYS = new Set([
@@ -106,10 +107,15 @@ export class AllExceptionsFilter implements ExceptionFilter {
     // 로그에서 실제 장애가 401/404 노이즈에 묻히지 않게 한다.
     const line = `${request.method} ${request.url.split('?')[0]} - ${status} - ${message}`;
     if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
-      this.logger.error(
-        line,
-        exception instanceof Error ? exception.stack : undefined,
-      );
+      // QueryFailedError에는 SQL과 매개변수가 들어 있다. 스택·객체를 기록하지 않는다.
+      if (exception instanceof QueryFailedError) {
+        this.logger.error(`${line} - DB 쿼리 실패`);
+      } else {
+        this.logger.error(
+          line,
+          exception instanceof Error ? exception.stack : undefined,
+        );
+      }
     } else {
       // 비운영 환경에서 400(검증 실패)이면 요청 바디를 함께 남긴다.
       // ValidationPipe 는 컨트롤러 앞에서 막아 바디가 어디에도 안 찍히므로,

@@ -1,7 +1,7 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class MetricsDeviceLifecycle1792500034000 implements MigrationInterface {
-  name = 'MetricsDeviceLifecycle1792500034000';
+export class MetricsDeviceLifecycle1792500036000 implements MigrationInterface {
+  name = 'MetricsDeviceLifecycle1792500036000';
 
   async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`CREATE INDEX "IDX_metric_events_deviceId"

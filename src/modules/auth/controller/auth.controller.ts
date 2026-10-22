@@ -89,8 +89,9 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
   @ApiOperation({
-    summary: '로그아웃 (refresh 토큰 전체 폐기)',
-    description: '이미 발급된 access 토큰은 만료(JWT_ACCESS_TTL)까지 유효하다.',
+    summary: '로그아웃 (refresh 토큰 폐기 및 계정 기기 알림 해제)',
+    description:
+      '계정의 refresh 토큰을 모두 폐기하고 이 계정에 연결된 모든 기기의 푸시 토큰과 알림 설정을 해제합니다. 익명 기기와 다른 계정의 기기는 변경하지 않습니다. 이미 발급된 access 토큰은 만료까지 유효합니다.',
   })
   @ApiResponse({ status: 200, description: '{ success: true }' })
   @ApiResponse({

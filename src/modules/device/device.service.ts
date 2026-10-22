@@ -325,10 +325,8 @@ export class DeviceService {
           'DELETE FROM device_subscription_rate_limits WHERE minute < $1',
           [minute - 1_440],
         );
-      } catch (error) {
-        this.logger.warn(
-          `지난 기기 구독 제한 기록 정리에 실패했습니다: ${String(error)}`,
-        );
+      } catch {
+        this.logger.warn('지난 기기 구독 제한 기록 정리에 실패했습니다.');
       }
     }
   }

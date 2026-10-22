@@ -166,11 +166,8 @@ export class PublicFestivalUpdatesGateway
           if (client.readyState === 1) client.send(message);
         }
       }
-    } catch (error) {
-      this.logger.error(
-        '공개 팩 변경 확인 실패',
-        error instanceof Error ? error.stack : String(error),
-      );
+    } catch {
+      this.logger.error('공개 팩 변경 확인 실패');
     } finally {
       this.polling = false;
     }
