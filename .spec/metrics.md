@@ -4,13 +4,13 @@ Source: Festival app API specification v0.1, page 27.
 
 ## POST `/api/v1/metrics/events`
 
-- Public ingestion; `X-Device-Id` is a required UUID v4. Access JWT is optional.
+- Public ingestion; `X-Device-Id` is a required UUID v4 previously registered through `PUT /api/v1/devices`. Access JWT is optional. An unknown or deleted device returns 404.
 - Body: `{ "events": [{ "name": EventName, "at": ISO8601, "festivalId"?: string, "value"?: number, "props"?: Record<string, string | number | boolean> }] }`.
 - `EventName`: `app.cold_start`, `live.poll`, `live.offline_banner`, `pack.download`, `screen.open`, `offline.open`, `status.update`, `push.received`.
 - `app.cold_start` and `pack.download` require `value` in milliseconds. `live.poll` requires `props.status` of 200, 304, or `err`. `screen.open` and `offline.open` require `props.screen`. `status.update` requires `props.kind` of `flag` or `crew` and boolean `props.queued`. `push.received` requires `props.type`.
 - One to 100 events per request. Unknown body and event fields, non-finite values, oversized properties, and malformed timestamps are rejected with 400. Events older than seven days or more than five minutes in the future are rejected.
 - `202` has no response body. Global rate limit applies; this route is further limited to 30 requests/minute per client IP.
-- Stored data excludes IP addresses and raw HTTP headers, including Authorization. Sensitive property names are rejected. Device IDs are retained solely for distinct-device counts; the endpoint does not grant access to a device record.
+- Stored data excludes IP addresses and raw HTTP headers, including Authorization. Sensitive property names are rejected. Device IDs are retained solely for distinct-device counts; deleting a device also deletes its events. The endpoint does not grant access to a device record.
 
 ## GET `/api/v1/admin/metrics`
 

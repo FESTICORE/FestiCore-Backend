@@ -187,15 +187,20 @@ export class MetricsService {
     if (!DEVICE_ID.test(deviceId))
       throw new BadRequestException('X-Device-Id는 UUID v4여야 합니다.');
     const events = validateEvents(body);
-    await this.db.query(
-      `INSERT INTO "metric_events" ("deviceId", "festivalId", "name", "at", "value", "props")
-       SELECT $1::uuid, e."festivalId", e."name", e."at"::timestamptz, e."value", COALESCE(e."props", '{}'::jsonb)
-       FROM jsonb_to_recordset($2::jsonb) AS e(
+    const inserted: unknown[] = await this.db.query(
+      `WITH registered_device AS (
+         SELECT "id" FROM "devices" WHERE "id" = $1::uuid FOR KEY SHARE
+       )
+       INSERT INTO "metric_events" ("deviceId", "festivalId", "name", "at", "value", "props")
+       SELECT d."id", e."festivalId", e."name", e."at"::timestamptz, e."value", COALESCE(e."props", '{}'::jsonb)
+       FROM registered_device d CROSS JOIN jsonb_to_recordset($2::jsonb) AS e(
          "festivalId" varchar(32), "name" varchar(32), "at" text,
          "value" double precision, "props" jsonb
-       )`,
+       ) RETURNING "id"`,
       [deviceId, JSON.stringify(events)],
     );
+    if (inserted.length === 0)
+      throw new NotFoundException('등록된 기기가 없습니다.');
   }
 
   async report(
