@@ -100,9 +100,9 @@ describe('Auth (e2e)', () => {
     expect(paths['/api/v1/auth/session']).toBeUndefined();
     expect(paths['/api/v1/auth/me']).toBeUndefined();
     expect(paths['/api/v1/auth/logout']?.post).toBeDefined();
-    expect(paths['/api/v1/auth/logout']?.post?.parameters).toEqual(
+    expect(paths['/api/v1/auth/logout']?.post?.parameters).not.toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ name: 'X-Device-Id', required: false }),
+        expect.objectContaining({ name: 'X-Device-Id' }),
       ]),
     );
     expect(paths['/api/v1/me']?.get).toBeDefined();
@@ -137,25 +137,6 @@ describe('Auth (e2e)', () => {
       .post('/api/v1/auth/refresh')
       .send({ refreshToken: dataOf(rotated).refreshToken })
       .expect(401);
-  });
-
-  it('로그아웃의 잘못된 기기 ID는 400이고 refresh 토큰을 유지한다', async () => {
-    const login = await socialLogin().expect(200);
-    const { accessToken, refreshToken } = dataOf(login);
-    await request(server)
-      .post('/api/v1/auth/logout')
-      .set('Authorization', `Bearer ${accessToken}`)
-      .set('X-Device-Id', 'invalid')
-      .expect(400);
-    await request(server)
-      .post('/api/v1/auth/logout')
-      .set('Authorization', `Bearer ${accessToken}`)
-      .set('X-Device-Id', '')
-      .expect(400);
-    await request(server)
-      .post('/api/v1/auth/refresh')
-      .send({ refreshToken })
-      .expect(200);
   });
 
   it('같은 refresh 토큰 동시 2회 → 하나만 성공', async () => {
