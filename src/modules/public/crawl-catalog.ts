@@ -75,7 +75,11 @@ function officialPosterUrl(raw: unknown): string | null {
       (url.hostname === 'tkfile.yes24.com' &&
         url.pathname.startsWith('/upload2/PerfBlog/')) ||
       (url.hostname === 'cdnticket.melon.co.kr' &&
-        url.pathname.startsWith('/resource/image/upload/product/'));
+        url.pathname.startsWith('/resource/image/upload/product/')) ||
+      (url.hostname === 'ticketimage.interpark.com' &&
+        /^\/Play\/image\/large\/\d+\/\d+_p\.(?:gif|jpe?g|png|webp)$/i.test(
+          url.pathname,
+        ));
     return url.protocol === 'https:' &&
       trusted &&
       !url.username &&

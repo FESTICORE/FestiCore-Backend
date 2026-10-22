@@ -189,6 +189,33 @@ describe('ticket discovery catalog', () => {
     ]);
   });
 
+  it('keeps a verified NOL product poster and rejects unrelated images', () => {
+    const candidate = {
+      name: 'NOL FESTIVAL 2026',
+      venue: '킨텍스',
+      date: '2026.11.07 - 2026.11.08',
+      url: 'https://nol.yanolja.com/ticket/products/26013406',
+    };
+    const poster =
+      'https://ticketimage.interpark.com/Play/image/large/26/26013406_p.gif';
+    expect(
+      discoverySummaries([
+        { candidate: { ...candidate, posterUrl: poster } },
+      ])[0],
+    ).toMatchObject({ posterUrl: poster });
+    for (const untrusted of [
+      'https://evil.example/Play/image/large/26/26013406_p.gif',
+      'https://ticketimage.interpark.com/Play/image/large/26/other.gif',
+      'http://ticketimage.interpark.com/Play/image/large/26/26013406_p.gif',
+    ]) {
+      expect(
+        discoverySummaries([
+          { candidate: { ...candidate, posterUrl: untrusted } },
+        ])[0],
+      ).not.toHaveProperty('posterUrl');
+    }
+  });
+
   it('returns official festival sources and verified Instagram account links', () => {
     const base = {
       name: 'GRAND MINT FESTIVAL 2026',
