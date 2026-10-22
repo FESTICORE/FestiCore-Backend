@@ -40,6 +40,27 @@ describe('crawl image safety', () => {
     ]);
   });
 
+  it('skips Melon search page chrome and rotates product posters across days', () => {
+    const page = 'https://ticket.melon.com/search/index.htm?q=페스티벌';
+    const rows = Array.from(
+      { length: 10 },
+      (_, index) =>
+        `<tr><td><img src="https://cdnticket.melon.co.kr/resource/image/upload/product/${index}.jpg"></td></tr>`,
+    ).join('');
+    const html = `<img src="https://cdnticket.melon.co.kr/resource/image/web/common/logo.png">${rows}<tr><td><img src="https://evil.example/poster.jpg"></td></tr>`;
+    const urls = discoverImageUrls(html, page);
+    expect(urls).toHaveLength(10);
+    expect(urls.every((url) => url.pathname.includes('/upload/product/'))).toBe(
+      true,
+    );
+    const first = selectRunImages(urls, page, '2026-10-21').map(String);
+    const second = selectRunImages(urls, page, '2026-10-22').map(String);
+    expect(first).toHaveLength(8);
+    expect(second).toHaveLength(8);
+    expect(second).not.toEqual(first);
+    expect(new Set([...first, ...second]).size).toBe(9);
+  });
+
   it('stores only referenced official Mint Paper festival covers', () => {
     const html = `<script id="__NEXT_DATA__" type="application/json">${JSON.stringify(
       {

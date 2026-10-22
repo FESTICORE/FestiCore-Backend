@@ -358,7 +358,14 @@ function melonSearchCandidates(
       /class=["'][^"']*\bshow_title\b[^"']*["'][^>]*>([\s\S]*?)<\/a>/i.exec(
         row[1],
       )?.[1];
-    const name = title && plainText(title);
+    const name =
+      title &&
+      plainText(
+        title
+          .replace(/<\/?(?:span|em|strong|b)\b[^>]*>/gi, '')
+          .replace(/&#40;/gi, '(')
+          .replace(/&#41;/gi, ')'),
+      );
     if (
       !id ||
       !name ||
@@ -381,7 +388,20 @@ function melonSearchCandidates(
     const poster = /<img\b[^>]*\bsrc=["'](https:\/\/[^"']+)["']/i.exec(
       row[1],
     )?.[1];
-    if (poster) candidate.posterUrl = poster;
+    if (poster) {
+      try {
+        const image = new URL(poster);
+        if (
+          image.hostname === 'cdnticket.melon.co.kr' &&
+          image.pathname.startsWith('/resource/image/upload/product/') &&
+          !image.username &&
+          !image.password
+        )
+          candidate.posterUrl = image.toString();
+      } catch {
+        /* Ignore malformed poster URLs. */
+      }
+    }
     candidates.set(candidate.url, candidate);
     if (candidates.size >= 100) break;
   }

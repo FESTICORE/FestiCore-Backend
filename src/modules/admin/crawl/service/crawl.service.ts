@@ -421,9 +421,13 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
                 'https://ticket.yes24.com/New/Genre/Ajax/GenreList_Data.aspx',
               )
               ? 'ticket-list:v4'
-              : source.url.startsWith('https://nol.yanolja.com/ticket')
-                ? 'ticket-list:v3'
-                : 'ticket-list:v3'
+              : source.url.startsWith(
+                    'https://ticket.melon.com/search/index.htm?',
+                  )
+                ? 'ticket-list:v4'
+                : source.url.startsWith('https://nol.yanolja.com/ticket')
+                  ? 'ticket-list:v3'
+                  : 'ticket-list:v3'
             : '',
         )
         .digest('hex');

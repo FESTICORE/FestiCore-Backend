@@ -186,7 +186,7 @@ describe('crawl parsers', () => {
     const html = `<table><tr>
       <td><div class="show_infor">
         <a href="../performance/index.htm?prodId=213793" class="inner">
-          <img src="https://cdnticket.melon.co.kr/poster.png" alt="WONDERLIVET" />
+          <img src="https://cdnticket.melon.co.kr/resource/image/upload/product/2026/poster.png" alt="WONDERLIVET" />
         </a>
         <a href="../performance/index.htm?prodId=213793" class="inner">
           <span class="show_title"><span>WONDERLIVET</span> 2026 (원더리벳 2026)</span>
@@ -201,7 +201,63 @@ describe('crawl parsers', () => {
         url: 'https://ticket.melon.com/performance/index.htm?prodId=213793',
         date: '2026.11.20 - 2026.11.22',
         venue: 'KINTEX HALL 7/8/9/10',
-        posterUrl: 'https://cdnticket.melon.co.kr/poster.png',
+        posterUrl:
+          'https://cdnticket.melon.co.kr/resource/image/upload/product/2026/poster.png',
+      },
+    ]);
+  });
+
+  it('preserves Melon search titles with in-word highlights and rejects untrusted posters', async () => {
+    const melon = source('ticket-list', 'discovery');
+    melon.url =
+      'https://ticket.melon.com/search/index.htm?q=%ED%8E%98%EC%8A%A4%ED%8B%B0%EB%B2%8C';
+    const html = `<table>
+      <tr><td><a href="../performance/index.htm?prodId=213665">
+        <img src="https://cdnticket.melon.co.kr/resource/image/upload/product/2026/10/poster.jpg">
+        <span class="show_title">2026 대구힙합<span>페스티벌</span></span>
+      </a></td><td class="show_date">2026.12.25 - 2026.12.26</td><td class="show_loc">대구 엑스코(EXCO)</td></tr>
+      <tr><td><a href="../performance/index.htm?prodId=214100">
+        <img src="https://evil.example/poster.jpg">
+        <span class="show_title">원웨이 페스티벌 2026 &#40;얼리버드&#41;</span>
+      </a></td><td class="show_date">2026.12.26 - 2026.12.27</td><td class="show_loc">일산 킨텍스</td></tr>
+      <tr><td><a href="../performance/index.htm?prodId=214101">
+        <img src="https://cdnticket.melon.co.kr/resource/image/web/common/logo.png">
+        <span class="show_title">경로 오류 페스티벌</span>
+      </a></td><td class="show_date">2026.12.26</td><td class="show_loc">서울</td></tr>
+      <tr><td><a href="../performance/index.htm?prodId=214102">
+        <img src="https://u:p@cdnticket.melon.co.kr/resource/image/upload/product/poster.jpg">
+        <span class="show_title">계정 오류 페스티벌</span>
+      </a></td><td class="show_date">2026.12.26</td><td class="show_loc">서울</td></tr>
+      <tr><td><a href="../performance/index.htm?prodId=214106">
+        <span class="show_title">클로버 뮤직 스테이션</span>
+      </a></td><td class="show_date">2026.11.07</td><td class="show_loc">부산</td></tr>
+    </table>`;
+    expect(await parseCrawl(melon, html)).toEqual([
+      {
+        name: '2026 대구힙합페스티벌',
+        url: 'https://ticket.melon.com/performance/index.htm?prodId=213665',
+        date: '2026.12.25 - 2026.12.26',
+        venue: '대구 엑스코(EXCO)',
+        posterUrl:
+          'https://cdnticket.melon.co.kr/resource/image/upload/product/2026/10/poster.jpg',
+      },
+      {
+        name: '원웨이 페스티벌 2026 (얼리버드)',
+        url: 'https://ticket.melon.com/performance/index.htm?prodId=214100',
+        date: '2026.12.26 - 2026.12.27',
+        venue: '일산 킨텍스',
+      },
+      {
+        name: '경로 오류 페스티벌',
+        url: 'https://ticket.melon.com/performance/index.htm?prodId=214101',
+        date: '2026.12.26',
+        venue: '서울',
+      },
+      {
+        name: '계정 오류 페스티벌',
+        url: 'https://ticket.melon.com/performance/index.htm?prodId=214102',
+        date: '2026.12.26',
+        venue: '서울',
       },
     ]);
   });
