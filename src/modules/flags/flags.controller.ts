@@ -124,6 +124,7 @@ export class FlagsController {
       .set({
         'Content-Type': 'image/webp',
         'Cache-Control': 'public, max-age=60',
+        'Cross-Origin-Resource-Policy': 'cross-origin',
         'X-Content-Type-Options': 'nosniff',
       })
       .send(bytes);
@@ -151,6 +152,7 @@ export class FlagsController {
       .set({
         'Content-Type': 'image/webp',
         'Cache-Control': 'public, max-age=60',
+        'Cross-Origin-Resource-Policy': 'cross-origin',
         'X-Content-Type-Options': 'nosniff',
       })
       .send(bytes);
