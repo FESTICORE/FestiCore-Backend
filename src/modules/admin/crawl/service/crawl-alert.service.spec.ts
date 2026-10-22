@@ -38,7 +38,7 @@ describe('CrawlAlertService', () => {
   const manager = { getRepository: jest.fn(() => alertRepo) };
   const dataSource = {
     transaction: jest.fn(
-      (callback: (manager: typeof manager) => Promise<unknown>) =>
+      (callback: (transactionManager: typeof manager) => Promise<unknown>) =>
         callback(manager),
     ),
   };

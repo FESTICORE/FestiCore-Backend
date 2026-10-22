@@ -145,191 +145,198 @@ export class AuthService {
    * 회원 탈퇴: provider 연동 해제(revoke) 후 재시도 건과 데이터 정리를 원자적으로 저장한다.
    */
   async withdraw(userId: string): Promise<void> {
-    await this.dataSource.transaction(async (manager) => {
-      await manager.query(
-        `SELECT pg_advisory_xact_lock(hashtext('admin_account_management'))`,
-      );
-      // 갱신된 OAuth grant를 놓치지 않도록 사용자 행을 잠근 뒤 최신 토큰을 읽는다.
-      const [user] = await manager.query<User[]>(
-        `SELECT "id", "provider", "oauthRefreshToken", "oauthClientId",
+    const changedFestivals = await this.dataSource.transaction(
+      async (manager) => {
+        await manager.query(
+          `SELECT pg_advisory_xact_lock(hashtext('admin_account_management'))`,
+        );
+        // 갱신된 OAuth grant를 놓치지 않도록 사용자 행을 잠근 뒤 최신 토큰을 읽는다.
+        const [user] = await manager.query<User[]>(
+          `SELECT "id", "provider", "oauthRefreshToken", "oauthClientId",
                 "oauthWebRefreshToken", "oauthWebClientId"
          FROM "users" WHERE "id" = $1 FOR UPDATE`,
-        [userId],
-      );
-      if (!user) throw new NotFoundException('사용자를 찾을 수 없습니다.');
-      const [admin] = await manager.query<{ id: string; role: string }[]>(
-        `SELECT "id", "role" FROM "admin_accounts" WHERE "userId" = $1 AND "active" = true FOR UPDATE`,
-        [userId],
-      );
-      if (admin?.role === 'owner') {
-        const [{ count }] = await manager.query<{ count: number }[]>(
-          `SELECT count(*)::int AS count FROM "admin_accounts" WHERE "role" = 'owner' AND "active" = true`,
+          [userId],
         );
-        if (count <= 1)
-          throw new ConflictException(
-            '마지막 owner 계정은 탈퇴할 수 없습니다.',
+        if (!user) throw new NotFoundException('사용자를 찾을 수 없습니다.');
+        const [admin] = await manager.query<{ id: string; role: string }[]>(
+          `SELECT "id", "role" FROM "admin_accounts" WHERE "userId" = $1 AND "active" = true FOR UPDATE`,
+          [userId],
+        );
+        if (admin?.role === 'owner') {
+          const [{ count }] = await manager.query<{ count: number }[]>(
+            `SELECT count(*)::int AS count FROM "admin_accounts" WHERE "role" = 'owner' AND "active" = true`,
           );
-      }
-      if (admin) {
-        await manager.query(
-          `UPDATE "admin_accounts" SET "active" = false WHERE "id" = $1`,
-          [admin.id],
-        );
-        await manager.query(
-          `INSERT INTO "admin_audit" ("actor", "action", "target", "before", "after")
+          if (count <= 1)
+            throw new ConflictException(
+              '마지막 owner 계정은 탈퇴할 수 없습니다.',
+            );
+        }
+        if (admin) {
+          await manager.query(
+            `UPDATE "admin_accounts" SET "active" = false WHERE "id" = $1`,
+            [admin.id],
+          );
+          await manager.query(
+            `INSERT INTO "admin_audit" ("actor", "action", "target", "before", "after")
            VALUES ($1, 'admin.withdraw', $2, $3::jsonb, $4::jsonb)`,
-          [
-            admin.id,
-            `admin:${admin.id}`,
-            JSON.stringify({ role: admin.role, active: true }),
-            JSON.stringify({ role: admin.role, active: false }),
-          ],
-        );
-      }
-      const failedAppleRevokes: { token: string; clientId?: string }[] = [];
-      if (user.oauthRefreshToken) {
-        if (user.provider === 'google') {
-          await this.google.revokeConnection(user.oauthRefreshToken);
-        } else {
-          const succeeded = await this.apple.revokeConnection(
-            user.oauthRefreshToken,
-            user.oauthClientId ?? undefined,
+            [
+              admin.id,
+              `admin:${admin.id}`,
+              JSON.stringify({ role: admin.role, active: true }),
+              JSON.stringify({ role: admin.role, active: false }),
+            ],
           );
-          if (!succeeded)
-            failedAppleRevokes.push({
-              token: user.oauthRefreshToken,
-              clientId: user.oauthClientId ?? undefined,
-            });
         }
-      } else {
-        this.logger.warn(
-          `provider 토큰이 없어 연동 해제를 건너뜁니다: ${user.provider} ${user.id}`,
-        );
-      }
-      if (
-        user.oauthWebRefreshToken &&
-        user.oauthWebRefreshToken !== user.oauthRefreshToken
-      ) {
-        if (user.provider === 'google') {
-          await this.google.revokeConnection(user.oauthWebRefreshToken);
+        const failedAppleRevokes: { token: string; clientId?: string }[] = [];
+        if (user.oauthRefreshToken) {
+          if (user.provider === 'google') {
+            await this.google.revokeConnection(user.oauthRefreshToken);
+          } else {
+            const succeeded = await this.apple.revokeConnection(
+              user.oauthRefreshToken,
+              user.oauthClientId ?? undefined,
+            );
+            if (!succeeded)
+              failedAppleRevokes.push({
+                token: user.oauthRefreshToken,
+                clientId: user.oauthClientId ?? undefined,
+              });
+          }
         } else {
-          const succeeded = await this.apple.revokeConnection(
-            user.oauthWebRefreshToken,
-            user.oauthWebClientId ?? undefined,
+          this.logger.warn(
+            `provider 토큰이 없어 연동 해제를 건너뜁니다: ${user.provider} ${user.id}`,
           );
-          if (!succeeded)
-            failedAppleRevokes.push({
-              token: user.oauthWebRefreshToken,
-              clientId: user.oauthWebClientId ?? undefined,
-            });
         }
-      }
-      for (const failed of failedAppleRevokes)
-        await this.appleRetry.enqueue(failed.token, failed.clientId, manager);
-      // 크루 변경 API와 동일하게 크루 행부터 잠가 소유권 이전/탈퇴 경쟁을 직렬화한다.
-      const ownedCrews = await manager.query<{ id: string }[]>(
-        `SELECT "id" FROM "crews" WHERE "ownerId" = $1 ORDER BY "id" FOR UPDATE`,
-        [userId],
-      );
-      for (const crew of ownedCrews) {
-        const successors = await manager.query<{ userId: string }[]>(
-          `SELECT "userId" FROM "crew_members"
+        if (
+          user.oauthWebRefreshToken &&
+          user.oauthWebRefreshToken !== user.oauthRefreshToken
+        ) {
+          if (user.provider === 'google') {
+            await this.google.revokeConnection(user.oauthWebRefreshToken);
+          } else {
+            const succeeded = await this.apple.revokeConnection(
+              user.oauthWebRefreshToken,
+              user.oauthWebClientId ?? undefined,
+            );
+            if (!succeeded)
+              failedAppleRevokes.push({
+                token: user.oauthWebRefreshToken,
+                clientId: user.oauthWebClientId ?? undefined,
+              });
+          }
+        }
+        for (const failed of failedAppleRevokes)
+          await this.appleRetry.enqueue(failed.token, failed.clientId, manager);
+        // 크루 변경 API와 동일하게 크루 행부터 잠가 소유권 이전/탈퇴 경쟁을 직렬화한다.
+        const ownedCrews = await manager.query<{ id: string }[]>(
+          `SELECT "id" FROM "crews" WHERE "ownerId" = $1 ORDER BY "id" FOR UPDATE`,
+          [userId],
+        );
+        for (const crew of ownedCrews) {
+          const successors = await manager.query<{ userId: string }[]>(
+            `SELECT "userId" FROM "crew_members"
            WHERE "crewId" = $1 AND "userId" <> $2
            ORDER BY "joinedAt", "userId" LIMIT 1`,
-          [crew.id, userId],
-        );
-        if (successors.length > 0) {
-          await manager.query(
-            `UPDATE "crews" SET "ownerId" = $1, "updatedAt" = now() WHERE "id" = $2`,
-            [successors[0].userId, crew.id],
+            [crew.id, userId],
           );
-        } else {
-          await manager.query(`DELETE FROM "crews" WHERE "id" = $1`, [crew.id]);
+          if (successors.length > 0) {
+            await manager.query(
+              `UPDATE "crews" SET "ownerId" = $1, "updatedAt" = now() WHERE "id" = $2`,
+              [successors[0].userId, crew.id],
+            );
+          } else {
+            await manager.query(`DELETE FROM "crews" WHERE "id" = $1`, [
+              crew.id,
+            ]);
+          }
         }
-      }
-      // 소유 깃발과 팔로우 중인 깃발을 ID 순서로 잠가 기수 변경/팔로워 수 갱신을 직렬화한다.
-      const affectedFlags = await manager.query<
-        { id: string; ownerId: string | null }[]
-      >(
-        `SELECT "id", "ownerId" FROM "flags"
+        // 소유 깃발과 팔로우 중인 깃발을 ID 순서로 잠가 기수 변경/팔로워 수 갱신을 직렬화한다.
+        const affectedFlags = await manager.query<
+          { id: string; ownerId: string | null }[]
+        >(
+          `SELECT "id", "ownerId" FROM "flags"
          WHERE "ownerId" = $1 OR "id" IN (
            SELECT "flagId" FROM "flag_follows" WHERE "userId" = $1
          ) OR "id" IN (
            SELECT "flagId" FROM "flag_reports" WHERE "userId" = $1
          ) ORDER BY "id" FOR UPDATE`,
-        [userId],
-      );
-      for (const flag of affectedFlags) {
-        if (flag.ownerId !== userId) continue;
-        const successors = await manager.query<{ userId: string }[]>(
-          `SELECT "userId" FROM "flag_bearers"
+          [userId],
+        );
+        for (const flag of affectedFlags) {
+          if (flag.ownerId !== userId) continue;
+          const successors = await manager.query<{ userId: string }[]>(
+            `SELECT "userId" FROM "flag_bearers"
            WHERE "flagId" = $1 AND "userId" <> $2
            ORDER BY "createdAt", "id" LIMIT 1`,
-          [flag.id, userId],
-        );
-        if (successors.length) {
-          await manager.query(
-            `UPDATE "flags" SET "ownerId" = $1, "updatedAt" = now() WHERE "id" = $2`,
-            [successors[0].userId, flag.id],
+            [flag.id, userId],
           );
-          await manager.query(
-            `UPDATE "flag_bearers" SET "isOwner" = true WHERE "flagId" = $1 AND "userId" = $2`,
-            [flag.id, successors[0].userId],
-          );
-        } else {
-          await manager.query(
-            `UPDATE "flags" SET "ownerId" = NULL, "hidden" = true, "updatedAt" = now() WHERE "id" = $1`,
-            [flag.id],
-          );
-          await manager.query(
-            `INSERT INTO "admin_notifications" ("kind", "flagId", "festivalId", "message")
+          if (successors.length) {
+            await manager.query(
+              `UPDATE "flags" SET "ownerId" = $1, "updatedAt" = now() WHERE "id" = $2`,
+              [successors[0].userId, flag.id],
+            );
+            await manager.query(
+              `UPDATE "flag_bearers" SET "isOwner" = true WHERE "flagId" = $1 AND "userId" = $2`,
+              [flag.id, successors[0].userId],
+            );
+          } else {
+            await manager.query(
+              `UPDATE "flags" SET "ownerId" = NULL, "hidden" = true, "updatedAt" = now() WHERE "id" = $1`,
+              [flag.id],
+            );
+            await manager.query(
+              `INSERT INTO "admin_notifications" ("kind", "flagId", "festivalId", "message")
              SELECT 'FLAG_OWNER_WITHDRAWN', "id", "festivalId", '기수가 없는 깃발을 숨겼습니다.'
              FROM "flags" WHERE "id" = $1`,
-            [flag.id],
-          );
+              [flag.id],
+            );
+          }
         }
-      }
-      await manager.query(
-        `UPDATE "flag_status_events" SET "userId" = NULL WHERE "userId" = $1`,
-        [userId],
-      );
-      await manager.query(
-        `UPDATE "flag_bearer_codes" SET "usedBy" = NULL, "expiresAt" = now()
+        await manager.query(
+          `UPDATE "flag_status_events" SET "userId" = NULL WHERE "userId" = $1`,
+          [userId],
+        );
+        await manager.query(
+          `UPDATE "flag_bearer_codes" SET "usedBy" = NULL, "expiresAt" = now()
          WHERE "usedBy" = $1`,
-        [userId],
-      );
-      await manager.delete(RefreshToken, { userId });
-      await manager.query(
-        `DELETE FROM "device_subscriptions" WHERE "deviceId" IN (
+          [userId],
+        );
+        await manager.delete(RefreshToken, { userId });
+        await manager.query(
+          `DELETE FROM "device_subscriptions" WHERE "deviceId" IN (
           SELECT "id" FROM "devices" WHERE "userId" = $1
         )`,
-        [userId],
-      );
-      await manager.query(
-        `UPDATE "devices" SET "apnsToken" = NULL,
+          [userId],
+        );
+        await manager.query(
+          `UPDATE "devices" SET "apnsToken" = NULL,
          "liveActivityPushToStartToken" = NULL,
          "liveActivityFestivalId" = NULL, "liveActivityId" = NULL,
          "liveActivityPushToken" = NULL, "updatedAt" = now()
          WHERE "userId" = $1`,
-        [userId],
-      );
-      await manager.delete(User, { id: userId });
-      for (const flag of affectedFlags) {
-        await manager.query(
-          `UPDATE "flags" SET "followerCount" = (
+          [userId],
+        );
+        await manager.delete(User, { id: userId });
+        for (const flag of affectedFlags) {
+          await manager.query(
+            `UPDATE "flags" SET "followerCount" = (
              SELECT count(*) FROM "flag_follows" WHERE "flagId" = $1
            ), "reportCount" = (
              SELECT count(*) FROM "flag_reports" WHERE "flagId" = $1
            ), "updatedAt" = now() WHERE "id" = $1`,
-          [flag.id],
-        );
-      }
-      if (affectedFlags.length)
-        await this.flagPackSync.syncMany(
-          affectedFlags.map((flag) => flag.id),
-          manager,
-        );
-    });
+            [flag.id],
+          );
+        }
+        if (affectedFlags.length)
+          return this.flagPackSync.syncMany(
+            affectedFlags.map((flag) => flag.id),
+            manager,
+          );
+        return [];
+      },
+    );
+    if (changedFestivals?.length)
+      await this.flagPackSync.invalidatePacks(changedFestivals);
   }
 
   private verify(dto: SocialLoginDto): Promise<SocialProfile> {

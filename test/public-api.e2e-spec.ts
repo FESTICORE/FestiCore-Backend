@@ -20,6 +20,7 @@ import { PublicFestivalController } from '../src/modules/public/public-festival.
 import { discoverySummaries } from '../src/modules/public/crawl-catalog';
 import { PublicFestivalService } from '../src/modules/public/public-festival.service';
 import { PublicLiveService } from '../src/modules/public/public-live.service';
+import { CacheService } from '../src/modules/redis/service/cache.service';
 
 function envelopeData<T>(body: unknown, code: string): T {
   expect(body).toBeInstanceOf(Object);
@@ -100,6 +101,14 @@ describe('Public festival API', () => {
       providers: [
         PublicFestivalService,
         PublicLiveService,
+        {
+          provide: CacheService,
+          useValue: {
+            packGeneration: jest.fn().mockResolvedValue(null),
+            getPack: jest.fn().mockResolvedValue(null),
+            setPack: jest.fn().mockResolvedValue(undefined),
+          },
+        },
         {
           provide: ConfigService,
           useValue: { get: () => 'test-access-secret' },

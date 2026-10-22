@@ -23,7 +23,11 @@ Railway 프로젝트 **FestiCore** (Roy's Projects). Cider 프로젝트와 같�
 ## 2. 플러그인 추가 (환경마다 각각)
 
 각 환경에 **Postgres** 플러그인을 추가하고 서비스 변수에 `DATABASE_URL=${{Postgres.DATABASE_URL}}`
-참조를 건다.
+참조를 건다. 공개 팩 캐시를 사용할 환경에는 Redis 서비스를 연결하고 백엔드 서비스 변수에
+`REDIS_URL=${{Redis.REDIS_URL}}` 참조를 건다. Redis는 선택 의존이며 URL이 없거나
+연결에 실패해도 공개 팩 조회는 DB로 동작한다.
+Redis 클라이언트는 `family: 0`으로 IPv4·IPv6를 모두 허용하므로 Railway 사설망이
+IPv6 주소만 제공하는 환경에서도 연결할 수 있다.
 
 - `DATABASE_URL` — 내부(사설망) URL. 런타임·CLI가 최우선 사용
 - `DATABASE_PUBLIC_URL` — 내부 URL이 없을 때만 폴백. 서버 인증 없이 자격증명을 보내지 않도록
@@ -129,6 +133,7 @@ APNs HTTP 200은 Apple 서버의 수락 결과이며 실기기 수신 증거는 
 - Builder: Dockerfile
 - Start: `node dist/main`
 - Healthcheck: `/api/v1/health` (DB `SELECT 1` 실패 시 503 → 배포 실패로 드러남)
+- Redis 상태는 health 응답의 `data.redis` (`up`/`down`/`disabled`)에서 확인한다. Redis 장애만으로는 503이 되지 않는다.
 - 스키마: prod 는 `synchronize` off, 부팅 시 `migrationsRun` 으로 `src/database/migrations` 실행
 
 ## 5. 배포 방식 (브랜치 자동 배포 + 릴리스 태그)

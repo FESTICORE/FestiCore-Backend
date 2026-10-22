@@ -19,6 +19,7 @@ describe('AdminFestivalService optimistic edits', () => {
       {} as never,
       { query } as never,
       {} as never,
+      {} as never,
     );
 
     await expect(service.list()).resolves.toMatchObject({
@@ -42,6 +43,7 @@ describe('AdminFestivalService optimistic edits', () => {
           getRepository: () => ({ findOne: () => Promise.resolve(row), save }),
         }),
     } as never,
+    {} as never,
     {} as never,
   );
 
@@ -99,12 +101,13 @@ describe('festival edit audit', () => {
           callback(manager),
       } as never,
       { record } as never,
+      {} as never,
     );
 
-    const result = await service.create(
+    const result = (await service.create(
       { name: 'Festival', venue: 'Venue', days },
       'adm_12345678',
-    );
+    )) as unknown as { id: string };
 
     expect(result.id).toMatch(/^fst_/);
     expect(save).toHaveBeenCalledTimes(1);
@@ -160,6 +163,7 @@ describe('festival edit audit', () => {
           callback(manager),
       } as never,
       { record } as never,
+      {} as never,
     );
 
     await expect(
@@ -224,6 +228,7 @@ describe('pack update delivery queue', () => {
     };
     const query = jest.fn().mockResolvedValue([{ id: 'one' }, { id: 'two' }]);
     const record = jest.fn().mockResolvedValue(undefined);
+    const invalidatePack = jest.fn().mockResolvedValue(undefined);
     const manager = {
       getRepository: (entity: unknown) =>
         entity === AdminFestival ? festivalRepo : versionRepo,
@@ -237,6 +242,7 @@ describe('pack update delivery queue', () => {
           callback(manager),
       } as never,
       { record } as never,
+      { invalidatePack } as never,
     );
 
     await expect(
@@ -266,6 +272,13 @@ describe('pack update delivery queue', () => {
       packVersion: 2,
       pushedDevices: 2,
     });
+    expect(invalidatePack).toHaveBeenCalledTimes(2);
+    expect(invalidatePack).toHaveBeenCalledWith(draft.id);
+    record.mockRejectedValueOnce(new Error('transaction failed'));
+    await expect(service.publish(draft.id, '', '"d1"', null)).rejects.toThrow(
+      'transaction failed',
+    );
+    expect(invalidatePack).toHaveBeenCalledTimes(2);
     expect(calls[1][1]).toEqual([draft.id, `pack-updated:${draft.id}:2`]);
     expect(record).toHaveBeenCalledWith(manager, {
       actor: null,

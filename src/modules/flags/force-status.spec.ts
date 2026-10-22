@@ -9,7 +9,7 @@ import { FlagsService } from './flags.service';
 
 describe('관리자 깃발 상태 강제 변경', () => {
   function setup(zoneIds = ['zone_main']) {
-    const flag = Object.assign(new Flag(), {
+    const flag: Flag = Object.assign(new Flag(), {
       id: 'flg_1',
       festivalId: 'fst_1',
       status: 'scheduled' as const,

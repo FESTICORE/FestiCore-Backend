@@ -2,7 +2,7 @@
 
 ## 개요
 
-서버 및 DB 상태를 확인하는 엔드포인트. Railway 헬스체크와 운영 모니터링에 사용한다.
+서버와 DB 상태 및 선택 의존인 Redis 상태를 확인하는 엔드포인트. Railway 헬스체크와 운영 모니터링에 사용한다.
 
 ## 엔드포인트
 
@@ -21,11 +21,14 @@
     "status": "ok",
     "uptime": 12.34,
     "timestamp": "2026-10-20T12:00:00.000Z",
-    "db": "up"
+    "db": "up",
+    "redis": "disabled"
   },
   "message": "성공적으로 처리되었습니다."
 }
 ```
+
+`data.redis`는 `REDIS_URL` 미설정 시 `disabled`, 연결 및 `PING` 성공 시 `up`, 실패 시 `down`이다. Redis 장애만으로는 503을 반환하지 않는다.
 
 DB 프로브(`SELECT 1`) 실패(503) — `AllExceptionsFilter` 표준 에러.
 
@@ -40,5 +43,6 @@ DB 프로브(`SELECT 1`) 실패(503) — `AllExceptionsFilter` 표준 에러.
 ## 검증 기준
 
 - DB 정상 → 200, `data.status === "ok"`, `data.db === "up"`
+- Redis 상태 → `data.redis === "disabled" | "up" | "down"`; Redis 장애에도 DB가 정상이라면 200
 - DB 실패 → 503, `code === "SERVICE_UNAVAILABLE"`, `data === null`
 - 대응 테스트: [test/health.e2e-spec.ts](../test/health.e2e-spec.ts)

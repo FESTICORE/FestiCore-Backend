@@ -1,11 +1,13 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { DataSource } from 'typeorm';
+import { CacheService, RedisStatus } from '../../redis/service/cache.service';
 
 export interface HealthStatus {
   status: 'ok';
   uptime: number;
   timestamp: string;
   db: 'up';
+  redis: RedisStatus;
 }
 
 /**
@@ -14,7 +16,10 @@ export interface HealthStatus {
  */
 @Injectable()
 export class HealthService {
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly cache: CacheService,
+  ) {}
 
   async check(): Promise<HealthStatus> {
     try {
@@ -29,6 +34,7 @@ export class HealthService {
       uptime: process.uptime(),
       timestamp: new Date().toISOString(),
       db: 'up',
+      redis: await this.cache.status().catch(() => 'down' as const),
     };
   }
 }
