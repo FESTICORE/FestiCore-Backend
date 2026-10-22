@@ -1,0 +1,415 @@
+import { ConfigService } from '@nestjs/config';
+import { Buffer } from 'buffer';
+import { createHash, randomUUID } from 'crypto';
+import { execFileSync } from 'child_process';
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { Readable } from 'stream';
+import sharp from 'sharp';
+import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import {
+  ImageStorageService,
+  prepareFestivalMap,
+  prepareFlagPhoto,
+} from './image-storage.service';
+
+describe('festival map image storage', () => {
+  it('applies EXIF rotation, strips metadata, and returns actual WebP aspect', async () => {
+    const source = await sharp({
+      create: { width: 400, height: 800, channels: 3, background: '#0066aa' },
+    })
+      .jpeg()
+      .withMetadata({ orientation: 6 })
+      .toBuffer();
+    const result = await prepareFestivalMap(source, 'image/jpeg');
+    const metadata = await sharp(result.image).metadata();
+    expect(metadata.format).toBe('webp');
+    expect(metadata.width).toBe(800);
+    expect(metadata.height).toBe(400);
+    expect(result.aspect).toBe(2);
+    expect(result.image.length).toBeLessThanOrEqual(300 * 1024);
+    expect(metadata.exif).toBeUndefined();
+  });
+
+  it('accepts a WebP source and re-encodes it for map delivery', async () => {
+    const source = await sharp({
+      create: { width: 600, height: 300, channels: 3, background: '#225588' },
+    })
+      .webp()
+      .toBuffer();
+    const result = await prepareFestivalMap(source, 'image/webp');
+    expect((await sharp(result.image).metadata()).format).toBe('webp');
+    expect(result.aspect).toBe(2);
+    expect(result.image.length).toBeLessThanOrEqual(300 * 1024);
+  });
+
+  it('rejects forged or oversized input and path traversal before storage', async () => {
+    const png = await sharp({
+      create: { width: 300, height: 400, channels: 3, background: '#aa6600' },
+    })
+      .png()
+      .toBuffer();
+    await expect(prepareFestivalMap(png, 'image/jpeg')).rejects.toMatchObject({
+      status: 415,
+    });
+    await expect(
+      prepareFestivalMap(Buffer.alloc(5 * 1024 * 1024 + 1), 'image/png'),
+    ).rejects.toMatchObject({ status: 413 });
+    const storage = new ImageStorageService({} as ConfigService);
+    await expect(
+      storage.readFestivalMap('fst_01234567', '../secret'),
+    ).rejects.toMatchObject({ status: 400 });
+    await expect(
+      storage.readFestivalMap('fst_01234567/other', randomUUID()),
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('saves a bounded map under a festival-scoped immutable key', async () => {
+    const values: Record<string, string> = {
+      RAILWAY_BUCKET_REGION: 'auto',
+      RAILWAY_BUCKET_ENDPOINT: 'https://storage.example.test',
+      RAILWAY_BUCKET_ACCESS_KEY_ID: 'test-key',
+      RAILWAY_BUCKET_SECRET_ACCESS_KEY: 'test-secret',
+      RAILWAY_BUCKET_NAME: 'private-images',
+    };
+    const storage = new ImageStorageService({
+      get: (key: string) => values[key],
+    } as ConfigService);
+    const bytes = await sharp({
+      create: { width: 300, height: 400, channels: 3, background: '#cc6600' },
+    })
+      .webp()
+      .toBuffer();
+    const send = jest.spyOn(S3Client.prototype, 'send');
+    try {
+      send.mockResolvedValueOnce({} as never);
+      const key = await storage.saveFestivalMap('fst_01234567', bytes);
+      expect(key).toMatch(/^festivals\/fst_01234567\/maps\/[0-9a-f-]+\.webp$/);
+      const command = send.mock.calls[0][0] as PutObjectCommand;
+      expect(command.input).toMatchObject({
+        Bucket: 'private-images',
+        Key: key,
+        ContentType: 'image/webp',
+        Body: bytes,
+      });
+      send.mockResolvedValueOnce({
+        Body: Readable.from([bytes]),
+        ContentLength: bytes.length,
+      } as never);
+      const imageId = key
+        .split('/')
+        .at(-1)!
+        .replace(/\.webp$/, '');
+      await expect(
+        storage.readFestivalMap('fst_01234567', imageId),
+      ).resolves.toEqual(bytes);
+    } finally {
+      send.mockRestore();
+    }
+  });
+});
+
+describe('flag image storage', () => {
+  it('validates JPEG bytes and produces square WebP variants', async () => {
+    const source = await sharp({
+      create: {
+        width: 320,
+        height: 480,
+        channels: 3,
+        background: '#ff4400',
+      },
+    })
+      .jpeg()
+      .toBuffer();
+    const result = await prepareFlagPhoto(source, 'image/jpeg');
+    expect((await sharp(result.photo).metadata()).format).toBe('webp');
+    expect((await sharp(result.photo).metadata()).width).toBe(512);
+    expect((await sharp(result.photo).metadata()).height).toBe(512);
+    expect((await sharp(result.thumbnail).metadata()).width).toBe(128);
+    expect((await sharp(result.thumbnail).metadata()).height).toBe(128);
+  });
+
+  it('rejects forged content types and undersized images', async () => {
+    const png = await sharp({
+      create: {
+        width: 320,
+        height: 320,
+        channels: 3,
+        background: '#0044ff',
+      },
+    })
+      .png()
+      .toBuffer();
+    await expect(prepareFlagPhoto(png, 'image/jpeg')).rejects.toMatchObject({
+      status: 415,
+    });
+    const small = await sharp(png).resize(255, 255).png().toBuffer();
+    await expect(prepareFlagPhoto(small, 'image/png')).rejects.toMatchObject({
+      status: 400,
+    });
+    await expect(
+      prepareFlagPhoto(Buffer.alloc(5 * 1024 * 1024 + 1), 'image/png'),
+    ).rejects.toMatchObject({ status: 413 });
+  });
+
+  it('rejects a genuine HEIC with a forged MIME type', async () => {
+    const heic = readFileSync(join(__dirname, 'fixtures/valid-320.heic'));
+    expect(heic.toString('ascii', 8, 12)).toBe('heic');
+    await expect(prepareFlagPhoto(heic, 'image/jpeg')).rejects.toMatchObject({
+      status: 415,
+    });
+  });
+
+  (existsSync('/usr/bin/heif-dec') ? it : it.skip)(
+    'converts a genuine HEIC to square WebP variants',
+    async () => {
+      const heic = readFileSync(join(__dirname, 'fixtures/valid-320.heic'));
+      const result = await prepareFlagPhoto(heic, 'image/heic');
+      expect((await sharp(result.photo).metadata()).format).toBe('webp');
+      expect((await sharp(result.photo).metadata()).width).toBe(512);
+      expect((await sharp(result.thumbnail).metadata()).width).toBe(128);
+    },
+  );
+
+  it('checks primary HEIF dimensions before invoking the decoder', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'festicore-heif-test-'));
+    const originalPath = process.env.PATH;
+    const originalJpeg = process.env.FESTICORE_HEIF_TEST_JPEG;
+    const heic = readFileSync(join(__dirname, 'fixtures/valid-320.heic'));
+    const info = join(directory, 'heif-info');
+    const decoder = join(directory, 'heif-dec');
+    const marker = join(directory, 'decoder-ran');
+    try {
+      const jpeg = await sharp({
+        create: { width: 320, height: 320, channels: 3, background: '#0077aa' },
+      })
+        .jpeg()
+        .toBuffer();
+      const jpegPath = join(directory, 'valid.jpg');
+      writeFileSync(jpegPath, jpeg);
+      writeFileSync(
+        decoder,
+        `#!/bin/sh\ntouch '${marker}'\ncp "$FESTICORE_HEIF_TEST_JPEG" "$4"\n`,
+      );
+      chmodSync(decoder, 0o700);
+      process.env.PATH = `${directory}:${originalPath ?? ''}`;
+      process.env.FESTICORE_HEIF_TEST_JPEG = jpegPath;
+
+      for (const output of [
+        'image: 10000x5000 (id=42), primary',
+        'image: 42 (10000x5000), primary',
+      ]) {
+        writeFileSync(info, `#!/bin/sh\nprintf '%s\\n' '${output}'\n`);
+        chmodSync(info, 0o700);
+        expect(process.env.PATH).toContain(directory);
+        expect(existsSync(info)).toBe(true);
+        expect(execFileSync(info, ['unused'], { encoding: 'utf8' })).toContain(
+          output,
+        );
+        expect(
+          execFileSync('heif-info', ['unused'], {
+            encoding: 'utf8',
+            env: { ...process.env },
+          }),
+        ).toContain(output);
+        await expect(
+          prepareFlagPhoto(heic, 'image/heic'),
+        ).rejects.toMatchObject({
+          status: 413,
+        });
+        expect(existsSync(marker)).toBe(false);
+      }
+
+      writeFileSync(
+        info,
+        "#!/bin/sh\nprintf '%s\\n' 'image: invalid, primary'\n",
+      );
+      await expect(prepareFlagPhoto(heic, 'image/heic')).rejects.toMatchObject({
+        status: 415,
+      });
+      expect(existsSync(marker)).toBe(false);
+
+      writeFileSync(
+        info,
+        "#!/bin/sh\nprintf '%s\\n' 'image: 320x320 (id=42), primary'\n",
+      );
+      const result = await prepareFlagPhoto(heic, 'image/heic');
+      expect(result.photo).toBeInstanceOf(Buffer);
+      expect(result.thumbnail).toBeInstanceOf(Buffer);
+      expect(existsSync(marker)).toBe(true);
+    } finally {
+      process.env.PATH = originalPath;
+      if (originalJpeg === undefined)
+        delete process.env.FESTICORE_HEIF_TEST_JPEG;
+      else process.env.FESTICORE_HEIF_TEST_JPEG = originalJpeg;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects keys from another flag before contacting storage', async () => {
+    const service = new ImageStorageService({} as ConfigService);
+    await expect(
+      service.readFlagPhoto('flg_a', 'flags/flg_b/random/photo.webp'),
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('rejects traversal, forged WebP, and oversized crawl objects', async () => {
+    const storage = new ImageStorageService({} as ConfigService);
+    const digest = createHash('sha256').update('crawl image').digest('hex');
+    const key = `crawl/${digest}.webp`;
+    await expect(
+      storage.readCrawlImage('../flags/secret.webp'),
+    ).rejects.toMatchObject({
+      status: 400,
+    });
+    await expect(
+      storage.readCrawlImage(`crawl/${digest.toUpperCase()}.webp`),
+    ).rejects.toMatchObject({
+      status: 400,
+    });
+    await expect(
+      storage.saveCrawlImage(key, Buffer.from('not-webp'), 'image/webp'),
+    ).rejects.toMatchObject({ status: 415 });
+    await expect(
+      storage.saveCrawlImage(
+        key,
+        Buffer.from('RIFF0000WEBPnot-an-image'),
+        'image/webp',
+      ),
+    ).rejects.toMatchObject({ status: 415 });
+    await expect(
+      storage.saveCrawlImage(
+        key,
+        Buffer.alloc(2 * 1024 * 1024 + 1),
+        'image/webp',
+      ),
+    ).rejects.toMatchObject({ status: 413 });
+    const valid = await sharp({
+      create: { width: 300, height: 300, channels: 3, background: '#00ff00' },
+    })
+      .webp()
+      .toBuffer();
+    await expect(
+      storage.saveCrawlImage(key, valid, 'image/webp'),
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('stores and reads bounded WebP crawl objects through the private bucket', async () => {
+    const values: Record<string, string> = {
+      RAILWAY_BUCKET_REGION: 'auto',
+      RAILWAY_BUCKET_ENDPOINT: 'https://storage.example.test',
+      RAILWAY_BUCKET_ACCESS_KEY_ID: 'test-key',
+      RAILWAY_BUCKET_SECRET_ACCESS_KEY: 'test-secret',
+      RAILWAY_BUCKET_NAME: 'private-images',
+    };
+    const config = { get: (key: string) => values[key] } as ConfigService;
+    const storage = new ImageStorageService(config);
+    const bytes = await sharp({
+      create: { width: 300, height: 300, channels: 3, background: '#00ff00' },
+    })
+      .webp()
+      .toBuffer();
+    const digest = createHash('sha256').update(bytes).digest('hex');
+    const key = `crawl/${digest}.webp`;
+    const send = jest.spyOn(S3Client.prototype, 'send');
+    try {
+      send.mockResolvedValueOnce({} as never);
+      await storage.saveCrawlImage(key, bytes, 'image/webp');
+      expect(send).toHaveBeenCalledTimes(1);
+      send.mockResolvedValueOnce({
+        Body: Readable.from([bytes]),
+        ContentLength: bytes.length,
+      } as never);
+      await expect(storage.readCrawlImage(key)).resolves.toEqual(bytes);
+    } finally {
+      send.mockRestore();
+    }
+  });
+
+  it('stores, reads, and deletes private bounded text crawl snapshots', async () => {
+    const values: Record<string, string> = {
+      RAILWAY_BUCKET_REGION: 'auto',
+      RAILWAY_BUCKET_ENDPOINT: 'https://storage.example.test',
+      RAILWAY_BUCKET_ACCESS_KEY_ID: 'test-key',
+      RAILWAY_BUCKET_SECRET_ACCESS_KEY: 'test-secret',
+      RAILWAY_BUCKET_NAME: 'private-images',
+    };
+    const storage = new ImageStorageService({
+      get: (key: string) => values[key],
+    } as ConfigService);
+    const key = `crawl/snapshots/${randomUUID()}.txt`;
+    const bytes = Buffer.from('<html>축제</html>');
+    const send = jest.spyOn(S3Client.prototype, 'send');
+    try {
+      await expect(
+        storage.saveCrawlSnapshot('../flags/secret.webp', bytes),
+      ).rejects.toMatchObject({ status: 400 });
+      await expect(
+        storage.readCrawlSnapshot('crawl/elsewhere.html'),
+      ).rejects.toMatchObject({
+        status: 400,
+      });
+      await expect(
+        storage.readCrawlSnapshot(key.replace(/\.txt$/, '.html')),
+      ).rejects.toMatchObject({ status: 400 });
+      await expect(
+        storage.deleteCrawlSnapshot('../flags/secret.webp'),
+      ).rejects.toMatchObject({
+        status: 400,
+      });
+      await expect(
+        storage.saveCrawlSnapshot(key, Buffer.alloc(0)),
+      ).rejects.toMatchObject({
+        status: 400,
+      });
+      await expect(
+        storage.saveCrawlSnapshot(key, Buffer.alloc(2 * 1024 * 1024 + 1)),
+      ).rejects.toMatchObject({ status: 413 });
+      expect(send).not.toHaveBeenCalled();
+
+      send.mockResolvedValueOnce({} as never);
+      await storage.saveCrawlSnapshot(key, bytes);
+      expect(send.mock.calls[0][0]).toMatchObject({
+        input: {
+          Bucket: 'private-images',
+          Key: key,
+          Body: bytes,
+          ContentType: 'text/plain; charset=utf-8',
+        },
+      });
+      const upload = send.mock.calls[0][0] as {
+        input: { CacheControl: string };
+      };
+      expect(upload.input.CacheControl).toContain('private');
+
+      send.mockResolvedValueOnce({
+        Body: Readable.from([bytes]),
+        ContentLength: bytes.length,
+      } as never);
+      await expect(storage.readCrawlSnapshot(key)).resolves.toEqual(bytes);
+
+      send.mockResolvedValueOnce({
+        Body: Readable.from([Buffer.alloc(2 * 1024 * 1024), Buffer.from('x')]),
+      } as never);
+      await expect(storage.readCrawlSnapshot(key)).rejects.toMatchObject({
+        status: 413,
+      });
+
+      send.mockResolvedValueOnce({} as never);
+      await storage.deleteCrawlSnapshot(key);
+      expect(send.mock.calls[3][0]).toMatchObject({
+        input: { Bucket: 'private-images', Key: key },
+      });
+    } finally {
+      send.mockRestore();
+    }
+  });
+});

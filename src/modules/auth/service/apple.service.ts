@@ -12,6 +12,7 @@ import {
   jwtVerify,
   SignJWT,
   type JWTVerifyGetKey,
+  type JWTPayload,
 } from 'jose';
 import type { OauthGrant, SocialProfile } from '../types/social-profile';
 
@@ -72,6 +73,85 @@ export class AppleService {
     }
   }
 
+  /** Apple Services ID 전용 웹 code 교환 및 nonce 검증. */
+  async exchangeWebCode(
+    code: string,
+    redirectUri: string,
+    nonce: string,
+    name?: string,
+  ): Promise<{ profile: SocialProfile; grant?: OauthGrant }> {
+    const webClientId = this.config.get<string>('APPLE_WEB_CLIENT_ID');
+    const clientSecret = await this.buildClientSecret(webClientId);
+    if (!webClientId || !clientSecret) {
+      throw new ServiceUnavailableException(
+        'Apple 웹 로그인이 설정되지 않았습니다.',
+      );
+    }
+    let res: Response;
+    try {
+      res = await fetch(APPLE_TOKEN_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          client_id: webClientId,
+          client_secret: clientSecret,
+          code,
+          redirect_uri: redirectUri,
+          grant_type: 'authorization_code',
+        }),
+      });
+    } catch {
+      this.logger.warn('Apple 웹 토큰 엔드포인트에 연결하지 못했습니다.');
+      throw new ServiceUnavailableException(
+        'Apple 로그인 서비스에 연결할 수 없습니다.',
+      );
+    }
+    if (res.status >= 500)
+      throw new ServiceUnavailableException(
+        'Apple 로그인 서비스가 응답하지 않습니다.',
+      );
+    if (!res.ok)
+      throw new UnauthorizedException('Apple 인증 코드 교환에 실패했습니다.');
+    let tokens: { id_token?: string; refresh_token?: string };
+    try {
+      tokens = (await res.json()) as typeof tokens;
+    } catch {
+      throw new ServiceUnavailableException(
+        'Apple 로그인 응답이 올바르지 않습니다.',
+      );
+    }
+    if (!tokens.id_token)
+      throw new UnauthorizedException('Apple ID 토큰이 없습니다.');
+    let payload: JWTPayload;
+    try {
+      ({ payload } = await jwtVerify(tokens.id_token, this.jwks, {
+        issuer: APPLE_ISSUER,
+        audience: webClientId,
+      }));
+    } catch {
+      this.logger.warn('Apple 웹 ID 토큰 검증에 실패했습니다.');
+      throw new UnauthorizedException('유효하지 않은 Apple 토큰입니다.');
+    }
+    if (!payload.sub || payload.nonce !== nonce) {
+      throw new UnauthorizedException('Apple nonce가 일치하지 않습니다.');
+    }
+    return {
+      profile: {
+        provider: 'apple',
+        providerId: payload.sub,
+        email: typeof payload.email === 'string' ? payload.email : undefined,
+        name,
+      },
+      grant: tokens.refresh_token
+        ? {
+            refreshToken: tokens.refresh_token,
+            subject: payload.sub,
+            clientId: webClientId,
+          }
+        : undefined,
+    };
+  }
+
   /**
    * authorizationCode를 Apple refresh 토큰으로 교환한다(교환 결과의 사용자 sub 포함).
    * 자격증명(teamId/keyId/privateKey)이 없으면 undefined를 반환(연동 저장 생략).
@@ -108,6 +188,7 @@ export class AppleService {
       return {
         refreshToken: json.refresh_token,
         subject: json.id_token ? decodeJwt(json.id_token).sub : undefined,
+        clientId: this.clientId,
       };
     } catch (error) {
       this.logger.warn(`Apple 토큰 교환 오류: ${(error as Error).message}`);
@@ -119,12 +200,18 @@ export class AppleService {
    * refresh 토큰으로 Apple 연동을 해제한다(회원 탈퇴).
    * 실패해도 예외를 던지지 않는다(계정 삭제는 계속 진행).
    */
-  async revokeConnection(refreshToken: string): Promise<void> {
-    const clientSecret = await this.buildClientSecret();
-    if (!clientSecret || !this.clientId) return;
+  async revokeConnection(
+    refreshToken: string,
+    clientId = this.clientId,
+  ): Promise<boolean> {
+    const clientSecret = await this.buildClientSecret(clientId);
+    if (!clientSecret || !clientId) {
+      this.logger.warn('Apple 연동 해제 설정이 없어 재시도가 필요합니다.');
+      return false;
+    }
 
     const body = new URLSearchParams({
-      client_id: this.clientId,
+      client_id: clientId,
       client_secret: clientSecret,
       token: refreshToken,
       token_type_hint: 'refresh_token',
@@ -135,18 +222,24 @@ export class AppleService {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body,
+        signal: AbortSignal.timeout(5000),
       });
       if (!res.ok) {
         this.logger.warn(`Apple 연동 해제 실패: ${res.status}`);
+        return false;
       }
-    } catch (error) {
-      this.logger.warn(`Apple 연동 해제 오류: ${(error as Error).message}`);
+      return true;
+    } catch {
+      this.logger.warn('Apple 연동 해제 연결 오류');
+      return false;
     }
   }
 
   /** Apple client secret(ES256 JWT) 생성. 자격증명 미비 시 undefined. */
-  private async buildClientSecret(): Promise<string | undefined> {
-    if (!this.clientId || !this.teamId || !this.keyId || !this.privateKey) {
+  private async buildClientSecret(
+    clientId = this.clientId,
+  ): Promise<string | undefined> {
+    if (!clientId || !this.teamId || !this.keyId || !this.privateKey) {
       return undefined;
     }
     try {
@@ -157,7 +250,7 @@ export class AppleService {
         .setIssuedAt()
         .setExpirationTime('5m')
         .setAudience(APPLE_ISSUER)
-        .setSubject(this.clientId)
+        .setSubject(clientId)
         .sign(key);
     } catch (error) {
       this.logger.error(

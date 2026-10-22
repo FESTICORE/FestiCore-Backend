@@ -5,6 +5,7 @@ export interface SocialProfile {
   provider: SocialProvider;
   providerId: string; // provider 고유 식별자(sub)
   email?: string;
+  emailVerified?: boolean;
   name?: string;
   picture?: string; // provider가 제공하는 프로필 사진 원본 URL
 }
@@ -13,6 +14,7 @@ export interface SocialProfile {
 export interface OauthGrant {
   refreshToken: string;
   subject?: string;
+  clientId?: string;
 }
 
 /** JWT access 토큰 페이로드 및 가드가 주입하는 요청 사용자 */

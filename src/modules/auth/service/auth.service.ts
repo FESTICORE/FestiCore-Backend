@@ -1,22 +1,44 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  HttpException,
+  HttpStatus,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { QueryFailedError, Repository } from 'typeorm';
-import { DevLoginDto } from '../dto/dev-login.dto';
+import { DataSource, QueryFailedError, Repository } from 'typeorm';
 import { SocialLoginDto } from '../dto/social-login.dto';
+import { RefreshToken } from '../entity/refresh-token.entity';
 import { User } from '../entity/user.entity';
+import { FlagPackSyncService } from '../../flags/flag-pack-sync.service';
 import type { SocialProfile } from '../types/social-profile';
+import type { OauthGrant } from '../types/social-profile';
 import { AppleService } from './apple.service';
+import { AppleRevokeRetryService } from './apple-revoke-retry.service';
 import { GoogleService } from './google.service';
 import { TokenService } from './token.service';
+import { CURRENT_TERMS_VERSION } from '../terms';
 
 // Postgres unique 제약 위반 코드.
 const UNIQUE_VIOLATION = '23505';
+export { CURRENT_TERMS_VERSION } from '../terms';
+
+export interface UpdateMeInput {
+  nickname?: string;
+  acceptTerms?: { version: string };
+  pushOptIn?: boolean;
+}
 
 export interface UserView {
   id: string;
   provider: string;
   email: string | null;
   nickname: string | null;
+  nicknameConfirmed: boolean;
+  termsAcceptedAt: Date | null;
+  termsVersion: string | null;
+  pushOptIn: boolean;
   profileImageUrl: string | null;
 }
 
@@ -42,31 +64,53 @@ export class AuthService {
     private readonly token: TokenService,
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
+    private readonly dataSource: DataSource,
+    private readonly appleRetry: AppleRevokeRetryService,
+    private readonly flagPackSync: FlagPackSyncService,
   ) {}
 
   async login(dto: SocialLoginDto): Promise<LoginResult> {
     const profile = await this.verify(dto);
     const { user, isNew } = await this.findOrCreate(profile);
+    await this.bindVerifiedAdminGrant(profile, user.id);
     await this.storeOauthRefreshToken(user, dto);
     const tokens = await this.token.issue(user);
     return { ...tokens, newUser: isNew, user: this.toView(user) };
   }
 
-  /**
-   * 개발 전용 로그인: 소셜 검증 없이 key로 사용자를 find-or-create 해 토큰을 발급한다.
-   * 같은 key는 항상 같은 계정으로 매핑되어(providerId=`dev-<key>`) 반복 테스트가 쉽다.
-   * 라우트 노출 여부는 컨트롤러에서 환경으로 제어한다.
-   */
-  async devLogin(dto: DevLoginDto): Promise<LoginResult> {
-    const key = (dto.key ?? 'default').trim() || 'default';
-    const { user, isNew } = await this.findOrCreate({
-      provider: 'google',
-      providerId: `dev-${key}`,
-      email: dto.email ?? undefined,
-      name: dto.nickname ?? key,
-    });
+  /** 웹 OAuth 콜백에서 검증이 끝난 프로필만 계정으로 연결한다. */
+  async completeWebLogin(
+    profile: SocialProfile,
+    grant?: OauthGrant,
+  ): Promise<{ userId: string; newUser: boolean }> {
+    const { user, isNew } = await this.findOrCreate(profile);
+    await this.bindVerifiedAdminGrant(profile, user.id);
+    if (grant?.refreshToken && grant.subject === profile.providerId) {
+      const updated = await this.userRepo.update(
+        { id: user.id },
+        {
+          oauthWebRefreshToken: grant.refreshToken,
+          oauthWebClientId: grant.clientId ?? null,
+        },
+      );
+      if (updated.affected !== 1) {
+        await this.revokeOrphanedGrant(
+          profile.provider,
+          grant.refreshToken,
+          grant.clientId,
+        );
+        throw new NotFoundException('사용자를 찾을 수 없습니다.');
+      }
+    }
+    return { userId: user.id, newUser: isNew };
+  }
+
+  /** 일회용 웹 교환 티켓 소비 후에만 토큰을 발급한다. */
+  async issueWebLogin(userId: string, newUser: boolean): Promise<LoginResult> {
+    const user = await this.userRepo.findOne({ where: { id: userId } });
+    if (!user) throw new NotFoundException('사용자를 찾을 수 없습니다.');
     const tokens = await this.token.issue(user);
-    return { ...tokens, newUser: isNew, user: this.toView(user) };
+    return { ...tokens, newUser, user: this.toView(user) };
   }
 
   /** refresh 토큰 회전: 기존 토큰 폐기 후 새 access/refresh 발급 */
@@ -86,40 +130,250 @@ export class AuthService {
     await this.token.revokeAllForUser(userId);
   }
 
-  async me(userId: string): Promise<UserView> {
+  async me(
+    userId: string,
+  ): Promise<UserView & { admin: { id: string; role: string } | null }> {
     const user = await this.userRepo.findOne({ where: { id: userId } });
     if (!user) {
       throw new NotFoundException('사용자를 찾을 수 없습니다.');
     }
+    const admins =
+      user.provider === 'google'
+        ? await this.dataSource.query<{ id: string; role: string }[]>(
+            `SELECT "id", "role" FROM "admin_accounts" WHERE "userId" = $1 AND "active" = true`,
+            [userId],
+          )
+        : [];
+    return { ...this.toView(user), admin: admins[0] ?? null };
+  }
+
+  async updateMe(userId: string, input: UpdateMeInput): Promise<UserView> {
+    const user = await this.userRepo.findOne({ where: { id: userId } });
+    if (!user) throw new NotFoundException('사용자를 찾을 수 없습니다.');
+    if (
+      input.acceptTerms &&
+      input.acceptTerms.version !== CURRENT_TERMS_VERSION
+    ) {
+      throw new HttpException(
+        {
+          code: 'TERMS_VERSION_OUTDATED',
+          message: '현재 약관 버전에 다시 동의해야 합니다.',
+        },
+        HttpStatus.UNPROCESSABLE_ENTITY,
+      );
+    }
+    if (input.nickname !== undefined) {
+      user.nickname = input.nickname;
+      user.nicknameExplicitlySet = true;
+    }
+    if (input.acceptTerms) {
+      user.termsVersion = CURRENT_TERMS_VERSION;
+      user.termsAcceptedAt = new Date();
+    }
+    if (input.pushOptIn !== undefined) user.pushOptIn = input.pushOptIn;
+    if (
+      user.nicknameExplicitlySet &&
+      user.nickname &&
+      user.termsVersion === CURRENT_TERMS_VERSION &&
+      user.termsAcceptedAt
+    ) {
+      user.nicknameConfirmed = true;
+    }
+    await this.userRepo.save(user);
     return this.toView(user);
   }
 
   /**
-   * 회원 탈퇴: provider 연동 해제(revoke) → refresh 토큰 삭제 → 사용자 삭제.
-   * provider revoke 실패는 계정 삭제를 막지 않는다.
+   * 회원 탈퇴: provider 연동 해제(revoke) 후 재시도 건과 데이터 정리를 원자적으로 저장한다.
    */
   async withdraw(userId: string): Promise<void> {
-    // oauthRefreshToken은 select:false라 명시적으로 조회한다.
-    const user = await this.userRepo.findOne({
-      where: { id: userId },
-      select: { id: true, provider: true, oauthRefreshToken: true },
-    });
-    if (!user) {
-      throw new NotFoundException('사용자를 찾을 수 없습니다.');
-    }
-    if (user.oauthRefreshToken) {
-      if (user.provider === 'google') {
-        await this.google.revokeConnection(user.oauthRefreshToken);
-      } else {
-        await this.apple.revokeConnection(user.oauthRefreshToken);
-      }
-    } else {
-      this.logger.warn(
-        `provider 토큰이 없어 연동 해제를 건너뜁니다: ${user.provider} ${user.id}`,
-      );
-    }
-    await this.token.deleteAllForUser(userId);
-    await this.userRepo.delete({ id: userId });
+    const changedFestivals = await this.dataSource.transaction(
+      async (manager) => {
+        await manager.query(
+          `SELECT pg_advisory_xact_lock(hashtext('admin_account_management'))`,
+        );
+        // 갱신된 OAuth grant를 놓치지 않도록 사용자 행을 잠근 뒤 최신 토큰을 읽는다.
+        const [user] = await manager.query<User[]>(
+          `SELECT "id", "provider", "oauthRefreshToken", "oauthClientId",
+                "oauthWebRefreshToken", "oauthWebClientId"
+         FROM "users" WHERE "id" = $1 FOR UPDATE`,
+          [userId],
+        );
+        if (!user) throw new NotFoundException('사용자를 찾을 수 없습니다.');
+        const [admin] = await manager.query<{ id: string; role: string }[]>(
+          `SELECT "id", "role" FROM "admin_accounts" WHERE "userId" = $1 AND "active" = true FOR UPDATE`,
+          [userId],
+        );
+        if (admin?.role === 'owner') {
+          const [{ count }] = await manager.query<{ count: number }[]>(
+            `SELECT count(*)::int AS count FROM "admin_accounts" WHERE "role" = 'owner' AND "active" = true`,
+          );
+          if (count <= 1)
+            throw new ConflictException(
+              '마지막 owner 계정은 탈퇴할 수 없습니다.',
+            );
+        }
+        if (admin) {
+          await manager.query(
+            `UPDATE "admin_accounts" SET "active" = false WHERE "id" = $1`,
+            [admin.id],
+          );
+          await manager.query(
+            `INSERT INTO "admin_audit" ("actor", "action", "target", "before", "after")
+           VALUES ($1, 'admin.withdraw', $2, $3::jsonb, $4::jsonb)`,
+            [
+              admin.id,
+              `admin:${admin.id}`,
+              JSON.stringify({ role: admin.role, active: true }),
+              JSON.stringify({ role: admin.role, active: false }),
+            ],
+          );
+        }
+        const failedAppleRevokes: { token: string; clientId?: string }[] = [];
+        if (user.oauthRefreshToken) {
+          if (user.provider === 'google') {
+            await this.google.revokeConnection(user.oauthRefreshToken);
+          } else {
+            const succeeded = await this.apple.revokeConnection(
+              user.oauthRefreshToken,
+              user.oauthClientId ?? undefined,
+            );
+            if (!succeeded)
+              failedAppleRevokes.push({
+                token: user.oauthRefreshToken,
+                clientId: user.oauthClientId ?? undefined,
+              });
+          }
+        } else {
+          this.logger.warn(
+            `provider 토큰이 없어 연동 해제를 건너뜁니다: ${user.provider} ${user.id}`,
+          );
+        }
+        if (
+          user.oauthWebRefreshToken &&
+          user.oauthWebRefreshToken !== user.oauthRefreshToken
+        ) {
+          if (user.provider === 'google') {
+            await this.google.revokeConnection(user.oauthWebRefreshToken);
+          } else {
+            const succeeded = await this.apple.revokeConnection(
+              user.oauthWebRefreshToken,
+              user.oauthWebClientId ?? undefined,
+            );
+            if (!succeeded)
+              failedAppleRevokes.push({
+                token: user.oauthWebRefreshToken,
+                clientId: user.oauthWebClientId ?? undefined,
+              });
+          }
+        }
+        for (const failed of failedAppleRevokes)
+          await this.appleRetry.enqueue(failed.token, failed.clientId, manager);
+        // 크루 변경 API와 동일하게 크루 행부터 잠가 소유권 이전/탈퇴 경쟁을 직렬화한다.
+        const ownedCrews = await manager.query<{ id: string }[]>(
+          `SELECT "id" FROM "crews" WHERE "ownerId" = $1 ORDER BY "id" FOR UPDATE`,
+          [userId],
+        );
+        for (const crew of ownedCrews) {
+          const successors = await manager.query<{ userId: string }[]>(
+            `SELECT "userId" FROM "crew_members"
+           WHERE "crewId" = $1 AND "userId" <> $2
+           ORDER BY "joinedAt", "userId" LIMIT 1`,
+            [crew.id, userId],
+          );
+          if (successors.length > 0) {
+            await manager.query(
+              `UPDATE "crews" SET "ownerId" = $1, "updatedAt" = now() WHERE "id" = $2`,
+              [successors[0].userId, crew.id],
+            );
+          } else {
+            await manager.query(`DELETE FROM "crews" WHERE "id" = $1`, [
+              crew.id,
+            ]);
+          }
+        }
+        // 소유 깃발과 팔로우 중인 깃발을 ID 순서로 잠가 기수 변경/팔로워 수 갱신을 직렬화한다.
+        const affectedFlags = await manager.query<
+          { id: string; ownerId: string | null }[]
+        >(
+          `SELECT "id", "ownerId" FROM "flags"
+         WHERE "ownerId" = $1 OR "id" IN (
+           SELECT "flagId" FROM "flag_follows" WHERE "userId" = $1
+         ) OR "id" IN (
+           SELECT "flagId" FROM "flag_reports" WHERE "userId" = $1
+         ) ORDER BY "id" FOR UPDATE`,
+          [userId],
+        );
+        for (const flag of affectedFlags) {
+          if (flag.ownerId !== userId) continue;
+          const successors = await manager.query<{ userId: string }[]>(
+            `SELECT "userId" FROM "flag_bearers"
+           WHERE "flagId" = $1 AND "userId" <> $2
+           ORDER BY "createdAt", "id" LIMIT 1`,
+            [flag.id, userId],
+          );
+          if (successors.length) {
+            await manager.query(
+              `UPDATE "flags" SET "ownerId" = $1, "updatedAt" = now() WHERE "id" = $2`,
+              [successors[0].userId, flag.id],
+            );
+            await manager.query(
+              `UPDATE "flag_bearers" SET "isOwner" = true WHERE "flagId" = $1 AND "userId" = $2`,
+              [flag.id, successors[0].userId],
+            );
+          } else {
+            await manager.query(
+              `UPDATE "flags" SET "ownerId" = NULL, "hidden" = true, "updatedAt" = now() WHERE "id" = $1`,
+              [flag.id],
+            );
+            await manager.query(
+              `INSERT INTO "admin_notifications" ("kind", "flagId", "festivalId", "message")
+             SELECT 'FLAG_OWNER_WITHDRAWN', "id", "festivalId", '기수가 없는 깃발을 숨겼습니다.'
+             FROM "flags" WHERE "id" = $1`,
+              [flag.id],
+            );
+          }
+        }
+        await manager.query(
+          `UPDATE "flag_status_events" SET "userId" = NULL WHERE "userId" = $1`,
+          [userId],
+        );
+        await manager.query(
+          `UPDATE "flag_bearer_codes" SET "usedBy" = NULL, "expiresAt" = now()
+         WHERE "usedBy" = $1`,
+          [userId],
+        );
+        await manager.delete(RefreshToken, { userId });
+        await manager.query(
+          `DELETE FROM "device_subscriptions" WHERE "deviceId" IN (
+          SELECT "id" FROM "devices" WHERE "userId" = $1
+        )`,
+          [userId],
+        );
+        await manager.query(`DELETE FROM "devices" WHERE "userId" = $1`, [
+          userId,
+        ]);
+        await manager.delete(User, { id: userId });
+        for (const flag of affectedFlags) {
+          await manager.query(
+            `UPDATE "flags" SET "followerCount" = (
+             SELECT count(*) FROM "flag_follows" WHERE "flagId" = $1
+           ), "reportCount" = (
+             SELECT count(*) FROM "flag_reports" WHERE "flagId" = $1
+           ), "updatedAt" = now() WHERE "id" = $1`,
+            [flag.id],
+          );
+        }
+        if (affectedFlags.length)
+          return this.flagPackSync.syncMany(
+            affectedFlags.map((flag) => flag.id),
+            manager,
+          );
+        return [];
+      },
+    );
+    if (changedFestivals?.length)
+      await this.flagPackSync.invalidatePacks(changedFestivals);
   }
 
   private verify(dto: SocialLoginDto): Promise<SocialProfile> {
@@ -156,10 +410,35 @@ export class AuthService {
       return;
     }
     user.oauthRefreshToken = grant.refreshToken;
-    await this.userRepo.update(
+    user.oauthClientId = grant.clientId ?? null;
+    const updated = await this.userRepo.update(
       { id: user.id },
-      { oauthRefreshToken: grant.refreshToken },
+      {
+        oauthRefreshToken: grant.refreshToken,
+        oauthClientId: grant.clientId ?? null,
+      },
     );
+    if (updated.affected !== 1) {
+      await this.revokeOrphanedGrant(
+        dto.provider,
+        grant.refreshToken,
+        grant.clientId,
+      );
+      throw new NotFoundException('사용자를 찾을 수 없습니다.');
+    }
+  }
+
+  private async revokeOrphanedGrant(
+    provider: 'google' | 'apple',
+    refreshToken: string,
+    clientId?: string,
+  ): Promise<void> {
+    if (provider === 'google') {
+      await this.google.revokeConnection(refreshToken);
+      return;
+    }
+    const succeeded = await this.apple.revokeConnection(refreshToken, clientId);
+    if (!succeeded) await this.appleRetry.enqueue(refreshToken, clientId);
   }
 
   /**
@@ -181,7 +460,11 @@ export class AuthService {
         this.userRepo.create({
           ...where,
           email: profile.email ?? null,
-          nickname: profile.name ?? null,
+          nickname: profile.name?.slice(0, 30) ?? null,
+          nicknameConfirmed: false,
+          termsAcceptedAt: null,
+          termsVersion: null,
+          pushOptIn: false,
           profileImageUrl: profile.picture ?? null,
         }),
       );
@@ -202,12 +485,57 @@ export class AuthService {
     );
   }
 
+  private async bindVerifiedAdminGrant(
+    profile: SocialProfile,
+    userId: string,
+  ): Promise<void> {
+    if (
+      profile.provider !== 'google' ||
+      !profile.emailVerified ||
+      !profile.email
+    )
+      return;
+    const email = profile.email.trim().toLowerCase();
+    await this.dataSource.transaction(async (manager) => {
+      await manager.query(
+        `SELECT pg_advisory_xact_lock(hashtext('admin_account_management'))`,
+      );
+      const [currentUser] = await manager.query<{ id: string }[]>(
+        `SELECT "id" FROM "users" WHERE "id" = $1 FOR KEY SHARE`,
+        [userId],
+      );
+      if (!currentUser) return;
+      const [bound] = await manager.query<{ id: string; role: string }[]>(
+        `UPDATE "admin_accounts" SET "userId" = $1
+         WHERE "email" = $2 AND "userId" IS NULL AND "active" = true
+           AND NOT EXISTS (SELECT 1 FROM "admin_accounts" WHERE "userId" = $1)
+         RETURNING "id", "role"`,
+        [userId, email],
+      );
+      if (!bound) return;
+      await manager.query(
+        `INSERT INTO "admin_audit" ("actor", "action", "target", "before", "after")
+         VALUES ($1, 'admin.bind', $2, $3::jsonb, $4::jsonb)`,
+        [
+          bound.id,
+          `admin:${bound.id}`,
+          JSON.stringify({ email, role: bound.role, userId: null }),
+          JSON.stringify({ email, role: bound.role, userId }),
+        ],
+      );
+    });
+  }
+
   private toView(user: User): UserView {
     return {
       id: user.id,
       provider: user.provider,
       email: user.email,
       nickname: user.nickname,
+      nicknameConfirmed: user.nicknameConfirmed ?? false,
+      termsAcceptedAt: user.termsAcceptedAt ?? null,
+      termsVersion: user.termsVersion ?? null,
+      pushOptIn: user.pushOptIn ?? false,
       profileImageUrl: user.profileImageUrl,
     };
   }

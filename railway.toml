@@ -30,6 +30,3 @@ restartPolicyType = "ON_FAILURE"
 
 [environments.develop.variables]
 NODE_ENV = "production"
-# 개발 환경 한정: 소셜 검증 없이 토큰을 발급하는 /auth/dev/login 을 켠다.
-# (운영 환경에는 의도적으로 넣지 않고, 코드도 production 환경 이름이면 항상 거부한다)
-DEV_LOGIN_ENABLED = "true"

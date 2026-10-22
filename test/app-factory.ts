@@ -4,19 +4,23 @@ import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { DataSource } from 'typeorm';
+import { DataSource, EntityManager } from 'typeorm';
 import { AllExceptionsFilter } from '../src/common/filters/all-exceptions.filter';
 import { ResponseInterceptor } from '../src/common/interceptors/response.interceptor';
 import { AuthController } from '../src/modules/auth/controller/auth.controller';
+import { MeController } from '../src/modules/auth/controller/me.controller';
 import { RefreshToken } from '../src/modules/auth/entity/refresh-token.entity';
 import { User } from '../src/modules/auth/entity/user.entity';
 import { JwtAuthGuard } from '../src/modules/auth/guard/jwt-auth.guard';
 import { AppleService } from '../src/modules/auth/service/apple.service';
+import { AppleRevokeRetryService } from '../src/modules/auth/service/apple-revoke-retry.service';
 import { AuthService } from '../src/modules/auth/service/auth.service';
 import { GoogleService } from '../src/modules/auth/service/google.service';
 import { TokenService } from '../src/modules/auth/service/token.service';
+import { FlagPackSyncService } from '../src/modules/flags/flag-pack-sync.service';
 import { HealthController } from '../src/modules/health/controller/health.controller';
 import { HealthService } from '../src/modules/health/service/health.service';
+import { CacheService } from '../src/modules/redis/service/cache.service';
 import { FakeRepository } from './fake-repository';
 
 /**
@@ -30,7 +34,10 @@ export interface TestContext {
   refreshTokens: FakeRepository<RefreshToken>;
   google: { [K in keyof GoogleService]: jest.Mock };
   apple: { [K in keyof AppleService]: jest.Mock };
-  dataSource: { query: jest.Mock };
+  appleRetry: { enqueue: jest.Mock };
+  flagPackSync: { syncMany: jest.Mock; invalidatePacks: jest.Mock };
+  dataSource: { query: jest.Mock; transaction: jest.Mock };
+  cache: { status: jest.Mock };
 }
 
 export async function createTestApp(): Promise<TestContext> {
@@ -40,7 +47,6 @@ export async function createTestApp(): Promise<TestContext> {
     'auth.jwt.accessTtl': '30m',
     'auth.jwt.refreshTtl': '14d',
     NODE_ENV: 'test',
-    DEV_LOGIN_ENABLED: 'true',
   };
   const users = new FakeRepository<User>();
   const refreshTokens = new FakeRepository<RefreshToken>();
@@ -51,23 +57,59 @@ export async function createTestApp(): Promise<TestContext> {
   };
   const apple = {
     verify: jest.fn(),
+    exchangeWebCode: jest.fn(),
     exchangeAuthCode: jest.fn(),
-    revokeConnection: jest.fn(),
+    revokeConnection: jest.fn().mockResolvedValue(true),
+  };
+  const appleRetry = { enqueue: jest.fn().mockResolvedValue(undefined) };
+  const flagPackSync = {
+    syncMany: jest.fn().mockResolvedValue(undefined),
+    invalidatePacks: jest.fn().mockResolvedValue(undefined),
   };
   const dataSource = {
     query: jest.fn().mockResolvedValue([{ '?column?': 1 }]),
+    transaction: jest
+      .fn()
+      .mockImplementation(
+        (work: (manager: EntityManager) => Promise<unknown>) =>
+          work({
+            query: jest
+              .fn()
+              .mockImplementation((sql: string, params?: string[]) =>
+                sql.includes('FROM "users"') && sql.includes('FOR UPDATE')
+                  ? users
+                      .findOne({ where: { id: params?.[0] } })
+                      .then((user) => (user ? [user] : []))
+                  : Promise.resolve([]),
+              ),
+            delete: jest
+              .fn()
+              .mockImplementation(
+                (entity: unknown, where: Record<string, unknown>) => {
+                  if (entity === User) return users.delete(where);
+                  if (entity === RefreshToken)
+                    return refreshTokens.delete(where);
+                  throw new Error('지원하지 않는 테스트 엔티티입니다.');
+                },
+              ),
+          } as unknown as EntityManager),
+      ),
   };
+  const cache = { status: jest.fn().mockResolvedValue('disabled') };
 
   const moduleRef = await Test.createTestingModule({
     imports: [JwtModule.register({})],
-    controllers: [AuthController, HealthController],
+    controllers: [AuthController, MeController, HealthController],
     providers: [
       AuthService,
       TokenService,
       HealthService,
       { provide: GoogleService, useValue: google },
       { provide: AppleService, useValue: apple },
+      { provide: AppleRevokeRetryService, useValue: appleRetry },
+      { provide: FlagPackSyncService, useValue: flagPackSync },
       { provide: DataSource, useValue: dataSource },
+      { provide: CacheService, useValue: cache },
       { provide: getRepositoryToken(User), useValue: users },
       { provide: getRepositoryToken(RefreshToken), useValue: refreshTokens },
       { provide: ConfigService, useValue: { get: (key: string) => env[key] } },
@@ -96,6 +138,9 @@ export async function createTestApp(): Promise<TestContext> {
     refreshTokens,
     google: google,
     apple: apple,
+    appleRetry,
+    flagPackSync,
     dataSource,
+    cache,
   };
 }

@@ -22,12 +22,16 @@ const GOOGLE_REVOKE_URL = 'https://oauth2.googleapis.com/revoke';
 export class GoogleService {
   private readonly logger = new Logger(GoogleService.name);
   private readonly clientId?: string;
+  private readonly clientIds: string[];
   private readonly clientSecret?: string;
   private readonly enabled: boolean;
   private readonly client: OAuth2Client;
 
   constructor(private readonly config: ConfigService) {
     this.clientId = this.config.get<string>('auth.google.clientId');
+    this.clientIds =
+      this.config.get<string[]>('auth.google.clientIds') ??
+      (this.clientId ? [this.clientId] : []);
     this.clientSecret = this.config.get<string>('auth.google.clientSecret');
     this.enabled = this.config.get<boolean>('auth.google.enabled') ?? false;
     this.client = new OAuth2Client(this.clientId);
@@ -42,7 +46,7 @@ export class GoogleService {
     try {
       const ticket = await this.client.verifyIdToken({
         idToken,
-        audience: this.clientId,
+        audience: this.clientIds,
       });
       const payload = ticket.getPayload();
       if (!payload?.sub) {
@@ -52,6 +56,7 @@ export class GoogleService {
         provider: 'google',
         providerId: payload.sub,
         email: payload.email,
+        emailVerified: payload.email_verified === true,
         name: payload.name,
         picture: payload.picture,
       };

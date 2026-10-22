@@ -7,8 +7,11 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { Reflector } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
+import { InjectRepository } from '@nestjs/typeorm';
 import type { Request } from 'express';
+import { Repository } from 'typeorm';
 import { IS_PUBLIC_KEY } from '../decorator/public.decorator';
+import { User } from '../entity/user.entity';
 import type { AuthUser, SocialProvider } from '../types/social-profile';
 
 interface AccessPayload {
@@ -29,6 +32,8 @@ export class JwtAuthGuard implements CanActivate {
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
     private readonly reflector: Reflector,
+    @InjectRepository(User)
+    private readonly users: Repository<User>,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -52,23 +57,38 @@ export class JwtAuthGuard implements CanActivate {
       throw new UnauthorizedException('인증 토큰이 없습니다.');
     }
 
+    let payload: AccessPayload;
     try {
-      const payload = await this.jwt.verifyAsync<AccessPayload>(token, {
+      payload = await this.jwt.verifyAsync<AccessPayload>(token, {
         secret: this.config.get<string>('auth.jwt.accessSecret'),
       });
       // refresh 토큰 등 access 가 아닌 토큰은 거부한다.
-      if (payload.typ !== 'access' || !payload.provider) {
+      if (
+        payload.typ !== 'access' ||
+        typeof payload.sub !== 'string' ||
+        !payload.sub ||
+        (payload.provider !== 'google' && payload.provider !== 'apple')
+      ) {
         throw new Error('access 토큰이 아닙니다.');
       }
-      const user: AuthUser = {
-        userId: payload.sub,
-        provider: payload.provider,
-      };
-      (request as Request & { user: AuthUser }).user = user;
-      return true;
     } catch {
       throw new UnauthorizedException('유효하지 않은 인증 토큰입니다.');
     }
+
+    // 이미 탈퇴한 계정의 서명 유효한 JWT도 남은 만료 시간과 무관하게 거부한다.
+    const account = await this.users.findOne({
+      where: { id: payload.sub },
+      select: { id: true, provider: true },
+    });
+    if (!account || account.provider !== payload.provider) {
+      throw new UnauthorizedException('유효하지 않은 인증 토큰입니다.');
+    }
+    const user: AuthUser = {
+      userId: account.id,
+      provider: account.provider,
+    };
+    (request as Request & { user: AuthUser }).user = user;
+    return true;
   }
 
   private extractToken(request: Request): string | undefined {

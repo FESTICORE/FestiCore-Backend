@@ -28,6 +28,21 @@ export class User {
   @Column({ type: 'varchar', nullable: true })
   nickname!: string | null;
 
+  @Column({ type: 'boolean', default: false })
+  nicknameConfirmed!: boolean;
+
+  @Column({ type: 'boolean', default: false })
+  nicknameExplicitlySet!: boolean;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  termsAcceptedAt!: Date | null;
+
+  @Column({ type: 'varchar', nullable: true })
+  termsVersion!: string | null;
+
+  @Column({ type: 'boolean', default: false })
+  pushOptIn!: boolean;
+
   // provider가 제공한 프로필 사진 URL.
   @Column({ type: 'varchar', nullable: true })
   profileImageUrl!: string | null;
@@ -35,6 +50,15 @@ export class User {
   // provider(OAuth) refresh 토큰. 회원 탈퇴 시 provider 연동 해제(revoke)에 사용.
   @Column({ type: 'varchar', nullable: true, select: false })
   oauthRefreshToken!: string | null;
+
+  @Column({ type: 'varchar', nullable: true, select: false })
+  oauthClientId!: string | null;
+
+  @Column({ type: 'varchar', nullable: true, select: false })
+  oauthWebRefreshToken!: string | null;
+
+  @Column({ type: 'varchar', nullable: true, select: false })
+  oauthWebClientId!: string | null;
 
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt!: Date;

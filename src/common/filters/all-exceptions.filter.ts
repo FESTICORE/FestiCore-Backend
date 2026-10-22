@@ -17,18 +17,30 @@ const REDACTED_KEYS = new Set([
   'authorization',
   'authorizationcode',
   'code',
+  'email',
   'idtoken',
+  'id_token',
   'identitytoken',
+  'nonce',
+  'linktoken',
+  'magictoken',
+  'otp',
   'password',
   'secret',
   'signature',
   'token',
   'accesstoken',
+  'apnstoken',
+  'pushtoken',
+  'liveactivitypushtostarttoken',
   'refreshtoken',
+  'state',
+  'user',
+  'sessionid',
 ]);
 
 /**
- * 모든 예외를 { success:false, data:null, message } 표준 형식으로 변환한다.
+ * 모든 JSON 예외를 { code, data, message } 표준 형식으로 변환한다.
  */
 @Catch()
 export class AllExceptionsFilter implements ExceptionFilter {
@@ -43,22 +55,56 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
     let status = HttpStatus.INTERNAL_SERVER_ERROR;
     let message = '내부 서버 오류가 발생했습니다.';
+    let code = 'INTERNAL_SERVER_ERROR';
+    const details: Record<string, unknown> = {};
 
     if (exception instanceof HttpException) {
       status = exception.getStatus();
+      code = HttpStatus[status] ?? `HTTP_${status}`;
       const body = exception.getResponse();
       if (typeof body === 'string') {
         message = body;
       } else if (typeof body === 'object' && body !== null) {
-        const msg = (body as { message?: string | string[] }).message;
+        const fields = body as Record<string, unknown>;
+        if (typeof fields.code === 'string') code = fields.code;
+        const msg = fields.message as string | string[] | undefined;
         message = Array.isArray(msg) ? msg.join(', ') : (msg ?? message);
+        // API 계약에 명시된 오류 필드만 노출한다. 임의 예외 객체의 비밀값은 내보내지 않는다.
+        for (const key of [
+          'draft',
+          'draftVersion',
+          'errors',
+          'warnings',
+          'retryAfter',
+        ]) {
+          if (key in fields) details[key] = fields[key];
+        }
+        if (
+          status === HttpStatus.CONFLICT &&
+          fields.code === 'STATUS_STALE' &&
+          typeof fields.current === 'object' &&
+          fields.current !== null &&
+          !Array.isArray(fields.current)
+        ) {
+          const current = fields.current as Record<string, unknown>;
+          if (
+            Array.isArray(current.setIds) &&
+            current.setIds.every((id) => typeof id === 'string') &&
+            current.updatedAt instanceof Date
+          ) {
+            details.current = {
+              setIds: current.setIds,
+              updatedAt: current.updatedAt.toISOString(),
+            };
+          }
+        }
       }
     }
 
     // 4xx(인증 없음·검증 실패·not found 등)는 예상된 클라이언트 오류이므로
     // 스택 없이 warn 으로 남긴다. 5xx(진짜 서버 오류)만 스택과 함께 error 로 남겨
     // 로그에서 실제 장애가 401/404 노이즈에 묻히지 않게 한다.
-    const line = `${request.method} ${request.url} - ${status} - ${message}`;
+    const line = `${request.method} ${request.url.split('?')[0]} - ${status} - ${message}`;
     if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
       this.logger.error(
         line,
@@ -76,16 +122,15 @@ export class AllExceptionsFilter implements ExceptionFilter {
     }
 
     response.status(status).json({
-      success: false,
-      statusCode: status,
-      data: null,
+      code,
+      data: Object.keys(details).length ? details : null,
       message,
     });
   }
 
   /**
    * 요청 바디 로깅은 개발 진단용이라 운영에서는 절대 켜지 않는다.
-   * dev-login 플래그와 무관하게 Railway production 환경이면 항상 끈다.
+   * Railway production 환경이면 항상 끈다.
    */
   private isDiagnosticsEnabled(): boolean {
     if (!this.config) return false;
