@@ -3,6 +3,7 @@ import { CrawlSource } from '../entity/crawl-source.entity';
 import { CrawlRun } from '../entity/crawl-run.entity';
 import { NotFoundException } from '@nestjs/common';
 import { In } from 'typeorm';
+import { createHash } from 'crypto';
 import {
   CreateCrawlSourceDto,
   UpdateCrawlSourceDto,
@@ -314,6 +315,41 @@ describe('CrawlService source audit', () => {
 });
 
 describe('CrawlService manual runs and snapshots', () => {
+  it('reparses an unchanged English YES24 listing after the parser update', async () => {
+    const { service, source, run, runsRepo, execute } = harness();
+    execute.mockRestore();
+    source.url = 'https://ticket.yes24.com/English/Genre/Concert';
+    const body = `<ul class="list_wrap">
+      <li class="poster"><a href="/English/Perf/60590"><img alt="poster"></a></li>
+      <li class="conlist"><h3><a href="/English/Perf/60590">COUNTDOWN FANTASY 2026-2027</a></h3>
+        <ul class="con_txt"><li><span>Genre</span>: [Festival]</li><li><span>Date/Time</span>: Dec 31, 2026</li><li><span>Venue</span>: KINTEX HALL 7·8</li></ul>
+      </li></ul>`;
+    const oldHash = createHash('sha256')
+      .update(body)
+      .update('ticket-list:v3')
+      .digest('hex');
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({ status: 200, body });
+    jest.spyOn(service as never, 'captureImages').mockResolvedValue([]);
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue({ contentHash: oldHash }),
+    }));
+    const proposalItems = jest
+      .spyOn(service, 'proposalItems')
+      .mockResolvedValue({
+        kind: 'discovery',
+        items: [],
+      });
+
+    await service.execute(run, source);
+
+    expect(proposalItems).toHaveBeenCalledTimes(1);
+    expect(run.result).toBe('nochange-parsed');
+    expect(run.contentHash).not.toBe(oldHash);
+  });
+
   it('registers only NOL product pages discovered from a festival listing', async () => {
     const { service, source, run, dataSource, runsRepo, execute } = harness();
     execute.mockRestore();
