@@ -19,6 +19,7 @@ import { AppleService } from './apple.service';
 import { AppleRevokeRetryService } from './apple-revoke-retry.service';
 import { GoogleService } from './google.service';
 import { TokenService } from './token.service';
+import { OauthTokenCipher } from './oauth-token-cipher';
 import { CURRENT_TERMS_VERSION } from '../terms';
 
 // Postgres unique 제약 위반 코드.
@@ -58,6 +59,7 @@ export interface LoginResult {
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
+  private readonly oauthCipher = new OauthTokenCipher(process.env);
 
   constructor(
     private readonly google: GoogleService,
@@ -90,7 +92,11 @@ export class AuthService {
       const updated = await this.userRepo.update(
         { id: user.id },
         {
-          oauthWebRefreshToken: grant.refreshToken,
+          oauthWebRefreshToken: this.oauthCipher.encode(
+            grant.refreshToken,
+            user.id,
+            'oauthWebRefreshToken',
+          ),
           oauthWebClientId: grant.clientId ?? null,
         },
       );
@@ -222,6 +228,16 @@ export class AuthService {
           [userId],
         );
         if (!user) throw new NotFoundException('사용자를 찾을 수 없습니다.');
+        const oauthRefreshToken = this.oauthCipher.decode(
+          user.oauthRefreshToken,
+          user.id,
+          'oauthRefreshToken',
+        );
+        const oauthWebRefreshToken = this.oauthCipher.decode(
+          user.oauthWebRefreshToken,
+          user.id,
+          'oauthWebRefreshToken',
+        );
         const [admin] = await manager.query<{ id: string; role: string }[]>(
           `SELECT "id", "role" FROM "admin_accounts" WHERE "userId" = $1 AND "active" = true FOR UPDATE`,
           [userId],
@@ -252,17 +268,17 @@ export class AuthService {
           );
         }
         const failedAppleRevokes: { token: string; clientId?: string }[] = [];
-        if (user.oauthRefreshToken) {
+        if (oauthRefreshToken) {
           if (user.provider === 'google') {
-            await this.google.revokeConnection(user.oauthRefreshToken);
+            await this.google.revokeConnection(oauthRefreshToken);
           } else {
             const succeeded = await this.apple.revokeConnection(
-              user.oauthRefreshToken,
+              oauthRefreshToken,
               user.oauthClientId ?? undefined,
             );
             if (!succeeded)
               failedAppleRevokes.push({
-                token: user.oauthRefreshToken,
+                token: oauthRefreshToken,
                 clientId: user.oauthClientId ?? undefined,
               });
           }
@@ -272,19 +288,19 @@ export class AuthService {
           );
         }
         if (
-          user.oauthWebRefreshToken &&
-          user.oauthWebRefreshToken !== user.oauthRefreshToken
+          oauthWebRefreshToken &&
+          oauthWebRefreshToken !== oauthRefreshToken
         ) {
           if (user.provider === 'google') {
-            await this.google.revokeConnection(user.oauthWebRefreshToken);
+            await this.google.revokeConnection(oauthWebRefreshToken);
           } else {
             const succeeded = await this.apple.revokeConnection(
-              user.oauthWebRefreshToken,
+              oauthWebRefreshToken,
               user.oauthWebClientId ?? undefined,
             );
             if (!succeeded)
               failedAppleRevokes.push({
-                token: user.oauthWebRefreshToken,
+                token: oauthWebRefreshToken,
                 clientId: user.oauthWebClientId ?? undefined,
               });
           }
@@ -436,7 +452,11 @@ export class AuthService {
     const updated = await this.userRepo.update(
       { id: user.id },
       {
-        oauthRefreshToken: grant.refreshToken,
+        oauthRefreshToken: this.oauthCipher.encode(
+          grant.refreshToken,
+          user.id,
+          'oauthRefreshToken',
+        ),
         oauthClientId: grant.clientId ?? null,
       },
     );

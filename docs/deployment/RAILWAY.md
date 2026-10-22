@@ -5,10 +5,10 @@ FestiCore 백엔드는 Railway에서 **develop / production** 두 환경으로 �
 2026-10-21 Railway 환경변수 보안 공지에 따른 점검·교체 순서는
 [보안 공지 대응 문서](SECURITY-INCIDENT-2026-10-21.md)에 기록한다.
 
-| 환경       | 연결 브랜치 | API 도메인                             | AdminWeb 도메인                                  | 용도          |
-| ---------- | ----------- | -------------------------------------- | ------------------------------------------------ | ------------- |
-| develop    | `develop`   | `https://festicore-dev.up.railway.app` | `https://festicoreadmin-dev.up.railway.app`       | 개발/스테이징 |
-| production | `main`      | `https://festicore.up.railway.app`     | `https://festicoreadmin.up.railway.app`           | 운영          |
+| 환경       | 연결 브랜치 | API 도메인                             | AdminWeb 도메인                             | 용도          |
+| ---------- | ----------- | -------------------------------------- | ------------------------------------------- | ------------- |
+| develop    | `develop`   | `https://festicore-dev.up.railway.app` | `https://festicoreadmin-dev.up.railway.app` | 개발/스테이징 |
+| production | `main`      | `https://festicore.up.railway.app`     | `https://festicoreadmin.up.railway.app`     | 운영          |
 
 ## 1. 프로젝트/환경 구성
 
@@ -68,6 +68,9 @@ APNS_KEY_ID=                               # APNs Auth Key ID
 APNS_PRIVATE_KEY=                          # APNs .p8 키, 개행은 \n
 APNS_BUNDLE_ID=                            # iOS 앱 bundle ID (apns-topic)
 APPLE_REVOKE_ENCRYPTION_KEY=                # Apple 폐기 재시도 토큰 암호화: 32바이트 base64 또는 64자리 hex, 환경별 별도 키
+OAUTH_TOKEN_ENCRYPTION_KEY=                 # 사용자 OAuth 갱신 토큰 전용 32바이트 base64 또는 64자리 hex 키
+OAUTH_TOKEN_ENCRYPTION_PREVIOUS_KEY=        # 키 교체 기간에만 사용; 이전 암호문이 남아 있는 동안 유지
+OAUTH_TOKEN_ENCRYPTION_WRITE=false          # 모든 인스턴스에 복호화 코드와 현재 키가 배포된 뒤 true
 RAILWAY_BUCKET_NAME=                        # 각 환경의 비공개 이미지 버킷
 RAILWAY_BUCKET_REGION=
 RAILWAY_BUCKET_ENDPOINT=
@@ -128,6 +131,22 @@ Apple 토큰 폐기가 실패하면 탈퇴 트랜잭션에서 암호화된 재�
 작업자는 1분마다 최대 10건을 처리하고 최대 12회 지수 간격으로 재시도한다.
 12회 실패한 작업은 `apple_revoke_retries.exhaustedAt`에 표시되며 운영 점검이 필요하다.
 기존 암호문이 남아 있는 동안 키를 변경하면 복호화할 수 없으므로 키를 보존해야 한다.
+
+사용자 OAuth 갱신 토큰 암호화는 단계적으로 활성화한다. 환경별로 별도
+`OAUTH_TOKEN_ENCRYPTION_KEY`를 설정하고 `OAUTH_TOKEN_ENCRYPTION_WRITE=false`로
+복호화 가능한 버전을 모든 인스턴스에 먼저 배포한다. 구 버전 인스턴스가 완전히
+종료된 것을 확인한 뒤에만 쓰기를 `true`로 변경한다. 읽기는 기존 평문과 버전 1
+암호문을 모두 지원한다. 쓰기 전환 후 `npm run oauth-token:backfill`을 환경별로
+실행하고 평문 잔여 행이 0건인지 확인한다. 실행 중 다른 트랜잭션이 행을 잠그면
+명령이 실패할 수 있으므로 잠금이 풀린 뒤 다시 실행한다. 키 교체는 먼저 기존
+현재 키를 유지하고 새 키를 `OAUTH_TOKEN_ENCRYPTION_PREVIOUS_KEY`에 넣어 모든
+인스턴스를 배포한다. 이 단계의 쓰기는 기존 키로 계속 암호화한다. 모든 인스턴스가
+두 키를 읽을 수 있음을 확인한 뒤 현재 키와 이전 키의 위치를 바꿔 배포한다.
+롤링 중 양쪽 인스턴스가 두 키를 읽을 수 있으므로 쓰기를 계속 암호화한다.
+이전 키로 암호화된 행도 배치 명령으로 새 키에 재암호화하고 0건임을 확인한 뒤
+이전 키를 제거한다.
+암호문에 필요한 키가 없으면 회원 탈퇴의 provider 연동 해제가 실패하므로
+키를 제거하기 전에 해당 행을 확인해야 한다.
 
 축제 시작 알림은 발행된 팩의 `days[].startsAt`에서 예약되며 서버 프로세스가
 매분 대기 작업을 확인한다. `APNS_*` 네 변수는 develop/production 서비스에 각각
