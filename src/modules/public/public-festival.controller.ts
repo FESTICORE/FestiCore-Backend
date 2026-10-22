@@ -202,7 +202,7 @@ export class PublicFestivalController {
     const principal = deviceId
       ? await this.deviceAuth.resolveOptionalPrincipal(request)
       : undefined;
-    response.setHeader('Vary', 'Authorization, X-Device-Id');
+    response.setHeader('Vary', 'Origin, Authorization, X-Device-Id');
     if (deviceId && principal) {
       try {
         const { items } = await this.devices.listSubscriptions(
@@ -227,7 +227,7 @@ export class PublicFestivalController {
       }
     }
     if (!response.hasHeader('Cache-Control'))
-      response.setHeader('Cache-Control', 'public, max-age=3600');
+      response.setHeader('Cache-Control', 'private, max-age=3600');
     this.send(
       response,
       body,

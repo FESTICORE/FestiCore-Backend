@@ -143,6 +143,7 @@ describe('Public festival API', () => {
     app.useGlobalFilters(new AllExceptionsFilter());
     app.useGlobalInterceptors(new ResponseInterceptor());
     app.setGlobalPrefix('api/v1');
+    app.enableCors({ origin: ['https://festicoreadmin-dev.up.railway.app'] });
     await app.listen(0);
     server = app.getHttpServer() as Server;
   });
@@ -154,6 +155,7 @@ describe('Public festival API', () => {
   it('lists published festivals and sends conditional list caching', async () => {
     const first = await request(server)
       .get('/api/v1/festivals?after=2026-10-21&limit=20')
+      .set('Origin', 'https://festicoreadmin-dev.up.railway.app')
       .expect(200);
     const listBody = successData<{ items: unknown[] }>(first.body);
     expect(listBody.items).toEqual([
@@ -164,8 +166,11 @@ describe('Public festival API', () => {
         ticketLinks: pack.ticketLinks,
       }),
     ]);
-    expect(first.headers['cache-control']).toBe('public, max-age=3600');
-    expect(first.headers.vary).toBe('Authorization, X-Device-Id');
+    expect(first.headers['cache-control']).toBe('private, max-age=3600');
+    expect(first.headers.vary).toBe('Origin, Authorization, X-Device-Id');
+    expect(first.headers['access-control-allow-origin']).toBe(
+      'https://festicoreadmin-dev.up.railway.app',
+    );
     expect(first.headers.date).toBeDefined();
     expect(first.headers.etag).toMatch(/^"cdm1-/);
     await request(server)
@@ -177,7 +182,7 @@ describe('Public festival API', () => {
       .set('If-None-Match', first.headers.etag)
       .set('Cache-Control', 'no-cache')
       .expect(304);
-    expect(notModified.headers['cache-control']).toBe('public, max-age=3600');
+    expect(notModified.headers['cache-control']).toBe('private, max-age=3600');
   });
 
   it('includes pinned only for an authenticated device and uses a private cache', async () => {
@@ -197,7 +202,7 @@ describe('Public festival API', () => {
     const body = successData<{ items: { pinned?: boolean }[] }>(response.body);
     expect(body.items[0].pinned).toBe(true);
     expect(response.headers['cache-control']).toBe('private, max-age=60');
-    expect(response.headers.vary).toBe('Authorization, X-Device-Id');
+    expect(response.headers.vary).toBe('Origin, Authorization, X-Device-Id');
     expect(devices.listSubscriptions).toHaveBeenCalledWith(
       'device-a',
       expect.objectContaining({ kind: 'device' }),
@@ -221,8 +226,8 @@ describe('Public festival API', () => {
     expect(
       successData<{ items: { pinned?: boolean }[] }>(response.body).items[0],
     ).not.toHaveProperty('pinned');
-    expect(response.headers['cache-control']).toBe('public, max-age=3600');
-    expect(response.headers.vary).toBe('Authorization, X-Device-Id');
+    expect(response.headers['cache-control']).toBe('private, max-age=3600');
+    expect(response.headers.vary).toBe('Origin, Authorization, X-Device-Id');
   });
 
   it('uses a visible legacy flag image when the published pack has no thumbnail', async () => {
