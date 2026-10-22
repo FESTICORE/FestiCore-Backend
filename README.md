@@ -10,12 +10,13 @@
 | gateway       | 전역 Throttler·JwtAuthGuard(`@Public` 예외)·필터·인터셉터                        |
 | swagger       | `/api-docs` 공개 API, `/admin/api-docs` 관리자 API. 각 경로에 도메인별 문서 제공 |
 | auth          | Google·Apple 통합 로그인, JWT access/refresh 회전, 회원 탈퇴                     |
-| admin         | 일반 로그인 JWT의 관리자 권한 검사, 축제 초안·발행·롤백                           |
+| admin         | 일반 로그인 JWT의 관리자 권한 검사, 축제 초안·발행·롤백                          |
 | storage       | Railway 비공개 버킷의 WebP 사진 저장·읽기                                        |
 | flags         | 공개 깃발, 팔로우·기수·상태·사진·관리자 신고 처리                                |
 | devices       | 익명 기기 토큰 등록·소유권 확인·핀·Live Activity 토큰 관리                       |
 | notifications | D-1 리마인더·축제 시작 알림 예약·APNs 발송                                       |
-| public        | 축제 목록·예매 링크·오프라인 팩과 공개 팩 갱신 WebSocket                          |
+| public        | 축제 목록·예매 링크·오프라인 팩과 공개 팩 갱신 WebSocket                         |
+| legal         | Google OAuth 브랜딩용 공개 홈페이지·개인정보처리방침·이용약관 HTML               |
 | health        | `GET /api/v1/health` — DB 실패 시 503                                            |
 
 구조와 규칙은 [아키텍처 문서](./docs/architecture/ARCHITECTURE.md), 엔드포인트 계약은 [.spec/](./.spec/README.md),
@@ -37,6 +38,7 @@ npm run start:dev
 - 관리자 Swagger: `http://localhost:3000/admin/api-docs` (JSON: `/admin/api-docs-json`)
 - 개발: [공개](https://festicore-dev.up.railway.app/api-docs) · [관리자](https://festicore-dev.up.railway.app/admin/api-docs)
 - 운영: [공개](https://festicore.up.railway.app/api-docs) · [관리자](https://festicore.up.railway.app/admin/api-docs)
+- 법적 문서: `/api/v1/legal/home`, `/api/v1/legal/privacy`, `/api/v1/legal/terms` ([계약](./.spec/legal.md))
 
 각 UI의 드롭다운에서 해당 영역의 전체·도메인별 문서를 선택할 수 있다.
 JSON API 응답은 `{ "code": "SUCCESS", "data": ..., "message": "성공적으로 처리되었습니다." }` 형식이며, 오류 코드와 상세 규칙은 [.spec/](./.spec/README.md)에 정리했다.

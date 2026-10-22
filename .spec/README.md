@@ -10,6 +10,7 @@
 - [api-v0.2-adoption.md](./api-v0.2-adoption.md) — Notion API v0.2 반영 범위와 검증 경계
 - [coverage.md](./coverage.md) — 제공된 명세서와 현재 구현의 대조 및 남은 검증
 - [health.md](./health.md) — 헬스체크
+- [legal.md](./legal.md) — 공개 홈페이지·개인정보 처리 안내·이용약관 HTML
 - [auth.md](./auth.md) — Google/Apple 통합 로그인, 프로필, Apple 웹 콜백
 - [me.md](./me.md) — 내 정보 조회·닉네임 변경·회원 탈퇴 요청 본문
 - [admin-auth.md](./admin-auth.md) — 일반 로그인과 관리자 권한

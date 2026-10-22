@@ -2,10 +2,10 @@
 
 FestiCore 백엔드는 Railway에서 **develop / production** 두 환경으로 운영한다.
 
-| 환경       | 연결 브랜치 | API 도메인                             | AdminWeb 도메인                                  | 용도          |
-| ---------- | ----------- | -------------------------------------- | ------------------------------------------------ | ------------- |
-| develop    | `develop`   | `https://festicore-dev.up.railway.app` | `https://festicoreadmin-dev.up.railway.app`       | 개발/스테이징 |
-| production | `main`      | `https://festicore.up.railway.app`     | `https://festicoreadmin.up.railway.app`           | 운영          |
+| 환경       | 연결 브랜치 | API 도메인                             | AdminWeb 도메인                             | 용도          |
+| ---------- | ----------- | -------------------------------------- | ------------------------------------------- | ------------- |
+| develop    | `develop`   | `https://festicore-dev.up.railway.app` | `https://festicoreadmin-dev.up.railway.app` | 개발/스테이징 |
+| production | `main`      | `https://festicore.up.railway.app`     | `https://festicoreadmin.up.railway.app`     | 운영          |
 
 ## 1. 프로젝트/환경 구성
 
@@ -91,6 +91,14 @@ AWS_S3_URL_STYLE=virtual                    # 엔드포인트가 경로 방식�
 Google 웹은 Google Identity Services에서 받은 ID 토큰을 모바일 앱과 동일한
 `POST /api/v1/auth/login`에 `{ "provider": "google", "token": "<idToken>" }`으로 보낸다.
 웹 클라이언트의 승인된 JavaScript 원본에는 실제 웹사이트의 HTTPS origin을 등록한다.
+Google OAuth 브랜딩에 등록할 백엔드 공개 페이지는 환경별로 다음과 같다.
+
+| 환경       | 홈페이지                                                 | 개인정보 처리 안내                                          | 이용약관                                                  |
+| ---------- | -------------------------------------------------------- | ----------------------------------------------------------- | --------------------------------------------------------- |
+| develop    | `https://festicore-dev.up.railway.app/api/v1/legal/home` | `https://festicore-dev.up.railway.app/api/v1/legal/privacy` | `https://festicore-dev.up.railway.app/api/v1/legal/terms` |
+| production | `https://festicore.up.railway.app/api/v1/legal/home`     | `https://festicore.up.railway.app/api/v1/legal/privacy`     | `https://festicore.up.railway.app/api/v1/legal/terms`     |
+
+배포 후 세 URL의 공개 HTTPS 응답과 페이지 간 링크를 확인한다. 법적 문서의 운영 주체·문의처·보유기간·위탁 현황·효력일은 운영자가 확인한 사실로 채워야 하며, Google 브랜드 검증에는 별도 도메인 소유권 확인이 필요할 수 있다.
 백엔드의 Google 리디렉션 URI는 사용하지 않는다. `GOOGLE_CLIENT_ID`는 웹 클라이언트 ID,
 `GOOGLE_MOBILE_CLIENT_IDS`는 iOS/Android 클라이언트 ID 목록이며,
 백엔드는 이 목록으로 ID 토큰의 audience를 검증한다.
