@@ -330,7 +330,18 @@ describe('CrawlService manual runs and snapshots', () => {
       .digest('hex');
     jest.spyOn(service, 'checkRobots').mockResolvedValue();
     jest.spyOn(service, 'getListing').mockResolvedValue({ status: 200, body });
-    jest.spyOn(service as never, 'captureImages').mockResolvedValue([]);
+    jest
+      .spyOn(
+        service as unknown as {
+          captureImages(
+            source: CrawlSource,
+            run: CrawlRun,
+            urls: URL[],
+          ): Promise<string[]>;
+        },
+        'captureImages',
+      )
+      .mockResolvedValue([]);
     runsRepo.createQueryBuilder = jest.fn(() => ({
       where: jest.fn().mockReturnThis(),
       orderBy: jest.fn().mockReturnThis(),
