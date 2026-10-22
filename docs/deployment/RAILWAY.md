@@ -95,6 +95,18 @@ Google 웹은 Google Identity Services에서 받은 ID 토큰을 모바일 앱�
 `GOOGLE_MOBILE_CLIENT_IDS`는 iOS/Android 클라이언트 ID 목록이며,
 백엔드는 이 목록으로 ID 토큰의 audience를 검증한다.
 
+Google 로그인 동의 화면의 표시 이름은 OAuth 클라이언트 이름이 아니라
+Google 인증 플랫폼의 **브랜딩 > 앱 이름**에서 정한다. 2026-10-22 확인 시
+`festicore` 프로젝트의 앱 이름은 `패스티코어`로 저장되어 있으나 게시 상태는
+`테스트 중`이며, 홈페이지·개인정보처리방침·서비스 약관 URL이 비어 있어
+`앱 게시` 버튼이 비활성화되어 있다. 테스트 상태에서는 로그인 동의 화면에
+앱 이름 대신 Railway 도메인이 표시될 수 있다. Google의 브랜드 인증을 위해서는
+실제 공개된 정책 페이지와 소유권을 검증할 수 있는 도메인을 준비하고,
+브랜딩 정보를 완성한 뒤 게시·인증 상태를 확인해야 한다. 현재 등록된
+`*.up.railway.app` 서브도메인은 공유 서비스 도메인이므로 커스텀 도메인 사용을
+검토한다. [Google 브랜딩 안내](https://support.google.com/cloud/answer/15549049),
+[도메인 검증 안내](https://developers.google.com/identity/verification/authentication-policy-compliance)
+
 이미지 저장은 Railway 환경마다 분리된 비공개 버킷을 사용한다. 현재 개발 버킷은
 `festicore-images-dev`, 운영 버킷은 `festicore-images-prod`이다. 버킷 자격증명은
 각 환경의 변수 참조로 설정하고 저장소·문서에 실제 값을 기록하지 않는다.

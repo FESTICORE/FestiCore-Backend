@@ -18,6 +18,21 @@ import { AdminAuditService } from '../audit/admin-audit.service';
 import { CacheService } from '../../redis/service/cache.service';
 
 const alphabet = '0123456789abcdefghjkmnpqrstvwxyz';
+const SOURCE_STALE_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
+
+function sourceWarnings(draft: FestivalDocument): string[] {
+  const source = draft.source;
+  const verifiedAt =
+    source && typeof source === 'object' && 'verifiedAt' in source
+      ? source.verifiedAt
+      : undefined;
+  const verifiedTime =
+    typeof verifiedAt === 'string' ? Date.parse(verifiedAt) : NaN;
+  return Number.isFinite(verifiedTime) &&
+    Date.now() - verifiedTime > SOURCE_STALE_AFTER_MS
+    ? ['출처 확인 시각이 7일을 지났습니다. 최신 정보를 확인해 주세요.']
+    : [];
+}
 function newId(): string {
   const bytes = randomBytes(8);
   return 'fst_' + [...bytes].map((b) => alphabet[b % alphabet.length]).join('');
@@ -181,7 +196,7 @@ export class AdminFestivalService {
         before,
         after: { draftVersion: row.draftVersion, draft: row.draft },
       });
-      return { ...this.draftResponse(row), warnings: [] };
+      return this.draftResponse(row);
     });
   }
 
@@ -276,7 +291,12 @@ export class AdminFestivalService {
         before: { packVersion: previousVersion },
         after: { packVersion, note },
       });
-      return { packVersion, etag: `"v${packVersion}"`, pushedDevices };
+      return {
+        packVersion,
+        etag: `"v${packVersion}"`,
+        pushedDevices,
+        warnings: sourceWarnings(row.draft),
+      };
     });
     await this.cache.invalidatePack(id);
     return result;
@@ -397,6 +417,7 @@ export class AdminFestivalService {
       draftVersion: row.draftVersion,
       draftUpdatedAt: row.draftUpdatedAt,
       draftUpdatedBy: row.draftUpdatedBy,
+      warnings: sourceWarnings(row.draft),
     };
   }
 }

@@ -71,7 +71,11 @@ const draftExample = {
   draftVersion: 1,
   draftUpdatedAt: '2026-10-20T09:00:00Z',
   draftUpdatedBy: 'adm_01234567',
+  warnings: [],
 };
+
+const sourceWarningExample =
+  '출처 확인 시각이 7일을 지났습니다. 최신 정보를 확인해 주세요.';
 
 const versionResult = {
   packVersion: 1,
@@ -81,7 +85,8 @@ const versionResult = {
 
 const draftResponse = {
   type: 'object' as const,
-  description: '현재 축제 문서와 초안 버전, 마지막 수정 정보',
+  description:
+    '현재 축제 문서와 초안 버전, 마지막 수정 정보. 출처 확인 후 7일을 초과하면 warnings에 경고가 포함됩니다.',
   example: draftExample,
 };
 
@@ -281,7 +286,8 @@ export class AdminFestivalController {
   })
   @ApiResponse({
     status: 200,
-    description: '수정된 초안과 빈 warnings 배열',
+    description:
+      '수정된 초안. 출처 확인 후 7일을 초과하면 warnings에 경고가 포함됩니다.',
     schema: {
       type: 'object',
       example: {
@@ -360,7 +366,8 @@ export class AdminFestivalController {
   })
   @ApiResponse({
     status: 200,
-    description: '교체된 초안과 빈 warnings 배열',
+    description:
+      '교체된 초안. 출처 확인 후 7일을 초과하면 warnings에 경고가 포함됩니다.',
     schema: {
       type: 'object',
       example: {
@@ -435,7 +442,8 @@ export class AdminFestivalController {
   })
   @ApiResponse({
     status: 200,
-    description: '교체된 초안과 빈 warnings 배열',
+    description:
+      '교체된 초안. 출처 확인 후 7일을 초과하면 warnings에 경고가 포함됩니다.',
     schema: {
       type: 'object',
       example: {
@@ -501,7 +509,7 @@ export class AdminFestivalController {
   @ApiOperation({
     summary: '축제 팩 발행',
     description:
-      'editor 이상이 검토한 초안을 새 팩 버전으로 발행합니다. GET /admin/festivals/{id}/draft의 draftVersion을 `If-Match: "d{draftVersion}"`으로 보내야 하며, 초안이 바뀌면 최신 초안과 함께 412를 반환합니다. 무대가 최소 1개 필요하고 Brotli 압축 팩은 200KB 이하여야 합니다. pushedDevices는 배경 푸시 작업을 큐에 등록한 기기 수이며 실제 수신 수가 아닙니다.',
+      'editor 이상이 검토한 초안을 새 팩 버전으로 발행합니다. GET /admin/festivals/{id}/draft의 draftVersion을 `If-Match: "d{draftVersion}"`으로 보내야 하며, 초안이 바뀌면 최신 초안과 함께 412를 반환합니다. 무대가 최소 1개 필요하고 Brotli 압축 팩은 200KB 이하여야 합니다. 출처 확인 후 7일이 지나면 warnings를 반환하지만 발행은 허용합니다. pushedDevices는 배경 푸시 작업을 큐에 등록한 기기 수이며 실제 수신 수가 아닙니다.',
   })
   @ApiParam(festivalId)
   @ApiHeader(draftHeader)
@@ -517,8 +525,12 @@ export class AdminFestivalController {
   })
   @ApiResponse({
     status: 200,
-    description: '새 팩 버전과 ETag, 배경 푸시 작업이 등록된 기기 수',
-    schema: versionResponse,
+    description:
+      '새 팩 버전과 ETag, 배경 푸시 작업이 등록된 기기 수, 출처 경고',
+    schema: {
+      ...versionResponse,
+      example: { ...versionResult, warnings: [sourceWarningExample] },
+    },
   })
   @ApiResponse({
     status: 400,

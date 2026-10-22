@@ -7,6 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { randomBytes } from 'node:crypto';
 import { DataSource, QueryFailedError, Repository } from 'typeorm';
 import { SocialLoginDto } from '../dto/social-login.dto';
 import { RefreshToken } from '../entity/refresh-token.entity';
@@ -460,7 +461,11 @@ export class AuthService {
         this.userRepo.create({
           ...where,
           email: profile.email ?? null,
-          nickname: profile.name?.slice(0, 30) ?? null,
+          nickname:
+            Array.from(profile.name?.trim() ?? '')
+              .slice(0, 12)
+              .join('') ||
+            `관객-${randomBytes(2).toString('hex').toUpperCase()}`,
           nicknameConfirmed: false,
           termsAcceptedAt: null,
           termsVersion: null,
