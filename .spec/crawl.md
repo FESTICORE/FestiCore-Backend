@@ -13,7 +13,8 @@
 
 - [NOL 티켓 콘서트 장르](https://nol.yanolja.com/ticket/genre/concert): 목록의 직렬화된 공연 URL 중 페스티벌 제목만 후보로 삼는다. 카드에 행사 날짜 전체와 장소가 있을 때만 저장 후보에 포함하고, 예매 오픈 시각을 행사 날짜로 쓰지 않는다. 파서 버전을 갱신해 기존 목록도 다시 처리한다. 식별 가능한 크롤러 요청에 403이 반환되고 격리된 일반 Chrome에도 차단 화면이 표시되어 운영 수집 성공은 확인되지 않았다. 실행 이력에 실패로 기록하고 연속 3회 실패 시 관리자 알림을 만든다.
 - [멜론티켓 페스티벌 목록](https://ticket.melon.com/concert/index.htm): 페이지가 사용하는 공개 `prodList.json?perfGenreCode=GENRE_CON_FESTIVAL` 목록 응답을 수집한다. 이 장르에도 일반 공연이 섞여 있어 제목에 축제 표시가 필요하다. 공식 정보로 확인한 `WONDERLIVET`과 `COUNTDOWN FANTASY`는 예외로 삼고, 콘서트·오케스트라 제목은 제외한다.
-- [멜론티켓 원더리벳 검색 결과](https://ticket.melon.com/search/index.htm?q=WONDERLIVET): 페스티벌 장르 목록에서 누락되는 원더리벳을 검색 결과의 공연 행에서 수집한다. 행의 공연 ID·날짜·장소·포스터를 함께 읽으며 지난 행사와 날짜 없는 결과는 공개 목록에서 제외한다.
+- [멜론티켓 원더리벳 검색 결과](https://ticket.melon.com/search/index.htm?q=WONDERLIVET): 페스티벌 장르 목록에서 누락되는 원더리벳을 검색 결과의 공연 행에서 수집한다. 행의 공연 ID·날짜·장소·포스터를 함께 읽으며 날짜 없는 결과는 공개 목록에서 제외한다. 지난 행사는 일정 그대로 보존한다.
+- [멜론티켓 영문 festival 검색 결과](https://ticket.melon.com/search/index.htm?q=festival): 한글 `페스티벌` 검색과 장르 목록에 잡히지 않는 영문 제목 공연을 같은 검증 파서로 수집한다. 결과에 지난 공연도 포함되므로 일정을 그대로 보존하며, 현재 또는 미래 공연 수 증가를 보장하지 않는다.
 - [YES24 티켓 콘서트 목록](https://ticket.yes24.com/English/Genre/Concert): 장르가 Festival인 상품을 후보로 추린다.
 - [YES24 국내 페스티벌 장르 AJAX 목록](https://ticket.yes24.com/New/Genre/Ajax/GenreList_Data.aspx?genre=15464&sort=0&area=&genretype=2&pCurPage=1&pPageSize=30): 공개 목록의 `ListTotalCnt`를 읽어 필요할 때 최대 4페이지를 순차 수집한다(페이지당 최대 2 MB, 페이지당 robots.txt 재확인). 공연 ID로 상품 URL을 구성하고 카드의 날짜와 장소를 수집하며, 제목 검증과 중복 제거를 적용해 최대 100개 후보를 만든다. 카드의 `data-src` 포스터 URL은 기존 이미지 검증·보관 경로의 수집 후보가 된다. 네트워크, robots.txt, 이미지 형식 검증이 실패하면 해당 이미지 보관은 보장되지 않는다.
 
