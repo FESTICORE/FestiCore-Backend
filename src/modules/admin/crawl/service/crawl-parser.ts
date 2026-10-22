@@ -579,7 +579,11 @@ function nolDetailCandidates(
   const name =
     (typeof event?.name === 'string' ? event.name : null) ??
     (heading ? plainText(heading) : '');
-  if (!(isFestivalTitle(name) || VERIFIED_FESTIVAL_BRAND.test(name))) return [];
+  if (
+    CONCERT_TITLE.test(name) ||
+    !(isFestivalTitle(name) || VERIFIED_FESTIVAL_BRAND.test(name))
+  )
+    return [];
 
   const dateText =
     /(?:^|\s)(?:기간|일시)\s+(20\d{2}\.\d{2}\.\d{2}(?:\s*[~–-]\s*20\d{2}\.\d{2}\.\d{2})?)/.exec(
@@ -605,7 +609,14 @@ function nolDetailCandidates(
     typeof structuredVenue === 'string'
       ? structuredVenue.trim()
       : venueText?.replace(/^장소\s+/, '').trim();
-  if (!date || !venue || venue.length > 160 || /[<>\\]/.test(venue)) return [];
+  if (
+    !date ||
+    !venue ||
+    venue.length > 160 ||
+    /^(?:장소|기간|일시)$/.test(venue) ||
+    /[<>\\]/.test(venue)
+  )
+    return [];
   return [{ name, url: source.toString(), date, venue }];
 }
 

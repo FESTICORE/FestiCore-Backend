@@ -139,8 +139,7 @@ describe('crawl parsers', () => {
 
   it('reads a NOL performance page only when its event date and venue are valid', async () => {
     const nol = source('ticket-list', 'discovery');
-    nol.url =
-      'https://nol.yanolja.com/ticket/meta/performance/countdown-fantasy-2026';
+    nol.url = 'https://nol.yanolja.com/ticket/products/26014568';
     const html = `<h1>COUNTDOWN FANTASY 2026-2027</h1>
       <div>장르 콘서트 &gt; 페스티벌</div>
       <div>장소 킨텍스 제2전시장 7홀, 8홀 일시 2026.12.31~2026.12.31</div>`;
@@ -156,6 +155,23 @@ describe('crawl parsers', () => {
       parseCrawl(
         nol,
         '<h1>COUNTDOWN FANTASY 2026-2027</h1><p>장소 킨텍스 일시 2026.02.30</p>',
+      ),
+    ).rejects.toThrow('공개 예매 링크를 찾지 못했습니다.');
+  });
+
+  it('rejects a NOL concert and navigation text masquerading as a venue', async () => {
+    const nol = source('ticket-list', 'discovery');
+    nol.url = 'https://nol.yanolja.com/ticket/products/26014568';
+    await expect(
+      parseCrawl(
+        nol,
+        '<h1>재즈 페스티벌 콘서트</h1><p>장소 킨텍스 일시 2026.12.31</p>',
+      ),
+    ).rejects.toThrow('공개 예매 링크를 찾지 못했습니다.');
+    await expect(
+      parseCrawl(
+        nol,
+        '<h1>COUNTDOWN FANTASY 2026-2027</h1><nav>장소</nav><p>기간 2026.12.31</p>',
       ),
     ).rejects.toThrow('공개 예매 링크를 찾지 못했습니다.');
   });
