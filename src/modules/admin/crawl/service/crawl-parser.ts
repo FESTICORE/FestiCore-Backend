@@ -737,7 +737,10 @@ function yes24FestivalCandidates(
   return [...candidates.values()];
 }
 
-function ticketCandidates(body: string, base: string): FestivalCandidate[] {
+export function ticketCandidates(
+  body: string,
+  base: string,
+): FestivalCandidate[] {
   const mintPaper = mintPaperCandidates(body, base);
   if (mintPaper) return mintPaper;
   const melonSearch = melonSearchCandidates(body, base);
@@ -845,6 +848,25 @@ function ticketCandidates(body: string, base: string): FestivalCandidate[] {
       url.hostname === 'nol.yanolja.com' &&
       /^\/ticket\/products\/\d+$/.test(url.pathname)
     ) {
+      const productId = url.pathname.split('/').at(-1);
+      const thumbnail = /"thumbnail":"([^"]{1,500})"/.exec(match[0])?.[1];
+      if (thumbnail && productId) {
+        try {
+          const image = new URL(thumbnail);
+          const posterProductId =
+            /^\/Play\/image\/large\/\d+\/(\d+)_p\.(?:gif|jpe?g|png|webp)$/i.exec(
+              image.pathname,
+            )?.[1];
+          if (
+            image.protocol === 'https:' &&
+            image.hostname === 'ticketimage.interpark.com' &&
+            posterProductId === productId
+          )
+            entry.posterUrl = image.toString();
+        } catch {
+          /* Ignore malformed card thumbnails. */
+        }
+      }
       const dateInfo = /"dateInfo":"([^"]{1,80})"/.exec(match[3])?.[1];
       const date = dateInfo && nolEventDate(dateInfo);
       if (date) entry.date = date;

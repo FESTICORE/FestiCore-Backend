@@ -429,7 +429,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
                   )
                 ? 'ticket-list:v4'
                 : source.url.startsWith('https://nol.yanolja.com/ticket')
-                  ? 'ticket-list:v4'
+                  ? 'ticket-list:v5'
                   : 'ticket-list:v3'
             : '',
         )

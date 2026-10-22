@@ -126,6 +126,15 @@ describe('crawl image safety', () => {
     ]);
   });
 
+  it('downloads only matched festival posters from the public NOL home', () => {
+    const html = String.raw`<script>self.__next_f.push([1,\"action\":{\"web\":\"https://nol.yanolja.com/ticket/products/26015181\"},\"thumbnail\":\"https://ticketimage.interpark.com/Play/image/large/26/26015181_p.gif\",\"title\":\"썸띵 뉴 뮤직 페스티벌 2026\"},{\"action\":{\"web\":\"https://nol.yanolja.com/ticket/products/26013510\"},\"thumbnail\":\"https://ticketimage.interpark.com/Play/image/large/26/99999999_p.gif\",\"title\":\"서울 뮤직 페스티벌 2026\"}]);</script>`;
+    expect(
+      discoverImageUrls(html, 'https://nol.yanolja.com/ticket').map(String),
+    ).toEqual([
+      'https://ticketimage.interpark.com/Play/image/large/26/26015181_p.gif',
+    ]);
+  });
+
   it('limits each Melon detail run and rotates artist images across days', () => {
     const urls = Array.from(
       { length: 22 },

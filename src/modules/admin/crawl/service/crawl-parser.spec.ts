@@ -84,6 +84,26 @@ describe('crawl parsers', () => {
     ]);
   });
 
+  it('uses only the matching NOL product poster from a public listing card', async () => {
+    const nol = source('ticket-list', 'discovery');
+    nol.url = 'https://nol.yanolja.com/ticket';
+    const html = String.raw`<script>self.__next_f.push([1,\"action\":{\"web\":\"https://nol.yanolja.com/ticket/products/26015181\"},\"thumbnail\":\"https://ticketimage.interpark.com/Play/image/large/26/26015181_p.gif\",\"title\":\"썸띵 뉴 뮤직 페스티벌 2026\",\"dateInfo\":\"내일 17:00\"},{\"action\":{\"web\":\"https://nol.yanolja.com/ticket/products/26013510\"},\"thumbnail\":\"https://ticketimage.interpark.com/Play/image/large/26/99999999_p.gif\",\"title\":\"서울 뮤직 페스티벌 2026\",\"dateInfo\":\"26.11.07 ~ 26.11.08\",\"locationDetails\":[\"인천남동체육관\"]}]);</script>`;
+    expect(await parseCrawl(nol, html)).toEqual([
+      {
+        name: '썸띵 뉴 뮤직 페스티벌 2026',
+        url: 'https://nol.yanolja.com/ticket/products/26015181',
+        posterUrl:
+          'https://ticketimage.interpark.com/Play/image/large/26/26015181_p.gif',
+      },
+      {
+        name: '서울 뮤직 페스티벌 2026',
+        url: 'https://nol.yanolja.com/ticket/products/26013510',
+        date: '2026.11.07 - 2026.11.08',
+        venue: '인천남동체육관',
+      },
+    ]);
+  });
+
   it('reads verified NOL event dates and venues without treating opening times as event dates', async () => {
     const nol = source('ticket-list', 'discovery');
     nol.url = 'https://nol.yanolja.com/ticket';
