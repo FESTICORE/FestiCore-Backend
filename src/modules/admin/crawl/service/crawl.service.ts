@@ -86,14 +86,14 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     // 부팅 직후와 이후 매분 점검하므로 자정에 프로세스가 내려갔어도 당일 미실행분을 처리한다.
     this.timer = setInterval(
       () =>
-        void this.scheduleDue().catch((error: unknown) =>
-          this.logger.error('예약 크롤 점검 실패', error),
+        void this.scheduleDue().catch(() =>
+          this.logger.error('예약 크롤 점검 실패'),
         ),
       60_000,
     );
     this.timer.unref();
-    void this.scheduleDue().catch((error: unknown) =>
-      this.logger.error('예약 크롤 점검 실패', error),
+    void this.scheduleDue().catch(() =>
+      this.logger.error('예약 크롤 점검 실패'),
     );
   }
 
@@ -222,8 +222,8 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     const run = await this.runsRepo.findOneByOrFail({
       id: insert.identifiers[0].id as string,
     });
-    void this.execute(run, source).catch((error: unknown) =>
-      this.logger.error('수동 크롤 실패', error),
+    void this.execute(run, source).catch(() =>
+      this.logger.error('수동 크롤 실패'),
     );
     return { runId: run.id };
   }
@@ -324,8 +324,8 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       try {
         await this.imageStorage.deleteCrawlSnapshot(snapshot.objectKey);
         await this.snapshotsRepo.delete(snapshot.id);
-      } catch (error) {
-        this.logger.warn(`만료 스냅샷 정리 실패: ${snapshot.id}`, error);
+      } catch {
+        this.logger.warn(`만료 스냅샷 정리 실패: ${snapshot.id}`);
       }
     }
     const sources = await this.sourcesRepo.findBy({
@@ -374,8 +374,8 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       }
       if (!runId) continue;
       const run = await this.runsRepo.findOneByOrFail({ id: runId });
-      void this.execute(run, source).catch((error: unknown) =>
-        this.logger.error('예약 크롤 실패', error),
+      void this.execute(run, source).catch(() =>
+        this.logger.error('예약 크롤 실패'),
       );
     }
   }
@@ -400,8 +400,10 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async execute(run: CrawlRun, source: CrawlSource) {
+    let phase = 'ROBOTS';
     try {
       await this.checkRobots(source.url);
+      phase = 'FETCH';
       if (source.parser === 'image-ocr') {
         await this.captureImages(source, run, [checkedUrl(source.url)]);
         throw new Error(
@@ -411,6 +413,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       const response = await this.getListing(source);
       run.httpStatus = response.status;
       if (response.status !== 200) throw new Error(`HTTP ${response.status}`);
+      phase = 'PROCESS';
       run.contentHash = createHash('sha256')
         .update(response.body)
         // Parser behavior is part of the snapshot identity. A parser release
@@ -460,6 +463,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       if (previous?.contentHash === run.contentHash) {
         run.result = 'unchanged';
       } else {
+        phase = 'PARSE';
         const parsed = await parseCrawl(source, response.body);
         if (
           source.url === 'https://mintpaper.co.kr/festivals' &&
@@ -533,9 +537,15 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     } catch (error) {
       run.result = 'failed';
       run.error =
-        error instanceof Error
-          ? error.message.slice(0, 1000)
-          : String(error).slice(0, 1000);
+        run.httpStatus && run.httpStatus !== 200
+          ? `HTTP_${run.httpStatus}`
+          : error instanceof Error &&
+              error.message === '요청 시간이 초과되었습니다.'
+            ? 'TIMEOUT'
+            : phase;
+      this.logger.warn(
+        `크롤 처리 실패: source=${source.id}, run=${run.id}, code=${run.error}`,
+      );
       source.consecutiveFailures += 1;
       if (source.consecutiveFailures >= 3) source.status = 'broken';
     } finally {
@@ -850,9 +860,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         stored.push(`/api/v1/admin/crawl/images/${image.id}`);
       } catch (error) {
         if (validated) throw error;
-        this.logger.warn(
-          `크롤 이미지 건너뜀: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        this.logger.warn('크롤 이미지를 건너뛰었습니다.');
       }
     }
     return stored;

@@ -403,7 +403,7 @@ describe('CrawlService manual runs and snapshots', () => {
         service as unknown as { checkRobots(url: string): Promise<void> },
         'checkRobots',
       )
-      .mockRejectedValue(new Error('수집 실패'));
+      .mockRejectedValue(new Error('수집 실패: oauth-refresh-token-raw'));
     dataSource.query.mockResolvedValueOnce([{ consecutiveFailures: 3 }]);
 
     await service.execute(run, source);
@@ -413,8 +413,9 @@ describe('CrawlService manual runs and snapshots', () => {
     expect(alerts.recordThresholdFailure).toHaveBeenCalledWith(
       source.id,
       run.id,
-      '수집 실패',
+      'ROBOTS',
     );
+    expect(JSON.stringify(run)).not.toContain('oauth-refresh-token-raw');
   });
 
   it('returns the active run instead of starting the same source twice', async () => {

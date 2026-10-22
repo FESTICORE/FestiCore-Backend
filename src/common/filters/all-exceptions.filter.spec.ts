@@ -5,6 +5,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { QueryFailedError } from 'typeorm';
 import { AllExceptionsFilter } from './all-exceptions.filter';
 
 function hostFor(body: unknown, url = '/api/v1/auth/login') {
@@ -187,5 +188,32 @@ describe('AllExceptionsFilter', () => {
       code: 'STATUS_STALE',
       message: '더 최신 일정이 저장되어 있습니다.',
     });
+  });
+
+  it('DB 오류의 SQL 매개변수와 드라이버 메시지를 로그에 남기지 않는다', () => {
+    const errorLog = jest.spyOn(Logger.prototype, 'error').mockImplementation();
+    try {
+      const { host, json } = hostFor({}, '/api/v1/auth/login');
+      const secret = 'oauth-refresh-token-raw';
+      const error = new QueryFailedError(
+        'INSERT INTO users (oauthRefreshToken) VALUES ($1)',
+        [secret],
+        new Error(`database rejected ${secret}`),
+      );
+
+      new AllExceptionsFilter().catch(error, host);
+
+      expect(JSON.stringify(errorLog.mock.calls)).not.toContain(secret);
+      expect(JSON.stringify(errorLog.mock.calls)).not.toContain(
+        'oauthRefreshToken',
+      );
+      expect(json).toHaveBeenCalledWith({
+        code: 'INTERNAL_SERVER_ERROR',
+        data: null,
+        message: '내부 서버 오류가 발생했습니다.',
+      });
+    } finally {
+      errorLog.mockRestore();
+    }
   });
 });
