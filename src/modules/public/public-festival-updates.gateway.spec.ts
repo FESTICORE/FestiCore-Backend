@@ -20,7 +20,7 @@ class Client extends EventEmitter {
 describe('PublicFestivalUpdatesGateway', () => {
   const find = jest.fn();
   const config = {
-    get: jest.fn((key: string) =>
+    get: jest.fn((key: string): string | undefined =>
       key === 'NODE_ENV'
         ? 'production'
         : key === 'CORS_ORIGINS'
