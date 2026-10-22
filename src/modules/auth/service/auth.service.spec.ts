@@ -362,7 +362,7 @@ describe('AuthService 회원 탈퇴의 크루 소유권', () => {
       [userId],
     );
     expect(query).toHaveBeenCalledWith(
-      expect.stringContaining('UPDATE "devices" SET "apnsToken" = NULL'),
+      expect.stringContaining('DELETE FROM "devices" WHERE "userId" = $1'),
       [userId],
     );
   });

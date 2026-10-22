@@ -8,6 +8,8 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import request from 'supertest';
 import type { Server } from 'http';
 import { JwtAuthGuard } from '../src/modules/auth/guard/jwt-auth.guard';
+import { CurrentTermsGuard } from '../src/modules/auth/guard/current-terms.guard';
+import { CURRENT_TERMS_VERSION } from '../src/modules/auth/service/auth.service';
 import { User } from '../src/modules/auth/entity/user.entity';
 import { CrewController } from '../src/modules/crews/crew.controller';
 import { CrewService } from '../src/modules/crews/crew.service';
@@ -16,9 +18,11 @@ const id = 'flg_1234567890abcdef';
 const userId = '00000000-0000-4000-8000-000000000001';
 
 describe('Crew HTTP contract', () => {
+  const previousTermsEnforcement = process.env.CURRENT_TERMS_ENFORCED;
   let app: INestApplication;
   let server: Server;
   let token: string;
+  let acceptedTerms = true;
   const service = Object.fromEntries(
     [
       'create',
@@ -37,6 +41,7 @@ describe('Crew HTTP contract', () => {
   ) as Record<string, jest.Mock>;
 
   beforeAll(async () => {
+    process.env.CURRENT_TERMS_ENFORCED = 'true';
     const moduleRef = await Test.createTestingModule({
       imports: [JwtModule.register({})],
       controllers: [CrewController],
@@ -49,11 +54,17 @@ describe('Crew HTTP contract', () => {
         {
           provide: getRepositoryToken(User),
           useValue: {
-            findOne: jest
-              .fn()
-              .mockResolvedValue({ id: userId, provider: 'google' }),
+            findOne: jest.fn().mockImplementation(() =>
+              Promise.resolve({
+                id: userId,
+                provider: 'google',
+                termsAcceptedAt: acceptedTerms ? new Date('2026-10-22') : null,
+                termsVersion: acceptedTerms ? CURRENT_TERMS_VERSION : null,
+              }),
+            ),
           },
         },
+        CurrentTermsGuard,
         { provide: APP_GUARD, useClass: JwtAuthGuard },
       ],
     }).compile();
@@ -78,6 +89,42 @@ describe('Crew HTTP contract', () => {
 
   afterAll(async () => {
     await app.close();
+    if (previousTermsEnforcement === undefined)
+      delete process.env.CURRENT_TERMS_ENFORCED;
+    else process.env.CURRENT_TERMS_ENFORCED = previousTermsEnforcement;
+  });
+
+  beforeEach(() => {
+    acceptedTerms = true;
+    jest.clearAllMocks();
+  });
+
+  it('requires current terms for writes while keeping read routes accessible', async () => {
+    acceptedTerms = false;
+    const denied = await request(server)
+      .post('/api/v1/crews')
+      .auth(token, { type: 'bearer' })
+      .send({ festivalId: 'fst_test', name: '친구들' })
+      .expect(403);
+    expect((denied.body as { code: string }).code).toBe('TERMS_REQUIRED');
+    expect(service.create).not.toHaveBeenCalled();
+    await request(server)
+      .delete(`/api/v1/crews/${id}/members/${userId}`)
+      .auth(token, { type: 'bearer' })
+      .expect(204);
+    expect(service.removeMember).toHaveBeenCalledWith(id, userId, userId);
+    await request(server)
+      .get(`/api/v1/crews/${id}`)
+      .auth(token, { type: 'bearer' })
+      .expect(200);
+    await request(server).get('/api/v1/crews/invite/K7P2QX').expect(200);
+    acceptedTerms = true;
+    await request(server)
+      .post('/api/v1/crews')
+      .auth(token, { type: 'bearer' })
+      .send({ festivalId: 'fst_test', name: '친구들' })
+      .expect(201);
+    expect(service.create).toHaveBeenCalledTimes(1);
   });
 
   it('requires access authentication for all routes except invite preview', async () => {

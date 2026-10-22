@@ -1,4 +1,4 @@
-import { INestApplication } from '@nestjs/common';
+import { ForbiddenException, INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtModule, JwtService } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
@@ -9,6 +9,8 @@ import type { Server } from 'http';
 import { AllExceptionsFilter } from '../src/common/filters/all-exceptions.filter';
 import { ResponseInterceptor } from '../src/common/interceptors/response.interceptor';
 import { AdminFestival } from '../src/modules/admin/festival/festival.entity';
+import { DeviceAuthGuard } from '../src/modules/device/device-auth.guard';
+import { DeviceService } from '../src/modules/device/device.service';
 import { Crew, CrewGather, CrewMember } from '../src/modules/crews/crew.entity';
 import {
   Flag,
@@ -64,6 +66,12 @@ describe('Public festival API', () => {
     findOne: jest.fn().mockResolvedValue(null),
   };
   const dataSource = { query: jest.fn().mockResolvedValue([{ count: 1 }]) };
+  const deviceAuth = {
+    resolveOptionalPrincipal: jest.fn().mockResolvedValue(undefined),
+  };
+  const devices = {
+    listSubscriptions: jest.fn().mockResolvedValue({ items: [] }),
+  };
   const pack = {
     id: 'fst_12345678',
     name: 'Festival',
@@ -77,6 +85,11 @@ describe('Public festival API', () => {
       },
     ],
     flagsEnabled: true,
+    thumbUrl:
+      '/api/v1/festivals/images/00000000-0000-4000-8000-000000000001.webp',
+    ticketLinks: [
+      { label: '예스24', url: 'https://ticket.yes24.com/Perf/12345' },
+    ],
     flags: [
       {
         id: 'flg_12345678',
@@ -101,6 +114,8 @@ describe('Public festival API', () => {
       providers: [
         PublicFestivalService,
         PublicLiveService,
+        { provide: DeviceAuthGuard, useValue: deviceAuth },
+        { provide: DeviceService, useValue: devices },
         {
           provide: CacheService,
           useValue: {
@@ -142,9 +157,15 @@ describe('Public festival API', () => {
       .expect(200);
     const listBody = successData<{ items: unknown[] }>(first.body);
     expect(listBody.items).toEqual([
-      expect.objectContaining({ id: pack.id, packVersion: 7 }),
+      expect.objectContaining({
+        id: pack.id,
+        packVersion: 7,
+        thumbUrl: pack.thumbUrl,
+        ticketLinks: pack.ticketLinks,
+      }),
     ]);
     expect(first.headers['cache-control']).toBe('public, max-age=3600');
+    expect(first.headers.vary).toBe('Authorization, X-Device-Id');
     expect(first.headers.date).toBeDefined();
     expect(first.headers.etag).toMatch(/^"cdm1-/);
     await request(server)
@@ -157,6 +178,83 @@ describe('Public festival API', () => {
       .set('Cache-Control', 'no-cache')
       .expect(304);
     expect(notModified.headers['cache-control']).toBe('public, max-age=3600');
+  });
+
+  it('includes pinned only for an authenticated device and uses a private cache', async () => {
+    deviceAuth.resolveOptionalPrincipal.mockResolvedValueOnce({
+      kind: 'device',
+      deviceId: 'device-a',
+      tokenId: 'token-a',
+    });
+    devices.listSubscriptions.mockResolvedValueOnce({
+      items: [{ festivalId: pack.id, pinned: true }],
+    });
+    const response = await request(server)
+      .get('/api/v1/festivals')
+      .set('X-Device-Id', 'device-a')
+      .set('Authorization', 'Bearer token-a')
+      .expect(200);
+    const body = successData<{ items: { pinned?: boolean }[] }>(response.body);
+    expect(body.items[0].pinned).toBe(true);
+    expect(response.headers['cache-control']).toBe('private, max-age=60');
+    expect(response.headers.vary).toBe('Authorization, X-Device-Id');
+    expect(devices.listSubscriptions).toHaveBeenCalledWith(
+      'device-a',
+      expect.objectContaining({ kind: 'device' }),
+    );
+  });
+
+  it('keeps the public list available when a device ID does not belong to the Bearer', async () => {
+    deviceAuth.resolveOptionalPrincipal.mockResolvedValueOnce({
+      kind: 'device',
+      deviceId: 'device-a',
+      tokenId: 'token-a',
+    });
+    devices.listSubscriptions.mockRejectedValueOnce(
+      new ForbiddenException('기기 소유권을 확인할 수 없습니다.'),
+    );
+    const response = await request(server)
+      .get('/api/v1/festivals')
+      .set('X-Device-Id', 'device-b')
+      .set('Authorization', 'Bearer token-a')
+      .expect(200);
+    expect(
+      successData<{ items: { pinned?: boolean }[] }>(response.body).items[0],
+    ).not.toHaveProperty('pinned');
+    expect(response.headers['cache-control']).toBe('public, max-age=3600');
+    expect(response.headers.vary).toBe('Authorization, X-Device-Id');
+  });
+
+  it('uses a visible legacy flag image when the published pack has no thumbnail', async () => {
+    queryBuilder.getMany.mockResolvedValueOnce([
+      {
+        ...published,
+        published: { ...pack, thumbUrl: undefined },
+      },
+    ]);
+    const response = await request(server).get('/api/v1/festivals').expect(200);
+    const body = successData<{ items: { thumbUrl: string }[] }>(response.body);
+    expect(body.items[0].thumbUrl).toBe('https://example.com/a.webp');
+  });
+
+  it('does not expose a hidden flag image in the list thumbnail', async () => {
+    queryBuilder.getMany.mockResolvedValueOnce([
+      {
+        ...published,
+        published: {
+          ...pack,
+          thumbUrl: undefined,
+          flags: [
+            { thumbUrl: 'https://example.com/private.webp', hidden: true },
+          ],
+        },
+      },
+    ]);
+    const response = await request(server).get('/api/v1/festivals').expect(200);
+    expect(
+      successData<{ items: { thumbUrl: string | null }[] }>(response.body)
+        .items[0].thumbUrl,
+    ).toBeNull();
   });
 
   it('includes crawled discoveries when no festival pack has been published', async () => {
@@ -189,13 +287,21 @@ describe('Public festival API', () => {
         lastDate: '2026-12-26',
         sourceUrl:
           'https://ticket.melon.com/performance/index.htm?prodId=213665',
+        ticketLinks: [
+          {
+            label: '멜론티켓',
+            url: 'https://ticket.melon.com/performance/index.htm?prodId=213665',
+          },
+        ],
       }),
     ]);
     const id = body.items[0].id;
     const unavailablePack = await request(server)
       .get(`/api/v1/festivals/${id}/pack`)
       .expect(404);
-    expect(errorData<null>(unavailablePack.body, 'NOT_FOUND')).toBeNull();
+    expect(
+      errorData<null>(unavailablePack.body, 'FESTIVAL_NOT_FOUND'),
+    ).toBeNull();
     await request(server)
       .get('/api/v1/festivals?limit=1')
       .set('If-None-Match', first.headers.etag)
@@ -215,6 +321,8 @@ describe('Public festival API', () => {
         name: pack.name,
         days: pack.days,
         packVersion: 7,
+        thumbUrl: pack.thumbUrl,
+        ticketLinks: pack.ticketLinks,
       }),
     );
     expect(first.headers.etag).toBe('"cdm1-v7"');
@@ -230,7 +338,7 @@ describe('Public festival API', () => {
     const missing = await request(server)
       .get('/api/v1/festivals/fst_unknown/pack')
       .expect(404);
-    expect(errorData<null>(missing.body, 'NOT_FOUND')).toBeNull();
+    expect(errorData<null>(missing.body, 'FESTIVAL_NOT_FOUND')).toBeNull();
   });
 
   it('returns a discovered festival detail with stored poster and artist images', async () => {
@@ -295,7 +403,7 @@ describe('Public festival API', () => {
     const missing = await request(server)
       .get('/api/v1/festivals/fst_unknown')
       .expect(404);
-    expect(errorData<null>(missing.body, 'NOT_FOUND')).toBeNull();
+    expect(errorData<null>(missing.body, 'FESTIVAL_NOT_FOUND')).toBeNull();
   });
 
   it('does not expose a festival that has only an admin draft', async () => {

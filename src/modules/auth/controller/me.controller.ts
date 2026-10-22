@@ -6,10 +6,25 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import { IsString, MaxLength, MinLength } from 'class-validator';
+import { Type } from 'class-transformer';
+import {
+  IsBoolean,
+  IsOptional,
+  IsString,
+  MaxLength,
+  MinLength,
+  ValidateNested,
+} from 'class-validator';
 import { CurrentUser } from '../decorator/current-user.decorator';
 import { AuthService } from '../service/auth.service';
 import type { AuthUser } from '../types/social-profile';
+
+class AcceptTermsDto {
+  @ApiProperty({ description: '동의한 필수 약관 버전', example: '2026-10' })
+  @IsString()
+  @MinLength(1)
+  version!: string;
+}
 
 class UpdateMeDto {
   @ApiProperty({
@@ -17,11 +32,32 @@ class UpdateMeDto {
     example: '축제관객',
     minLength: 1,
     maxLength: 12,
+    required: false,
   })
   @IsString()
+  @IsOptional()
   @MinLength(1)
   @MaxLength(12)
-  nickname!: string;
+  nickname?: string;
+
+  @ApiProperty({
+    description: '필수 약관 2개 동의',
+    required: false,
+    type: AcceptTermsDto,
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => AcceptTermsDto)
+  acceptTerms?: AcceptTermsDto;
+
+  @ApiProperty({
+    description: '선택 알림 수신 동의',
+    required: false,
+    type: Boolean,
+  })
+  @IsOptional()
+  @IsBoolean()
+  pushOptIn?: boolean;
 }
 
 @ApiTags('Me')
@@ -47,21 +83,25 @@ export class MeController {
 
   @Patch()
   @ApiOperation({
-    summary: '내 닉네임 변경',
+    summary: '가입 정보 및 내 프로필 수정',
     description:
-      '현재 로그인한 사용자의 닉네임을 변경하고 변경된 사용자 정보를 반환합니다.',
+      '닉네임 확정, 필수 약관 2개 동의 및 선택 알림 수신 여부를 한 번에 저장합니다.',
   })
   @ApiResponse({ status: 200, description: '변경된 사용자 정보' })
   @ApiResponse({
     status: 400,
-    description: '닉네임이 없거나 길이가 1~12자가 아님',
+    description: '본문 형식이 잘못되었거나 닉네임 길이가 1~12자가 아님',
+  })
+  @ApiResponse({
+    status: 422,
+    description: 'TERMS_VERSION_OUTDATED: 현재 약관 버전과 다름',
   })
   @ApiResponse({
     status: 401,
     description: 'access 토큰이 없거나 유효하지 않음',
   })
   update(@CurrentUser() user: AuthUser, @Body() body: UpdateMeDto) {
-    return this.auth.updateMe(user.userId, body.nickname);
+    return this.auth.updateMe(user.userId, body);
   }
 
   @Delete()

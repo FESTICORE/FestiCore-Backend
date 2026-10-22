@@ -2,10 +2,10 @@
 
 FestiCore 백엔드는 Railway에서 **develop / production** 두 환경으로 운영한다.
 
-| 환경       | 연결 브랜치 | API 도메인                             | 용도          |
-| ---------- | ----------- | -------------------------------------- | ------------- |
-| develop    | `develop`   | `https://festicore-dev.up.railway.app` | 개발/스테이징 |
-| production | `main`      | `https://festicore.up.railway.app`     | 운영          |
+| 환경       | 연결 브랜치 | API 도메인                             | AdminWeb 도메인                                  | 용도          |
+| ---------- | ----------- | -------------------------------------- | ------------------------------------------------ | ------------- |
+| develop    | `develop`   | `https://festicore-dev.up.railway.app` | `https://festicoreadmin-dev.up.railway.app`       | 개발/스테이징 |
+| production | `main`      | `https://festicore.up.railway.app`     | `https://festicoreadmin.up.railway.app`           | 운영          |
 
 ## 1. 프로젝트/환경 구성
 
@@ -41,13 +41,15 @@ IPv6 주소만 제공하는 환경에서도 연결할 수 있다.
 ```
 PORT=3000
 PUBLIC_URL=https://<환경별-도메인>          # Swagger 서버 표기용
-CORS_ORIGINS=https://<허용-origin>          # 쉼표 구분
+CORS_ORIGINS=https://<환경별-AdminWeb-도메인> # 쉼표 구분
+ADMIN_WEB_URL=https://<환경별-AdminWeb-도메인>  # develop/production 각각 위 표 사용
 WS_MAX_CLIENTS=5000                         # 공개 축제 팩 WebSocket 인스턴스별 연결 상한
 WS_MAX_CLIENTS_PER_IP=500                  # 공용 Wi-Fi/NAT를 고려한 IP별 상한
 JWT_ACCESS_SECRET=<랜덤>                    # 필수
 JWT_REFRESH_SECRET=<다른 랜덤>              # 필수, access 와 달라야 함(같으면 부팅 실패)
 JWT_ACCESS_TTL=30m
 JWT_REFRESH_TTL=14d
+CURRENT_TERMS_ENFORCED=false                # 앱 약관 화면 배포·검증 후 true로 전환
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
 GOOGLE_MOBILE_CLIENT_IDS=                     # iOS/Android OAuth client ID, 쉼표 구분. 웹 ID는 GOOGLE_CLIENT_ID
@@ -74,6 +76,11 @@ AWS_S3_URL_STYLE=virtual                    # 엔드포인트가 경로 방식�
 ```
 
 로컬은 같은 키를 `.env`에 둔다(로컬 DB는 `DB_HOST/DB_PORT/DB_USERNAME/DB_PASSWORD/DB_NAME`, 기본 DB명 `festicore`).
+
+기존 앱은 가입 정보 화면이 없으므로 새 API 배포 시 `CURRENT_TERMS_ENFORCED=false`로 둔다.
+앱에서 `GET /me`의 약관 상태와 `TERMS_REQUIRED` 처리를 검증한 뒤 develop에서 먼저
+`true`로 켜고 쓰기·탈퇴·해제 경로를 확인한 다음 production에 적용한다.
+설정이 없거나 `false`이면 약관 동의값은 저장하지만 쓰기 제한은 하지 않는다.
 
 공개 팩 WebSocket은 `wss://<환경별-도메인>/api/v1/festivals/updates`에서 제공한다.
 브라우저 Origin은 `CORS_ORIGINS`에 있어야 하며 네이티브 앱의 Origin 없는 연결은 허용한다.

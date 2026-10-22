@@ -12,10 +12,18 @@ import { DeviceService } from './device.service';
 import { NotificationSubscriptionController } from './notification-subscription.controller';
 import { JwtAuthGuard } from '../auth/guard/jwt-auth.guard';
 import { User } from '../auth/entity/user.entity';
+import { Device } from './device.entity';
+import { DeviceAuthGuard } from './device-auth.guard';
 
 describe('기기 API 경로와 헤더 계약', () => {
   let app: INestApplication;
   const verifyAsync = jest.fn((token: string) => {
+    if (token === 'device-valid')
+      return Promise.resolve({
+        sub: 'device-a',
+        jti: 'token-a',
+        typ: 'device',
+      });
     if (token !== 'valid') return Promise.reject(new Error('invalid'));
     return Promise.resolve({
       sub: 'user-a',
@@ -23,6 +31,7 @@ describe('기기 API 경로와 헤더 계약', () => {
       provider: 'google',
     });
   });
+  const storedDevice = { findOne: jest.fn().mockResolvedValue(null) };
   const service = {
     register: jest.fn().mockResolvedValue({ deviceId: 'device-id' }),
     get: jest.fn().mockResolvedValue({ deviceId: 'device-id' }),
@@ -44,6 +53,7 @@ describe('기기 API 경로와 헤더 계약', () => {
       providers: [
         { provide: DeviceService, useValue: service },
         { provide: APP_GUARD, useClass: JwtAuthGuard },
+        DeviceAuthGuard,
         { provide: JwtService, useValue: { verifyAsync } },
         { provide: ConfigService, useValue: { get: () => 'test-secret' } },
         {
@@ -52,6 +62,10 @@ describe('기기 API 경로와 헤더 계약', () => {
             findOne: () =>
               Promise.resolve({ id: 'user-a', provider: 'google' }),
           },
+        },
+        {
+          provide: getRepositoryToken(Device),
+          useValue: storedDevice,
         },
       ],
     }).compile();
@@ -78,11 +92,10 @@ describe('기기 API 경로와 헤더 계약', () => {
       .set('Authorization', 'Bearer valid')
       .send(body)
       .expect(200);
-    expect(service.register).toHaveBeenCalledWith(
-      'header-device',
-      body,
-      'user-a',
-    );
+    expect(service.register).toHaveBeenCalledWith('header-device', body, {
+      kind: 'user',
+      userId: 'user-a',
+    });
     await request(app.getHttpServer() as App)
       .put('/api/v1/devices/path-device')
       .send(body)
@@ -94,13 +107,13 @@ describe('기기 API 경로와 헤더 계약', () => {
       .put('/api/v1/notifications/subscriptions/fst_test')
       .set('X-Device-Id', 'header-device')
       .set('Authorization', 'Bearer valid')
-      .send({ packUpdates: true, festivalStarts: true })
+      .send({ pinned: true, packUpdates: true, festivalStarts: true })
       .expect(200);
     expect(service.subscribe).toHaveBeenCalledWith(
       'header-device',
       'fst_test',
-      { packUpdates: true, festivalStarts: true },
-      'user-a',
+      { pinned: true, packUpdates: true, festivalStarts: true },
+      { kind: 'user', userId: 'user-a' },
     );
     await request(app.getHttpServer() as App)
       .put('/api/v1/devices/subscriptions/fst_test')
@@ -145,7 +158,6 @@ describe('기기 API 경로와 헤더 계약', () => {
 
   it('rejects missing and invalid Bearer tokens on every device route', async () => {
     const routes = [
-      ['put', '/api/v1/devices'],
       ['get', '/api/v1/devices'],
       ['delete', '/api/v1/devices'],
       ['put', '/api/v1/devices/live-activity'],
@@ -163,5 +175,32 @@ describe('기기 API 경로와 헤더 계약', () => {
         .set('Authorization', 'Bearer invalid')
         .expect(401);
     }
+    await request(app.getHttpServer() as App)
+      .put('/api/v1/devices')
+      .set('X-Device-Id', 'new-device')
+      .send({})
+      .expect(200);
+  });
+
+  it('binds an anonymous device Bearer to the stored device and header ID', async () => {
+    storedDevice.findOne.mockResolvedValue({
+      id: 'device-a',
+      deviceTokenId: 'token-a',
+    });
+    await request(app.getHttpServer() as App)
+      .get('/api/v1/devices')
+      .set('X-Device-Id', 'device-b')
+      .set('Authorization', 'Bearer device-valid')
+      .expect(401);
+    await request(app.getHttpServer() as App)
+      .get('/api/v1/devices')
+      .set('X-Device-Id', 'device-a')
+      .set('Authorization', 'Bearer device-valid')
+      .expect(200);
+    expect(service.get).toHaveBeenCalledWith('device-a', {
+      kind: 'device',
+      deviceId: 'device-a',
+      tokenId: 'token-a',
+    });
   });
 });

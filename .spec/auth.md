@@ -42,7 +42,7 @@
 | POST   | `/api/v1/auth/refresh`        | 불필요 | `{ refreshToken }`                               | access/refresh 재발급(회전, 1회용)                |
 | POST   | `/api/v1/auth/logout`         | 필요   | -                                                | refresh 토큰 전체 폐기                            |
 | GET    | `/api/v1/me`                  | 필요   | -                                                | 프로필 조회                                       |
-| PATCH  | `/api/v1/me`                  | 필요   | 닉네임 등                                        | 프로필 수정                                       |
+| PATCH  | `/api/v1/me`                  | 필요   | `{nickname?, acceptTerms?: {version}, pushOptIn?}` | S14-2 가입 정보 및 프로필 수정                  |
 | DELETE | `/api/v1/me`                  | 필요   | -                                                | 탈퇴                                              |
 | GET    | `/api/v1/auth/apple/start`    | 불필요 | -                                                | Apple 웹 로그인 시작                              |
 | POST   | `/api/v1/auth/apple/callback` | 불필요 | `form_post`                                      | Apple 웹 콜백                                     |

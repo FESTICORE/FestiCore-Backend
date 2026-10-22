@@ -46,7 +46,8 @@ async function bootstrap() {
       origin: origins
         .split(',')
         .map((o) => o.trim())
-        .filter(Boolean),
+        .filter(Boolean)
+        .map((o) => new URL(o).origin),
       credentials: true,
       exposedHeaders: ['ETag'],
     });

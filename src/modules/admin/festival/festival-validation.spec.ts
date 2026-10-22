@@ -82,4 +82,59 @@ describe('festival draft validation', () => {
       'stages: 배열 크기 오류',
     );
   });
+
+  it('accepts ticket links and thumbnail fields in draft patches', () => {
+    const next = mergeDraft(draft, {
+      thumbUrl: 'https://example.com/poster.webp',
+      ticketLinks: [
+        { label: '예스24', url: 'https://ticket.yes24.com/Perf/1' },
+      ],
+    });
+    expect(validateDraft(next, true)).toEqual([]);
+    expect(next).toMatchObject({
+      thumbUrl: 'https://example.com/poster.webp',
+      ticketLinks: [
+        { label: '예스24', url: 'https://ticket.yes24.com/Perf/1' },
+      ],
+    });
+    expect(
+      validateDraft({
+        ...draft,
+        thumbUrl:
+          '/api/v1/festivals/images/00000000-0000-4000-8000-000000000001.webp',
+      }),
+    ).toEqual([]);
+  });
+
+  it('rejects invalid thumbnail and ticket links', () => {
+    expect(
+      validateDraft({ ...draft, thumbUrl: 'javascript:alert(1)' }),
+    ).toContain('thumbUrl: HTTPS URL, 보관 이미지 경로 또는 null 필요');
+    expect(
+      validateDraft({
+        ...draft,
+        ticketLinks: [
+          { label: '잘못된 링크', url: 'http://ticket.example.com' },
+        ],
+      }),
+    ).toContain('ticketLinks: 최대 5개, 1..20자 라벨과 HTTPS URL 필요');
+    expect(
+      validateDraft({
+        ...draft,
+        ticketLinks: [
+          { label: '예스24', url: 'https://ticket.example.com/1' },
+          { label: '멜론', url: 'https://ticket.example.com/1' },
+        ],
+      }),
+    ).toContain('ticketLinks: 최대 5개, 1..20자 라벨과 HTTPS URL 필요');
+    expect(
+      validateDraft({
+        ...draft,
+        ticketLinks: Array.from({ length: 6 }, (_, index) => ({
+          label: `예매처 ${index}`,
+          url: `https://example.com/${index}`,
+        })),
+      }),
+    ).toContain('ticketLinks: 최대 5개, 1..20자 라벨과 HTTPS URL 필요');
+  });
 });

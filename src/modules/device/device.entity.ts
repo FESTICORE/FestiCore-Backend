@@ -14,6 +14,9 @@ export class Device {
   @Column({ type: 'uuid', nullable: true })
   userId!: string | null;
 
+  @Column({ type: 'uuid', nullable: true })
+  deviceTokenId!: string | null;
+
   @Column({ type: 'varchar', length: 256, nullable: true, select: false })
   apnsToken!: string | null;
 
@@ -58,6 +61,18 @@ export class DeviceSubscription {
 
   @PrimaryColumn({ type: 'varchar', length: 32 })
   festivalId!: string;
+
+  @Column({ type: 'boolean', default: false })
+  pinned!: boolean;
+
+  @Column({ type: 'boolean', default: true })
+  reminders!: boolean;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  pinnedAt!: Date | null;
+
+  @Column({ type: 'integer', nullable: true })
+  packDownloadedVersion!: number | null;
 
   @Column({ type: 'boolean' })
   packUpdates!: boolean;

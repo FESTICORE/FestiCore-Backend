@@ -1,11 +1,14 @@
 import {
   BadRequestException,
   Controller,
+  ForbiddenException,
   Get,
   Headers,
   HttpException,
+  NotFoundException,
   Param,
   Query,
+  Req,
   Res,
 } from '@nestjs/common';
 import {
@@ -17,9 +20,11 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { brotliCompressSync, gzipSync } from 'zlib';
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
 import { apiSuccess } from '../../common/interfaces/api-response.interface';
 import { Public } from '../auth/decorator/public.decorator';
+import { DeviceAuthGuard } from '../device/device-auth.guard';
+import { DeviceService } from '../device/device.service';
 import { envelopeEtag, PublicFestivalService } from './public-festival.service';
 import { PublicLiveService } from './public-live.service';
 
@@ -82,6 +87,8 @@ export class PublicFestivalController {
   constructor(
     private readonly service: PublicFestivalService,
     private readonly liveService: PublicLiveService,
+    private readonly deviceAuth: DeviceAuthGuard,
+    private readonly devices: DeviceService,
   ) {}
 
   private send(
@@ -103,7 +110,7 @@ export class PublicFestivalController {
   @ApiOperation({
     summary: '축제 목록',
     description:
-      '발행 축제와 판매처에서 발견한 축제를 함께 조회합니다. 발견 항목은 status=discovered, packVersion=0이며 팩은 아직 없습니다. 발견 항목의 날짜는 공연 날짜만 뜻하고 시작 시각은 확인되지 않았습니다. 요청 본문은 없습니다.',
+      '발행 축제와 판매처에서 발견한 축제를 함께 조회합니다. 각 항목의 ticketLinks(최대 5개)는 예매처·공식 링크이며 thumbUrl은 썸네일입니다. 발견 항목은 status=discovered, packVersion=0이며 팩은 아직 없습니다. 발견 항목의 날짜는 공연 날짜만 뜻하고 시작 시각은 확인되지 않았습니다. 요청 본문은 없습니다.',
   })
   @ApiQuery({
     name: 'after',
@@ -123,6 +130,11 @@ export class PublicFestivalController {
     required: false,
     description: '이전 목록 응답의 ETag. 일치하면 304.',
   })
+  @ApiHeader({
+    name: 'X-Device-Id',
+    required: false,
+    description: '기기 Bearer와 함께 전송하면 각 축제의 pinned를 포함합니다.',
+  })
   @ApiResponse({
     status: 200,
     description: '발행 축제 및 발견 항목 요약과 다음 페이지 커서',
@@ -138,6 +150,10 @@ export class PublicFestivalController {
               firstDate: '2026-10-24',
               lastDate: '2026-10-24',
               packVersion: 1,
+              thumbUrl: 'https://example.com/festival.webp',
+              ticketLinks: [
+                { label: '예스24', url: 'https://ticket.yes24.com/Perf/12345' },
+              ],
               status: 'upcoming',
             },
             {
@@ -149,6 +165,12 @@ export class PublicFestivalController {
               packVersion: 0,
               flagsEnabled: false,
               thumbUrl: null,
+              ticketLinks: [
+                {
+                  label: '멜론티켓',
+                  url: 'https://ticket.melon.com/performance/index.htm?prodId=12345',
+                },
+              ],
               status: 'discovered',
               sourceUrl:
                 'https://ticket.melon.com/performance/index.htm?prodId=12345',
@@ -172,10 +194,40 @@ export class PublicFestivalController {
     @Query('after') after: string | undefined,
     @Query('limit') limit: string | undefined,
     @Headers('if-none-match') ifNoneMatch: string | undefined,
+    @Req() request: Request,
     @Res() response: Response,
   ) {
     const body = await this.service.list(after, limit);
-    response.setHeader('Cache-Control', 'public, max-age=3600');
+    const deviceId = request.header('x-device-id');
+    const principal = deviceId
+      ? await this.deviceAuth.resolveOptionalPrincipal(request)
+      : undefined;
+    response.setHeader('Vary', 'Authorization, X-Device-Id');
+    if (deviceId && principal) {
+      try {
+        const { items } = await this.devices.listSubscriptions(
+          deviceId,
+          principal,
+        );
+        const pins = new Map(
+          items.map((item) => [item.festivalId, item.pinned]),
+        );
+        body.items = body.items.map((item) => ({
+          ...item,
+          pinned: pins.get(item.id) ?? false,
+        }));
+        response.setHeader('Cache-Control', 'private, max-age=60');
+      } catch (error) {
+        if (
+          !(error instanceof BadRequestException) &&
+          !(error instanceof ForbiddenException) &&
+          !(error instanceof NotFoundException)
+        )
+          throw error;
+      }
+    }
+    if (!response.hasHeader('Cache-Control'))
+      response.setHeader('Cache-Control', 'public, max-age=3600');
     this.send(
       response,
       body,
@@ -188,7 +240,7 @@ export class PublicFestivalController {
   @ApiOperation({
     summary: '축제 상세 정보',
     description:
-      '목록의 축제 ID로 상세를 조회합니다. 발견된 축제는 확인된 일정·장소·보관 포스터·출연진만 반환하고 타임테이블은 발행 전 빈 목록입니다. 발행된 축제는 공개 팩 내용을 반환합니다. 요청 본문은 없습니다.',
+      '목록의 축제 ID로 상세를 조회합니다. 발견된 축제는 확인된 일정·장소·보관 포스터·출연진·ticketLinks를 반환하고 타임테이블은 발행 전 빈 목록입니다. 발행된 축제는 thumbUrl과 ticketLinks를 포함한 공개 팩을 반환합니다. 요청 본문은 없습니다.',
   })
   @ApiParam({
     name: 'id',
@@ -212,6 +264,12 @@ export class PublicFestivalController {
           packVersion: 0,
           thumbUrl:
             '/api/v1/festivals/images/00000000-0000-4000-8000-000000000001.webp',
+          ticketLinks: [
+            {
+              label: '멜론티켓',
+              url: 'https://ticket.melon.com/performance/index.htm?prodId=213793',
+            },
+          ],
           sourceUrl:
             'https://ticket.melon.com/performance/index.htm?prodId=213793',
           officialInstagramUrl: null,
@@ -225,7 +283,7 @@ export class PublicFestivalController {
   @ApiResponse({
     status: 404,
     description: '축제를 찾을 수 없습니다.',
-    schema: jsonErrorSchema('NOT_FOUND'),
+    schema: jsonErrorSchema('FESTIVAL_NOT_FOUND'),
   })
   async detail(@Param('id') id: string, @Res() response: Response) {
     const body = await this.service.detail(id);
@@ -264,7 +322,7 @@ export class PublicFestivalController {
   @ApiResponse({
     status: 404,
     description: '발행된 축제가 없습니다.',
-    schema: jsonErrorSchema('NOT_FOUND'),
+    schema: jsonErrorSchema('FESTIVAL_NOT_FOUND'),
   })
   @ApiResponse({ status: 304, description: '팩 버전이 변경되지 않았습니다.' })
   async version(
@@ -316,7 +374,7 @@ export class PublicFestivalController {
   @ApiResponse({
     status: 404,
     description: '발행된 축제가 없습니다.',
-    schema: jsonErrorSchema('NOT_FOUND'),
+    schema: jsonErrorSchema('FESTIVAL_NOT_FOUND'),
   })
   async pack(
     @Param('id') id: string,
@@ -384,7 +442,7 @@ export class PublicFestivalController {
   @ApiResponse({
     status: 404,
     description: '발행된 축제가 없습니다.',
-    schema: jsonErrorSchema('NOT_FOUND'),
+    schema: jsonErrorSchema('FESTIVAL_NOT_FOUND'),
   })
   async flags(
     @Param('id') id: string,

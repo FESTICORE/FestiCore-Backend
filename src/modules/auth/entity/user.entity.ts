@@ -28,6 +28,21 @@ export class User {
   @Column({ type: 'varchar', nullable: true })
   nickname!: string | null;
 
+  @Column({ type: 'boolean', default: false })
+  nicknameConfirmed!: boolean;
+
+  @Column({ type: 'boolean', default: false })
+  nicknameExplicitlySet!: boolean;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  termsAcceptedAt!: Date | null;
+
+  @Column({ type: 'varchar', nullable: true })
+  termsVersion!: string | null;
+
+  @Column({ type: 'boolean', default: false })
+  pushOptIn!: boolean;
+
   // provider가 제공한 프로필 사진 URL.
   @Column({ type: 'varchar', nullable: true })
   profileImageUrl!: string | null;

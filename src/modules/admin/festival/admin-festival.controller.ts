@@ -38,6 +38,8 @@ const draftExample = {
   venue: '서울 올림픽공원',
   timezone: 'Asia/Seoul',
   days: [festivalDay],
+  thumbUrl: null,
+  ticketLinks: [],
   flagsEnabled: false,
   stages: [],
   sets: [],
@@ -232,7 +234,7 @@ export class AdminFestivalController {
   @ApiHeader(draftHeader)
   @ApiBody({
     description:
-      '수정할 필드만 보냅니다. 허용 필드: name, venue, timezone, days, flagsEnabled, source, stages, sets, zones, flags, directions, checklist, rules, mapImageUrl, mapAspect. 발행하려면 무대가 1개 이상 필요합니다.',
+      '수정할 필드만 보냅니다. 허용 필드: name, venue, timezone, days, thumbUrl, ticketLinks, flagsEnabled, source, stages, sets, zones, flags, directions, checklist, rules, mapImageUrl, mapAspect. 발행하려면 무대가 1개 이상 필요합니다.',
     schema: {
       type: 'object',
       minProperties: 1,
@@ -245,6 +247,19 @@ export class AdminFestivalController {
           minItems: 1,
           maxItems: 7,
           items: { type: 'object' },
+        },
+        thumbUrl: { type: 'string', nullable: true, format: 'uri' },
+        ticketLinks: {
+          type: 'array',
+          maxItems: 5,
+          items: {
+            type: 'object',
+            required: ['label', 'url'],
+            properties: {
+              label: { type: 'string', maxLength: 20 },
+              url: { type: 'string', format: 'uri' },
+            },
+          },
         },
         flagsEnabled: { type: 'boolean' },
         source: { type: 'object' },

@@ -65,7 +65,9 @@ export class AdminAuthService implements OnModuleInit {
     const origin = new URL(webUrl).origin;
     const corsOrigins = (this.config.get<string>('CORS_ORIGINS') ?? '')
       .split(',')
-      .map((value) => value.trim());
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .map((value) => new URL(value).origin);
     if (!corsOrigins.includes(origin)) {
       throw new Error('ADMIN_WEB_URL origin must be listed in CORS_ORIGINS.');
     }

@@ -2,7 +2,6 @@ import {
   Body,
   Controller,
   Get,
-  Header,
   HttpCode,
   HttpStatus,
   Param,
@@ -11,6 +10,7 @@ import {
   Post,
   Query,
   Req,
+  Res,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -21,7 +21,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { AdminRoles } from '../../auth/admin-roles.decorator';
-import { Request } from 'express';
+import type { Request, Response } from 'express';
 import {
   CreateCrawlSourceDto,
   UpdateCrawlSourceDto,
@@ -199,8 +199,6 @@ export class CrawlController {
 
   @Get('images/:id')
   @AdminRoles('viewer')
-  @Header('Content-Type', 'image/webp')
-  @Header('Cache-Control', 'private, max-age=300')
   @ApiOperation({
     summary: '저장된 크롤 이미지',
     description: 'viewer 이상. 서버 저장소에 보관된 WebP 이미지를 읽습니다.',
@@ -212,7 +210,17 @@ export class CrawlController {
     content: { 'image/webp': { schema: { type: 'string', format: 'binary' } } },
   })
   @ApiResponse({ status: 404, description: '이미지를 찾을 수 없습니다.' })
-  image(@Param('id', ParseUUIDPipe) id: string) {
-    return this.crawl.image(id);
+  async image(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Res() response: Response,
+  ) {
+    const bytes = await this.crawl.image(id);
+    response
+      .set({
+        'Content-Type': 'image/webp',
+        'Cache-Control': 'private, max-age=300',
+        'X-Content-Type-Options': 'nosniff',
+      })
+      .send(bytes);
   }
 }

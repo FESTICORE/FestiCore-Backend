@@ -7,6 +7,7 @@
 
 ## 목록
 
+- [api-v0.2-adoption.md](./api-v0.2-adoption.md) — Notion API v0.2 반영 범위와 검증 경계
 - [coverage.md](./coverage.md) — 제공된 명세서와 현재 구현의 대조 및 남은 검증
 - [health.md](./health.md) — 헬스체크
 - [auth.md](./auth.md) — Google/Apple 통합 로그인, 프로필, Apple 웹 콜백

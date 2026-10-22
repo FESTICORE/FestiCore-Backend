@@ -6,6 +6,8 @@ import {
   HttpCode,
   Put,
   Req,
+  SetMetadata,
+  UseGuards,
 } from '@nestjs/common';
 import type { Request } from 'express';
 import {
@@ -16,13 +18,19 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import { CurrentUser } from '../auth/decorator/current-user.decorator';
-import type { AuthUser } from '../auth/types/social-profile';
+import { Public } from '../auth/decorator/public.decorator';
+import {
+  ALLOW_ANONYMOUS_DEVICE_REGISTRATION,
+  DeviceAuthGuard,
+  type DeviceRequest,
+} from './device-auth.guard';
 import { LiveActivityDto, RegisterDeviceDto } from './device.dto';
 import { DeviceService } from './device.service';
 
 @ApiTags('Devices')
 @Controller('devices')
+@Public()
+@UseGuards(DeviceAuthGuard)
 @ApiBearerAuth()
 @ApiHeader({
   name: 'X-Device-Id',
@@ -33,15 +41,17 @@ export class DeviceController {
   constructor(private readonly service: DeviceService) {}
 
   @Put()
+  @SetMetadata(ALLOW_ANONYMOUS_DEVICE_REGISTRATION, true)
   @ApiOperation({
     summary: '기기 등록 또는 토큰 갱신',
     description:
-      'Bearer access JWT 사용자와 X-Device-Id의 소유자가 일치해야 합니다. 계정을 바꾸려면 이전 계정에서 기기를 삭제한 뒤 다시 등록하세요.',
+      '처음 등록하는 UUID v4 기기는 Bearer 없이 요청할 수 있습니다. 응답의 deviceAccessToken을 안전하게 저장하고 이후 Authorization: Bearer와 X-Device-Id를 함께 전송하세요. 등록된 기기를 UUID만으로 갱신할 수 없습니다. 계정 기기는 계정 Bearer로 등록합니다.',
   })
   @ApiBody({ type: RegisterDeviceDto })
   @ApiResponse({
     status: 200,
-    description: '기기 ID, 연결된 사용자 ID와 축제 구독',
+    description:
+      '기기 ID, 선택적 사용자 ID, 익명 기기 전용 deviceAccessToken과 축제 구독',
     schema: {
       type: 'object',
       properties: {
@@ -51,6 +61,11 @@ export class DeviceController {
           properties: {
             deviceId: { type: 'string', format: 'uuid' },
             userId: { type: 'string', format: 'uuid' },
+            deviceAccessToken: {
+              type: 'string',
+              description:
+                '익명 기기 등록·갱신 시 발급. 갱신 전 토큰도 만료 전까지 유효합니다.',
+            },
             subscriptions: {
               type: 'array',
               items: {
@@ -59,6 +74,13 @@ export class DeviceController {
                   festivalId: { type: 'string' },
                   packUpdates: { type: 'boolean' },
                   festivalStarts: { type: 'boolean' },
+                  pinned: { type: 'boolean' },
+                  reminders: { type: 'boolean' },
+                  pinnedAt: {
+                    type: 'string',
+                    format: 'date-time',
+                    nullable: true,
+                  },
                 },
               },
             },
@@ -68,12 +90,12 @@ export class DeviceController {
       },
     },
   })
-  async register(
-    @Body() body: RegisterDeviceDto,
-    @Req() request: Request,
-    @CurrentUser() user: AuthUser,
-  ) {
-    return this.service.register(this.deviceId(request), body, user.userId);
+  async register(@Body() body: RegisterDeviceDto, @Req() request: Request) {
+    return this.service.register(
+      this.deviceId(request),
+      body,
+      (request as DeviceRequest).devicePrincipal,
+    );
   }
 
   @Get()
@@ -104,16 +126,16 @@ export class DeviceController {
       },
     },
   })
-  async get(@Req() request: Request, @CurrentUser() user: AuthUser) {
-    return this.service.get(this.deviceId(request), user.userId);
+  async get(@Req() request: DeviceRequest) {
+    return this.service.get(this.deviceId(request), request.devicePrincipal);
   }
 
   @Delete()
   @HttpCode(204)
   @ApiOperation({ summary: '현재 기기와 모든 알림 구독 삭제' })
   @ApiResponse({ status: 204, description: '삭제됨' })
-  async remove(@Req() request: Request, @CurrentUser() user: AuthUser) {
-    await this.service.remove(this.deviceId(request), user.userId);
+  async remove(@Req() request: DeviceRequest) {
+    await this.service.remove(this.deviceId(request), request.devicePrincipal);
   }
 
   @Put('live-activity')
@@ -124,12 +146,11 @@ export class DeviceController {
   async startLiveActivity(
     @Body() body: LiveActivityDto,
     @Req() request: Request,
-    @CurrentUser() user: AuthUser,
   ) {
     await this.service.startLiveActivity(
       this.deviceId(request),
       body,
-      user.userId,
+      (request as DeviceRequest).devicePrincipal,
     );
   }
 
@@ -137,11 +158,11 @@ export class DeviceController {
   @HttpCode(204)
   @ApiOperation({ summary: 'Live Activity 토큰 삭제' })
   @ApiResponse({ status: 204, description: '삭제됨' })
-  async stopLiveActivity(
-    @Req() request: Request,
-    @CurrentUser() user: AuthUser,
-  ) {
-    await this.service.stopLiveActivity(this.deviceId(request), user.userId);
+  async stopLiveActivity(@Req() request: Request) {
+    await this.service.stopLiveActivity(
+      this.deviceId(request),
+      (request as DeviceRequest).devicePrincipal,
+    );
   }
 
   private deviceId(request: Request): string {

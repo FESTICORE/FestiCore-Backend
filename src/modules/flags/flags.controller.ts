@@ -35,6 +35,7 @@ import type { Request, Response } from 'express';
 import { AdminRoles } from '../admin/auth/admin-roles.decorator';
 import type { AdminRequest } from '../admin/auth/admin-session.guard';
 import { CurrentUser } from '../auth/decorator/current-user.decorator';
+import { RequireCurrentTerms } from '../auth/decorator/require-current-terms.decorator';
 import { Public } from '../auth/decorator/public.decorator';
 import type { AuthUser } from '../auth/types/social-profile';
 import { FlagsService } from './flags.service';
@@ -49,6 +50,7 @@ export class FlagsController {
     private readonly config: ConfigService,
   ) {}
 
+  @RequireCurrentTerms()
   @Post(':flagId/photo')
   @HttpCode(200)
   @ApiBearerAuth()
@@ -214,6 +216,7 @@ export class FlagsController {
     return this.service.detail(id, userId);
   }
 
+  @RequireCurrentTerms()
   @Put(':flagId/follow')
   @ApiBearerAuth()
   @ApiOperation({
@@ -274,6 +277,7 @@ export class FlagsController {
     return this.service.unfollow(id, user.userId);
   }
 
+  @RequireCurrentTerms()
   @Post(':flagId/report')
   @HttpCode(202)
   @ApiBearerAuth()
@@ -344,6 +348,7 @@ export class FlagsController {
     return this.service.bearerView(id, user.userId);
   }
 
+  @RequireCurrentTerms()
   @Patch(':flagId')
   @ApiBearerAuth()
   @ApiOperation({
@@ -408,6 +413,7 @@ export class FlagsController {
     return this.service.patch(id, user.userId, body);
   }
 
+  @RequireCurrentTerms()
   @Post(':flagId/status')
   @HttpCode(200)
   @ApiBearerAuth()
@@ -488,6 +494,7 @@ export class FlagsController {
     return this.service.status(id, user.userId, key, body);
   }
 
+  @RequireCurrentTerms()
   @Post(':flagId/co-bearers/invite')
   @HttpCode(200)
   @ApiBearerAuth()
@@ -541,6 +548,7 @@ export class FlagsController {
 @Controller('bearer')
 export class BearerController {
   constructor(private readonly service: FlagsService) {}
+  @RequireCurrentTerms()
   @Post('claim')
   @HttpCode(200)
   @ApiOperation({
@@ -660,6 +668,7 @@ export class MyFlagsController {
   ) {
     return this.service.myFollows(user.userId, festivalId);
   }
+  @RequireCurrentTerms()
   @Put('pinned-flag')
   @ApiOperation({
     summary: '내 대표 깃발 지정',

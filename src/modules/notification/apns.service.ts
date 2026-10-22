@@ -62,6 +62,34 @@ export class ApnsService {
     );
   }
 
+  async sendReminderNotification(
+    token: string,
+    environment: 'sandbox' | 'production',
+    input: {
+      festivalId: string;
+      title: string;
+      body: string;
+      eventKey: string;
+      hasPack: boolean;
+    },
+  ): Promise<ApnsSendResult> {
+    return this.send(
+      token,
+      environment,
+      {
+        aps: {
+          alert: { title: input.title, body: input.body },
+          sound: 'default',
+        },
+        type: 'festival.reminder',
+        route: input.hasPack ? `/festivals/${input.festivalId}/checklist` : '/',
+        festivalId: input.festivalId,
+        eventKey: input.eventKey,
+      },
+      { pushType: 'alert', priority: '10', collapseKey: input.eventKey },
+    );
+  }
+
   async sendPackUpdated(
     token: string,
     environment: 'sandbox' | 'production',
