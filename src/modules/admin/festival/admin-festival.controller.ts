@@ -369,7 +369,7 @@ export class AdminFestivalController {
   @ApiOperation({
     summary: '공연 목록 전체 교체',
     description:
-      'editor 이상이 공연 배열을 통째로 교체합니다. 각 공연의 stageId는 초안의 무대를 참조해야 하며, 시간은 축제 일정 안에 있어야 하고 같은 무대에서 겹치면 안 됩니다.',
+      'editor 이상이 공연 배열을 통째로 교체합니다. 각 공연의 stageId는 초안의 무대를 참조해야 하며, 시간은 축제 일정 안에 있어야 하고 같은 무대에서 겹치면 안 됩니다. imageUrl은 서버에 보관한 출연진 WebP 경로만 허용합니다.',
   })
   @ApiParam(festivalId)
   @ApiHeader(draftHeader)
@@ -386,6 +386,12 @@ export class AdminFestivalController {
           artist: { type: 'string', minLength: 1, maxLength: 60 },
           startsAt: { type: 'string', format: 'date-time' },
           endsAt: { type: 'string', format: 'date-time' },
+          imageUrl: {
+            type: 'string',
+            nullable: true,
+            example:
+              '/api/v1/festivals/images/00000000-0000-4000-8000-000000000001.webp',
+          },
         },
       },
       example: [

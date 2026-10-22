@@ -48,6 +48,13 @@ function publicImageUrl(value: unknown): string | null {
     : null;
 }
 
+function storedArtistImageUrl(value: unknown): string | null {
+  return typeof value === 'string' &&
+    /^\/api\/v1\/festivals\/images\/[0-9a-f-]{36}\.webp$/.test(value)
+    ? value
+    : null;
+}
+
 function projectDirections(value: unknown): Document {
   const direction = fields(value, [
     'shuttle',
@@ -100,7 +107,27 @@ function projectPack(pack: Document): Document {
     'startsAt',
     'endsAt',
     'note',
-  ]).map((set) => ({ ...set, id: festivalSetId(set) }));
+    'imageUrl',
+  ]).map((set) => ({
+    ...set,
+    id: festivalSetId(set),
+    imageUrl: storedArtistImageUrl(set.imageUrl),
+  }));
+  const stageNames = new Map(
+    requiredArray(result.stages)
+      .filter((stage) => typeof stage.id === 'string')
+      .map((stage) => [stage.id, stage.name]),
+  );
+  result.timetable = requiredArray(result.sets)
+    .sort((a, b) => String(a.startsAt).localeCompare(String(b.startsAt)))
+    .map((set) => ({
+      ...set,
+      date:
+        typeof set.startsAt === 'string'
+          ? dateInSeoul(new Date(set.startsAt))
+          : null,
+      stageName: stageNames.get(set.stageId) ?? null,
+    }));
   result.zones = projectedArray(pack.zones, [
     'id',
     'name',
