@@ -227,7 +227,7 @@ export class PublicFestivalController {
       }
     }
     if (!response.hasHeader('Cache-Control'))
-      response.setHeader('Cache-Control', 'private, max-age=3600');
+      response.setHeader('Cache-Control', 'public, max-age=3600');
     this.send(
       response,
       body,

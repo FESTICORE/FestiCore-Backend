@@ -180,48 +180,55 @@ describe('AuthService web grant replacement', () => {
     expect(users[0].nickname).toMatch(/^관객-[0-9A-F]{4}$/);
   });
 
-  it('trims a social profile name to the twelve-character nickname limit', async () => {
-    const save = jest
-      .fn()
-      .mockImplementation((user: User) =>
-        Promise.resolve({ ...user, id: 'new-user' }),
-      );
-    const service = new AuthService(
-      {
-        verify: jest.fn().mockResolvedValue({
-          provider: 'google',
-          providerId: 'new-subject',
-          name: '  열두글자를넘어가는긴닉네임입니다  ',
-        }),
-      } as unknown as GoogleService,
-      {} as AppleService,
-      {
-        issue: jest.fn().mockResolvedValue({
-          accessToken: 'access',
-          refreshToken: 'refresh',
-        }),
-      } as unknown as TokenService,
-      {
-        findOne: jest.fn().mockResolvedValue(null),
-        create: jest.fn().mockImplementation((user: User) => user),
-        save,
-      } as unknown as Repository<User>,
-      {} as DataSource,
-      {} as AppleRevokeRetryService,
-      {} as FlagPackSyncService,
-    );
-
-    const result = await service.login({
-      provider: 'google',
-      token: 'id-token',
-    });
-    expect(result.user.nickname).toBe(
+  it.each([
+    [
+      '  열두글자를넘어가는긴닉네임입니다  ',
       '열두글자를넘어가는긴닉네임입니다'.slice(0, 12),
-    );
-    expect(save).toHaveBeenCalledWith(
-      expect.objectContaining({ nickname: result.user.nickname }),
-    );
-  });
+    ],
+    ['12345678901😀', '12345678901😀'],
+  ])(
+    'trims a social profile name without splitting Unicode characters',
+    async (name, expected) => {
+      const save = jest
+        .fn()
+        .mockImplementation((user: User) =>
+          Promise.resolve({ ...user, id: 'new-user' }),
+        );
+      const service = new AuthService(
+        {
+          verify: jest.fn().mockResolvedValue({
+            provider: 'google',
+            providerId: 'new-subject',
+            name,
+          }),
+        } as unknown as GoogleService,
+        {} as AppleService,
+        {
+          issue: jest.fn().mockResolvedValue({
+            accessToken: 'access',
+            refreshToken: 'refresh',
+          }),
+        } as unknown as TokenService,
+        {
+          findOne: jest.fn().mockResolvedValue(null),
+          create: jest.fn().mockImplementation((user: User) => user),
+          save,
+        } as unknown as Repository<User>,
+        {} as DataSource,
+        {} as AppleRevokeRetryService,
+        {} as FlagPackSyncService,
+      );
+
+      const result = await service.login({
+        provider: 'google',
+        token: 'id-token',
+      });
+      expect(result.user.nickname).toBe(expected);
+      expect(save).toHaveBeenCalledWith(
+        expect.objectContaining({ nickname: result.user.nickname }),
+      );
+    },
+  );
 
   it('keeps provider authorization active when replacing a web refresh token', async () => {
     const user = {

@@ -462,7 +462,9 @@ export class AuthService {
           ...where,
           email: profile.email ?? null,
           nickname:
-            profile.name?.trim().slice(0, 12) ||
+            Array.from(profile.name?.trim() ?? '')
+              .slice(0, 12)
+              .join('') ||
             `관객-${randomBytes(2).toString('hex').toUpperCase()}`,
           nicknameConfirmed: false,
           termsAcceptedAt: null,

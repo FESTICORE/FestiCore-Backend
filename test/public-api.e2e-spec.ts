@@ -166,7 +166,7 @@ describe('Public festival API', () => {
         ticketLinks: pack.ticketLinks,
       }),
     ]);
-    expect(first.headers['cache-control']).toBe('private, max-age=3600');
+    expect(first.headers['cache-control']).toBe('public, max-age=3600');
     expect(first.headers.vary).toBe('Origin, Authorization, X-Device-Id');
     expect(first.headers['access-control-allow-origin']).toBe(
       'https://festicoreadmin-dev.up.railway.app',
@@ -179,10 +179,14 @@ describe('Public festival API', () => {
       .expect(200);
     const notModified = await request(server)
       .get('/api/v1/festivals?after=2026-10-21&limit=20')
+      .set('Origin', 'https://festicoreadmin-dev.up.railway.app')
       .set('If-None-Match', first.headers.etag)
       .set('Cache-Control', 'no-cache')
       .expect(304);
-    expect(notModified.headers['cache-control']).toBe('private, max-age=3600');
+    expect(notModified.headers['cache-control']).toBe('public, max-age=3600');
+    expect(notModified.headers['access-control-allow-origin']).toBe(
+      'https://festicoreadmin-dev.up.railway.app',
+    );
   });
 
   it('includes pinned only for an authenticated device and uses a private cache', async () => {
@@ -226,7 +230,7 @@ describe('Public festival API', () => {
     expect(
       successData<{ items: { pinned?: boolean }[] }>(response.body).items[0],
     ).not.toHaveProperty('pinned');
-    expect(response.headers['cache-control']).toBe('private, max-age=3600');
+    expect(response.headers['cache-control']).toBe('public, max-age=3600');
     expect(response.headers.vary).toBe('Origin, Authorization, X-Device-Id');
   });
 

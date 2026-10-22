@@ -40,7 +40,7 @@ PDF의 명시 경로와 현재 컨트롤러를 대조한 결과, 위의 사용�
 1. 로그아웃은 refresh 토큰만 폐기한다. PDF에는 해당 기기의 푸시 구독 해제가 포함된다. 현재 기기 식별·소유권을 확인한 뒤 해당 기기만 정리해야 한다.
 2. 신규 계정의 `nickname`은 최대 12자로 제한하고, 제공된 이름이 없거나 공백뿐이면 임의 코드의 `관객-{4자}`를 발급하도록 로컬 코드를 수정했다. 기본값과 12자 제한 단위 테스트는 통과했고 배포 검증은 남아 있다.
 3. 관리자 축제 출처의 `source.verifiedAt`이 7일을 초과하면 초안 조회·수정·발행 응답에 경고를 포함하고 발행은 허용하도록 로컬 코드를 수정했다. 조회의 7일 경계와 발행 허용 단위 테스트는 통과했고 배포 검증은 남아 있다.
-4. 개발 Railway의 공개 축제 목록은 공유 캐시 적중 응답에서 `Access-Control-Allow-Origin`이 빠져 AdminWeb 브라우저 요청이 차단될 수 있었다. 목록 응답에 `Vary: Origin, Authorization, X-Device-Id`와 `Cache-Control: private`를 적용했다. 공개 API E2E에서 허용된 Origin의 응답 헤더와 목록 동작은 통과했으며 배포 후 실제 Origin 요청으로 다시 확인해야 한다.
+4. 개발 Railway의 공개 축제 목록은 공유 캐시 적중 응답에서 `Access-Control-Allow-Origin`이 빠져 AdminWeb 브라우저 요청이 차단될 수 있었다. 개인화된 `pinned` 응답만 private 캐시로 두고, 공개 목록은 명세의 `Cache-Control: public, max-age=3600`을 유지하며 `Vary: Origin, Authorization, X-Device-Id`로 변형을 구분한다. 공개 API E2E에서 허용된 Origin의 200·304 응답 헤더를 확인했다. 배포 후 실제 공유 캐시 적중 응답의 Origin 헤더는 별도로 확인해야 한다.
 
 ## 수정·증명 계획
 
