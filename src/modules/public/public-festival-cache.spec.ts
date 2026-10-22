@@ -54,6 +54,38 @@ describe('PublicFestivalService published cache', () => {
     expect(cache.setPack).not.toHaveBeenCalled();
   });
 
+  it('includes the stored artist image, stage, and date in the published timetable', async () => {
+    const { service, findOne } = setup();
+    const imageUrl =
+      '/api/v1/festivals/images/00000000-0000-4000-8000-000000000001.webp';
+    findOne.mockResolvedValue({
+      publishedVersion: 1,
+      published: {
+        id,
+        stages: [{ id: 'stg_main', name: '메인 무대', order: 1 }],
+        sets: [
+          {
+            stageId: 'stg_main',
+            artist: '밴드',
+            startsAt: '2026-11-20T13:00:00+09:00',
+            endsAt: '2026-11-20T14:00:00+09:00',
+            imageUrl,
+          },
+        ],
+      },
+    });
+    await expect(service.detail(id)).resolves.toMatchObject({
+      timetable: [
+        {
+          artist: '밴드',
+          stageName: '메인 무대',
+          date: '2026-11-20',
+          imageUrl,
+        },
+      ],
+    });
+  });
+
   it('an older reader cannot revive a pack after invalidation', async () => {
     const { service, cache, findOne } = setup();
     let finishRead!: (value: object) => void;

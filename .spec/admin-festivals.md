@@ -23,6 +23,8 @@
 | POST   | `/:id/rollback`          | `{ toVersion }`                                                         | 이전 팩을 새 버전으로 재발행                                      |
 | POST   | `/:id/pack/import-image` | multipart `image` (JPEG/PNG/WebP, 최대 10MB), `date` (등록된 축제 날짜) | HTTP 200 `{ draft: Set[], confidence: 0..1, unparsed: string[] }` |
 
+공연 `Set`의 선택 필드 `imageUrl`에는 서버가 보관한 `/api/v1/festivals/images/{imageId}.webp` 경로만 넣는다. 외부 URL은 거부한다. 발행 후 공개 상세의 `sets`와 `timetable`에 이 경로가 전달되며, 사진이 없는 공연은 `imageUrl: null`이다. `timetable`의 각 항목에는 `date`와 `stageName`도 포함된다. 공연별 공식 시작·종료 시각이 없으면 공연을 임의 생성하지 않는다.
+
 ## 실패와 보안
 
 - 대상이 없으면 404, 초안 값이 유효하지 않으면 400이다.
