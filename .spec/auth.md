@@ -83,7 +83,7 @@ Apple 웹 로그인 설정: `APPLE_WEB_REDIRECT_URI`는 환경별
 - logout 후에도 이미 발급된 access 토큰은 만료(`JWT_ACCESS_TTL`, 기본 30m)까지 유효(의도된 트레이드오프).
 - 첫 로그인 동시 경합으로 unique 위반(23505)이 나면 재조회해 기존 사용자로 처리.
 - 에러 로그 바디 진단은 production 환경에서 항상 off, 인증 값(`token`, `authorizationCode` 등)은 가린다.
-- TypeORM 쿼리 오류 로그는 SQL 매개변수를 출력할 수 있어 비활성화한다. HTTP 예외 필터는 DB 오류의 원본 스택·드라이버 메시지 대신 일반 오류만 기록한다. 이는 DB에 저장하는 OAuth 갱신 토큰 자체의 암호화를 대체하지 않으며 [#74](https://github.com/FESTICORE/FestiCore-Backend/issues/74)에서 별도 처리한다.
+- TypeORM 쿼리 오류 로그는 SQL 매개변수를 출력할 수 있어 비활성화한다. HTTP 예외 필터는 DB 오류의 원본 스택·드라이버 메시지 대신 일반 오류만 기록한다. 사용자 OAuth 갱신 토큰은 환경별 암호화 키와 `OAUTH_TOKEN_ENCRYPTION_WRITE=true`가 설정된 뒤 AES-256-GCM으로 저장하고, 기존 평문은 잠금 기반 배치로 재암호화한다. 설정·배포 순서는 [#74](https://github.com/FESTICORE/FestiCore-Backend/issues/74)와 Railway 문서를 따른다.
 - 알려진 한계: refresh 와 logout 이 ms 단위로 겹치면 logout 직후 새 토큰이 발급될 수 있다.
 
 ## 실패 응답
