@@ -91,6 +91,8 @@ export function validateDraft(
     draft.ticketLinks !== undefined &&
     (!Array.isArray(draft.ticketLinks) ||
       draft.ticketLinks.length > 5 ||
+      new Set(draft.ticketLinks.map((link) => (object(link) ? link.url : null)))
+        .size !== draft.ticketLinks.length ||
       draft.ticketLinks.some(
         (link) =>
           !object(link) ||

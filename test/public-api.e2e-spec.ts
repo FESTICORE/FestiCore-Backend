@@ -1,4 +1,4 @@
-import { INestApplication } from '@nestjs/common';
+import { ForbiddenException, INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtModule, JwtService } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
@@ -165,6 +165,7 @@ describe('Public festival API', () => {
       }),
     ]);
     expect(first.headers['cache-control']).toBe('public, max-age=3600');
+    expect(first.headers.vary).toBe('Authorization, X-Device-Id');
     expect(first.headers.date).toBeDefined();
     expect(first.headers.etag).toMatch(/^"cdm1-/);
     await request(server)
@@ -201,6 +202,39 @@ describe('Public festival API', () => {
       'device-a',
       expect.objectContaining({ kind: 'device' }),
     );
+  });
+
+  it('keeps the public list available when a device ID does not belong to the Bearer', async () => {
+    deviceAuth.resolveOptionalPrincipal.mockResolvedValueOnce({
+      kind: 'device',
+      deviceId: 'device-a',
+      tokenId: 'token-a',
+    });
+    devices.listSubscriptions.mockRejectedValueOnce(
+      new ForbiddenException('기기 소유권을 확인할 수 없습니다.'),
+    );
+    const response = await request(server)
+      .get('/api/v1/festivals')
+      .set('X-Device-Id', 'device-b')
+      .set('Authorization', 'Bearer token-a')
+      .expect(200);
+    expect(
+      successData<{ items: { pinned?: boolean }[] }>(response.body).items[0],
+    ).not.toHaveProperty('pinned');
+    expect(response.headers['cache-control']).toBe('public, max-age=3600');
+    expect(response.headers.vary).toBe('Authorization, X-Device-Id');
+  });
+
+  it('uses a visible legacy flag image when the published pack has no thumbnail', async () => {
+    queryBuilder.getMany.mockResolvedValueOnce([
+      {
+        ...published,
+        published: { ...pack, thumbUrl: undefined },
+      },
+    ]);
+    const response = await request(server).get('/api/v1/festivals').expect(200);
+    const body = successData<{ items: { thumbUrl: string }[] }>(response.body);
+    expect(body.items[0].thumbUrl).toBe('https://example.com/a.webp');
   });
 
   it('includes crawled discoveries when no festival pack has been published', async () => {

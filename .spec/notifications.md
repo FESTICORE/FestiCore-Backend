@@ -17,7 +17,7 @@
 
 - `PUT /api/v1/devices`: 본문에 `apnsEnvironment` (`sandbox` 또는 `production`)가 필수다. 익명 기기는 최초 등록·토큰 갱신 시 `deviceAccessToken`을 받으며 갱신하면 이전 토큰이 무효화된다.
 - `GET /api/v1/notifications/subscriptions`: 응답 `data.items[]`는 `festivalId`, `pinned`, `pinnedAt`, `reminders`, `festivalStarts`, `packUpdates`를 포함한다.
-- `PUT /api/v1/notifications/subscriptions/{festivalId}`: 본문 `{ "pinned": true, "reminders": true, "packUpdates": false }`를 저장한다. `pinned`는 필수이고 false여도 구독 행을 보존한다. `reminders` 기본값은 true, `packUpdates` 기본값은 false다. 기기별 분당 10회로 제한한다.
+- `PUT /api/v1/notifications/subscriptions/{festivalId}`: 본문 `{ "pinned": true, "reminders": true, "packUpdates": false }`를 저장한다. `pinned`는 필수이고 false여도 구독 행을 보존한다. 새 핀은 `reminders`와 `festivalStarts`가 기본 true, `packUpdates`는 기본 false다. 기존 구독에서 생략한 알림 설정은 유지한다. 기기별 분당 10회로 제한한다.
 - `PUT /api/v1/notifications/subscriptions/{festivalId}/pack-download`: 본문 `{ "packVersion": 1 }`은 현재 발행 버전과 일치할 때만 다운로드 완료를 기록한다. 성공 204.
 - `DELETE /api/v1/notifications/subscriptions/{festivalId}`: 해당 기기의 구독을 해제한다. 성공 204.
 - `POST /api/v1/admin/push/test`: Bearer JWT와 `editor` 이상 관리자 권한으로 `{ "deviceId": "UUID v4", "type": "flag.status|crew.status|crew.gather|pack.updated" }`를 보내면 등록된 한 기기의 APNs 토큰과 환경으로 테스트 푸시 1건을 시도한다. 자유 입력 메시지와 APNs 토큰은 받지 않는다. 분당 5회로 제한하고 감사 기록에 요청을 남긴다. 응답 `data`는 `deviceId`, `type`, APNs 수락 여부 `accepted`, 실패 시 `reason`이다. APNs 수락은 실기기 수신을 보장하지 않는다.

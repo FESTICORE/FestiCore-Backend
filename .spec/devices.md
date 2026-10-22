@@ -6,7 +6,7 @@
 
 ## `PUT /api/v1/devices`
 
-기존 기기 갱신에는 같은 소유자의 Bearer가 필요하다. 익명 기기 갱신 시 새 `deviceAccessToken`이 발급되며 이전 토큰은 무효화된다. `liveActivityPushToStartToken`을 생략하면 기존 값이 유지되고, 명시적 `null`을 보내면 삭제한다. `apnsToken` 키는 항상 보내며 값이 없으면 `null`을 보낸다. `apnsEnvironment`는 앱의 APNs entitlement 값에 맞춰 `sandbox` 또는 `production`으로 보낸다. TestFlight는 `production`이며 Railway 개발/운영 환경과 별개다.
+기존 기기 갱신에는 같은 소유자의 Bearer가 필요하다. 익명 기기 갱신 시 같은 기기 식별자를 담은 `deviceAccessToken`을 다시 발급하며 기존 토큰도 만료 전까지 유효하다. 응답을 받지 못해 재시도해도 기기가 잠기지 않는다. `liveActivityPushToStartToken`을 생략하면 기존 값이 유지되고, 명시적 `null`을 보내면 삭제한다. `apnsToken` 키는 항상 보내며 값이 없으면 `null`을 보낸다. `apnsEnvironment`는 앱의 APNs entitlement 값에 맞춰 `sandbox` 또는 `production`으로 보낸다. TestFlight는 `production`이며 Railway 개발/운영 환경과 별개다.
 
 본문:
 
@@ -36,6 +36,6 @@ APNs 토큰은 제공할 때 2~256자 짝수 길이 hex 문자열이다. JSON �
 
 ## 축제 알림 구독
 
-`GET /api/v1/notifications/subscriptions`, `PUT /api/v1/notifications/subscriptions/{festivalId}`, `DELETE /api/v1/notifications/subscriptions/{festivalId}`를 사용한다. PUT 본문은 `{"pinned":true,"reminders":true,"packUpdates":false}`다. `pinned`는 필수, `reminders` 기본값은 true, `packUpdates` 기본값은 false다. `pinned:false`로 바꿔도 구독 행은 보존한다. 구독 PUT은 인증된 기기별 분당 10회로 제한한다. 경로의 `festivalId`는 구독 대상이며 기기 식별과 무관하다. 공개된 축제에 대해서만 저장한다. `PUT /api/v1/notifications/subscriptions/{festivalId}/pack-download`에 현재 발행된 `packVersion`을 보내면 팩 다운로드를 기록한다. 회원 탈퇴 시 해당 계정 기기의 구독과 푸시 토큰을 삭제한다. 발송 규칙은 [notifications.md](./notifications.md)를 따른다.
+`GET /api/v1/notifications/subscriptions`, `PUT /api/v1/notifications/subscriptions/{festivalId}`, `DELETE /api/v1/notifications/subscriptions/{festivalId}`를 사용한다. PUT 본문은 `{"pinned":true,"reminders":true,"packUpdates":false}`다. `pinned`는 필수다. 새 핀의 `reminders`와 `festivalStarts` 기본값은 true, `packUpdates`는 false다. 기존 구독을 수정하면서 생략한 알림 설정은 유지한다. 기존 알림 구독은 마이그레이션에서 핀으로 이관한다. `pinned:false`로 바꿔도 구독 행은 보존한다. 구독 PUT은 인증된 기기별 분당 10회로 제한한다. 경로의 `festivalId`는 구독 대상이며 기기 식별과 무관하다. 공개된 축제에 대해서만 저장한다. `PUT /api/v1/notifications/subscriptions/{festivalId}/pack-download`에 현재 발행된 `packVersion`을 보내면 팩 다운로드를 기록한다. 회원 탈퇴 시 해당 계정 기기와 구독, 푸시 토큰을 삭제한다. 발송 규칙은 [notifications.md](./notifications.md)를 따른다.
 
 공개 Swagger: `/api-docs/devices`. 관리자 Swagger에는 포함하지 않는다.

@@ -1,6 +1,5 @@
 import {
   ConflictException,
-  ForbiddenException,
   HttpException,
   HttpStatus,
   Injectable,
@@ -170,6 +169,7 @@ export class AuthService {
     }
     if (input.pushOptIn !== undefined) user.pushOptIn = input.pushOptIn;
     if (
+      (user.nicknameConfirmed || input.nickname !== undefined) &&
       user.nickname &&
       user.termsVersion === CURRENT_TERMS_VERSION &&
       user.termsAcceptedAt
@@ -178,18 +178,6 @@ export class AuthService {
     }
     await this.userRepo.save(user);
     return this.toView(user);
-  }
-
-  /** 팔로우·크루·기수 쓰기 전에 호출할 약관 정책. */
-  async requireCurrentTerms(userId: string): Promise<void> {
-    const user = await this.userRepo.findOne({ where: { id: userId } });
-    if (!user) throw new NotFoundException('사용자를 찾을 수 없습니다.');
-    if (!user.termsAcceptedAt || user.termsVersion !== CURRENT_TERMS_VERSION) {
-      throw new ForbiddenException({
-        code: 'TERMS_REQUIRED',
-        message: '필수 약관 동의가 필요합니다.',
-      });
-    }
   }
 
   /**
@@ -359,14 +347,9 @@ export class AuthService {
         )`,
           [userId],
         );
-        await manager.query(
-          `UPDATE "devices" SET "apnsToken" = NULL,
-         "liveActivityPushToStartToken" = NULL,
-         "liveActivityFestivalId" = NULL, "liveActivityId" = NULL,
-         "liveActivityPushToken" = NULL, "updatedAt" = now()
-         WHERE "userId" = $1`,
-          [userId],
-        );
+        await manager.query(`DELETE FROM "devices" WHERE "userId" = $1`, [
+          userId,
+        ]);
         await manager.delete(User, { id: userId });
         for (const flag of affectedFlags) {
           await manager.query(

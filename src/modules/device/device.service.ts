@@ -84,12 +84,11 @@ export class DeviceService {
       if (principal.kind === 'anonymous')
         throw new ForbiddenException('이미 등록된 기기입니다.');
       await this.ownedDevice(id, principal);
-      deviceTokenId = principal.kind === 'device' ? randomUUID() : null;
+      deviceTokenId = principal.kind === 'device' ? principal.tokenId : null;
       const update = await this.devices.update(
         this.ownerCondition(id, principal),
         {
           ...values,
-          ...(deviceTokenId ? { deviceTokenId } : {}),
         },
       );
       if (update.affected !== 1) {
@@ -205,10 +204,10 @@ export class DeviceService {
         ? previous.pinnedAt
         : new Date()
       : null;
-    const reminders = body.reminders ?? true;
-    const packUpdates = body.packUpdates ?? false;
+    const reminders = body.reminders ?? previous?.reminders ?? true;
+    const packUpdates = body.packUpdates ?? previous?.packUpdates ?? false;
     const festivalStarts =
-      body.festivalStarts ?? previous?.festivalStarts ?? false;
+      body.festivalStarts ?? previous?.festivalStarts ?? pinned;
     await this.subscriptions.save({
       deviceId: id,
       festivalId,

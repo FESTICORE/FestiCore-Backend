@@ -121,6 +121,15 @@ describe('festival draft validation', () => {
     expect(
       validateDraft({
         ...draft,
+        ticketLinks: [
+          { label: '예스24', url: 'https://ticket.example.com/1' },
+          { label: '멜론', url: 'https://ticket.example.com/1' },
+        ],
+      }),
+    ).toContain('ticketLinks: 최대 5개, 1..20자 라벨과 HTTPS URL 필요');
+    expect(
+      validateDraft({
+        ...draft,
         ticketLinks: Array.from({ length: 6 }, (_, index) => ({
           label: `예매처 ${index}`,
           url: `https://example.com/${index}`,

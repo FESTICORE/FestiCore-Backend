@@ -436,7 +436,18 @@ export class PublicFestivalService {
           lastDate,
           packVersion: row.publishedVersion,
           flagsEnabled: pack.flagsEnabled,
-          thumbUrl: publicImageUrl(pack.thumbUrl),
+          thumbUrl:
+            publicImageUrl(pack.thumbUrl) ??
+            requiredArray(pack.flags)
+              .filter(
+                (flag) =>
+                  object(flag) &&
+                  (flag.visibility === undefined ||
+                    flag.visibility === 'public'),
+              )
+              .map((flag) => publicImageUrl(flag.thumbUrl))
+              .find((url) => url !== null) ??
+            null,
           ticketLinks: projectedArray(pack.ticketLinks, ['label', 'url']),
           status:
             today < firstDate

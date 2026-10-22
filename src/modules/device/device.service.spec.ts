@@ -121,7 +121,7 @@ describe('DeviceService ownership and pins', () => {
     expect(devices.update).not.toHaveBeenCalled();
   });
 
-  it('rotates a matching device token on registration', async () => {
+  it('keeps a matching device token valid when registration is retried', async () => {
     devices.findOne.mockResolvedValue({
       id,
       userId: null,
@@ -131,11 +131,14 @@ describe('DeviceService ownership and pins', () => {
     expect(result).toHaveProperty('deviceAccessToken', 'issued-device-token');
     const [condition, values] = devices.update.mock.calls[0] as [
       { id: string; deviceTokenId: string },
-      { deviceTokenId: string },
+      Record<string, unknown>,
     ];
     expect(condition).toEqual({ id, deviceTokenId: 'token-a' });
-    expect(typeof values.deviceTokenId).toBe('string');
-    expect(values.deviceTokenId).not.toBe('token-a');
+    expect(values).not.toHaveProperty('deviceTokenId');
+    expect(jwt.signAsync).toHaveBeenCalledWith(
+      expect.objectContaining({ jti: 'token-a' }),
+      expect.any(Object),
+    );
   });
 
   it('lets user Bearer update only its own device', async () => {
@@ -183,6 +186,26 @@ describe('DeviceService ownership and pins', () => {
         packDownloadedVersion: 2,
       }),
     );
+  });
+
+  it('enables start notifications for a new pin without changing pack opt-in', async () => {
+    devices.findOne.mockResolvedValue({
+      id,
+      userId: null,
+      deviceTokenId: 'token-a',
+    });
+    const result = await service.subscribe(
+      id,
+      'fst_test',
+      { pinned: true },
+      device,
+    );
+    expect(result).toMatchObject({
+      pinned: true,
+      reminders: true,
+      packUpdates: false,
+      festivalStarts: true,
+    });
   });
 
   it('limits subscription writes by the authenticated device ID', async () => {

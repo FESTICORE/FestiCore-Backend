@@ -1,9 +1,11 @@
 import {
   BadRequestException,
   Controller,
+  ForbiddenException,
   Get,
   Headers,
   HttpException,
+  NotFoundException,
   Param,
   Query,
   Req,
@@ -200,21 +202,32 @@ export class PublicFestivalController {
     const principal = deviceId
       ? await this.deviceAuth.resolveOptionalPrincipal(request)
       : undefined;
+    response.setHeader('Vary', 'Authorization, X-Device-Id');
     if (deviceId && principal) {
-      const { items } = await this.devices.listSubscriptions(
-        deviceId,
-        principal,
-      );
-      const pins = new Map(items.map((item) => [item.festivalId, item.pinned]));
-      body.items = body.items.map((item) => ({
-        ...item,
-        pinned: pins.get(item.id) ?? false,
-      }));
-      response.setHeader('Cache-Control', 'private, max-age=60');
-      response.setHeader('Vary', 'Authorization, X-Device-Id');
-    } else {
-      response.setHeader('Cache-Control', 'public, max-age=3600');
+      try {
+        const { items } = await this.devices.listSubscriptions(
+          deviceId,
+          principal,
+        );
+        const pins = new Map(
+          items.map((item) => [item.festivalId, item.pinned]),
+        );
+        body.items = body.items.map((item) => ({
+          ...item,
+          pinned: pins.get(item.id) ?? false,
+        }));
+        response.setHeader('Cache-Control', 'private, max-age=60');
+      } catch (error) {
+        if (
+          !(error instanceof BadRequestException) &&
+          !(error instanceof ForbiddenException) &&
+          !(error instanceof NotFoundException)
+        )
+          throw error;
+      }
     }
+    if (!response.hasHeader('Cache-Control'))
+      response.setHeader('Cache-Control', 'public, max-age=3600');
     this.send(
       response,
       body,

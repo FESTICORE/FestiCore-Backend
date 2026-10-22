@@ -20,6 +20,9 @@ export class DevicePins1792500033000 implements MigrationInterface {
       'ALTER TABLE "device_subscriptions" ADD COLUMN "packDownloadedVersion" integer',
     );
     await queryRunner.query(
+      'UPDATE "device_subscriptions" SET "pinned" = true, "pinnedAt" = now()',
+    );
+    await queryRunner.query(
       'CREATE INDEX "IDX_device_subscriptions_reminder" ON "device_subscriptions"("festivalId") WHERE "pinned" = true AND "reminders" = true',
     );
     await queryRunner.query(

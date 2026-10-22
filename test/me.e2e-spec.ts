@@ -72,6 +72,17 @@ describe('Me API contract (e2e)', () => {
     expect(current.data.termsVersion).toBe('2026-10');
   });
 
+  it('약관 동의만으로 소셜 프로필 닉네임을 확정하지 않는다', async () => {
+    const response = await request(server)
+      .patch('/api/v1/me')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ acceptTerms: { version: '2026-10' } })
+      .expect(200);
+    expect(response.body).toMatchObject({
+      data: { nickname: '기존이름', nicknameConfirmed: false },
+    });
+  });
+
   it('잘못된 약관 버전은 422로 거부하고 프로필을 변경하지 않는다', async () => {
     const response = await request(server)
       .patch('/api/v1/me')
