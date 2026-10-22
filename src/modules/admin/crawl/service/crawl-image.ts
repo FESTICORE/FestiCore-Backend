@@ -15,6 +15,17 @@ export function selectRunImages(
   if (urls.length <= MAX_IMAGES_PER_RUN) return urls;
   const page = new URL(pageUrl);
   if (
+    page.hostname === 'ticket.melon.com' &&
+    page.pathname === '/search/index.htm'
+  ) {
+    const dayNumber = Math.floor(Date.parse(`${day}T00:00:00Z`) / 86_400_000);
+    const start = Number.isFinite(dayNumber) ? dayNumber % urls.length : 0;
+    return Array.from(
+      { length: MAX_IMAGES_PER_RUN },
+      (_, index) => urls[(start + index) % urls.length],
+    );
+  }
+  if (
     page.hostname !== 'ticket.melon.com' ||
     page.pathname !== '/performance/index.htm'
   )
@@ -68,6 +79,36 @@ function melonDetailImages(html: string, pageUrl: string): URL[] | null {
     const image = /\bsrc=["']([^"']+)["']/i.exec(tag)?.[1];
     if (image) add(image, 'cdnimg.melon.co.kr');
     if (urls.length >= 81) break;
+  }
+  return urls;
+}
+
+function melonSearchImages(html: string, pageUrl: string): URL[] | null {
+  const page = new URL(pageUrl);
+  if (
+    page.hostname !== 'ticket.melon.com' ||
+    page.pathname !== '/search/index.htm'
+  )
+    return null;
+  const urls: URL[] = [];
+  const seen = new Set<string>();
+  for (const row of html.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)) {
+    const raw = /<img\b[^>]*\bsrc=["']([^"']+)["']/i.exec(row[1])?.[1];
+    if (!raw) continue;
+    try {
+      const image = checkedUrl(new URL(raw, page).toString());
+      if (
+        image.hostname !== 'cdnticket.melon.co.kr' ||
+        !image.pathname.startsWith('/resource/image/upload/product/') ||
+        seen.has(image.toString())
+      )
+        continue;
+      seen.add(image.toString());
+      urls.push(image);
+      if (urls.length >= 100) break;
+    } catch {
+      /* Ignore malformed or unsafe image locations. */
+    }
   }
   return urls;
 }
@@ -147,6 +188,8 @@ export function discoverImageUrls(html: string, pageUrl: string): URL[] {
   if (officialImages) return officialImages;
   const melonImages = melonDetailImages(html, pageUrl);
   if (melonImages) return melonImages;
+  const melonSearchPosters = melonSearchImages(html, pageUrl);
+  if (melonSearchPosters) return melonSearchPosters;
   const yes24Images = yes24DetailImages(html, pageUrl);
   if (yes24Images) return yes24Images;
   const urls: URL[] = [];
