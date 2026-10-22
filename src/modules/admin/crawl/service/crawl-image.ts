@@ -11,14 +11,20 @@ import {
 const MAX_INPUT_BYTES = 5 * 1024 * 1024;
 const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
 const MAX_IMAGES_PER_RUN = 8;
+const MAX_MELON_DETAIL_IMAGES = 81;
 
 export function selectRunImages(
   urls: URL[],
   pageUrl: string,
   day: string,
 ): URL[] {
-  if (urls.length <= MAX_IMAGES_PER_RUN) return urls;
   const page = new URL(pageUrl);
+  if (
+    page.hostname === 'ticket.melon.com' &&
+    page.pathname === '/performance/index.htm'
+  )
+    return urls.slice(0, MAX_MELON_DETAIL_IMAGES);
+  if (urls.length <= MAX_IMAGES_PER_RUN) return urls;
   if (
     (page.hostname === 'ticket.melon.com' &&
       page.pathname === '/search/index.htm') ||
@@ -32,24 +38,7 @@ export function selectRunImages(
       (_, index) => urls[(start + index) % urls.length],
     );
   }
-  if (
-    page.hostname !== 'ticket.melon.com' ||
-    page.pathname !== '/performance/index.htm'
-  )
-    return urls.slice(0, MAX_IMAGES_PER_RUN);
-  const poster = urls[0];
-  const artists = urls.slice(1);
-  const dayNumber = Math.floor(Date.parse(`${day}T00:00:00Z`) / 86_400_000);
-  const start =
-    (Number.isFinite(dayNumber) ? dayNumber * (MAX_IMAGES_PER_RUN - 1) : 0) %
-    artists.length;
-  return [
-    poster,
-    ...Array.from(
-      { length: MAX_IMAGES_PER_RUN - 1 },
-      (_, index) => artists[(start + index) % artists.length],
-    ),
-  ];
+  return urls.slice(0, MAX_IMAGES_PER_RUN);
 }
 
 function melonDetailImages(html: string, pageUrl: string): URL[] | null {
