@@ -114,6 +114,25 @@ describe('crawl image safety', () => {
     ).toEqual(['https://tkfile.yes24.com/upload2/PerfBlog/cdf.jpg']);
   });
 
+  it('selects only matching YES24 English festival card posters', () => {
+    const card = (id: string, genre: string, posterId = id) =>
+      `<ul class="list_wrap"><li class="poster"><a href="/English/Perf/${id}"><img src="https://stkfile.yes24.com/upload2/PerfBlog/202610/20261012/20261012-${posterId}.jpg"></a></li><li class="conlist"><h3><a href="/English/Perf/${id}">Festival ${id}</a></h3><span>Genre</span>: [${genre}]</li></ul><div class="btn">`;
+    const html =
+      card('60590', 'Festival') +
+      card('54606', 'Festival') +
+      card('11111', 'Concert') +
+      card('22222', 'Festival', '99999');
+    expect(
+      discoverImageUrls(
+        html,
+        'https://ticket.yes24.com/English/Genre/Concert',
+      ).map(String),
+    ).toEqual([
+      'https://stkfile.yes24.com/upload2/PerfBlog/202610/20261012/20261012-60590.jpg',
+      'https://stkfile.yes24.com/upload2/PerfBlog/202610/20261012/20261012-54606.jpg',
+    ]);
+  });
+
   it('stores only the NOL product poster from the known ticket image host', () => {
     const html = `<meta property="og:image" content="https://ticketimage.interpark.com/Play/image/large/26/26013406_p.gif"><img src="https://evil.example/other.jpg">`;
     expect(
