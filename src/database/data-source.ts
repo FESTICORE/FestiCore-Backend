@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import { existsSync } from 'fs';
 import { DataSource, DataSourceOptions } from 'typeorm';
 import { resolveDbConnection } from '../config/db-ssl';
+import { SafeTypeOrmLogger } from '../common/logging/safe-typeorm.logger';
 
 /**
  * TypeORM CLI(마이그레이션 생성/실행) 전용 DataSource.
@@ -35,9 +36,9 @@ export function createDataSourceOptions(
     entities: [`${root}/**/*.entity.{ts,js}`],
     migrations: [`${root}/database/migrations/*.{ts,js}`],
     synchronize: false,
-    logging: ['error', 'warn', 'migration'] as (
-      'error' | 'warn' | 'migration'
-    )[],
+    // migration CLI는 logging 옵션을 덮어쓰므로 별도의 안전한 로거가 필요하다.
+    logging: ['warn', 'migration'] as ('warn' | 'migration')[],
+    logger: new SafeTypeOrmLogger(),
   };
 
   return url

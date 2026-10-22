@@ -1,6 +1,7 @@
 import { ConfigService } from '@nestjs/config';
 import { TypeOrmModuleOptions } from '@nestjs/typeorm';
 import { resolveDbConnection } from './db-ssl';
+import { SafeTypeOrmLogger } from '../common/logging/safe-typeorm.logger';
 
 export const typeOrmConfig = (config: ConfigService): TypeOrmModuleOptions => {
   const isProd = config.get<string>('NODE_ENV') === 'production';
@@ -33,10 +34,9 @@ export const typeOrmConfig = (config: ConfigService): TypeOrmModuleOptions => {
     migrationsRun,
     // 컴파일 전(src, ts-node)과 후(dist, node) 모두에서 마이그레이션을 로드한다.
     migrations: [__dirname + '/../database/migrations/*.{js,ts}'],
-    // 쿼리 로깅은 매개변수(토큰 원문 등)까지 찍히므로 끄고 오류·경고·마이그레이션만 남긴다.
-    logging: ['error', 'warn', 'migration'] as (
-      'error' | 'warn' | 'migration'
-    )[],
+    // CLI가 logging 옵션을 덮어써도 쿼리·매개변수를 출력하지 않는 로거를 사용한다.
+    logging: ['warn', 'migration'] as ('warn' | 'migration')[],
+    logger: new SafeTypeOrmLogger(),
     poolSize: poolMax,
     extra: {
       max: poolMax,
