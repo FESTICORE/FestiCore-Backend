@@ -4,6 +4,7 @@ import { checkedUrl } from './crawl-fetch';
 import {
   melonSearchCandidates,
   nolPosterUrl,
+  ticketCandidates,
   yes24EventJson,
 } from './crawl-parser';
 
@@ -185,6 +186,12 @@ export function discoverImageUrls(html: string, pageUrl: string): URL[] {
   if (melonSearchPosters) return melonSearchPosters;
   const yes24Images = yes24DetailImages(html, pageUrl);
   if (yes24Images) return yes24Images;
+  const page = new URL(pageUrl);
+  if (page.hostname === 'nol.yanolja.com' && page.pathname === '/ticket') {
+    return ticketCandidates(html, pageUrl).flatMap((candidate) =>
+      candidate.posterUrl ? [checkedUrl(candidate.posterUrl)] : [],
+    );
+  }
   const nolPoster = nolPosterUrl(html, new URL(pageUrl));
   if (nolPoster) return [checkedUrl(nolPoster)];
   const urls: URL[] = [];
