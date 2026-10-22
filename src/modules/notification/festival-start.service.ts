@@ -40,6 +40,37 @@ interface DeliveryTarget {
   name: string | null;
   days: unknown;
   publishedVersion: number;
+  checklist: unknown;
+  packDownloadedVersion: number | null;
+}
+
+const REMINDER_PREFIX = 'festival-reminder:';
+
+function reminderAt(days: Day[]): Date | null {
+  const firstDate = days.map((day) => day.date).sort()[0];
+  if (!firstDate) return null;
+  const start = new Date(`${firstDate}T09:00:00.000Z`);
+  if (
+    Number.isNaN(start.getTime()) ||
+    start.toISOString().slice(0, 10) !== firstDate
+  )
+    return null;
+  return new Date(start.getTime() - 24 * 60 * 60_000);
+}
+
+function checklistSummary(value: unknown): string {
+  if (!Array.isArray(value)) return '';
+  const labels = value
+    .filter(
+      (item): item is { label: string } =>
+        item !== null &&
+        typeof item === 'object' &&
+        typeof (item as { label?: unknown }).label === 'string',
+    )
+    .map((item) => item.label.trim().slice(0, 40))
+    .filter(Boolean)
+    .slice(0, 3);
+  return labels.length ? ` ${labels.join(', ')} 챙기세요.` : '';
 }
 
 function validDays(value: unknown): Day[] {
@@ -142,7 +173,28 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
       FROM "admin_festivals"
       WHERE "published" IS NOT NULL AND "publishedVersion" > 0`);
     for (const row of rows) {
-      for (const day of validDays(row.days)) {
+      const days = validDays(row.days);
+      const reminder = reminderAt(days);
+      if (reminder && reminder.getTime() >= now.getTime() - LATE_GRACE_MS) {
+        await this.db.query(
+          `INSERT INTO "notification_deliveries"
+            ("id", "deviceId", "festivalId", "eventKey", "scheduledAt", "nextAttemptAt")
+           SELECT gen_random_uuid(), s."deviceId", $1, $2, $3::timestamptz, $3::timestamptz
+           FROM "device_subscriptions" s
+           JOIN "devices" d ON d."id" = s."deviceId"
+           WHERE s."festivalId" = $1 AND s."pinned" = true AND s."reminders" = true
+             AND d."apnsToken" IS NOT NULL AND d."apnsEnvironment" IS NOT NULL
+           ON CONFLICT ("deviceId", "eventKey") DO UPDATE
+             SET "scheduledAt" = EXCLUDED."scheduledAt",
+                 "nextAttemptAt" = EXCLUDED."nextAttemptAt",
+                 "status" = 'pending', "leaseUntil" = NULL
+           WHERE "notification_deliveries"."status" = 'cancelled'
+              OR ("notification_deliveries"."status" = 'pending'
+                  AND "notification_deliveries"."scheduledAt" <> EXCLUDED."scheduledAt")`,
+          [row.id, `${REMINDER_PREFIX}${row.id}`, reminder],
+        );
+      }
+      for (const day of days) {
         const startsAt = new Date(day.startsAt);
         if (startsAt.getTime() < now.getTime() - LATE_GRACE_MS) continue;
         const eventKey = `festival-start:${row.id}:${day.date}`;
@@ -189,15 +241,24 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
     const packUpdate = job.eventKey.startsWith(
       `pack-updated:${job.festivalId}:`,
     );
+    const reminder = job.eventKey === `${REMINDER_PREFIX}${job.festivalId}`;
+    const subscriptionFlag = packUpdate
+      ? 'packUpdates'
+      : reminder
+        ? 'reminders'
+        : 'festivalStarts';
     const rows = await this.db.query<DeliveryTarget[]>(
       `
       SELECT d."apnsToken", d."apnsEnvironment",
         f."published"->>'name' AS "name", f."published"->'days' AS "days",
-        f."publishedVersion" AS "publishedVersion"
+        f."published"->'checklist' AS "checklist",
+        f."publishedVersion" AS "publishedVersion",
+        s."packDownloadedVersion" AS "packDownloadedVersion"
       FROM "notification_deliveries" n
       JOIN "devices" d ON d."id" = n."deviceId"
       JOIN "device_subscriptions" s ON s."deviceId" = n."deviceId"
-        AND s."festivalId" = n."festivalId" AND s."${packUpdate ? 'packUpdates' : 'festivalStarts'}" = true
+        AND s."festivalId" = n."festivalId" AND s."${subscriptionFlag}" = true
+        ${reminder ? 'AND s."pinned" = true' : ''}
       JOIN "admin_festivals" f ON f."id" = n."festivalId"
         AND f."published" IS NOT NULL AND f."publishedVersion" > 0
       WHERE n."id" = $1 AND n."status" = 'leased'
@@ -224,6 +285,47 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
           target.apnsEnvironment!,
           job.festivalId,
           expectedVersion,
+        ),
+      );
+      return;
+    }
+    if (reminder) {
+      const currentReminder = reminderAt(validDays(target?.days));
+      if (
+        !target?.apnsToken ||
+        !target.apnsEnvironment ||
+        !target.name ||
+        !currentReminder ||
+        currentReminder.getTime() < now.getTime() - LATE_GRACE_MS
+      ) {
+        await this.finish(job, 'cancelled', 'TARGET_UNAVAILABLE');
+        return;
+      }
+      if (currentReminder.getTime() !== new Date(job.scheduledAt).getTime()) {
+        await this.db.query(
+          `UPDATE "notification_deliveries"
+           SET "status" = 'pending', "scheduledAt" = $3, "nextAttemptAt" = $3,
+             "leaseUntil" = NULL, "lastErrorCode" = NULL
+           WHERE "id" = $1 AND "status" = 'leased' AND "leaseUntil" = $2`,
+          [job.id, job.leaseUntil, currentReminder],
+        );
+        return;
+      }
+      const hasPack =
+        target.packDownloadedVersion !== null &&
+        Number(target.packDownloadedVersion) ===
+          Number(target.publishedVersion);
+      await this.sendDelivery(job, () =>
+        this.apns.sendReminderNotification(
+          target.apnsToken!,
+          target.apnsEnvironment!,
+          {
+            festivalId: job.festivalId,
+            title: `${target.name} 준비물`,
+            body: `준비물 확인했어요?${checklistSummary(target.checklist)}${hasPack ? '' : ' 지금 팩을 받아 두세요.'}`,
+            eventKey: job.eventKey,
+            hasPack,
+          },
         ),
       );
       return;

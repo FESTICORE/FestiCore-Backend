@@ -69,6 +69,16 @@ describe('ticket discovery catalog', () => {
       lastDate: '2026-12-27',
       packVersion: 0,
       status: 'discovered',
+      ticketLinks: [
+        {
+          label: '멜론티켓',
+          url: 'https://ticket.melon.com/performance/index.htm?prodId=214100',
+        },
+        {
+          label: '멜론티켓',
+          url: 'https://ticket.melon.com/performance/index.htm?prodId=213769',
+        },
+      ],
     });
     expect(entries[0]).not.toHaveProperty('startsAt');
   });
@@ -170,6 +180,13 @@ describe('ticket discovery catalog', () => {
       { name: 'Band', sourceUrl: 'https://cdnimg.melon.co.kr/band.jpg' },
       { name: 'Bad' },
     ]);
+    expect(entries[0].ticketLinks).toEqual([
+      { label: '예스24', url: 'https://ticket.yes24.com/Perf/59840' },
+      {
+        label: '멜론티켓',
+        url: 'https://ticket.melon.com/performance/index.htm?prodId=213793',
+      },
+    ]);
   });
 
   it('returns official festival sources and verified Instagram account links', () => {
@@ -219,6 +236,13 @@ describe('ticket discovery catalog', () => {
     expect(merged[0].officialInstagramUrl).toBe(
       'https://www.instagram.com/grandmintfestival/',
     );
+    expect(merged[0].ticketLinks).toEqual([
+      { label: '공식 사이트', url: base.url },
+      {
+        label: '공식 인스타그램',
+        url: 'https://www.instagram.com/grandmintfestival/',
+      },
+    ]);
     expect(merged[0].posterUrl).toBe(
       'https://mintpaper.s3.ap-northeast-2.amazonaws.com/gmf.jpg',
     );

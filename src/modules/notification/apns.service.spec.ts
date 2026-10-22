@@ -157,6 +157,39 @@ describe('ApnsService', () => {
     });
   });
 
+  it.each([true, false])(
+    'routes a festival reminder based on downloaded pack state %s',
+    async (hasPack) => {
+      const { session, stream } = mockResponse(200);
+      const service = new ApnsService(config(credentials));
+      await service.sendReminderNotification(DEVICE_TOKEN, 'production', {
+        festivalId: 'fst_12345678',
+        title: '축제 준비물',
+        body: '준비물 확인했어요?',
+        eventKey: 'festival-reminder:fst_12345678',
+        hasPack,
+      });
+      const headers = (
+        session.request.mock.calls as unknown[][]
+      )[0][0] as Record<string, string>;
+      expect(headers['apns-push-type']).toBe('alert');
+      expect(headers['apns-priority']).toBe('10');
+      const payload = JSON.parse(
+        (stream.end.mock.calls as unknown[][])[0][0] as string,
+      ) as Record<string, unknown>;
+      expect(payload).toMatchObject({
+        type: 'festival.reminder',
+        festivalId: 'fst_12345678',
+        route: hasPack ? '/festivals/fst_12345678/checklist' : '/',
+        eventKey: 'festival-reminder:fst_12345678',
+        aps: {
+          alert: { title: '축제 준비물', body: '준비물 확인했어요?' },
+          sound: 'default',
+        },
+      });
+    },
+  );
+
   it('does not contact APNs for malformed tokens or missing credentials', async () => {
     const service = new ApnsService(config(credentials));
     await expect(

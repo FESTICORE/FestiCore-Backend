@@ -10,9 +10,11 @@ import { ImageStorageService } from '../storage/image-storage.service';
 import { PublicFestivalService } from './public-festival.service';
 import { PublicLiveService } from './public-live.service';
 import { PublicFestivalUpdatesGateway } from './public-festival-updates.gateway';
+import { DeviceModule } from '../device/device.module';
 
 @Module({
   imports: [
+    DeviceModule,
     JwtModule.register({}),
     TypeOrmModule.forFeature([
       AdminFestival,

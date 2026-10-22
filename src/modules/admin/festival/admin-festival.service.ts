@@ -83,6 +83,8 @@ export class AdminFestivalService {
       venue: input?.venue,
       timezone: 'Asia/Seoul',
       days: input?.days,
+      thumbUrl: null,
+      ticketLinks: [],
       flagsEnabled: false,
       stages: [],
       sets: [],

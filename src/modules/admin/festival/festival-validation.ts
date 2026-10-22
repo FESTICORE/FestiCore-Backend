@@ -6,6 +6,8 @@ const keys = new Set([
   'venue',
   'timezone',
   'days',
+  'thumbUrl',
+  'ticketLinks',
   'flagsEnabled',
   'source',
   'stages',
@@ -76,6 +78,30 @@ export function validateDraft(
   }
   if (typeof draft.flagsEnabled !== 'boolean')
     errors.push('flagsEnabled: boolean 필요');
+  if (
+    draft.thumbUrl !== undefined &&
+    draft.thumbUrl !== null &&
+    (typeof draft.thumbUrl !== 'string' ||
+      !/^(https:\/\/[^\s]+|\/api\/v1\/festivals\/images\/[0-9a-f-]+\.webp)$/.test(
+        draft.thumbUrl,
+      ))
+  )
+    errors.push('thumbUrl: HTTPS URL, 보관 이미지 경로 또는 null 필요');
+  if (
+    draft.ticketLinks !== undefined &&
+    (!Array.isArray(draft.ticketLinks) ||
+      draft.ticketLinks.length > 5 ||
+      draft.ticketLinks.some(
+        (link) =>
+          !object(link) ||
+          typeof link.label !== 'string' ||
+          [...link.label].length < 1 ||
+          [...link.label].length > 20 ||
+          typeof link.url !== 'string' ||
+          !/^https:\/\/[^\s]+$/.test(link.url),
+      ))
+  )
+    errors.push('ticketLinks: 최대 5개, 1..20자 라벨과 HTTPS URL 필요');
   for (const [name, max] of [
     ['stages', 8],
     ['sets', 400],

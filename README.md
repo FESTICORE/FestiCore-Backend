@@ -13,13 +13,15 @@
 | admin         | 일반 로그인 JWT의 관리자 권한 검사, 축제 초안·발행·롤백                           |
 | storage       | Railway 비공개 버킷의 WebP 사진 저장·읽기                                        |
 | flags         | 공개 깃발, 팔로우·기수·상태·사진·관리자 신고 처리                                |
-| devices       | 기기 등록·조회·삭제와 Live Activity 토큰 관리                                    |
-| notifications | 축제 시작 알림 구독·예약 작업·APNs 발송                                          |
-| public        | 축제 목록·오프라인 팩과 공개 팩 갱신 WebSocket                                    |
+| devices       | 익명 기기 토큰 등록·소유권 확인·핀·Live Activity 토큰 관리                       |
+| notifications | D-1 리마인더·축제 시작 알림 예약·APNs 발송                                       |
+| public        | 축제 목록·예매 링크·오프라인 팩과 공개 팩 갱신 WebSocket                          |
 | health        | `GET /api/v1/health` — DB 실패 시 503                                            |
 
 구조와 규칙은 [아키텍처 문서](./docs/architecture/ARCHITECTURE.md), 엔드포인트 계약은 [.spec/](./.spec/README.md),
 배포는 [Railway 문서](./docs/deployment/RAILWAY.md)를 본다. 문서 전체 목록은 [docs/](./docs/README.md)에 있다.
+
+API v0.2 변경 내역과 검증 범위는 [v0.2 반영 문서](./.spec/api-v0.2-adoption.md)에 정리했다. 익명 기기는 첫 `PUT /api/v1/devices` 응답의 `deviceAccessToken`을 저장하고 이후 기기 API에 `Authorization: Bearer`와 `X-Device-Id`를 함께 보낸다.
 
 ## 로컬 실행
 

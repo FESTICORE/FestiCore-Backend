@@ -28,12 +28,24 @@ export interface DiscoverySummary {
   packVersion: 0;
   flagsEnabled: false;
   thumbUrl: string | null;
+  ticketLinks: { label: string; url: string }[];
   status: 'discovered';
   sourceUrl: string;
   officialInstagramUrl?: string;
   posterUrl?: string;
   artists?: { name: string; sourceUrl?: string; imageUrl?: string | null }[];
   sortAt: string;
+}
+
+function ticketLabel(hostname: string): string {
+  return (
+    {
+      'ticket.melon.com': '멜론티켓',
+      'ticket.yes24.com': '예스24',
+      'nol.yanolja.com': 'NOL',
+      'mintpaper.co.kr': '공식 사이트',
+    }[hostname] ?? '공식 사이트'
+  );
 }
 
 function officialInstagramUrl(raw: unknown): string | null {
@@ -288,8 +300,25 @@ export function discoverySummaries(
     const artists = verifiedArtists(value.artists);
     const existing = found.get(key);
     if (existing) {
+      if (
+        existing.ticketLinks.length < 5 &&
+        !existing.ticketLinks.some((link) => link.url === url.toString())
+      )
+        existing.ticketLinks.push({
+          label: ticketLabel(url.hostname),
+          url: url.toString(),
+        });
       if (instagramUrl && !existing.officialInstagramUrl)
         existing.officialInstagramUrl = instagramUrl;
+      if (
+        instagramUrl &&
+        existing.ticketLinks.length < 5 &&
+        !existing.ticketLinks.some((link) => link.url === instagramUrl)
+      )
+        existing.ticketLinks.push({
+          label: '공식 인스타그램',
+          url: instagramUrl,
+        });
       if (posterUrl && !existing.posterUrl) existing.posterUrl = posterUrl;
       if (artists.length && !existing.artists?.length)
         existing.artists = artists;
@@ -304,6 +333,12 @@ export function discoverySummaries(
       packVersion: 0,
       flagsEnabled: false,
       thumbUrl: null,
+      ticketLinks: [
+        { label: ticketLabel(url.hostname), url: url.toString() },
+        ...(instagramUrl
+          ? [{ label: '공식 인스타그램', url: instagramUrl }]
+          : []),
+      ],
       status: 'discovered',
       sourceUrl: url.toString(),
       ...(instagramUrl ? { officialInstagramUrl: instagramUrl } : {}),

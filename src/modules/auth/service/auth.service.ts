@@ -1,5 +1,8 @@
 import {
   ConflictException,
+  ForbiddenException,
+  HttpException,
+  HttpStatus,
   Injectable,
   Logger,
   NotFoundException,
@@ -16,15 +19,27 @@ import { AppleService } from './apple.service';
 import { AppleRevokeRetryService } from './apple-revoke-retry.service';
 import { GoogleService } from './google.service';
 import { TokenService } from './token.service';
+import { CURRENT_TERMS_VERSION } from '../terms';
 
 // Postgres unique 제약 위반 코드.
 const UNIQUE_VIOLATION = '23505';
+export { CURRENT_TERMS_VERSION } from '../terms';
+
+export interface UpdateMeInput {
+  nickname?: string;
+  acceptTerms?: { version: string };
+  pushOptIn?: boolean;
+}
 
 export interface UserView {
   id: string;
   provider: string;
   email: string | null;
   nickname: string | null;
+  nicknameConfirmed: boolean;
+  termsAcceptedAt: Date | null;
+  termsVersion: string | null;
+  pushOptIn: boolean;
   profileImageUrl: string | null;
 }
 
@@ -133,12 +148,48 @@ export class AuthService {
     return { ...this.toView(user), admin: admins[0] ?? null };
   }
 
-  async updateMe(userId: string, nickname: string): Promise<UserView> {
+  async updateMe(userId: string, input: UpdateMeInput): Promise<UserView> {
     const user = await this.userRepo.findOne({ where: { id: userId } });
     if (!user) throw new NotFoundException('사용자를 찾을 수 없습니다.');
-    user.nickname = nickname;
+    if (
+      input.acceptTerms &&
+      input.acceptTerms.version !== CURRENT_TERMS_VERSION
+    ) {
+      throw new HttpException(
+        {
+          code: 'TERMS_VERSION_OUTDATED',
+          message: '현재 약관 버전에 다시 동의해야 합니다.',
+        },
+        HttpStatus.UNPROCESSABLE_ENTITY,
+      );
+    }
+    if (input.nickname !== undefined) user.nickname = input.nickname;
+    if (input.acceptTerms) {
+      user.termsVersion = CURRENT_TERMS_VERSION;
+      user.termsAcceptedAt = new Date();
+    }
+    if (input.pushOptIn !== undefined) user.pushOptIn = input.pushOptIn;
+    if (
+      user.nickname &&
+      user.termsVersion === CURRENT_TERMS_VERSION &&
+      user.termsAcceptedAt
+    ) {
+      user.nicknameConfirmed = true;
+    }
     await this.userRepo.save(user);
     return this.toView(user);
+  }
+
+  /** 팔로우·크루·기수 쓰기 전에 호출할 약관 정책. */
+  async requireCurrentTerms(userId: string): Promise<void> {
+    const user = await this.userRepo.findOne({ where: { id: userId } });
+    if (!user) throw new NotFoundException('사용자를 찾을 수 없습니다.');
+    if (!user.termsAcceptedAt || user.termsVersion !== CURRENT_TERMS_VERSION) {
+      throw new ForbiddenException({
+        code: 'TERMS_REQUIRED',
+        message: '필수 약관 동의가 필요합니다.',
+      });
+    }
   }
 
   /**
@@ -424,6 +475,10 @@ export class AuthService {
           ...where,
           email: profile.email ?? null,
           nickname: profile.name?.slice(0, 30) ?? null,
+          nicknameConfirmed: false,
+          termsAcceptedAt: null,
+          termsVersion: null,
+          pushOptIn: false,
           profileImageUrl: profile.picture ?? null,
         }),
       );
@@ -491,6 +546,10 @@ export class AuthService {
       provider: user.provider,
       email: user.email,
       nickname: user.nickname,
+      nicknameConfirmed: user.nicknameConfirmed ?? false,
+      termsAcceptedAt: user.termsAcceptedAt ?? null,
+      termsVersion: user.termsVersion ?? null,
+      pushOptIn: user.pushOptIn ?? false,
       profileImageUrl: user.profileImageUrl,
     };
   }

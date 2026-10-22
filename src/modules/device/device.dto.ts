@@ -3,6 +3,8 @@ import {
   IsDefined,
   IsIn,
   IsOptional,
+  IsInt,
+  Min,
   IsString,
   Matches,
   MaxLength,
@@ -79,11 +81,29 @@ export class LiveActivityDto {
 }
 
 export class DeviceSubscriptionDto {
-  @ApiProperty({ example: true, description: '축제 개최일 시작 알림' })
-  @IsBoolean()
-  festivalStarts!: boolean;
-
   @ApiProperty({ example: true })
   @IsBoolean()
-  packUpdates!: boolean;
+  pinned!: boolean;
+
+  @ApiPropertyOptional({ example: true, default: true })
+  @IsOptional()
+  @IsBoolean()
+  reminders?: boolean;
+
+  @ApiProperty({ example: true, description: '축제 개최일 시작 알림' })
+  @IsOptional()
+  @IsBoolean()
+  festivalStarts?: boolean;
+
+  @ApiPropertyOptional({ example: false, default: false })
+  @IsOptional()
+  @IsBoolean()
+  packUpdates?: boolean;
+}
+
+export class PackDownloadDto {
+  @ApiProperty({ example: 1, minimum: 1 })
+  @IsInt()
+  @Min(1)
+  packVersion!: number;
 }

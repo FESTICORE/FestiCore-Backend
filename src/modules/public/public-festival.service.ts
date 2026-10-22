@@ -41,7 +41,9 @@ function projectSource(value: unknown): Document {
 
 function publicImageUrl(value: unknown): string | null {
   return typeof value === 'string' &&
-    (value.startsWith('https://') || value.startsWith('/api/v1/flags/'))
+    (value.startsWith('https://') ||
+      value.startsWith('/api/v1/flags/') ||
+      value.startsWith('/api/v1/festivals/images/'))
     ? value
     : null;
 }
@@ -86,6 +88,8 @@ function projectPack(pack: Document): Document {
     'mapImageUrl',
     'mapAspect',
   ]);
+  result.thumbUrl = publicImageUrl(pack.thumbUrl);
+  result.ticketLinks = projectedArray(pack.ticketLinks, ['label', 'url']);
   result.days = projectedArray(pack.days, ['date', 'startsAt', 'endsAt']);
   result.source = projectSource(pack.source);
   result.stages = projectedArray(pack.stages, ['id', 'name', 'order', 'color']);
@@ -185,7 +189,10 @@ export class PublicFestivalService {
     }
     const row = await this.festivals.findOne({ where: { id } });
     if (!row?.published || row.publishedVersion < 1)
-      throw new NotFoundException('공개된 페스티벌을 찾을 수 없습니다.');
+      throw new NotFoundException({
+        code: 'FESTIVAL_NOT_FOUND',
+        message: '공개된 페스티벌을 찾을 수 없습니다.',
+      });
     const document = projectPack(row.published);
     if (generation !== null) await this.cache.setPack(id, generation, document);
     return document;
@@ -286,14 +293,21 @@ export class PublicFestivalService {
 
   async detail(id: string) {
     if (!/^fst_[0-9a-z]+$/.test(id))
-      throw new NotFoundException('축제를 찾을 수 없습니다.');
+      throw new NotFoundException({
+        code: 'FESTIVAL_NOT_FOUND',
+        message: '축제를 찾을 수 없습니다.',
+      });
     const published = await this.festivals.findOne({ where: { id } });
     if (published?.published && published.publishedVersion > 0)
       return projectPack(published.published);
     const entry = (await this.discoveryCatalog()).find(
       (item) => item.id === id,
     );
-    if (!entry) throw new NotFoundException('축제를 찾을 수 없습니다.');
+    if (!entry)
+      throw new NotFoundException({
+        code: 'FESTIVAL_NOT_FOUND',
+        message: '축제를 찾을 수 없습니다.',
+      });
     await this.attachStoredImages([entry]);
     return {
       id: entry.id,
@@ -305,6 +319,7 @@ export class PublicFestivalService {
       packVersion: entry.packVersion,
       flagsEnabled: entry.flagsEnabled,
       thumbUrl: entry.thumbUrl,
+      ticketLinks: entry.ticketLinks,
       sourceUrl: entry.sourceUrl,
       officialInstagramUrl: entry.officialInstagramUrl ?? null,
       artists:
@@ -410,11 +425,6 @@ export class PublicFestivalService {
         lastDate < floor
       )
         return [];
-      const flags = requiredArray(pack.flags).filter(
-        (flag) =>
-          (flag.visibility === undefined || flag.visibility === 'public') &&
-          flag.hidden !== true,
-      );
       return [
         {
           id: row.id,
@@ -426,7 +436,8 @@ export class PublicFestivalService {
           lastDate,
           packVersion: row.publishedVersion,
           flagsEnabled: pack.flagsEnabled,
-          thumbUrl: publicImageUrl(flags[0]?.thumbUrl),
+          thumbUrl: publicImageUrl(pack.thumbUrl),
+          ticketLinks: projectedArray(pack.ticketLinks, ['label', 'url']),
           status:
             today < firstDate
               ? 'upcoming'
@@ -456,6 +467,7 @@ export class PublicFestivalService {
       packVersion: summary.packVersion,
       flagsEnabled: summary.flagsEnabled,
       thumbUrl: summary.thumbUrl,
+      ticketLinks: summary.ticketLinks,
       status: summary.status,
       ...('sourceUrl' in summary ? { sourceUrl: summary.sourceUrl } : {}),
       ...('officialInstagramUrl' in summary

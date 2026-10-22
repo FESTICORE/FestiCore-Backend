@@ -21,19 +21,161 @@ describe('FestivalStartService', () => {
     const query = jest.fn<Promise<unknown>, [string, unknown[]?]>();
     const sendStartNotification = jest.fn();
     const sendPackUpdated = jest.fn();
+    const sendReminderNotification = jest.fn();
     const isConfigured = jest.fn().mockReturnValue(true);
     const service = new FestivalStartService(
       { query } as never,
-      { sendStartNotification, sendPackUpdated, isConfigured } as never,
+      {
+        sendStartNotification,
+        sendPackUpdated,
+        sendReminderNotification,
+        isConfigured,
+      } as never,
     );
     return {
       service,
       query,
       sendStartNotification,
       sendPackUpdated,
+      sendReminderNotification,
       isConfigured,
     };
   }
+
+  it('schedules one D-1 18:00 KST reminder for the first published day and deduplicates by festival', async () => {
+    const { service, query } = setup();
+    query.mockResolvedValueOnce([
+      {
+        id: festivalId,
+        days: [
+          { date: '2026-11-21', startsAt: '2026-11-21T12:00:00+09:00' },
+          { date: '2026-11-20', startsAt: '2026-11-20T12:00:00+09:00' },
+        ],
+      },
+    ]);
+    query.mockResolvedValue([]);
+
+    await service.schedulePublished(new Date('2026-11-19T00:00:00Z'));
+
+    expect(query).toHaveBeenCalledTimes(4);
+    expect(query.mock.calls[1][0]).toContain(
+      's."pinned" = true AND s."reminders" = true',
+    );
+    expect(query.mock.calls[1][0]).toContain(
+      'ON CONFLICT ("deviceId", "eventKey")',
+    );
+    expect(query.mock.calls[1][0]).toContain(
+      '"notification_deliveries"."status" = \'pending\'',
+    );
+    expect(query.mock.calls[1][0]).not.toContain(
+      '"notification_deliveries"."status" = \'sent\'',
+    );
+    expect(query.mock.calls[1][1]).toEqual([
+      festivalId,
+      `festival-reminder:${festivalId}`,
+      new Date('2026-11-19T09:00:00Z'),
+    ]);
+  });
+
+  it('keeps D-1 18:00 KST across a year boundary', async () => {
+    const { service, query } = setup();
+    query
+      .mockResolvedValueOnce([
+        {
+          id: festivalId,
+          days: [{ date: '2027-01-01', startsAt: '2027-01-01T00:30:00+09:00' }],
+        },
+      ])
+      .mockResolvedValue([]);
+    await service.schedulePublished(new Date('2026-12-30T00:00:00Z'));
+    expect(query.mock.calls[1][1]?.[2]).toEqual(
+      new Date('2026-12-31T09:00:00Z'),
+    );
+  });
+
+  it('rechecks pin and reminder opt-in before sending, then cancels an unsubscribed job', async () => {
+    const { service, query, sendReminderNotification } = setup();
+    query.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+    await service.deliver(
+      { ...job, eventKey: `festival-reminder:${festivalId}` },
+      scheduledAt,
+    );
+    expect(query.mock.calls[0][0]).toContain('s."reminders" = true');
+    expect(query.mock.calls[0][0]).toContain('s."pinned" = true');
+    expect(sendReminderNotification).not.toHaveBeenCalled();
+    expect(query.mock.calls[1][1]).toEqual([
+      job.id,
+      leaseUntil,
+      'cancelled',
+      'TARGET_UNAVAILABLE',
+    ]);
+  });
+
+  it.each([null, 2, 3])(
+    'sends checklist reminder with pack version %s',
+    async (packDownloadedVersion) => {
+      const { service, query, sendReminderNotification } = setup();
+      const reminderJob = {
+        ...job,
+        eventKey: `festival-reminder:${festivalId}`,
+        scheduledAt: new Date('2026-11-19T09:00:00Z'),
+      };
+      query
+        .mockResolvedValueOnce([
+          {
+            apnsToken: 'token',
+            apnsEnvironment: 'production',
+            name: '축제',
+            days: [
+              { date: '2026-11-20', startsAt: '2026-11-20T12:00:00+09:00' },
+            ],
+            checklist: [{ label: '티켓' }, { label: '보조배터리' }],
+            publishedVersion: 3,
+            packDownloadedVersion,
+          },
+        ])
+        .mockResolvedValueOnce([]);
+      sendReminderNotification.mockResolvedValueOnce({ accepted: true });
+
+      await service.deliver(reminderJob, new Date('2026-11-19T09:01:00Z'));
+
+      expect(sendReminderNotification).toHaveBeenCalledWith(
+        'token',
+        'production',
+        expect.objectContaining({
+          body: `준비물 확인했어요? 티켓, 보조배터리 챙기세요.${packDownloadedVersion === 3 ? '' : ' 지금 팩을 받아 두세요.'}`,
+          hasPack: packDownloadedVersion === 3,
+        }),
+      );
+    },
+  );
+
+  it('reschedules an unsent reminder when the first day changes', async () => {
+    const { service, query, sendReminderNotification } = setup();
+    query.mockResolvedValueOnce([
+      {
+        apnsToken: 'token',
+        apnsEnvironment: 'sandbox',
+        name: '축제',
+        days: [{ date: '2026-11-21', startsAt: '2026-11-21T12:00:00+09:00' }],
+        checklist: [],
+        publishedVersion: 1,
+        packDownloadedVersion: null,
+      },
+    ]);
+    await service.deliver(
+      {
+        ...job,
+        eventKey: `festival-reminder:${festivalId}`,
+        scheduledAt: new Date('2026-11-19T09:00:00Z'),
+      },
+      new Date('2026-11-19T09:00:00Z'),
+    );
+    expect(sendReminderNotification).not.toHaveBeenCalled();
+    expect(query.mock.calls[1][1]?.[2]).toEqual(
+      new Date('2026-11-20T09:00:00Z'),
+    );
+  });
 
   it('enqueues only upcoming published days for subscribed devices', async () => {
     const { service, query } = setup();

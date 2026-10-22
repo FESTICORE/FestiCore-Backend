@@ -22,6 +22,7 @@ import {
 import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { CurrentUser } from '../auth/decorator/current-user.decorator';
+import { RequireCurrentTerms } from '../auth/decorator/require-current-terms.decorator';
 import { Public } from '../auth/decorator/public.decorator';
 import type { AuthUser } from '../auth/types/social-profile';
 import {
@@ -40,6 +41,7 @@ import { CrewService } from './crew.service';
 export class CrewController {
   constructor(private readonly service: CrewService) {}
 
+  @RequireCurrentTerms()
   @Post()
   @ApiBearerAuth()
   @ApiOperation({
@@ -116,6 +118,7 @@ export class CrewController {
     return this.service.invite(code);
   }
 
+  @RequireCurrentTerms()
   @Post('join')
   @ApiBearerAuth()
   @HttpCode(200)
@@ -199,6 +202,7 @@ export class CrewController {
     return this.service.detail(id, user.userId);
   }
 
+  @RequireCurrentTerms()
   @Post(':crewId/invite/rotate')
   @ApiBearerAuth()
   @HttpCode(200)
@@ -224,6 +228,7 @@ export class CrewController {
     return this.service.rotate(id, user.userId);
   }
 
+  @RequireCurrentTerms()
   @Post(':crewId/status')
   @ApiBearerAuth()
   @HttpCode(200)
@@ -269,6 +274,7 @@ export class CrewController {
     return this.service.status(id, user.userId, body, key);
   }
 
+  @RequireCurrentTerms()
   @Post(':crewId/gather')
   @ApiBearerAuth()
   @HttpCode(200)
@@ -299,6 +305,7 @@ export class CrewController {
     return this.service.gather(id, user.userId, body.zoneId);
   }
 
+  @RequireCurrentTerms()
   @Patch(':crewId')
   @ApiBearerAuth()
   @ApiOperation({
@@ -314,6 +321,7 @@ export class CrewController {
     return this.service.rename(id, user.userId, body?.name);
   }
 
+  @RequireCurrentTerms()
   @Patch(':crewId/members/me')
   @ApiBearerAuth()
   @ApiOperation({
@@ -337,6 +345,7 @@ export class CrewController {
     return this.service.renameMember(id, user.userId, body?.nickname);
   }
 
+  @RequireCurrentTerms()
   @Delete(':crewId/members/:userId')
   @ApiBearerAuth()
   @HttpCode(204)
@@ -355,6 +364,7 @@ export class CrewController {
     return this.service.removeMember(id, user.userId, userId);
   }
 
+  @RequireCurrentTerms()
   @Post(':crewId/transfer')
   @ApiBearerAuth()
   @HttpCode(200)
@@ -371,6 +381,7 @@ export class CrewController {
     return this.service.transfer(id, user.userId, body.toUserId);
   }
 
+  @RequireCurrentTerms()
   @Delete(':crewId')
   @ApiBearerAuth()
   @HttpCode(204)
