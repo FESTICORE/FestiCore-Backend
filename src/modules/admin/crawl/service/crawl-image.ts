@@ -20,8 +20,10 @@ export function selectRunImages(
   if (urls.length <= MAX_IMAGES_PER_RUN) return urls;
   const page = new URL(pageUrl);
   if (
-    page.hostname === 'ticket.melon.com' &&
-    page.pathname === '/search/index.htm'
+    (page.hostname === 'ticket.melon.com' &&
+      page.pathname === '/search/index.htm') ||
+    (page.hostname === 'ticket.yes24.com' &&
+      page.pathname === '/English/Genre/Concert')
   ) {
     const dayNumber = Math.floor(Date.parse(`${day}T00:00:00Z`) / 86_400_000);
     const start = Number.isFinite(dayNumber) ? dayNumber % urls.length : 0;
@@ -128,6 +130,53 @@ function yes24DetailImages(html: string, pageUrl: string): URL[] | null {
   }
 }
 
+function yes24EnglishFestivalImages(
+  html: string,
+  pageUrl: string,
+): URL[] | null {
+  const page = new URL(pageUrl);
+  if (
+    page.hostname !== 'ticket.yes24.com' ||
+    page.pathname !== '/English/Genre/Concert'
+  )
+    return null;
+  const urls: URL[] = [];
+  const seen = new Set<string>();
+  for (const card of html
+    .slice(0, 2_000_000)
+    .matchAll(
+      /<ul\b[^>]*class=["'][^"']*\blist_wrap\b[^"']*["'][^>]*>([\s\S]*?)<div\b[^>]*class=["'][^"']*\bbtn\b/gi,
+    )) {
+    if (!/<span>\s*Genre\s*<\/span>\s*:\s*\[Festival\]/i.test(card[1]))
+      continue;
+    const productId =
+      /<h3>\s*<a\b[^>]*href=["']\/English\/Perf\/(\d+)["']/i.exec(card[1])?.[1];
+    const poster =
+      /<li\b[^>]*class=["']poster["'][^>]*>\s*<a\b[^>]*>\s*<img\b[^>]*src=["']([^"']+)["']/i.exec(
+        card[1],
+      )?.[1];
+    if (!productId || !poster) continue;
+    try {
+      const image = checkedUrl(new URL(poster, page).toString());
+      const imageProductId =
+        /^\/upload2\/PerfBlog\/\d{6}\/\d{8}\/\d{8}-(\d+)\.(?:jpe?g|png|webp)$/i.exec(
+          image.pathname,
+        )?.[1];
+      if (
+        image.hostname !== 'stkfile.yes24.com' ||
+        imageProductId !== productId ||
+        seen.has(image.toString())
+      )
+        continue;
+      seen.add(image.toString());
+      urls.push(image);
+    } catch {
+      /* Ignore malformed or unsafe poster locations. */
+    }
+  }
+  return urls;
+}
+
 function mintPaperImages(html: string, pageUrl: string): URL[] | null {
   const page = new URL(pageUrl);
   if (
@@ -184,6 +233,8 @@ export function discoverImageUrls(html: string, pageUrl: string): URL[] {
   if (melonImages) return melonImages;
   const melonSearchPosters = melonSearchImages(html, pageUrl);
   if (melonSearchPosters) return melonSearchPosters;
+  const yes24EnglishPosters = yes24EnglishFestivalImages(html, pageUrl);
+  if (yes24EnglishPosters) return yes24EnglishPosters;
   const yes24Images = yes24DetailImages(html, pageUrl);
   if (yes24Images) return yes24Images;
   const page = new URL(pageUrl);
