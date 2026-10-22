@@ -262,23 +262,63 @@ export class PublicFestivalService {
         ]),
       ),
     ];
-    if (!imageUrls.length) return;
-    const images = await this.dataSource.query<
-      { originUrl: string; id: string }[]
-    >(
-      `SELECT DISTINCT ON (image."originUrl") image."originUrl", image.id
+    const images = imageUrls.length
+      ? await this.dataSource.query<{ originUrl: string; id: string }[]>(
+          `SELECT DISTINCT ON (image."originUrl") image."originUrl", image.id
        FROM crawl_images image
        JOIN crawl_sources source ON source.id = image."sourceId"
        WHERE image."originUrl" = ANY($1::text[])
          AND ${PUBLIC_CRAWL_IMAGE_SQL}
        ORDER BY image."originUrl", image."lastSeenAt" DESC`,
-      [imageUrls],
-    );
+          [imageUrls],
+        )
+      : [];
     const imageByUrl = new Map(
       images.map((image) => [image.originUrl, image.id]),
     );
+    const englishProductIds = [
+      ...new Set(
+        entries.flatMap((entry) => {
+          if (entry.posterUrl) return [];
+          const id =
+            /^https:\/\/ticket\.yes24\.com\/English\/Perf\/(\d+)$/.exec(
+              entry.sourceUrl,
+            )?.[1];
+          return id ? [id] : [];
+        }),
+      ),
+    ];
+    const englishPosterByProduct = new Map<string, string>();
+    if (englishProductIds.length) {
+      const pattern = `-(${englishProductIds.join('|')})[.](?:jpg|jpeg|png|webp)$`;
+      const posters = await this.dataSource.query<
+        { originUrl: string; id: string }[]
+      >(
+        `SELECT image."originUrl", image.id
+         FROM crawl_images image
+         JOIN crawl_sources source ON source.id = image."sourceId"
+         WHERE source.url = 'https://ticket.yes24.com/English/Genre/Concert'
+           AND image."originUrl" ~ $1
+           AND ${PUBLIC_CRAWL_IMAGE_SQL}
+         ORDER BY image."lastSeenAt" DESC`,
+        [pattern],
+      );
+      for (const poster of posters) {
+        const id = /-(\d+)\.(?:jpg|jpeg|png|webp)$/i.exec(
+          poster.originUrl,
+        )?.[1];
+        if (id && !englishPosterByProduct.has(id))
+          englishPosterByProduct.set(id, poster.id);
+      }
+    }
     for (const entry of entries) {
-      const posterId = entry.posterUrl && imageByUrl.get(entry.posterUrl);
+      const englishProductId =
+        /^https:\/\/ticket\.yes24\.com\/English\/Perf\/(\d+)$/.exec(
+          entry.sourceUrl,
+        )?.[1];
+      const posterId =
+        (entry.posterUrl && imageByUrl.get(entry.posterUrl)) ||
+        (englishProductId && englishPosterByProduct.get(englishProductId));
       if (posterId)
         entry.thumbUrl = `/api/v1/festivals/images/${posterId}.webp`;
       entry.artists = entry.artists?.map((artist) => {
