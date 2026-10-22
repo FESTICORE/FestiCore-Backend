@@ -4,11 +4,13 @@ import {
   Controller,
   HttpCode,
   HttpStatus,
+  Headers,
   Post,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiBody,
+  ApiHeader,
   ApiOperation,
   ApiResponse,
   ApiTags,
@@ -89,16 +91,26 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
   @ApiOperation({
-    summary: '로그아웃 (refresh 토큰 전체 폐기)',
-    description: '이미 발급된 access 토큰은 만료(JWT_ACCESS_TTL)까지 유효하다.',
+    summary: '로그아웃 (refresh 토큰 폐기 및 현재 기기 알림 해제)',
+    description:
+      '계정의 refresh 토큰을 모두 폐기합니다. X-Device-Id를 보내면 이 계정 소유 기기의 푸시 토큰과 알림 설정도 해제합니다. 다른 기기·익명 기기는 변경하지 않습니다. 이미 발급된 access 토큰은 만료까지 유효합니다.',
+  })
+  @ApiHeader({
+    name: 'X-Device-Id',
+    required: false,
+    description:
+      '현재 계정에 등록된 UUID v4 기기 ID. 제공하면 해당 기기의 알림을 해제합니다.',
   })
   @ApiResponse({ status: 200, description: '{ success: true }' })
   @ApiResponse({
     status: 401,
     description: '앱 access 토큰이 없거나 유효하지 않음',
   })
-  async logout(@CurrentUser() user: AuthUser) {
-    await this.authService.logout(user.userId);
+  async logout(
+    @CurrentUser() user: AuthUser,
+    @Headers('x-device-id') deviceId?: string,
+  ) {
+    await this.authService.logout(user.userId, deviceId);
     return { success: true };
   }
 }

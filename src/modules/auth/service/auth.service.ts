@@ -1,5 +1,7 @@
 import {
+  BadRequestException,
   ConflictException,
+  ForbiddenException,
   HttpException,
   HttpStatus,
   Injectable,
@@ -126,9 +128,45 @@ export class AuthService {
     return this.token.issue(user);
   }
 
-  /** 로그아웃: 해당 사용자의 refresh 토큰 전체 폐기 */
-  async logout(userId: string): Promise<void> {
-    await this.token.revokeAllForUser(userId);
+  /** 로그아웃: 계정 토큰을 폐기하고 증명된 현재 기기의 알림만 해제한다. */
+  async logout(userId: string, deviceId?: string): Promise<void> {
+    if (deviceId === undefined) {
+      await this.token.revokeAllForUser(userId);
+      return;
+    }
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        deviceId,
+      )
+    ) {
+      throw new BadRequestException('deviceId는 UUID v4여야 합니다.');
+    }
+    await this.dataSource.transaction(async (manager) => {
+      const devices = await manager.query<{ id: string }[]>(
+        `UPDATE "devices"
+         SET "apnsToken" = NULL, "liveActivityPushToStartToken" = NULL,
+             "liveActivityPushToken" = NULL, "liveActivityFestivalId" = NULL,
+             "liveActivityId" = NULL, "updatedAt" = now()
+         WHERE "id" = $1 AND "userId" = $2
+         RETURNING "id"`,
+        [deviceId, userId],
+      );
+      if (devices.length !== 1) {
+        throw new ForbiddenException('기기 소유권을 확인할 수 없습니다.');
+      }
+      // 핀·다운로드 기록은 유지하고 푸시 구독 플래그만 해제한다.
+      await manager.query(
+        `UPDATE "device_subscriptions"
+         SET "packUpdates" = false, "festivalStarts" = false, "reminders" = false
+         WHERE "deviceId" = $1`,
+        [deviceId],
+      );
+      await manager.query(
+        `UPDATE "refresh_tokens" SET "revokedAt" = now()
+         WHERE "userId" = $1 AND "revokedAt" IS NULL`,
+        [userId],
+      );
+    });
   }
 
   async me(

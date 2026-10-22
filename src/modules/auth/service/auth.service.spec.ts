@@ -1,3 +1,4 @@
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 
 jest.mock('jose', () => ({
@@ -14,6 +15,85 @@ import { AuthService } from './auth.service';
 import { FlagPackSyncService } from '../../flags/flag-pack-sync.service';
 import { GoogleService } from './google.service';
 import { TokenService } from './token.service';
+
+describe('AuthService logout device ownership', () => {
+  const userId = '00000000-0000-4000-8000-000000000001';
+  const deviceId = '00000000-0000-4000-8000-000000000002';
+
+  function setup(owned = true) {
+    const revokeAllForUser = jest.fn().mockResolvedValue(undefined);
+    const query = jest.fn().mockImplementation((sql: string) => {
+      if (sql.includes('UPDATE "devices"')) {
+        return Promise.resolve(owned ? [{ id: deviceId }] : []);
+      }
+      return Promise.resolve([]);
+    });
+    const transaction = jest
+      .fn()
+      .mockImplementation(
+        (work: (manager: EntityManager) => Promise<unknown>) =>
+          work({ query } as unknown as EntityManager),
+      );
+    const service = new AuthService(
+      {} as GoogleService,
+      {} as AppleService,
+      { revokeAllForUser } as unknown as TokenService,
+      {} as Repository<User>,
+      { transaction } as unknown as DataSource,
+      {} as AppleRevokeRetryService,
+      {} as FlagPackSyncService,
+    );
+    return { service, query, transaction, revokeAllForUser };
+  }
+
+  it('기기 헤더가 없으면 기존처럼 refresh 토큰만 폐기한다', async () => {
+    const { service, transaction, revokeAllForUser } = setup();
+    await service.logout(userId);
+    expect(revokeAllForUser).toHaveBeenCalledWith(userId);
+    expect(transaction).not.toHaveBeenCalled();
+  });
+
+  it('본인 기기의 푸시 토큰·구독만 해제하고 같은 트랜잭션에서 refresh 토큰을 폐기한다', async () => {
+    const { service, query, revokeAllForUser } = setup();
+    await service.logout(userId, deviceId);
+    expect(query).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining('"id" = $1 AND "userId" = $2'),
+      [deviceId, userId],
+    );
+    expect(query).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('"reminders" = false'),
+      [deviceId],
+    );
+    expect(query).toHaveBeenNthCalledWith(
+      3,
+      expect.stringContaining('UPDATE "refresh_tokens"'),
+      [userId],
+    );
+    expect(revokeAllForUser).not.toHaveBeenCalled();
+  });
+
+  it('다른 계정 또는 익명 기기는 건드리지 않고 로그아웃을 거부한다', async () => {
+    const { service, query, revokeAllForUser } = setup(false);
+    await expect(service.logout(userId, deviceId)).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(revokeAllForUser).not.toHaveBeenCalled();
+  });
+
+  it('잘못된 기기 ID는 DB 변경 전에 거부한다', async () => {
+    const { service, transaction, revokeAllForUser } = setup();
+    for (const deviceId of ['', 'invalid']) {
+      await expect(service.logout(userId, deviceId)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+    }
+    expect(transaction).not.toHaveBeenCalled();
+    expect(revokeAllForUser).not.toHaveBeenCalled();
+  });
+});
 
 describe('AuthService web grant replacement', () => {
   it('binds a pending admin grant only after Google verifies the email', async () => {
