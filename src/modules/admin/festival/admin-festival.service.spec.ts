@@ -10,9 +10,20 @@ describe('AdminFestivalService optimistic edits', () => {
         find: jest.fn().mockResolvedValue([
           {
             id: 'fst_12345678',
-            draft: { name: 'Festival', venue: 'Seoul', days: [] },
+            draft: {
+              name: 'Festival',
+              venue: 'Seoul',
+              days: [],
+              thumbUrl: 'https://example.com/poster.webp',
+            },
             draftVersion: 1,
             publishedVersion: 0,
+          },
+          {
+            id: 'fst_87654321',
+            draft: { name: 'Second', venue: 'Busan', days: [], thumbUrl: null },
+            draftVersion: 2,
+            publishedVersion: 1,
           },
         ]),
       } as never,
@@ -22,8 +33,29 @@ describe('AdminFestivalService optimistic edits', () => {
       {} as never,
     );
 
-    await expect(service.list()).resolves.toMatchObject({
-      items: [{ id: 'fst_12345678', openProposals: 0 }],
+    await expect(service.list()).resolves.toEqual({
+      items: [
+        {
+          id: 'fst_12345678',
+          name: 'Festival',
+          venue: 'Seoul',
+          days: [],
+          thumbUrl: 'https://example.com/poster.webp',
+          draftVersion: 1,
+          publishedVersion: 0,
+          openProposals: 0,
+        },
+        {
+          id: 'fst_87654321',
+          name: 'Second',
+          venue: 'Busan',
+          days: [],
+          thumbUrl: null,
+          draftVersion: 2,
+          publishedVersion: 1,
+          openProposals: 0,
+        },
+      ],
     });
     expect(query).toHaveBeenCalledTimes(1);
   });
