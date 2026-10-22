@@ -81,6 +81,7 @@ export class AdminFestivalService {
         name: f.draft.name,
         venue: f.draft.venue,
         days: f.draft.days,
+        thumbUrl: f.draft.thumbUrl ?? null,
         draftVersion: f.draftVersion,
         publishedVersion: f.publishedVersion,
         openProposals: openByFestival.get(f.id) ?? 0,

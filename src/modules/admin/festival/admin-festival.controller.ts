@@ -124,13 +124,46 @@ export class AdminFestivalController {
   @ApiOperation({
     summary: '관리자 축제 목록',
     description:
-      '최근 생성 순서로 초안·발행 버전과 열린 크롤 제안 수를 조회합니다. 관리자 권한이 필요합니다.',
+      '최근 생성 순서로 포스터 URL, 초안·발행 버전과 열린 크롤 제안 수를 조회합니다. 관리자 권한이 필요합니다.',
   })
   @ApiResponse({
     status: 200,
     description: '축제 목록',
     schema: {
       type: 'object',
+      properties: {
+        items: {
+          type: 'array',
+          items: {
+            type: 'object',
+            required: [
+              'id',
+              'name',
+              'venue',
+              'days',
+              'thumbUrl',
+              'draftVersion',
+              'publishedVersion',
+              'openProposals',
+            ],
+            properties: {
+              id: { type: 'string' },
+              name: { type: 'string' },
+              venue: { type: 'string' },
+              days: { type: 'array', items: { type: 'object' } },
+              thumbUrl: {
+                type: 'string',
+                nullable: true,
+                description:
+                  'HTTPS 포스터 URL 또는 /api/v1/로 시작하는 보관 이미지 경로',
+              },
+              draftVersion: { type: 'integer' },
+              publishedVersion: { type: 'integer' },
+              openProposals: { type: 'integer' },
+            },
+          },
+        },
+      },
       example: {
         items: [
           {
@@ -138,6 +171,7 @@ export class AdminFestivalController {
             name: '가을 음악 축제',
             venue: '서울 올림픽공원',
             days: [festivalDay],
+            thumbUrl: 'https://example.com/poster.webp',
             draftVersion: 1,
             publishedVersion: 0,
             openProposals: 0,
