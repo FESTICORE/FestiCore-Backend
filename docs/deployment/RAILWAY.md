@@ -2,10 +2,10 @@
 
 FestiCore 백엔드는 Railway에서 **develop / production** 두 환경으로 운영한다.
 
-| 환경       | 연결 브랜치 | API 도메인                             | 용도          |
-| ---------- | ----------- | -------------------------------------- | ------------- |
-| develop    | `develop`   | `https://festicore-dev.up.railway.app` | 개발/스테이징 |
-| production | `main`      | `https://festicore.up.railway.app`     | 운영          |
+| 환경       | 연결 브랜치 | API 도메인                             | AdminWeb 도메인                                  | 용도          |
+| ---------- | ----------- | -------------------------------------- | ------------------------------------------------ | ------------- |
+| develop    | `develop`   | `https://festicore-dev.up.railway.app` | `https://festicoreAdmin-dev.up.railway.app`       | 개발/스테이징 |
+| production | `main`      | `https://festicore.up.railway.app`     | `https://festicoreAdmin.up.railway.app`           | 운영          |
 
 ## 1. 프로젝트/환경 구성
 
@@ -41,7 +41,8 @@ IPv6 주소만 제공하는 환경에서도 연결할 수 있다.
 ```
 PORT=3000
 PUBLIC_URL=https://<환경별-도메인>          # Swagger 서버 표기용
-CORS_ORIGINS=https://<허용-origin>          # 쉼표 구분
+CORS_ORIGINS=https://<환경별-AdminWeb-도메인> # 쉼표 구분
+ADMIN_WEB_URL=https://<환경별-AdminWeb-도메인>  # develop/production 각각 위 표 사용
 WS_MAX_CLIENTS=5000                         # 공개 축제 팩 WebSocket 인스턴스별 연결 상한
 WS_MAX_CLIENTS_PER_IP=500                  # 공용 Wi-Fi/NAT를 고려한 IP별 상한
 JWT_ACCESS_SECRET=<랜덤>                    # 필수
