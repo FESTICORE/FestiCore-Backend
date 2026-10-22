@@ -12,6 +12,7 @@ import { MetricsModule } from './metrics/metrics.module';
 import { AdminAuditModule } from './admin/audit/admin-audit.module';
 import { AdminPushModule } from './admin/push/admin-push.module';
 import { RedisModule } from './redis/redis.module';
+import { LegalModule } from './legal/legal.module';
 
 /**
  * app.module imports 에 펼칠(...) 기능 모듈 목록.
@@ -21,6 +22,7 @@ import { RedisModule } from './redis/redis.module';
 export const featureModules = [
   RedisModule,
   HealthModule,
+  LegalModule,
   AuthModule,
   AdminFestivalModule,
   FlagsModule,

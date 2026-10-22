@@ -17,6 +17,7 @@
 | notifications | D-1 리마인더·축제 시작 알림 예약·APNs 발송                                       |
 | public        | 축제 목록·예매 링크·오프라인 팩과 공개 팩 갱신 WebSocket                          |
 | health        | `GET /api/v1/health` — DB 실패 시 503                                            |
+| legal         | 공개 홈페이지·개인정보처리방침·이용약관 HTML                                      |
 
 구조와 규칙은 [아키텍처 문서](./docs/architecture/ARCHITECTURE.md), 엔드포인트 계약은 [.spec/](./.spec/README.md),
 배포는 [Railway 문서](./docs/deployment/RAILWAY.md)를 본다. 문서 전체 목록은 [docs/](./docs/README.md)에 있다.
@@ -32,6 +33,7 @@ npm run start:dev
 ```
 
 - API: `http://localhost:3000/api/v1`
+- 공개 페이지: `/api/v1/about`, `/api/v1/legal/privacy`, `/api/v1/legal/terms` ([계약](./.spec/legal-pages.md))
 - 공개 팩 갱신 WebSocket: `ws://localhost:3000/api/v1/festivals/updates` ([계약](./.spec/festival-websocket.md))
 - 공개 Swagger: `http://localhost:3000/api-docs` (JSON: `/api-docs-json`)
 - 관리자 Swagger: `http://localhost:3000/admin/api-docs` (JSON: `/admin/api-docs-json`)
