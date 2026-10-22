@@ -1,61 +1,109 @@
-# FestiCore-Backend
+# FestiCore Backend
 
-페스티코어(FestiCore) 백엔드. NestJS 11 + TypeORM(Postgres), Railway 배포.
+**축제 일정·현장 정보·알림을 제공하는 FestiCore API 서버**
 
-## 구성
+NestJS 11 · TypeScript 5 · PostgreSQL / TypeORM · Railway
 
-| 영역          | 내용                                                                             |
-| ------------- | -------------------------------------------------------------------------------- |
-| common        | 표준 응답/에러 형식, 예외 필터, 로깅·응답 인터셉터, API 도메인 목록              |
-| gateway       | 전역 Throttler·JwtAuthGuard(`@Public` 예외)·필터·인터셉터                        |
-| swagger       | `/api-docs` 공개 API, `/admin/api-docs` 관리자 API. 각 경로에 도메인별 문서 제공 |
-| auth          | Google·Apple 통합 로그인, JWT access/refresh 회전, 회원 탈퇴                     |
-| admin         | 일반 로그인 JWT의 관리자 권한 검사, 축제 초안·발행·롤백                           |
-| storage       | Railway 비공개 버킷의 WebP 사진 저장·읽기                                        |
-| flags         | 공개 깃발, 팔로우·기수·상태·사진·관리자 신고 처리                                |
-| devices       | 익명 기기 토큰 등록·소유권 확인·핀·Live Activity 토큰 관리                       |
-| notifications | D-1 리마인더·축제 시작 알림 예약·APNs 발송                                       |
-| public        | 축제 목록·예매 링크·오프라인 팩과 공개 팩 갱신 WebSocket                          |
-| health        | `GET /api/v1/health` — DB 실패 시 503                                            |
+[기술 스택](#기술-스택) · [구조](#구조) · [빠른 시작](#빠른-시작) · [api-문서](#api-문서) · [검증](#검증) · [배포](#배포)
 
-구조와 규칙은 [아키텍처 문서](./docs/architecture/ARCHITECTURE.md), 엔드포인트 계약은 [.spec/](./.spec/README.md),
-배포는 [Railway 문서](./docs/deployment/RAILWAY.md)를 본다. 문서 전체 목록은 [docs/](./docs/README.md)에 있다.
+## 프로젝트
 
-API v0.2 변경 내역과 검증 범위는 [v0.2 반영 문서](./.spec/api-v0.2-adoption.md)에 정리했다. 익명 기기는 첫 `PUT /api/v1/devices` 응답의 `deviceAccessToken`을 저장하고 이후 기기 API에 `Authorization: Bearer`와 `X-Device-Id`를 함께 보낸다.
+FestiCore는 축제 목록과 상세·예매 링크·타임테이블, 오프라인 팩, 현장 깃발·크루, 기기별 알림을 제공합니다. 서버는 활성 크롤링 소스를 매일 **00:00 KST 이후 첫 점검**에 예약하며, 수집 결과는 관리자 검토와 공개 데이터 흐름을 거칩니다. 외부 사이트별 수집 성공 여부와 실제 저장 건수는 별도 운영 확인이 필요합니다.
 
-## 로컬 실행
+Google·Apple 계정 로그인, JWT 토큰 회전, 기기 토큰, 축제 팩 갱신 WebSocket을 지원합니다. 관리자 웹은 [별도 AdminWeb 저장소](https://github.com/FESTICORE/AdminWeb)에서 개발합니다.
 
-```bash
-npm install
-# .env 작성(변수 목록은 docs/deployment/RAILWAY.md). 최소: DB_* 와 서로 다른 JWT_ACCESS_SECRET / JWT_REFRESH_SECRET
+## 기술 스택
+
+| 영역 | 사용 기술 |
+| --- | --- |
+| API | Node.js 22, NestJS 11, TypeScript 5 |
+| 데이터 | PostgreSQL, TypeORM 마이그레이션 |
+| 인증 | Google·Apple 로그인, JWT access/refresh, 관리자 역할 |
+| 실시간·캐시 | WebSocket(`ws`), 선택적 Redis 캐시 |
+| 이미지 | Railway 비공개 S3 호환 버킷, Sharp/WebP |
+| 문서·검증 | Swagger/OpenAPI, Jest, ESLint, Docker·Postgres CI |
+| 배포 | Railway `develop` / `production` 환경 |
+
+## 구조
+
+```text
+src/
+├── main.ts                 # 앱 부트스트랩·전역 API prefix
+├── app.module.ts           # 루트 모듈
+├── swagger.ts              # 공개/관리자 Swagger 분리
+├── config/                 # 인증·DB·SSL 등 설정
+├── database/               # TypeORM CLI·마이그레이션
+├── gateway/                # 인증·요청 제한·로깅 공통 경계
+├── common/                 # 응답·예외 처리 등 공통 규약
+└── modules/
+    ├── admin/              # 축제 초안·발행, 크롤링, 감사·권한
+    ├── auth/               # Google·Apple 로그인과 토큰
+    ├── public/             # 공개 축제·오프라인 팩·WebSocket
+    ├── device/             # 기기 등록·핀·Live Activity
+    ├── notification/       # 리마인더·축제 시작 알림
+    ├── flags/              # 현장 깃발·신고
+    ├── crews/              # 크루
+    ├── schedule/           # 개인 일정
+    ├── storage/            # 이미지 저장·읽기
+    ├── metrics/            # 클라이언트 관측 이벤트
+    └── health/             # DB 상태 확인
+```
+
+상세 설계는 [아키텍처](docs/architecture/ARCHITECTURE.md), 기능별 API 계약은 [.spec 목차](.spec/README.md), 문서 전체 목록은 [docs 목차](docs/README.md)를 봅니다. [API v0.2 반영 문서](.spec/api-v0.2-adoption.md)에는 명세와 구현 차이를 기록했습니다.
+
+## 공통 API 규약
+
+- API prefix는 `/api/v1`입니다. JSON 성공·오류 응답은 `code`, `data`, `message`를 사용합니다. HTML·WebSocket·204·304 응답은 해당 프로토콜 형식을 따릅니다.
+- 사용자 로그인은 `POST /api/v1/auth/login` 한 경로에서 Google·Apple을 구분합니다. `POST /api/v1/auth/refresh`는 refresh 토큰을 회전하고, `POST /api/v1/auth/logout`은 세션을 폐기합니다. 프로필 조회·탈퇴는 `/api/v1/me`입니다.
+- 기기 API는 등록 뒤 받은 기기 access 토큰을 `Authorization: Bearer`로 전달하며, 현재 계약에서는 `X-Device-Id`도 사용합니다. 자세한 요청·응답은 [기기 계약](.spec/devices.md)을 봅니다.
+- 공개 축제 목록·상세는 `/api/v1/festivals`, 팩 갱신 WebSocket은 `/api/v1/festivals/updates`를 사용합니다. 공개 Swagger와 관리자 Swagger는 분리되어 있습니다.
+
+## 빠른 시작
+
+### 요구사항
+
+- Node.js 22와 npm
+- PostgreSQL 연결 및 서로 다른 JWT access/refresh 비밀값
+- 이미지·Google·Apple·APNs 기능을 검증하려면 각 서비스의 환경별 자격 증명
+
+```sh
+git clone https://github.com/FESTICORE/FestiCore-Backend.git
+cd FestiCore-Backend
+npm ci
+# 로컬 .env에 DB 연결과 JWT_ACCESS_SECRET, JWT_REFRESH_SECRET 설정
+npm run migration:run
 npm run start:dev
 ```
 
-- API: `http://localhost:3000/api/v1`
-- 공개 팩 갱신 WebSocket: `ws://localhost:3000/api/v1/festivals/updates` ([계약](./.spec/festival-websocket.md))
-- 공개 Swagger: `http://localhost:3000/api-docs` (JSON: `/api-docs-json`)
-- 관리자 Swagger: `http://localhost:3000/admin/api-docs` (JSON: `/admin/api-docs-json`)
-- 개발: [공개](https://festicore-dev.up.railway.app/api-docs) · [관리자](https://festicore-dev.up.railway.app/admin/api-docs)
-- 운영: [공개](https://festicore.up.railway.app/api-docs) · [관리자](https://festicore.up.railway.app/admin/api-docs)
+로컬 DB는 개별 `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_NAME`을 사용할 수 있습니다. 배포 환경에서는 `DATABASE_URL`을 우선 사용하고, 공개 DB URL 폴백은 인증서 검증 또는 명시적 옵트인이 필요합니다. Redis는 선택 사항이며 연결할 수 없으면 공개 팩 조회가 DB로 동작합니다. 변수 목록과 보안 설정은 [Railway 배포 가이드](docs/deployment/RAILWAY.md)를 확인하세요. 실제 비밀값은 저장소에 커밋하지 않습니다.
 
-각 UI의 드롭다운에서 해당 영역의 전체·도메인별 문서를 선택할 수 있다.
-JSON API 응답은 `{ "code": "SUCCESS", "data": ..., "message": "성공적으로 처리되었습니다." }` 형식이며, 오류 코드와 상세 규칙은 [.spec/](./.spec/README.md)에 정리했다.
-공개 문서에는 `/api/v1/admin` 경로가 없고, 관리자 문서에는 관리자 경로만 표시된다.
-브라우저 호출에는 해당 환경의 유효한 인증 정보가 필요하다. 배포된 문서의 가용성과 최신 코드 반영 여부는 Railway 배포 상태로 확인한다.
+## API 문서
 
-## 스크립트
+| 대상 | 로컬 주소 | 개발 환경 |
+| --- | --- | --- |
+| 공개 API | `http://localhost:3000/api-docs` | [공개 Swagger](https://festicore-dev.up.railway.app/api-docs) |
+| 관리자 API | `http://localhost:3000/admin/api-docs` | [관리자 Swagger](https://festicore-dev.up.railway.app/admin/api-docs) |
+| 헬스체크 | `http://localhost:3000/api/v1/health` | [개발 헬스체크](https://festicore-dev.up.railway.app/api/v1/health) |
 
-| 명령                         | 설명                           |
-| ---------------------------- | ------------------------------ |
-| `npm run start:dev`          | 개발 서버(watch)               |
-| `npm run build`              | 빌드(`dist/`)                  |
-| `npm run lint`               | ESLint                         |
-| `npm test`                   | 단위 테스트                    |
-| `npm run test:e2e`           | e2e(DB 없이 인메모리 저장소)   |
-| `npm run migration:generate` | 마이그레이션 생성(`-- <경로>`) |
-| `npm run migration:run`      | 마이그레이션 실행              |
+운영 문서는 `https://festicore.up.railway.app`에서 같은 경로를 사용합니다. Swagger UI의 정의 선택 메뉴에서 영역별 문서를 열 수 있습니다. 배포된 문서가 최신 코드인지 여부는 해당 Railway 배포 커밋으로 확인해야 합니다.
 
-## 브랜치 / 배포
+## 검증
 
-- `develop` → Railway **develop** 환경, `main` → **production** 환경 자동 배포
-- 푸시 시 릴리스 태그 자동 생성(`dev-v*` / `v*`)
+```sh
+npx eslint 'src/**/*.ts' 'test/**/*.ts'  # 변경 없이 ESLint 검사
+npx tsc --noEmit --incremental false    # 타입 검사
+npm run build                           # Nest 빌드
+npm test -- --runInBand                 # 단위 테스트
+npm run test:e2e -- --runInBand         # HTTP E2E
+```
+
+`npm run lint`는 `--fix`가 포함되어 파일을 수정하므로 단순 검사에는 위 `npx eslint` 명령을 사용합니다. PR CI는 의존성 보안 검사, Docker 빌드, PostgreSQL 마이그레이션·헬스체크도 실행합니다. 로컬 단위·E2E 성공은 외부 OAuth, APNs, 크롤링 원본 및 운영 배포 성공을 증명하지 않습니다.
+
+## 배포
+
+| 환경 | Git 브랜치 | API 주소 | 태그 |
+| --- | --- | --- | --- |
+| 개발 | `develop` | `https://festicore-dev.up.railway.app` | `dev-v*` |
+| 운영 | `main` | `https://festicore.up.railway.app` | `v*` |
+
+Railway의 GitHub 브랜치 연결이 Dockerfile로 빌드·배포합니다. 기능 PR은 `develop`에 스쿼시 머지하고 개발 배포를 확인한 뒤 `main`으로 승격합니다. 태그 워크플로는 릴리스 기록을 남기며 태그 자체가 재배포를 실행하지는 않습니다. 환경별 Postgres·Redis·이미지 버킷 및 마이그레이션 절차는 [Railway 배포 가이드](docs/deployment/RAILWAY.md)에 있습니다.
