@@ -10,6 +10,7 @@ import { AdminFestival } from '../admin/festival/festival.entity';
 import { festivalSetId } from '../admin/festival/festival-set-id';
 import { PUBLIC_CRAWL_IMAGE_SQL } from './crawl-image-policy';
 import { Flag } from '../flags/flag.entity';
+import { CacheService } from '../redis/service/cache.service';
 import {
   discoverySummaries,
   DiscoveryRow,
@@ -173,13 +174,21 @@ export class PublicFestivalService {
     @InjectRepository(Flag)
     private readonly flagRecords: Repository<Flag>,
     private readonly dataSource: DataSource,
+    private readonly cache: CacheService,
   ) {}
 
   async published(id: string): Promise<Document> {
+    const generation = await this.cache.packGeneration(id);
+    if (generation !== null) {
+      const cached = await this.cache.getPack<Document>(id, generation);
+      if (cached !== null) return cached;
+    }
     const row = await this.festivals.findOne({ where: { id } });
     if (!row?.published || row.publishedVersion < 1)
       throw new NotFoundException('공개된 페스티벌을 찾을 수 없습니다.');
-    return projectPack(row.published);
+    const document = projectPack(row.published);
+    if (generation !== null) await this.cache.setPack(id, generation, document);
+    return document;
   }
 
   private async discoveryCatalog(): Promise<DiscoverySummary[]> {

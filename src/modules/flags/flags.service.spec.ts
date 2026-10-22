@@ -31,7 +31,7 @@ describe('FlagsService security boundaries', () => {
     plan: [],
     planVisible: true,
     hidden: false,
-  } as Flag;
+  } as unknown as Flag;
   const flags = {
     findOne: jest.fn().mockResolvedValue(flag),
     exists: jest.fn().mockResolvedValue(false),
@@ -73,7 +73,8 @@ describe('FlagsService security boundaries', () => {
     ),
   };
   const audit = { record: jest.fn().mockResolvedValue(undefined) };
-  const sync = jest.fn().mockResolvedValue(undefined);
+  const sync = jest.fn().mockResolvedValue(['fest_1']);
+  const invalidatePacks = jest.fn().mockResolvedValue(undefined);
   const service = new FlagsService(
     db as unknown as DataSource,
     { get: () => 'a-long-test-refresh-secret' } as unknown as ConfigService,
@@ -88,7 +89,7 @@ describe('FlagsService security boundaries', () => {
     festivals as unknown as Repository<AdminFestival>,
     {} as Repository<User>,
     {} as ImageStorageService,
-    { sync } as unknown as FlagPackSyncService,
+    { sync, invalidatePacks } as unknown as FlagPackSyncService,
     audit as unknown as AdminAuditService,
   );
 
@@ -158,6 +159,7 @@ describe('FlagsService security boundaries', () => {
       after: { hidden: true },
     });
     expect(sync).toHaveBeenCalledWith('flg_1', manager);
+    expect(invalidatePacks).toHaveBeenCalledWith(['fest_1']);
   });
 
   it('does not refresh the pack when the visibility audit fails', async () => {
@@ -166,6 +168,7 @@ describe('FlagsService security boundaries', () => {
       'audit failed',
     );
     expect(sync).not.toHaveBeenCalled();
+    expect(invalidatePacks).not.toHaveBeenCalled();
   });
 
   it('propagates pack refresh failure from the visibility transaction', async () => {
@@ -175,6 +178,7 @@ describe('FlagsService security boundaries', () => {
     );
     expect(audit.record).toHaveBeenCalled();
     expect(db.transaction).toHaveBeenCalled();
+    expect(invalidatePacks).not.toHaveBeenCalled();
   });
 
   it('rejects an invitation by a co-bearer', async () => {

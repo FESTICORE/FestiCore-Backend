@@ -20,6 +20,7 @@ import { TokenService } from '../src/modules/auth/service/token.service';
 import { FlagPackSyncService } from '../src/modules/flags/flag-pack-sync.service';
 import { HealthController } from '../src/modules/health/controller/health.controller';
 import { HealthService } from '../src/modules/health/service/health.service';
+import { CacheService } from '../src/modules/redis/service/cache.service';
 import { FakeRepository } from './fake-repository';
 
 /**
@@ -34,8 +35,9 @@ export interface TestContext {
   google: { [K in keyof GoogleService]: jest.Mock };
   apple: { [K in keyof AppleService]: jest.Mock };
   appleRetry: { enqueue: jest.Mock };
-  flagPackSync: { sync: jest.Mock };
+  flagPackSync: { syncMany: jest.Mock; invalidatePacks: jest.Mock };
   dataSource: { query: jest.Mock; transaction: jest.Mock };
+  cache: { status: jest.Mock };
 }
 
 export async function createTestApp(): Promise<TestContext> {
@@ -62,6 +64,7 @@ export async function createTestApp(): Promise<TestContext> {
   const appleRetry = { enqueue: jest.fn().mockResolvedValue(undefined) };
   const flagPackSync = {
     syncMany: jest.fn().mockResolvedValue(undefined),
+    invalidatePacks: jest.fn().mockResolvedValue(undefined),
   };
   const dataSource = {
     query: jest.fn().mockResolvedValue([{ '?column?': 1 }]),
@@ -81,14 +84,18 @@ export async function createTestApp(): Promise<TestContext> {
               ),
             delete: jest
               .fn()
-              .mockImplementation((entity: unknown, where: object) => {
-                if (entity === User) return users.delete(where);
-                if (entity === RefreshToken) return refreshTokens.delete(where);
-                throw new Error('지원하지 않는 테스트 엔티티입니다.');
-              }),
+              .mockImplementation(
+                (entity: unknown, where: Record<string, unknown>) => {
+                  if (entity === User) return users.delete(where);
+                  if (entity === RefreshToken)
+                    return refreshTokens.delete(where);
+                  throw new Error('지원하지 않는 테스트 엔티티입니다.');
+                },
+              ),
           } as unknown as EntityManager),
       ),
   };
+  const cache = { status: jest.fn().mockResolvedValue('disabled') };
 
   const moduleRef = await Test.createTestingModule({
     imports: [JwtModule.register({})],
@@ -102,6 +109,7 @@ export async function createTestApp(): Promise<TestContext> {
       { provide: AppleRevokeRetryService, useValue: appleRetry },
       { provide: FlagPackSyncService, useValue: flagPackSync },
       { provide: DataSource, useValue: dataSource },
+      { provide: CacheService, useValue: cache },
       { provide: getRepositoryToken(User), useValue: users },
       { provide: getRepositoryToken(RefreshToken), useValue: refreshTokens },
       { provide: ConfigService, useValue: { get: (key: string) => env[key] } },
@@ -133,5 +141,6 @@ export async function createTestApp(): Promise<TestContext> {
     appleRetry,
     flagPackSync,
     dataSource,
+    cache,
   };
 }

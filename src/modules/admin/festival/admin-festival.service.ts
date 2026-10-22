@@ -15,6 +15,7 @@ import {
 } from './festival.entity';
 import { mergeDraft, validateDraft } from './festival-validation';
 import { AdminAuditService } from '../audit/admin-audit.service';
+import { CacheService } from '../../redis/service/cache.service';
 
 const alphabet = '0123456789abcdefghjkmnpqrstvwxyz';
 function newId(): string {
@@ -43,6 +44,7 @@ export class AdminFestivalService {
     private readonly versions: Repository<AdminFestivalVersion>,
     private readonly dataSource: DataSource,
     private readonly audit: AdminAuditService,
+    private readonly cache: CacheService,
   ) {}
 
   async list() {
@@ -221,7 +223,7 @@ export class AdminFestivalService {
     if (typeof note !== 'string' || [...note].length > 500)
       throw new BadRequestException('note는 500자 이하의 문자열이어야 합니다.');
     const expected = this.matchVersion(ifMatch);
-    return this.dataSource.transaction(async (manager) => {
+    const result = await this.dataSource.transaction(async (manager) => {
       const repo = manager.getRepository(AdminFestival);
       const row = await repo.findOne({
         where: { id },
@@ -274,6 +276,8 @@ export class AdminFestivalService {
       });
       return { packVersion, etag: `"v${packVersion}"`, pushedDevices };
     });
+    await this.cache.invalidatePack(id);
+    return result;
   }
 
   async versionsList(id: string) {
@@ -298,7 +302,7 @@ export class AdminFestivalService {
   async rollback(id: string, toVersion: number, actor: string | null) {
     if (!Number.isSafeInteger(toVersion) || toVersion < 1)
       throw new BadRequestException('toVersion은 양의 정수여야 합니다.');
-    return this.dataSource.transaction(async (manager) => {
+    const result = await this.dataSource.transaction(async (manager) => {
       const repo = manager.getRepository(AdminFestival);
       const row = await repo.findOne({
         where: { id },
@@ -346,6 +350,8 @@ export class AdminFestivalService {
       });
       return { packVersion, etag: `"v${packVersion}"`, pushedDevices };
     });
+    await this.cache.invalidatePack(id);
+    return result;
   }
 
   private async queuePackUpdate(

@@ -155,13 +155,13 @@ describe('Swagger 문서 분리', () => {
       adminPaths,
     );
     const admin = documents.get('admin/api-docs')!;
-    expect(admin.components.schemas).toHaveProperty('Flag');
-    expect(admin.components.securitySchemes).toHaveProperty('bearer');
-    expect(admin.components.securitySchemes).not.toHaveProperty(
+    expect(admin.components!.schemas).toHaveProperty('Flag');
+    expect(admin.components!.securitySchemes).toHaveProperty('bearer');
+    expect(admin.components!.securitySchemes).not.toHaveProperty(
       'admin-session',
     );
     expect(
-      documents.get('api-docs')!.components.securitySchemes,
+      documents.get('api-docs')!.components!.securitySchemes,
     ).toHaveProperty('bearer');
     expect(admin.paths['/api/v1/admin/admins'].get?.security).toContainEqual({
       bearer: [],
@@ -216,13 +216,15 @@ describe('Swagger 문서 분리', () => {
       .mockImplementation((_app, config, options) => ({
         openapi: '3.0.0',
         info: { title: 'test', version: '1', description: '' },
-        paths: options?.include?.includes(AdminPushModule)
-          ? {
-              '/api/v1/admin/push/test': {
-                post: { responses: { 201: { description: 'Accepted' } } },
-              },
-            }
-          : {},
+        paths: {
+          ...(options?.include?.includes(AdminPushModule)
+            ? {
+                '/api/v1/admin/push/test': {
+                  post: { responses: { 201: { description: 'Accepted' } } },
+                },
+              }
+            : {}),
+        },
         components: config.components,
       }));
     const setup = jest.spyOn(SwaggerModule, 'setup').mockImplementation();

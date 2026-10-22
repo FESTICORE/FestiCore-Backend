@@ -45,7 +45,7 @@ function harness() {
     parserConfig: { sourceName: 'Tickets' },
     festivalId: null,
     consecutiveFailures: 2,
-  } as CrawlSource;
+  } as unknown as CrawlSource;
   const run = { id: 'run-1', sourceId: source.id } as CrawlRun;
   const insertResult = { identifiers: [{ id: run.id }] };
   const reclaimResult = { raw: [] as { id: string }[] };
@@ -217,7 +217,7 @@ describe('CrawlService source audit', () => {
     };
     const manager = { getRepository: jest.fn(() => repo) };
     dataSource.transaction.mockImplementation(
-      (callback: (manager: typeof manager) => Promise<unknown>) =>
+      (callback: (transactionManager: typeof manager) => Promise<unknown>) =>
         callback(manager),
     );
     const dto = {
@@ -259,7 +259,7 @@ describe('CrawlService source audit', () => {
     };
     const manager = { getRepository: jest.fn(() => repo) };
     dataSource.transaction.mockImplementation(
-      (callback: (manager: typeof manager) => Promise<unknown>) =>
+      (callback: (transactionManager: typeof manager) => Promise<unknown>) =>
         callback(manager),
     );
 

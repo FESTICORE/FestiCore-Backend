@@ -458,7 +458,8 @@ describe('AuthService 회원 탈퇴의 깃발과 Apple 재시도', () => {
       revokeConnection: jest.fn().mockResolvedValue(false),
     } as unknown as AppleService;
     const enqueue = jest.fn().mockResolvedValue(undefined);
-    const syncMany = jest.fn().mockResolvedValue(undefined);
+    const syncMany = jest.fn().mockResolvedValue(['fst_12345678']);
+    const invalidatePacks = jest.fn().mockResolvedValue(undefined);
     const userRepo = {
       findOne: jest.fn().mockResolvedValue({
         id: userId,
@@ -474,14 +475,22 @@ describe('AuthService 회원 탈퇴의 깃발과 Apple 재시도', () => {
       userRepo,
       { transaction } as unknown as DataSource,
       { enqueue } as unknown as AppleRevokeRetryService,
-      { syncMany } as unknown as FlagPackSyncService,
+      { syncMany, invalidatePacks } as unknown as FlagPackSyncService,
     );
-    return { service, query, remove, manager, enqueue, syncMany };
+    return {
+      service,
+      query,
+      remove,
+      manager,
+      enqueue,
+      syncMany,
+      invalidatePacks,
+    };
   }
 
   it('첫 공동 기수에게 깃발을 이전하고 팩을 갱신한다', async () => {
     const successor = '00000000-0000-4000-8000-000000000002';
-    const { service, query, syncMany } = setup({ successor });
+    const { service, query, syncMany, invalidatePacks } = setup({ successor });
     await service.withdraw(userId);
 
     expect(query).toHaveBeenCalledWith(
@@ -493,6 +502,7 @@ describe('AuthService 회원 탈퇴의 깃발과 Apple 재시도', () => {
       [flagId, successor],
     );
     expect(syncMany).toHaveBeenCalledWith([flagId], expect.anything());
+    expect(invalidatePacks).toHaveBeenCalledWith(['fst_12345678']);
   });
 
   it('후임이 없는 깃발을 숨기고 관리자 알림을 남긴다', async () => {

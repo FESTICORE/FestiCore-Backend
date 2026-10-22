@@ -37,7 +37,7 @@ describe('FlagPackSyncService', () => {
       draftVersion: 1,
       published: { ...base, packVersion: 1 },
       publishedVersion: 1,
-    } as AdminFestival;
+    } as unknown as AdminFestival;
     const flag = {
       id: 'flg_1234567890',
       festivalId: base.id,
@@ -54,14 +54,17 @@ describe('FlagPackSyncService', () => {
       thumbUrl: null,
       photoKey: null,
       thumbKey: null,
-    } as Flag;
+    } as unknown as Flag;
     const secondFlag = {
       ...flag,
       id: 'flg_abcdef1234567890',
       name: 'Red Flag',
     };
     const saveVersion = jest.fn().mockResolvedValue(undefined);
-    const repositories = new Map([
+    const repositories = new Map<
+      unknown,
+      { findOne?: jest.Mock; save?: jest.Mock }
+    >([
       [
         Flag,
         {
@@ -82,14 +85,14 @@ describe('FlagPackSyncService', () => {
       [AdminFestivalVersion, { save: saveVersion }],
     ]);
     const manager = {
-      getRepository: (entity: unknown) =>
-        repositories.get(entity as typeof Flag),
+      getRepository: (entity: unknown) => repositories.get(entity),
     };
     const transaction = jest.fn(
       (run: (value: typeof manager) => Promise<void>) => run(manager),
     );
     const db = { transaction } as unknown as DataSource;
-    const service = new FlagPackSyncService(db);
+    const invalidatePack = jest.fn().mockResolvedValue(undefined);
+    const service = new FlagPackSyncService(db, { invalidatePack } as never);
 
     await service.sync(flag.id);
     expect(festival.publishedVersion).toBe(2);
@@ -112,5 +115,7 @@ describe('FlagPackSyncService', () => {
     expect(festival.publishedVersion).toBe(4);
     expect(saveVersion).toHaveBeenCalledTimes(3);
     expect(festival.published?.flags).toHaveLength(2);
+    expect(invalidatePack).toHaveBeenCalledTimes(1);
+    expect(invalidatePack).toHaveBeenCalledWith(base.id);
   });
 });

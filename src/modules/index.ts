@@ -11,6 +11,7 @@ import { NotificationModule } from './notification/notification.module';
 import { MetricsModule } from './metrics/metrics.module';
 import { AdminAuditModule } from './admin/audit/admin-audit.module';
 import { AdminPushModule } from './admin/push/admin-push.module';
+import { RedisModule } from './redis/redis.module';
 
 /**
  * app.module imports 에 펼칠(...) 기능 모듈 목록.
@@ -18,6 +19,7 @@ import { AdminPushModule } from './admin/push/admin-push.module';
  * (ConfigModule/TypeOrmModule 처럼 설정이 붙은 루트 모듈은 제외)
  */
 export const featureModules = [
+  RedisModule,
   HealthModule,
   AuthModule,
   AdminFestivalModule,

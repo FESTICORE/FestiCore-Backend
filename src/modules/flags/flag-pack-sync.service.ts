@@ -9,6 +9,7 @@ import {
 } from '../admin/festival/festival.entity';
 import { validateDraft } from '../admin/festival/festival-validation';
 import { Flag } from './flag.entity';
+import { CacheService } from '../redis/service/cache.service';
 
 type Profile = Record<string, unknown> & { id: string };
 
@@ -57,17 +58,21 @@ function replaceProfile(
 /** Regenerate immutable published pack versions after a flag profile changes. */
 @Injectable()
 export class FlagPackSyncService {
-  constructor(@InjectDataSource() private readonly db: DataSource) {}
+  constructor(
+    @InjectDataSource() private readonly db: DataSource,
+    private readonly cache: CacheService,
+  ) {}
 
-  async sync(flagId: string, transaction?: EntityManager): Promise<void> {
-    await this.syncMany([flagId], transaction);
+  async sync(flagId: string, transaction?: EntityManager): Promise<string[]> {
+    return this.syncMany([flagId], transaction);
   }
 
   async syncMany(
     flagIds: string[],
     transaction?: EntityManager,
-  ): Promise<void> {
+  ): Promise<string[]> {
     const apply = async (manager: EntityManager) => {
+      const changedFestivalIds: string[] = [];
       const flags = manager.getRepository(Flag);
       const byFestival = new Map<string, Flag[]>();
       for (const flagId of new Set(flagIds)) {
@@ -122,6 +127,7 @@ export class FlagPackSyncService {
               throw new BadRequestException('압축된 팩이 200KB를 초과합니다.');
             festival.published = pack;
             festival.publishedVersion = packVersion;
+            changedFestivalIds.push(festivalId);
             await manager.getRepository(AdminFestivalVersion).save({
               festivalId: festival.id,
               packVersion,
@@ -134,8 +140,16 @@ export class FlagPackSyncService {
         }
         await festivals.save(festival);
       }
+      return changedFestivalIds;
     };
-    if (transaction) await apply(transaction);
-    else await this.db.transaction(apply);
+    if (transaction) return apply(transaction);
+    const changed = await this.db.transaction(apply);
+    await this.invalidatePacks(changed);
+    return changed;
+  }
+
+  async invalidatePacks(festivalIds: string[]): Promise<void> {
+    for (const festivalId of festivalIds)
+      await this.cache.invalidatePack(festivalId);
   }
 }

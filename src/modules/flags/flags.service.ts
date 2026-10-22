@@ -1026,7 +1026,7 @@ export class FlagsService {
   }
 
   async setHidden(id: string, hidden: boolean, actor: string) {
-    await this.db.transaction(async (manager) => {
+    const changedFestivals = await this.db.transaction(async (manager) => {
       const repo = manager.getRepository(Flag);
       const flag = await repo.findOne({
         where: { id },
@@ -1043,8 +1043,10 @@ export class FlagsService {
         before,
         after: { hidden },
       });
-      await this.packSync.sync(id, manager);
+      return this.packSync.sync(id, manager);
     });
+    if (changedFestivals.length)
+      await this.packSync.invalidatePacks(changedFestivals);
     return { flagId: id, hidden };
   }
 
