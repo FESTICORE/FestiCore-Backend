@@ -154,7 +154,7 @@ describe('crawl image safety', () => {
     ]);
   });
 
-  it('limits each Melon detail run and rotates artist images across days', () => {
+  it('collects all available Melon detail artist images in one run', () => {
     const urls = Array.from(
       { length: 22 },
       (_, index) => new URL(`https://cdnimg.melon.co.kr/${index}.jpg`),
@@ -162,11 +162,22 @@ describe('crawl image safety', () => {
     const page = 'https://ticket.melon.com/performance/index.htm?prodId=213793';
     const first = selectRunImages(urls, page, '2026-10-21');
     const second = selectRunImages(urls, page, '2026-10-22');
-    expect(first).toHaveLength(8);
-    expect(second).toHaveLength(8);
-    expect(first[0]).toBe(urls[0]);
-    expect(second[0]).toBe(urls[0]);
-    expect(second.slice(1).map(String)).not.toEqual(first.slice(1).map(String));
+    expect(first).toEqual(urls);
+    expect(second).toEqual(urls);
+    expect(
+      selectRunImages(
+        [
+          ...urls,
+          ...Array.from(
+            { length: 70 },
+            (_, index) =>
+              new URL(`https://cdnimg.melon.co.kr/more-${index}.jpg`),
+          ),
+        ],
+        page,
+        '2026-10-21',
+      ),
+    ).toHaveLength(81);
   });
 
   it('normalizes a valid image to content-addressed WebP without trusting its extension', async () => {
