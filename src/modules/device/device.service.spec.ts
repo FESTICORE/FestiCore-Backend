@@ -47,7 +47,16 @@ describe('DeviceService ownership and pins', () => {
     }),
   };
   const config = { get: jest.fn().mockReturnValue('test-secret') };
-  const dataSource = { query: jest.fn().mockResolvedValue([{ count: 1 }]) };
+  const manager = {
+    getRepository: jest.fn().mockReturnValue(devices),
+    query: jest.fn().mockResolvedValue([]),
+  };
+  const dataSource = {
+    query: jest.fn().mockResolvedValue([{ count: 1 }]),
+    transaction: jest.fn(
+      (work: (manager: typeof manager) => Promise<unknown>) => work(manager),
+    ),
+  };
   const service = new DeviceService(
     devices as never,
     subscriptions as never,
@@ -68,6 +77,30 @@ describe('DeviceService ownership and pins', () => {
       publishedVersion: 1,
     });
     dataSource.query.mockResolvedValue([{ count: 1 }]);
+    manager.query.mockResolvedValue([]);
+  });
+
+  it('deletes device metrics in the same transaction as an owned device', async () => {
+    devices.findOne.mockResolvedValue({ id, userId: 'user-a' });
+
+    await service.remove(id, user);
+
+    expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+    expect(devices.delete).toHaveBeenCalledWith({ id, userId: 'user-a' });
+    expect(manager.query).toHaveBeenCalledWith(
+      'DELETE FROM "metric_events" WHERE "deviceId" = $1',
+      [id],
+    );
+  });
+
+  it('does not delete metrics if device ownership changes before deletion', async () => {
+    devices.findOne.mockResolvedValue({ id, userId: 'user-a' });
+    devices.delete.mockResolvedValueOnce({ affected: 0 });
+
+    await expect(service.remove(id, user)).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+    expect(manager.query).not.toHaveBeenCalled();
   });
 
   it('rejects an invalid device ID before registration', async () => {

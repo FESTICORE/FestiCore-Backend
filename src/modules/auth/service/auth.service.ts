@@ -345,6 +345,12 @@ export class AuthService {
         );
         await manager.delete(RefreshToken, { userId });
         await manager.query(
+          `DELETE FROM "metric_events" WHERE "deviceId" IN (
+          SELECT "id" FROM "devices" WHERE "userId" = $1
+        )`,
+          [userId],
+        );
+        await manager.query(
           `DELETE FROM "device_subscriptions" WHERE "deviceId" IN (
           SELECT "id" FROM "devices" WHERE "userId" = $1
         )`,

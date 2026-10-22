@@ -146,11 +146,16 @@ export class DeviceService {
 
   async remove(id: string, principal: DevicePrincipal) {
     await this.ownedDevice(id, principal);
-    const result = await this.devices.delete(
-      this.ownerCondition(id, principal),
-    );
-    if (result.affected !== 1)
-      throw new ForbiddenException('기기 소유권을 확인할 수 없습니다.');
+    await this.dataSource.transaction(async (manager) => {
+      const result = await manager
+        .getRepository(Device)
+        .delete(this.ownerCondition(id, principal));
+      if (result.affected !== 1)
+        throw new ForbiddenException('기기 소유권을 확인할 수 없습니다.');
+      await manager.query('DELETE FROM "metric_events" WHERE "deviceId" = $1', [
+        id,
+      ]);
+    });
   }
 
   async startLiveActivity(
