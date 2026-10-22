@@ -62,7 +62,8 @@ export class PublicFestivalUpdatesGateway
       configured
         ?.split(',')
         .map((value) => value.trim())
-        .filter(Boolean) ?? [];
+        .filter(Boolean)
+        .map((value) => new URL(value).origin) ?? [];
     const production = this.config.get<string>('NODE_ENV') === 'production';
     if (
       origin &&

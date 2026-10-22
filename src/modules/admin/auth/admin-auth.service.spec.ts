@@ -33,6 +33,24 @@ describe('AdminAuthService', () => {
     );
   });
 
+  it('accepts mixed-case configured host names after origin normalization', async () => {
+    const normalized = new AdminAuthService(
+      { findOneBy } as unknown as Repository<AdminAccount>,
+      {
+        transaction: (fn: (manager: { query: jest.Mock }) => Promise<void>) =>
+          fn({ query }),
+      } as unknown as DataSource,
+      {
+        get: (key: string) =>
+          ({
+            ADMIN_WEB_URL: 'https://festicoreAdmin-dev.up.railway.app',
+            CORS_ORIGINS: 'https://festicoreAdmin-dev.up.railway.app',
+          })[key],
+      } as ConfigService,
+    );
+    await expect(normalized.onModuleInit()).resolves.toBeUndefined();
+  });
+
   it('uses only the bound user ID and rejects inactive or absent accounts', async () => {
     findOneBy
       .mockResolvedValueOnce({

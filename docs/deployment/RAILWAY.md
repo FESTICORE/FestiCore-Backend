@@ -4,8 +4,8 @@ FestiCore 백엔드는 Railway에서 **develop / production** 두 환경으로 �
 
 | 환경       | 연결 브랜치 | API 도메인                             | AdminWeb 도메인                                  | 용도          |
 | ---------- | ----------- | -------------------------------------- | ------------------------------------------------ | ------------- |
-| develop    | `develop`   | `https://festicore-dev.up.railway.app` | `https://festicoreAdmin-dev.up.railway.app`       | 개발/스테이징 |
-| production | `main`      | `https://festicore.up.railway.app`     | `https://festicoreAdmin.up.railway.app`           | 운영          |
+| develop    | `develop`   | `https://festicore-dev.up.railway.app` | `https://festicoreadmin-dev.up.railway.app`       | 개발/스테이징 |
+| production | `main`      | `https://festicore.up.railway.app`     | `https://festicoreadmin.up.railway.app`           | 운영          |
 
 ## 1. 프로젝트/환경 구성
 

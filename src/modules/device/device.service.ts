@@ -207,7 +207,7 @@ export class DeviceService {
     const reminders = body.reminders ?? previous?.reminders ?? true;
     const packUpdates = body.packUpdates ?? previous?.packUpdates ?? false;
     const festivalStarts =
-      body.festivalStarts ?? previous?.festivalStarts ?? pinned;
+      body.festivalStarts ?? previous?.festivalStarts ?? true;
     await this.subscriptions.save({
       deviceId: id,
       festivalId,

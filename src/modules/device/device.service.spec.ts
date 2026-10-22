@@ -210,6 +210,24 @@ describe('DeviceService ownership and pins', () => {
     });
   });
 
+  it('keeps default start preference when first saved unpinned and later pinned', async () => {
+    devices.findOne.mockResolvedValue({
+      id,
+      userId: null,
+      deviceTokenId: 'token-a',
+    });
+    await expect(
+      service.subscribe(id, 'fst_test', { pinned: false }, device),
+    ).resolves.toMatchObject({ pinned: false, festivalStarts: true });
+    subscriptions.findOne.mockResolvedValue({
+      pinned: false,
+      festivalStarts: true,
+    });
+    await expect(
+      service.subscribe(id, 'fst_test', { pinned: true }, device),
+    ).resolves.toMatchObject({ pinned: true, festivalStarts: true });
+  });
+
   it('restores the start preference when an existing subscription is pinned again', async () => {
     devices.findOne.mockResolvedValue({
       id,

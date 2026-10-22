@@ -38,7 +38,14 @@ describe('PublicFestivalUpdatesGateway', () => {
   beforeEach(() => {
     find.mockReset();
     find.mockResolvedValue([]);
-    config.get.mockClear();
+    config.get.mockReset();
+    config.get.mockImplementation((key: string) =>
+      key === 'NODE_ENV'
+        ? 'production'
+        : key === 'CORS_ORIGINS'
+          ? 'https://admin.example.com'
+          : undefined,
+    );
     gateway = new PublicFestivalUpdatesGateway(
       { find } as unknown as Repository<AdminFestival>,
       config as unknown as ConfigService,
@@ -66,6 +73,21 @@ describe('PublicFestivalUpdatesGateway', () => {
       }),
     );
     expect(rejected.send).not.toHaveBeenCalled();
+  });
+
+  it('normalizes a mixed-case configured host for browser upgrades', () => {
+    config.get.mockImplementation((key: string) =>
+      key === 'NODE_ENV'
+        ? 'production'
+        : key === 'CORS_ORIGINS'
+          ? 'https://festicoreAdmin-dev.up.railway.app'
+          : undefined,
+    );
+    expect(
+      gateway.upgradeDecision(
+        request('https://festicoreadmin-dev.up.railway.app'),
+      ),
+    ).toBeNull();
   });
 
   it('does not broadcast the same version twice or accept client commands', async () => {
