@@ -26,6 +26,9 @@ export class CurrentTermsGuard implements CanActivate {
       .getRequest<Request & { user?: AuthUser }>();
     if (!request.user) throw new UnauthorizedException('인증 토큰이 없습니다.');
 
+    // 기존 앱이 약관 화면을 제공할 때까지 쓰기 기능을 유지한다.
+    if (process.env.CURRENT_TERMS_ENFORCED !== 'true') return true;
+
     const user = await this.users.findOne({
       where: { id: request.user.userId },
       select: { termsAcceptedAt: true, termsVersion: true },

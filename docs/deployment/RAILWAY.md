@@ -48,6 +48,7 @@ JWT_ACCESS_SECRET=<랜덤>                    # 필수
 JWT_REFRESH_SECRET=<다른 랜덤>              # 필수, access 와 달라야 함(같으면 부팅 실패)
 JWT_ACCESS_TTL=30m
 JWT_REFRESH_TTL=14d
+CURRENT_TERMS_ENFORCED=false                # 앱 약관 화면 배포·검증 후 true로 전환
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
 GOOGLE_MOBILE_CLIENT_IDS=                     # iOS/Android OAuth client ID, 쉼표 구분. 웹 ID는 GOOGLE_CLIENT_ID
@@ -74,6 +75,11 @@ AWS_S3_URL_STYLE=virtual                    # 엔드포인트가 경로 방식�
 ```
 
 로컬은 같은 키를 `.env`에 둔다(로컬 DB는 `DB_HOST/DB_PORT/DB_USERNAME/DB_PASSWORD/DB_NAME`, 기본 DB명 `festicore`).
+
+기존 앱은 가입 정보 화면이 없으므로 새 API 배포 시 `CURRENT_TERMS_ENFORCED=false`로 둔다.
+앱에서 `GET /me`의 약관 상태와 `TERMS_REQUIRED` 처리를 검증한 뒤 develop에서 먼저
+`true`로 켜고 쓰기·탈퇴·해제 경로를 확인한 다음 production에 적용한다.
+설정이 없거나 `false`이면 약관 동의값은 저장하지만 쓰기 제한은 하지 않는다.
 
 공개 팩 WebSocket은 `wss://<환경별-도메인>/api/v1/festivals/updates`에서 제공한다.
 브라우저 Origin은 `CORS_ORIGINS`에 있어야 하며 네이티브 앱의 Origin 없는 연결은 허용한다.

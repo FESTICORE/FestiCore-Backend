@@ -15,7 +15,7 @@
 
 첫 `PUT /api/v1/devices`는 Bearer 없이 가능하며, 응답의 `deviceAccessToken`을 앱 Keychain에 저장한다. 이후 기기·구독 요청은 `Authorization: Bearer <deviceAccessToken>`과 `X-Device-Id` UUID v4 헤더로 소유권을 증명한다. 로그인 계정이 소유한 기기는 계정 access JWT를 사용한다. 기존 기기를 UUID만으로 갱신할 수 없고, 기기 비밀값 헤더는 요구하지 않는다. 누락·잘못된 토큰은 401, 다른 계정의 기기는 403이다.
 
-- `PUT /api/v1/devices`: 본문에 `apnsEnvironment` (`sandbox` 또는 `production`)가 필수다. 익명 기기는 최초 등록·토큰 갱신 시 `deviceAccessToken`을 받으며 갱신하면 이전 토큰이 무효화된다.
+- `PUT /api/v1/devices`: 본문에 `apnsEnvironment` (`sandbox` 또는 `production`)가 필수다. 익명 기기는 최초 등록·갱신 시 `deviceAccessToken`을 받으며 갱신 전 토큰도 만료 전까지 유효하다. 토큰 노출 시에는 기존 소유자 인증으로 기기를 삭제하고 새 UUID로 등록한다.
 - `GET /api/v1/notifications/subscriptions`: 응답 `data.items[]`는 `festivalId`, `pinned`, `pinnedAt`, `reminders`, `festivalStarts`, `packUpdates`를 포함한다.
 - `PUT /api/v1/notifications/subscriptions/{festivalId}`: 본문 `{ "pinned": true, "reminders": true, "packUpdates": false }`를 저장한다. `pinned`는 필수이고 false여도 구독 행을 보존한다. 새 핀은 `reminders`와 `festivalStarts`가 기본 true, `packUpdates`는 기본 false다. 기존 구독에서 생략한 알림 설정은 유지한다. 기기별 분당 10회로 제한한다.
 - `PUT /api/v1/notifications/subscriptions/{festivalId}/pack-download`: 본문 `{ "packVersion": 1 }`은 현재 발행 버전과 일치할 때만 다운로드 완료를 기록한다. 성공 204.

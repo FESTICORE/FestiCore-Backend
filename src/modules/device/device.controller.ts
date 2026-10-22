@@ -64,7 +64,7 @@ export class DeviceController {
             deviceAccessToken: {
               type: 'string',
               description:
-                '익명 기기 등록·갱신 시 발급. 갱신하면 이전 토큰은 무효화됩니다.',
+                '익명 기기 등록·갱신 시 발급. 갱신 전 토큰도 만료 전까지 유효합니다.',
             },
             subscriptions: {
               type: 'array',

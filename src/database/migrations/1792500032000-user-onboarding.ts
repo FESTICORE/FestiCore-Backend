@@ -8,6 +8,9 @@ export class UserOnboarding1792500032000 implements MigrationInterface {
       `ALTER TABLE "users" ADD COLUMN "nicknameConfirmed" boolean NOT NULL DEFAULT false`,
     );
     await queryRunner.query(
+      `ALTER TABLE "users" ADD COLUMN "nicknameExplicitlySet" boolean NOT NULL DEFAULT false`,
+    );
+    await queryRunner.query(
       `ALTER TABLE "users" ADD COLUMN "termsAcceptedAt" timestamptz`,
     );
     await queryRunner.query(
@@ -26,6 +29,9 @@ export class UserOnboarding1792500032000 implements MigrationInterface {
     );
     await queryRunner.query(
       `ALTER TABLE "users" DROP COLUMN "nicknameConfirmed"`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE "users" DROP COLUMN "nicknameExplicitlySet"`,
     );
   }
 }

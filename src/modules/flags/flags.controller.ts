@@ -257,7 +257,6 @@ export class FlagsController {
     return this.service.follow(id, user.userId, key);
   }
 
-  @RequireCurrentTerms()
   @Delete(':flagId/follow')
   @ApiBearerAuth()
   @ApiOperation({
@@ -518,7 +517,6 @@ export class FlagsController {
     return this.service.invite(id, user.userId);
   }
 
-  @RequireCurrentTerms()
   @Delete(':flagId/co-bearers/:userId')
   @HttpCode(204)
   @ApiBearerAuth()

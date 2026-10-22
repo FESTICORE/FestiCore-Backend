@@ -345,7 +345,6 @@ export class CrewController {
     return this.service.renameMember(id, user.userId, body?.nickname);
   }
 
-  @RequireCurrentTerms()
   @Delete(':crewId/members/:userId')
   @ApiBearerAuth()
   @HttpCode(204)
@@ -364,7 +363,6 @@ export class CrewController {
     return this.service.removeMember(id, user.userId, userId);
   }
 
-  @RequireCurrentTerms()
   @Post(':crewId/transfer')
   @ApiBearerAuth()
   @HttpCode(200)
@@ -381,7 +379,6 @@ export class CrewController {
     return this.service.transfer(id, user.userId, body.toUserId);
   }
 
-  @RequireCurrentTerms()
   @Delete(':crewId')
   @ApiBearerAuth()
   @HttpCode(204)

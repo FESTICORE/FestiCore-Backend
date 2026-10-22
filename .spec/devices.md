@@ -36,6 +36,6 @@ APNs 토큰은 제공할 때 2~256자 짝수 길이 hex 문자열이다. JSON �
 
 ## 축제 알림 구독
 
-`GET /api/v1/notifications/subscriptions`, `PUT /api/v1/notifications/subscriptions/{festivalId}`, `DELETE /api/v1/notifications/subscriptions/{festivalId}`를 사용한다. PUT 본문은 `{"pinned":true,"reminders":true,"packUpdates":false}`다. `pinned`는 필수다. 새 핀의 `reminders`와 `festivalStarts` 기본값은 true, `packUpdates`는 false다. 기존 구독을 수정하면서 생략한 알림 설정은 유지한다. 기존 알림 구독은 마이그레이션에서 핀으로 이관한다. `pinned:false`로 바꿔도 구독 행은 보존한다. 구독 PUT은 인증된 기기별 분당 10회로 제한한다. 경로의 `festivalId`는 구독 대상이며 기기 식별과 무관하다. 공개된 축제에 대해서만 저장한다. `PUT /api/v1/notifications/subscriptions/{festivalId}/pack-download`에 현재 발행된 `packVersion`을 보내면 팩 다운로드를 기록한다. 회원 탈퇴 시 해당 계정 기기와 구독, 푸시 토큰을 삭제한다. 발송 규칙은 [notifications.md](./notifications.md)를 따른다.
+`GET /api/v1/notifications/subscriptions`, `PUT /api/v1/notifications/subscriptions/{festivalId}`, `DELETE /api/v1/notifications/subscriptions/{festivalId}`를 사용한다. PUT 본문은 `{"pinned":true,"reminders":true,"packUpdates":false}`다. `pinned`는 필수다. 새 핀의 `reminders`와 `festivalStarts` 기본값은 true, `packUpdates`는 false다. 기존 구독을 수정하면서 생략한 알림 설정은 유지한다. 기존 알림 구독은 마이그레이션에서 핀으로 이관하고, 이전 `festivalStarts` 동의값으로 D-1 `reminders`를 설정한다. `pinned:false`로 바꾸면 시작 알림은 꺼지지만 구독 행은 보존한다. 구독 PUT은 인증된 기기별 분당 10회로 제한한다. 경로의 `festivalId`는 구독 대상이며 기기 식별과 무관하다. 공개된 축제에 대해서만 저장한다. `PUT /api/v1/notifications/subscriptions/{festivalId}/pack-download`에 현재 발행된 `packVersion`을 보내면 팩 다운로드를 기록한다. 회원 탈퇴 시 해당 계정 기기와 구독, 푸시 토큰을 삭제한다. 발송 규칙은 [notifications.md](./notifications.md)를 따른다.
 
 공개 Swagger: `/api-docs/devices`. 관리자 Swagger에는 포함하지 않는다.

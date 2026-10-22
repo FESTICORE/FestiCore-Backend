@@ -83,6 +83,25 @@ describe('Me API contract (e2e)', () => {
     });
   });
 
+  it('닉네임을 먼저 정하고 나중에 약관에 동의해도 가입 정보가 확정된다', async () => {
+    const nickname = await request(server)
+      .patch('/api/v1/me')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ nickname: '먼저정함' })
+      .expect(200);
+    expect(nickname.body).toMatchObject({
+      data: { nicknameConfirmed: false },
+    });
+    const terms = await request(server)
+      .patch('/api/v1/me')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ acceptTerms: { version: '2026-10' } })
+      .expect(200);
+    expect(terms.body).toMatchObject({
+      data: { nickname: '먼저정함', nicknameConfirmed: true },
+    });
+  });
+
   it('잘못된 약관 버전은 422로 거부하고 프로필을 변경하지 않는다', async () => {
     const response = await request(server)
       .patch('/api/v1/me')

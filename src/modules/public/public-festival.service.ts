@@ -438,12 +438,13 @@ export class PublicFestivalService {
           flagsEnabled: pack.flagsEnabled,
           thumbUrl:
             publicImageUrl(pack.thumbUrl) ??
-            requiredArray(pack.flags)
+            (pack.flagsEnabled ? requiredArray(pack.flags) : [])
               .filter(
                 (flag) =>
                   object(flag) &&
                   (flag.visibility === undefined ||
-                    flag.visibility === 'public'),
+                    flag.visibility === 'public') &&
+                  flag.hidden !== true,
               )
               .map((flag) => publicImageUrl(flag.thumbUrl))
               .find((url) => url !== null) ??

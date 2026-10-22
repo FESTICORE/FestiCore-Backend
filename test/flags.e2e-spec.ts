@@ -23,6 +23,7 @@ import {
 import { FlagsService } from '../src/modules/flags/flags.service';
 
 describe('Flags HTTP authorization (e2e)', () => {
+  const previousTermsEnforcement = process.env.CURRENT_TERMS_ENFORCED;
   let app: INestApplication;
   let server: App;
   let jwt: JwtService;
@@ -31,6 +32,7 @@ describe('Flags HTTP authorization (e2e)', () => {
     readPhoto: jest.fn().mockResolvedValue(Buffer.from('photo')),
     bearerView: jest.fn().mockResolvedValue({ flagId: 'flag-1' }),
     follow: jest.fn().mockResolvedValue({ following: true }),
+    unfollow: jest.fn().mockResolvedValue({ following: false }),
     claim: jest.fn().mockResolvedValue({ flagId: 'flag-1', isNew: true }),
     createCodes: jest.fn().mockResolvedValue({ codes: [] }),
     listCodes: jest.fn().mockResolvedValue({ items: [] }),
@@ -44,6 +46,7 @@ describe('Flags HTTP authorization (e2e)', () => {
   let acceptedTerms = true;
 
   beforeAll(async () => {
+    process.env.CURRENT_TERMS_ENFORCED = 'true';
     const moduleRef = await Test.createTestingModule({
       imports: [JwtModule.register({})],
       controllers: [
@@ -96,6 +99,9 @@ describe('Flags HTTP authorization (e2e)', () => {
 
   afterAll(async () => {
     await app.close();
+    if (previousTermsEnforcement === undefined)
+      delete process.env.CURRENT_TERMS_ENFORCED;
+    else process.env.CURRENT_TERMS_ENFORCED = previousTermsEnforcement;
   });
 
   beforeEach(() => {
@@ -170,6 +176,11 @@ describe('Flags HTTP authorization (e2e)', () => {
     expect((denied.body as { code: string }).code).toBe('TERMS_REQUIRED');
     expect(service.follow).not.toHaveBeenCalled();
     await request(server)
+      .delete('/api/v1/flags/flag-1/follow')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+    expect(service.unfollow).toHaveBeenCalledWith('flag-1', 'user-1');
+    await request(server)
       .get('/api/v1/flags/flag-1/bearer')
       .set('Authorization', `Bearer ${token}`)
       .expect(200);
@@ -184,6 +195,21 @@ describe('Flags HTTP authorization (e2e)', () => {
       'user-1',
       'follow-terms',
     );
+  });
+
+  it('약관 화면 배포 전에는 기존 앱의 쓰기 요청을 유지한다', async () => {
+    acceptedTerms = false;
+    process.env.CURRENT_TERMS_ENFORCED = 'false';
+    try {
+      await request(server)
+        .put('/api/v1/flags/flag-1/follow')
+        .set('Authorization', `Bearer ${await accessToken()}`)
+        .set('Idempotency-Key', 'follow-rollout')
+        .expect(200);
+      expect(service.follow).toHaveBeenCalledTimes(1);
+    } finally {
+      process.env.CURRENT_TERMS_ENFORCED = 'true';
+    }
   });
 
   it('기수 코드 등록도 약관 동의 전에는 거부하고 동의 후 허용한다', async () => {

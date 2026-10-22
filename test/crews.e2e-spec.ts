@@ -18,6 +18,7 @@ const id = 'flg_1234567890abcdef';
 const userId = '00000000-0000-4000-8000-000000000001';
 
 describe('Crew HTTP contract', () => {
+  const previousTermsEnforcement = process.env.CURRENT_TERMS_ENFORCED;
   let app: INestApplication;
   let server: Server;
   let token: string;
@@ -40,6 +41,7 @@ describe('Crew HTTP contract', () => {
   ) as Record<string, jest.Mock>;
 
   beforeAll(async () => {
+    process.env.CURRENT_TERMS_ENFORCED = 'true';
     const moduleRef = await Test.createTestingModule({
       imports: [JwtModule.register({})],
       controllers: [CrewController],
@@ -87,6 +89,9 @@ describe('Crew HTTP contract', () => {
 
   afterAll(async () => {
     await app.close();
+    if (previousTermsEnforcement === undefined)
+      delete process.env.CURRENT_TERMS_ENFORCED;
+    else process.env.CURRENT_TERMS_ENFORCED = previousTermsEnforcement;
   });
 
   beforeEach(() => {
@@ -103,6 +108,11 @@ describe('Crew HTTP contract', () => {
       .expect(403);
     expect((denied.body as { code: string }).code).toBe('TERMS_REQUIRED');
     expect(service.create).not.toHaveBeenCalled();
+    await request(server)
+      .delete(`/api/v1/crews/${id}/members/${userId}`)
+      .auth(token, { type: 'bearer' })
+      .expect(204);
+    expect(service.removeMember).toHaveBeenCalledWith(id, userId, userId);
     await request(server)
       .get(`/api/v1/crews/${id}`)
       .auth(token, { type: 'bearer' })

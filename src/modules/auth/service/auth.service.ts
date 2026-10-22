@@ -162,14 +162,17 @@ export class AuthService {
         HttpStatus.UNPROCESSABLE_ENTITY,
       );
     }
-    if (input.nickname !== undefined) user.nickname = input.nickname;
+    if (input.nickname !== undefined) {
+      user.nickname = input.nickname;
+      user.nicknameExplicitlySet = true;
+    }
     if (input.acceptTerms) {
       user.termsVersion = CURRENT_TERMS_VERSION;
       user.termsAcceptedAt = new Date();
     }
     if (input.pushOptIn !== undefined) user.pushOptIn = input.pushOptIn;
     if (
-      (user.nicknameConfirmed || input.nickname !== undefined) &&
+      user.nicknameExplicitlySet &&
       user.nickname &&
       user.termsVersion === CURRENT_TERMS_VERSION &&
       user.termsAcceptedAt

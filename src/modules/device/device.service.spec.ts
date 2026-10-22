@@ -176,6 +176,7 @@ describe('DeviceService ownership and pins', () => {
       pinnedAt: null,
       reminders: true,
       packUpdates: false,
+      festivalStarts: false,
     });
     expect(subscriptions.save).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -183,6 +184,7 @@ describe('DeviceService ownership and pins', () => {
         festivalId: 'fst_test',
         pinned: false,
         pinnedAt: null,
+        festivalStarts: false,
         packDownloadedVersion: 2,
       }),
     );

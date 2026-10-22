@@ -237,6 +237,26 @@ describe('Public festival API', () => {
     expect(body.items[0].thumbUrl).toBe('https://example.com/a.webp');
   });
 
+  it('does not expose a hidden flag image in the list thumbnail', async () => {
+    queryBuilder.getMany.mockResolvedValueOnce([
+      {
+        ...published,
+        published: {
+          ...pack,
+          thumbUrl: undefined,
+          flags: [
+            { thumbUrl: 'https://example.com/private.webp', hidden: true },
+          ],
+        },
+      },
+    ]);
+    const response = await request(server).get('/api/v1/festivals').expect(200);
+    expect(
+      successData<{ items: { thumbUrl: string | null }[] }>(response.body)
+        .items[0].thumbUrl,
+    ).toBeNull();
+  });
+
   it('includes crawled discoveries when no festival pack has been published', async () => {
     queryBuilder.getMany.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
     const candidates = [

@@ -31,6 +31,9 @@ export class User {
   @Column({ type: 'boolean', default: false })
   nicknameConfirmed!: boolean;
 
+  @Column({ type: 'boolean', default: false })
+  nicknameExplicitlySet!: boolean;
+
   @Column({ type: 'timestamptz', nullable: true })
   termsAcceptedAt!: Date | null;
 
