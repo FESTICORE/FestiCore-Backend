@@ -79,6 +79,8 @@ function harness() {
   const snapshotsRepo = {
     find: jest.fn().mockResolvedValue([]),
     findOneBy: jest.fn(),
+    create: jest.fn((value: unknown) => value),
+    save: jest.fn().mockResolvedValue({ id: 'snapshot-1' }),
   };
   const sourcesRepo = {
     findBy: jest.fn().mockResolvedValue([source]),
@@ -91,7 +93,10 @@ function harness() {
       callback({}),
     ),
   };
-  const imageStorage = { readCrawlSnapshot: jest.fn() };
+  const imageStorage = {
+    readCrawlSnapshot: jest.fn(),
+    saveCrawlSnapshot: jest.fn().mockResolvedValue(undefined),
+  };
   const alerts = {
     recordThresholdFailure: jest.fn().mockResolvedValue(undefined),
   };
@@ -309,6 +314,48 @@ describe('CrawlService source audit', () => {
 });
 
 describe('CrawlService manual runs and snapshots', () => {
+  it('registers only NOL product pages discovered from a festival listing', async () => {
+    const { service, source, run, dataSource, runsRepo, execute } = harness();
+    execute.mockRestore();
+    source.url = 'https://nol.yanolja.com/ticket/genre/concert';
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({
+      status: 200,
+      body: '<script>self.__next_f.push([1,"action":{"web":"https://nol.yanolja.com/ticket/places/25000827/products/26013510"},"title":"ASEAN-Korea Music Festival 2026","dateInfo":"26.11.07 ~ 26.11.08","locationDetails":["인천남동체육관"]},{"action":{"web":"https://nol.yanolja.com/ticket.evil.example/products/1"},"title":"Fake Festival"}]);</script>',
+    });
+    jest
+      .spyOn(
+        service as unknown as {
+          captureImages(
+            source: CrawlSource,
+            run: CrawlRun,
+            urls: URL[],
+          ): Promise<string[]>;
+        },
+        'captureImages',
+      )
+      .mockResolvedValue([]);
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(null),
+    }));
+    jest.spyOn(service, 'proposalItems').mockResolvedValue({
+      kind: 'discovery',
+      items: [],
+    });
+
+    await service.execute(run, source);
+
+    expect(run.result).toBe('nochange-parsed');
+    const sourceUrls = dataSource.query.mock.calls
+      .filter(([sql]: [string]) => sql.includes('INSERT INTO crawl_sources'))
+      .map(([, parameters]: [string, string[]]) => parameters[0]);
+    expect(sourceUrls).toEqual([
+      'https://nol.yanolja.com/ticket/products/26013510',
+    ]);
+  });
+
   it('fetches bounded YES24 category pages and combines their listings', async () => {
     const { service, source } = harness();
     source.url =

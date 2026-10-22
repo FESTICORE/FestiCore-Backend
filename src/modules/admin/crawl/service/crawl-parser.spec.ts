@@ -102,6 +102,21 @@ describe('crawl parsers', () => {
     ]);
   });
 
+  it('normalizes NOL place-product links to a single detail URL', async () => {
+    const nol = source('ticket-list', 'discovery');
+    nol.url = 'https://nol.yanolja.com/ticket/genre/concert';
+    const html = String.raw`<script>self.__next_f.push([1,"action":{"web":"https://nol.yanolja.com/ticket/places/25000827/products/26011660"},"title":"서울 뮤직 페스티벌","dateInfo":"26.11.07 ~ 26.11.08","locationDetails":["서울 공연장"]}]);</script>`;
+
+    expect(await parseCrawl(nol, html)).toEqual([
+      {
+        name: '서울 뮤직 페스티벌',
+        url: 'https://nol.yanolja.com/ticket/products/26011660',
+        date: '2026.11.07 - 2026.11.08',
+        venue: '서울 공연장',
+      },
+    ]);
+  });
+
   it('omits invalid NOL dates and does not attach another product’s venue', async () => {
     const nol = source('ticket-list', 'discovery');
     nol.url = 'https://nol.yanolja.com/ticket';
@@ -133,6 +148,24 @@ describe('crawl parsers', () => {
         url: nol.url,
         date: '2026.10.17',
         venue: '일산 킨텍스 제 2전시장',
+      },
+    ]);
+  });
+
+  it('uses a NOL product poster from the official ticket image host', async () => {
+    const nol = source('ticket-list', 'discovery');
+    nol.url = 'https://nol.yanolja.com/ticket/products/26013406';
+    const html = `<meta property="og:image" content="https://ticketimage.interpark.com/Play/image/large/26/26013406_p.gif" />
+      <h1>NOL FESTIVAL 2026</h1><div>장소 킨텍스 일시 2026.10.17</div>`;
+
+    expect(await parseCrawl(nol, html)).toEqual([
+      {
+        name: 'NOL FESTIVAL 2026',
+        url: nol.url,
+        date: '2026.10.17',
+        venue: '킨텍스',
+        posterUrl:
+          'https://ticketimage.interpark.com/Play/image/large/26/26013406_p.gif',
       },
     ]);
   });

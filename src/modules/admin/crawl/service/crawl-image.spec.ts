@@ -6,6 +6,23 @@ import {
 } from './crawl-image';
 
 describe('crawl image safety', () => {
+  it('converts a bounded GIF poster to stored WebP', async () => {
+    const gif = await sharp({
+      create: {
+        width: 2,
+        height: 2,
+        channels: 4,
+        background: '#fa7a00',
+      },
+    })
+      .gif()
+      .toBuffer();
+    const prepared = await prepareCrawlImage(gif, 'image/gif');
+    expect((await sharp(prepared.body).metadata()).format).toBe('webp');
+    expect(prepared.key).toMatch(/^crawl\/[a-f0-9]{64}\.webp$/);
+    await expect(prepareCrawlImage(gif, 'image/png')).rejects.toThrow();
+  });
+
   it('discovers only bounded public HTTPS image candidates', () => {
     const html = `<img src="/poster.png"><img src="http://bad.example.com/x.jpg">
       <img data-src="https://cdn.example.com/photo.jpg?x=1&amp;y=2">
@@ -95,6 +112,18 @@ describe('crawl image safety', () => {
         String,
       ),
     ).toEqual(['https://tkfile.yes24.com/upload2/PerfBlog/cdf.jpg']);
+  });
+
+  it('stores only the NOL product poster from the known ticket image host', () => {
+    const html = `<meta property="og:image" content="https://ticketimage.interpark.com/Play/image/large/26/26013406_p.gif"><img src="https://evil.example/other.jpg">`;
+    expect(
+      discoverImageUrls(
+        html,
+        'https://nol.yanolja.com/ticket/products/26013406',
+      ).map(String),
+    ).toEqual([
+      'https://ticketimage.interpark.com/Play/image/large/26/26013406_p.gif',
+    ]);
   });
 
   it('limits each Melon detail run and rotates artist images across days', () => {
