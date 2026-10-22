@@ -2,6 +2,9 @@
 
 FestiCore 백엔드는 Railway에서 **develop / production** 두 환경으로 운영한다.
 
+2026-10-21 Railway 환경변수 보안 공지에 따른 점검·교체 순서는
+[보안 공지 대응 문서](SECURITY-INCIDENT-2026-10-21.md)에 기록한다.
+
 | 환경       | 연결 브랜치 | API 도메인                             | AdminWeb 도메인                                  | 용도          |
 | ---------- | ----------- | -------------------------------------- | ------------------------------------------------ | ------------- |
 | develop    | `develop`   | `https://festicore-dev.up.railway.app` | `https://festicoreadmin-dev.up.railway.app`       | 개발/스테이징 |
