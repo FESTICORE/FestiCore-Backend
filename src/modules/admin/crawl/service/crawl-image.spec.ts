@@ -40,18 +40,24 @@ describe('crawl image safety', () => {
     ]);
   });
 
-  it('skips Melon search page chrome and rotates product posters across days', () => {
+  it('uses the Melon festival candidates for poster downloads and rotates them across days', () => {
     const page = 'https://ticket.melon.com/search/index.htm?q=페스티벌';
     const rows = Array.from(
-      { length: 10 },
+      { length: 9 },
       (_, index) =>
-        `<tr><td><img src="https://cdnticket.melon.co.kr/resource/image/upload/product/${index}.jpg"></td></tr>`,
+        `<tr><td><img src="https://cdnticket.melon.co.kr/resource/image/upload/product/${index}.jpg"></td><td><a href="/performance/index.htm?prodId=${1000 + index}" class="show_title">2026 지역 페스티벌 ${index}</a></td><td class="show_date">2026.12.25 - 2026.12.26</td></tr>`,
     ).join('');
-    const html = `<img src="https://cdnticket.melon.co.kr/resource/image/web/common/logo.png">${rows}<tr><td><img src="https://evil.example/poster.jpg"></td></tr>`;
+    const nonFestival = `<tr><td><img src="https://cdnticket.melon.co.kr/resource/image/upload/product/concert.jpg"></td><td><a href="/performance/index.htm?prodId=2000" class="show_title">클로버 뮤직 스테이션</a></td><td class="show_date">2026.12.25</td></tr>`;
+    const noDate = `<tr><td><img src="https://cdnticket.melon.co.kr/resource/image/upload/product/undated.jpg"></td><td><a href="/performance/index.htm?prodId=2001" class="show_title">날짜 없는 페스티벌</a></td></tr>`;
+    const unsafeImage = `<tr><td><img src="https://evil.example/poster.jpg"></td><td><a href="/performance/index.htm?prodId=2002" class="show_title">포스터 없는 페스티벌</a></td><td class="show_date">2026.12.25</td></tr>`;
+    const html = `<img src="https://cdnticket.melon.co.kr/resource/image/web/common/logo.png">${rows}${nonFestival}${noDate}${unsafeImage}`;
     const urls = discoverImageUrls(html, page);
-    expect(urls).toHaveLength(10);
+    expect(urls).toHaveLength(9);
     expect(urls.every((url) => url.pathname.includes('/upload/product/'))).toBe(
       true,
+    );
+    expect(urls.map(String)).not.toContain(
+      'https://cdnticket.melon.co.kr/resource/image/upload/product/concert.jpg',
     );
     const first = selectRunImages(urls, page, '2026-10-21').map(String);
     const second = selectRunImages(urls, page, '2026-10-22').map(String);
