@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import sharp from 'sharp';
 import { checkedUrl } from './crawl-fetch';
-import { yes24EventJson } from './crawl-parser';
+import { melonSearchCandidates, yes24EventJson } from './crawl-parser';
 
 const MAX_INPUT_BYTES = 5 * 1024 * 1024;
 const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
@@ -84,28 +84,17 @@ function melonDetailImages(html: string, pageUrl: string): URL[] | null {
 }
 
 function melonSearchImages(html: string, pageUrl: string): URL[] | null {
-  const page = new URL(pageUrl);
-  if (
-    page.hostname !== 'ticket.melon.com' ||
-    page.pathname !== '/search/index.htm'
-  )
-    return null;
+  const candidates = melonSearchCandidates(html, pageUrl);
+  if (candidates === null) return null;
   const urls: URL[] = [];
   const seen = new Set<string>();
-  for (const row of html.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)) {
-    const raw = /<img\b[^>]*\bsrc=["']([^"']+)["']/i.exec(row[1])?.[1];
-    if (!raw) continue;
+  for (const candidate of candidates) {
+    if (!candidate.posterUrl) continue;
     try {
-      const image = checkedUrl(new URL(raw, page).toString());
-      if (
-        image.hostname !== 'cdnticket.melon.co.kr' ||
-        !image.pathname.startsWith('/resource/image/upload/product/') ||
-        seen.has(image.toString())
-      )
-        continue;
+      const image = checkedUrl(candidate.posterUrl);
+      if (seen.has(image.toString())) continue;
       seen.add(image.toString());
       urls.push(image);
-      if (urls.length >= 100) break;
     } catch {
       /* Ignore malformed or unsafe image locations. */
     }

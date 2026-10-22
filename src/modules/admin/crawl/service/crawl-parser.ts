@@ -336,7 +336,7 @@ function melonFestivalCandidates(
   return [...candidates.values()];
 }
 
-function melonSearchCandidates(
+export function melonSearchCandidates(
   body: string,
   base: string,
 ): FestivalCandidate[] | null {
