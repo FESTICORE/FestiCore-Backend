@@ -11,6 +11,7 @@ Source: Festival app API specification v0.1, page 27.
 - One to 100 events per request. Unknown body and event fields, non-finite values, oversized properties, and malformed timestamps are rejected with 400. Events older than seven days or more than five minutes in the future are rejected.
 - `202` has no response body. Global rate limit applies; this route is further limited to 30 requests/minute per client IP.
 - Stored data excludes IP addresses and raw HTTP headers, including Authorization. Sensitive property names are rejected. Device IDs are retained solely for distinct-device counts; deleting a device also deletes its events. The endpoint does not grant access to a device record.
+- The device foreign key is `NOT VALID` during migration: it blocks new orphan events and cascades registered-device deletion without deleting historical events collected under the earlier public contract. Historical orphan retention requires a separate data decision.
 
 ## GET `/api/v1/admin/metrics`
 
