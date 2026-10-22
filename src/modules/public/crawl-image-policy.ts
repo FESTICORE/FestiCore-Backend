@@ -12,4 +12,6 @@ export const PUBLIC_CRAWL_IMAGE_SQL = `(
       OR image."originUrl" LIKE 'https://cdnimg.melon.co.kr/%'))
   OR (source.url ~ '^https://ticket[.]yes24[.]com/Perf/[0-9]+$'
     AND image."originUrl" LIKE 'https://tkfile.yes24.com/upload2/PerfBlog/%')
+  OR (source.url = 'https://ticket.yes24.com/English/Genre/Concert'
+    AND image."originUrl" LIKE 'https://stkfile.yes24.com/upload2/PerfBlog/%')
 )`;
