@@ -47,11 +47,12 @@ describe('DeviceService ownership and pins', () => {
     }),
   };
   const config = { get: jest.fn().mockReturnValue('test-secret') };
-  const manager = { delete: jest.fn(), query: jest.fn() };
+  const transactionManager = { delete: jest.fn(), query: jest.fn() };
   const dataSource = {
     query: jest.fn().mockResolvedValue([{ count: 1 }]),
     transaction: jest.fn(
-      (work: (manager: typeof manager) => Promise<unknown>) => work(manager),
+      (work: (manager: typeof transactionManager) => Promise<unknown>) =>
+        work(transactionManager),
     ),
   };
   const service = new DeviceService(
@@ -69,8 +70,8 @@ describe('DeviceService ownership and pins', () => {
     subscriptions.findOne.mockResolvedValue(null);
     devices.update.mockResolvedValue({ affected: 1 });
     devices.delete.mockResolvedValue({ affected: 1 });
-    manager.delete.mockResolvedValue({ affected: 1 });
-    manager.query.mockResolvedValue([]);
+    transactionManager.delete.mockResolvedValue({ affected: 1 });
+    transactionManager.query.mockResolvedValue([]);
     festivals.findOne.mockResolvedValue({
       published: true,
       publishedVersion: 1,
@@ -82,11 +83,11 @@ describe('DeviceService ownership and pins', () => {
     devices.findOne.mockResolvedValue({ id, userId: user.userId });
     await service.remove(id, user);
     expect(dataSource.transaction).toHaveBeenCalledTimes(1);
-    expect(manager.delete).toHaveBeenCalledWith(
+    expect(transactionManager.delete).toHaveBeenCalledWith(
       expect.any(Function),
       expect.objectContaining({ id }),
     );
-    expect(manager.query).toHaveBeenCalledWith(
+    expect(transactionManager.query).toHaveBeenCalledWith(
       'DELETE FROM "metric_events" WHERE "deviceId" = $1',
       [id],
     );
