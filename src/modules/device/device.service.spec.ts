@@ -176,7 +176,7 @@ describe('DeviceService ownership and pins', () => {
       pinnedAt: null,
       reminders: true,
       packUpdates: false,
-      festivalStarts: false,
+      festivalStarts: true,
     });
     expect(subscriptions.save).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -184,7 +184,7 @@ describe('DeviceService ownership and pins', () => {
         festivalId: 'fst_test',
         pinned: false,
         pinnedAt: null,
-        festivalStarts: false,
+        festivalStarts: true,
         packDownloadedVersion: 2,
       }),
     );
@@ -208,6 +208,24 @@ describe('DeviceService ownership and pins', () => {
       packUpdates: false,
       festivalStarts: true,
     });
+  });
+
+  it('restores the start preference when an existing subscription is pinned again', async () => {
+    devices.findOne.mockResolvedValue({
+      id,
+      userId: null,
+      deviceTokenId: 'token-a',
+    });
+    subscriptions.findOne.mockResolvedValue({
+      pinned: false,
+      pinnedAt: null,
+      reminders: true,
+      packUpdates: false,
+      festivalStarts: true,
+    });
+    await expect(
+      service.subscribe(id, 'fst_test', { pinned: true }, device),
+    ).resolves.toMatchObject({ pinned: true, festivalStarts: true });
   });
 
   it('limits subscription writes by the authenticated device ID', async () => {

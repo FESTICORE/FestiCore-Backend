@@ -4,6 +4,7 @@
 
 - 발행 팩의 첫 `days[].date` 전날 18:00 Asia/Seoul(09:00 UTC)에 축제당 기기별 작업 하나를 예약한다. `eventKey`는 `festival-reminder:{festivalId}`이며 `(deviceId, eventKey)` 유일 제약으로 중복 예약을 막는다. 첫 개최일이 바뀌면 미발송 작업만 새 시각으로 옮긴다.
 - 발송 직전 `pinned=true`, `reminders=true`, 공개 팩, APNs 토큰을 다시 확인한다. 핀 해제, 알림 끄기, 구독 삭제, 기기 삭제 시 작업을 취소한다.
+- 핀을 해제한 동안에는 시작 알림도 예약·발송하지 않는다. `festivalStarts` 선호값은 보존하며 다시 핀하면 적용한다.
 - `festival.reminder`는 준비물 확인 문구와 발행 팩 체크리스트 항목 최대 3개의 요약을 담은 소리 있는 alert다. `packDownloadedVersion`이 현재 `publishedVersion`과 다르면 `지금 팩을 받아 두세요.`를 덧붙이고 S00 경로 `/`를 보낸다. 같으면 S12 준비물 경로 `/festivals/{festivalId}/checklist`를 보낸다. `packUpdates`는 팩 업데이트 푸시 동의이므로 팩 다운로드 판정에 사용하지 않는다.
 - APNs 수락은 실제 단말 표시의 증거가 아니다. 앱은 `eventKey`로 중복 표시를 방지한다.
 

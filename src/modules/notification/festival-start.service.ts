@@ -204,7 +204,8 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
            SELECT gen_random_uuid(), s."deviceId", $1, $2, $3::timestamptz, $3::timestamptz
            FROM "device_subscriptions" s
            JOIN "devices" d ON d."id" = s."deviceId"
-           WHERE s."festivalId" = $1 AND s."festivalStarts" = true
+           WHERE s."festivalId" = $1 AND s."pinned" = true
+             AND s."festivalStarts" = true
              AND d."apnsToken" IS NOT NULL AND d."apnsEnvironment" IS NOT NULL
            ON CONFLICT ("deviceId", "eventKey") DO UPDATE
              SET "scheduledAt" = EXCLUDED."scheduledAt",
@@ -258,7 +259,7 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
       JOIN "devices" d ON d."id" = n."deviceId"
       JOIN "device_subscriptions" s ON s."deviceId" = n."deviceId"
         AND s."festivalId" = n."festivalId" AND s."${subscriptionFlag}" = true
-        ${reminder ? 'AND s."pinned" = true' : ''}
+        ${packUpdate ? '' : 'AND s."pinned" = true'}
       JOIN "admin_festivals" f ON f."id" = n."festivalId"
         AND f."published" IS NOT NULL AND f."publishedVersion" > 0
       WHERE n."id" = $1 AND n."status" = 'leased'

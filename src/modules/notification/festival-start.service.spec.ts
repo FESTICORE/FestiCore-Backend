@@ -195,6 +195,7 @@ describe('FestivalStartService', () => {
 
     expect(query).toHaveBeenCalledTimes(2);
     expect(query.mock.calls[0][0]).toContain('"publishedVersion" > 0');
+    expect(query.mock.calls[1][0]).toContain('s."pinned" = true');
     expect(query.mock.calls[1][0]).toContain('s."festivalStarts" = true');
     expect(query.mock.calls[1][0]).toContain('ON CONFLICT');
     expect(query.mock.calls[1][1]).toEqual([
@@ -281,6 +282,7 @@ describe('FestivalStartService', () => {
     await service.deliver(job, scheduledAt);
 
     expect(sendStartNotification).not.toHaveBeenCalled();
+    expect(query.mock.calls[0][0]).toContain('s."pinned" = true');
     expect(query.mock.calls[0][0]).toContain('s."festivalStarts" = true');
     expect(query.mock.calls[1][1]).toEqual([
       job.id,
