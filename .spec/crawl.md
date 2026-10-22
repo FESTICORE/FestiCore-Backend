@@ -20,7 +20,7 @@
 
 확인된 멜론·YES24 상품 URL은 별도 상세 소스로 등록해 다음 KST 예약 실행부터 수집한다. 멜론 상세에서 출연진 이름과 공식 사진 URL을, YES24 상세의 공개 구조화 데이터에서 일정·장소·포스터를 읽는다. 멜론 상세 이미지는 한 번에 최대 81개(포스터와 출연진 사진), 다른 소스 이미지는 최대 8개를 수집한다. 사진은 WebP 보관에 성공한 경우에만 공개 경로를 제공한다. NOL 기본 소스는 지속된 403으로 이번 마이그레이션에서 비활성화한다. 공연 시작 시각과 무대별 타임테이블은 공식 정보가 확인되기 전에는 생성하지 않는다.
 
-2026-10-23 확인한 [WONDERLIVET 2026 멜론 상세](https://ticket.melon.com/performance/index.htm?prodId=213793)에는 출연진 40명이 있다. 개발 API에는 40명 중 33명의 개별 사진이 보관되어 있다. 나머지 7명(CHiCO with HoneyWorks, Suisei Hoshimachi, Humbreaders, Chevon, Brandy Senki, Conton Candy, CLAN QUEEN)의 멜론 이미지 주소는 모두 동일한 기본 이미지 경로이므로 실제 사진으로 취급하지 않는다. [공동 주최사 ぴあ의 공식 발표](https://corporate.pia.jp/news/detail_wonderlivet_20260826.html)는 42팀을 명시하며, 멜론 상세에 없는 A I W E O와 KUROMI를 포함한다. 공식 출처에서 두 팀과 개별 사진의 사용 가능한 주소를 확인하고 출처별 중복 제거를 구현하기 전까지 42팀과 사진 40건을 수집 완료로 표시하지 않는다.
+2026-10-23 확인한 [WONDERLIVET 2026 멜론 상세](https://ticket.melon.com/performance/index.htm?prodId=213793)에는 출연진 40명이 있다. 개발 API에는 40명 중 33명의 개별 사진이 보관되어 있다. 나머지 7명(CHiCO with HoneyWorks, Suisei Hoshimachi, Humbreaders, Chevon, Brandy Senki, Conton Candy, CLAN QUEEN)의 멜론 이미지 주소는 모두 동일한 기본 이미지 경로이므로 실제 사진으로 취급하지 않는다. [공동 주최사 ぴあ의 공식 발표](https://corporate.pia.jp/news/detail_wonderlivet_20260826.html)는 42팀을 명시하며, 멜론 상세에 없는 A I W E O와 KUROMI를 포함한다. 축제 공식 사이트의 `robots.txt`는 `/api` 수집을 금지하므로 해당 경로를 예약 크롤러에 연결하지 않는다. 허용되는 공식 출처에서 두 팀과 개별 사진의 사용 가능한 주소를 확인하고 출처별 중복 제거를 구현하기 전까지 42팀과 사진 40건을 수집 완료로 표시하지 않는다.
 
 NOL의 공개 상품·공연정보 상세 HTML이 입력되면 공연명과 명시된 `기간`/`일시`, `장소`를 축제 발견 후보로 읽는다. 별도 티켓 오픈 날짜는 행사 날짜로 사용하지 않으며 유효하지 않은 날짜·장소는 거부한다. 2026-10-22 서버 직접 요청에서 콘서트 목록과 상품 상세가 각각 HTTP 403이었으므로 이 파서의 테스트 통과는 운영 수집 성공을 뜻하지 않는다. `robots.txt`의 `/discovery/` 제외 경로는 수집하지 않고, 비활성화된 NOL 예약 소스를 접근 가능성이 검증되기 전에 켜지 않는다.
 
