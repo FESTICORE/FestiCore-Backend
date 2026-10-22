@@ -617,7 +617,55 @@ function nolDetailCandidates(
     /[<>\\]/.test(venue)
   )
     return [];
-  return [{ name, url: source.toString(), date, venue }];
+  const candidate: FestivalCandidate = {
+    name,
+    url: source.toString(),
+    date,
+    venue,
+  };
+  const poster = nolPosterUrl(body, source);
+  if (poster) candidate.posterUrl = poster;
+  return [candidate];
+}
+
+export function nolPosterUrl(body: string, source: URL): string | null {
+  if (
+    source.hostname !== 'nol.yanolja.com' ||
+    !/^\/ticket\/products\/\d+$/.test(source.pathname)
+  )
+    return null;
+  const event = yes24EventJson(body);
+  const poster =
+    (typeof event?.image === 'string' ? event.image : null) ??
+    /<meta\b[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i.exec(
+      body,
+    )?.[1];
+  if (poster) {
+    try {
+      const image = new URL(poster, source);
+      if (
+        image.protocol === 'https:' &&
+        image.hostname === 'ticketimage.interpark.com' &&
+        /^\/Play\/image\/large\/\d+\/\d+_p\.(?:gif|jpe?g|png|webp)$/i.test(
+          image.pathname,
+        )
+      )
+        return image.toString();
+    } catch {
+      /* Ignore malformed poster URLs. */
+    }
+  }
+  return null;
+}
+
+function canonicalNolProductUrl(url: URL): URL {
+  if (url.hostname !== 'nol.yanolja.com') return url;
+  const match = /^\/ticket\/places\/\d+\/products\/(\d+)$/.exec(url.pathname);
+  if (match) {
+    url.pathname = `/ticket/products/${match[1]}`;
+    url.search = '';
+  }
+  return url;
 }
 
 function yes24FestivalCandidates(
@@ -744,6 +792,7 @@ function ticketCandidates(body: string, base: string): FestivalCandidate[] {
     )
       continue;
     url.hash = '';
+    canonicalNolProductUrl(url);
     const card =
       cards.find((item) => match.index >= item.start && match.index < item.end)
         ?.html ?? match[0];
@@ -789,6 +838,7 @@ function ticketCandidates(body: string, base: string): FestivalCandidate[] {
     )
       continue;
     url.hash = '';
+    canonicalNolProductUrl(url);
     const entry: FestivalCandidate = { name, url: url.toString() };
     if (
       sourceUrl.hostname === 'nol.yanolja.com' &&

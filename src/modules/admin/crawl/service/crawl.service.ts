@@ -429,7 +429,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
                   )
                 ? 'ticket-list:v4'
                 : source.url.startsWith('https://nol.yanolja.com/ticket')
-                  ? 'ticket-list:v3'
+                  ? 'ticket-list:v4'
                   : 'ticket-list:v3'
             : '',
         )
@@ -496,7 +496,10 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
               (!/^https:\/\/ticket\.melon\.com\/performance\/index\.htm\?prodId=\d+$/.test(
                 url,
               ) &&
-                !/^https:\/\/ticket\.yes24\.com\/Perf\/\d+$/.test(url))
+                !/^https:\/\/ticket\.yes24\.com\/Perf\/\d+$/.test(url) &&
+                !/^https:\/\/nol\.yanolja\.com\/ticket\/products\/\d+$/.test(
+                  url,
+                ))
             )
               continue;
             await this.dataSource.query(

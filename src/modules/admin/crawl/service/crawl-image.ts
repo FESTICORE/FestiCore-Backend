@@ -1,7 +1,11 @@
 import { createHash } from 'node:crypto';
 import sharp from 'sharp';
 import { checkedUrl } from './crawl-fetch';
-import { melonSearchCandidates, yes24EventJson } from './crawl-parser';
+import {
+  melonSearchCandidates,
+  nolPosterUrl,
+  yes24EventJson,
+} from './crawl-parser';
 
 const MAX_INPUT_BYTES = 5 * 1024 * 1024;
 const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
@@ -181,6 +185,8 @@ export function discoverImageUrls(html: string, pageUrl: string): URL[] {
   if (melonSearchPosters) return melonSearchPosters;
   const yes24Images = yes24DetailImages(html, pageUrl);
   if (yes24Images) return yes24Images;
+  const nolPoster = nolPosterUrl(html, new URL(pageUrl));
+  if (nolPoster) return [checkedUrl(nolPoster)];
   const urls: URL[] = [];
   const seen = new Set<string>();
   if (
@@ -261,6 +267,7 @@ export async function prepareCrawlImage(
     jpeg: 'image/jpeg',
     png: 'image/png',
     webp: 'image/webp',
+    gif: 'image/gif',
   };
   try {
     const image = sharp(bytes, {
@@ -274,7 +281,9 @@ export async function prepareCrawlImage(
       !metadata.width ||
       !metadata.height
     ) {
-      throw new Error('JPEG, PNG 또는 WebP 이미지 형식이 일치하지 않습니다.');
+      throw new Error(
+        'JPEG, PNG, GIF 또는 WebP 이미지 형식이 일치하지 않습니다.',
+      );
     }
     const body = await image
       .rotate()
