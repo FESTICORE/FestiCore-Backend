@@ -126,9 +126,30 @@ export class AuthService {
     return this.token.issue(user);
   }
 
-  /** 로그아웃: 해당 사용자의 refresh 토큰 전체 폐기 */
+  /** 로그아웃: 계정 토큰과 계정 소유 기기 전체의 푸시 수신을 해제한다. */
   async logout(userId: string): Promise<void> {
-    await this.token.revokeAllForUser(userId);
+    await this.dataSource.transaction(async (manager) => {
+      await manager.query(
+        `UPDATE "devices"
+         SET "apnsToken" = NULL, "liveActivityPushToStartToken" = NULL,
+             "liveActivityPushToken" = NULL, "liveActivityFestivalId" = NULL,
+             "liveActivityId" = NULL, "updatedAt" = now()
+         WHERE "userId" = $1`,
+        [userId],
+      );
+      // 핀·다운로드 기록은 유지하고 이 계정의 푸시 구독만 해제한다.
+      await manager.query(
+        `UPDATE "device_subscriptions"
+         SET "packUpdates" = false, "festivalStarts" = false, "reminders" = false
+         WHERE "deviceId" IN (SELECT "id" FROM "devices" WHERE "userId" = $1)`,
+        [userId],
+      );
+      await manager.query(
+        `UPDATE "refresh_tokens" SET "revokedAt" = now()
+         WHERE "userId" = $1 AND "revokedAt" IS NULL`,
+        [userId],
+      );
+    });
   }
 
   async me(

@@ -15,6 +15,60 @@ import { FlagPackSyncService } from '../../flags/flag-pack-sync.service';
 import { GoogleService } from './google.service';
 import { TokenService } from './token.service';
 
+describe('AuthService logout account devices', () => {
+  const userId = '00000000-0000-4000-8000-000000000001';
+
+  function setup() {
+    const query = jest.fn().mockResolvedValue([]);
+    const transaction = jest
+      .fn()
+      .mockImplementation(
+        (work: (manager: EntityManager) => Promise<unknown>) =>
+          work({ query } as unknown as EntityManager),
+      );
+    const service = new AuthService(
+      {} as GoogleService,
+      {} as AppleService,
+      {} as TokenService,
+      {} as Repository<User>,
+      { transaction } as unknown as DataSource,
+      {} as AppleRevokeRetryService,
+      {} as FlagPackSyncService,
+    );
+    return { service, query, transaction };
+  }
+
+  it('계정 소유 기기 전체의 푸시 수신과 refresh 토큰을 같은 트랜잭션에서 해제한다', async () => {
+    const { service, query, transaction } = setup();
+    await service.logout(userId);
+    expect(transaction).toHaveBeenCalledTimes(1);
+    expect(query).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining('WHERE "userId" = $1'),
+      [userId],
+    );
+    expect(query).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('SELECT "id" FROM "devices" WHERE "userId" = $1'),
+      [userId],
+    );
+    expect(query).toHaveBeenNthCalledWith(
+      3,
+      expect.stringContaining('UPDATE "refresh_tokens"'),
+      [userId],
+    );
+  });
+
+  it('기기 정리가 실패하면 refresh 토큰 폐기를 실행하지 않는다', async () => {
+    const { service, query } = setup();
+    query.mockRejectedValueOnce(new Error('device update failed'));
+    await expect(service.logout(userId)).rejects.toThrow(
+      'device update failed',
+    );
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('AuthService web grant replacement', () => {
   it('binds a pending admin grant only after Google verifies the email', async () => {
     const user = {

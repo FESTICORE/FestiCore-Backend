@@ -4,7 +4,7 @@ import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { DataSource, EntityManager } from 'typeorm';
+import { DataSource, EntityManager, IsNull } from 'typeorm';
 import { AllExceptionsFilter } from '../src/common/filters/all-exceptions.filter';
 import { ResponseInterceptor } from '../src/common/interceptors/response.interceptor';
 import { AuthController } from '../src/modules/auth/controller/auth.controller';
@@ -75,13 +75,23 @@ export async function createTestApp(): Promise<TestContext> {
           work({
             query: jest
               .fn()
-              .mockImplementation((sql: string, params?: string[]) =>
-                sql.includes('FROM "users"') && sql.includes('FOR UPDATE')
-                  ? users
-                      .findOne({ where: { id: params?.[0] } })
-                      .then((user) => (user ? [user] : []))
-                  : Promise.resolve([]),
-              ),
+              .mockImplementation((sql: string, params?: string[]) => {
+                if (
+                  sql.includes('FROM "users"') &&
+                  sql.includes('FOR UPDATE')
+                ) {
+                  return users
+                    .findOne({ where: { id: params?.[0] } })
+                    .then((user) => (user ? [user] : []));
+                }
+                if (sql.includes('UPDATE "refresh_tokens"')) {
+                  return refreshTokens.update(
+                    { userId: params?.[0], revokedAt: IsNull() },
+                    { revokedAt: new Date() },
+                  );
+                }
+                return Promise.resolve([]);
+              }),
             delete: jest
               .fn()
               .mockImplementation(
