@@ -220,6 +220,7 @@ describe('CrawlTimetableRevisionService', () => {
         id: where.id,
         sourceId: candidate.sourceId,
         status: 'pending',
+        contentHash: where.id === 'day-1' ? 'a'.repeat(64) : 'b'.repeat(64),
         sets: candidate.sets,
       }),
     );
@@ -227,12 +228,10 @@ describe('CrawlTimetableRevisionService', () => {
       { parser: 'image-ocr', parserConfig: { expectedRows: '1' } },
     ]);
     const items = [
-      { id: 'day-1', sets: candidate.sets },
-      { id: 'day-2', sets: candidate.sets },
+      { id: 'day-1', sets: candidate.sets, imageSha256: 'a'.repeat(64) },
+      { id: 'day-2', sets: candidate.sets, imageSha256: 'b'.repeat(64) },
     ];
-    await expect(
-      service.verifyReviewedBatch(items, 'a'.repeat(64)),
-    ).resolves.toHaveLength(2);
+    await expect(service.verifyReviewedBatch(items)).resolves.toHaveLength(2);
     expect(dataSource.transaction).toHaveBeenCalledTimes(1);
     expect(audit.record).toHaveBeenCalledTimes(2);
     expect(audit.record).toHaveBeenCalledWith(
@@ -246,12 +245,28 @@ describe('CrawlTimetableRevisionService', () => {
       { after: { imageSha256: string } },
     ][];
     expect(recordedCalls[0][1].after.imageSha256).toBe('a'.repeat(64));
+    expect(recordedCalls[1][1].after.imageSha256).toBe('b'.repeat(64));
     const savedRevisions = save.mock.calls as unknown as [
       { verifiedBy: string | null },
     ][];
     expect(
       savedRevisions.every(([revision]) => revision.verifiedBy === null),
     ).toBe(true);
+  });
+
+  it('refuses to verify a review against another stored image hash', async () => {
+    findOne.mockResolvedValue({
+      id: 'pending',
+      status: 'pending',
+      contentHash: 'a'.repeat(64),
+      sets: candidate.sets,
+    });
+    await expect(
+      service.verifyReviewedBatch([
+        { id: 'pending', sets: candidate.sets, imageSha256: 'b'.repeat(64) },
+      ]),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(save).not.toHaveBeenCalled();
   });
 
   it('includes the expected OCR row count in review items', async () => {

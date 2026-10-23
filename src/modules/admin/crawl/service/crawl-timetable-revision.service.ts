@@ -169,16 +169,19 @@ export class CrawlTimetableRevisionService {
   }
 
   async verifyReviewedBatch(
-    items: { id: string; sets: CrawlTimetableSet[] }[],
-    imageSha256: string,
+    items: { id: string; sets: CrawlTimetableSet[]; imageSha256?: string }[],
+    imageSha256?: string,
   ): Promise<CrawlTimetableRevision[]> {
     if (
       !Array.isArray(items) ||
       !items.length ||
       items.length > 3 ||
       new Set(items.map((item) => item.id)).size !== items.length ||
-      items.some((item) => !validSets(item.sets)) ||
-      !/^[0-9a-f]{64}$/i.test(imageSha256)
+      items.some(
+        (item) =>
+          !validSets(item.sets) ||
+          !/^[0-9a-f]{64}$/i.test(item.imageSha256 ?? imageSha256 ?? ''),
+      )
     )
       throw new BadRequestException(
         '검토 데이터나 원본 이미지 해시가 올바르지 않습니다.',
@@ -193,7 +196,7 @@ export class CrawlTimetableRevisionService {
             null,
             'system:reviewed-timetable-import',
             item.sets,
-            imageSha256,
+            item.imageSha256 ?? imageSha256,
           ),
         );
       }
@@ -218,6 +221,8 @@ export class CrawlTimetableRevisionService {
       throw new NotFoundException('시간표 검토본을 찾을 수 없습니다.');
     if (revision.status !== 'pending')
       throw new BadRequestException('대기 중인 시간표만 검증할 수 있습니다.');
+    if (imageSha256 && revision.contentHash !== imageSha256)
+      throw new BadRequestException('원본 이미지 해시가 검토 자료와 다릅니다.');
     const before = { status: revision.status, sets: revision.sets };
     if (correctedSets !== undefined) revision.sets = correctedSets;
     if (revision.sourceId) {
