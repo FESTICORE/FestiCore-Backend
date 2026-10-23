@@ -52,18 +52,20 @@ function setup() {
     }),
   };
   const gatherRepository = { findOne: jest.fn().mockResolvedValue(null) };
+  const socialNotifications = {
+    enqueueCrewStatus: jest.fn().mockResolvedValue(undefined),
+    enqueueCrewGather: jest.fn().mockResolvedValue(undefined),
+    enqueueCrewDissolved: jest.fn().mockResolvedValue(undefined),
+  };
   const service = new CrewService(
     crewRepository as unknown as Repository<Crew>,
     memberRepository as unknown as Repository<CrewMember>,
     gatherRepository as unknown as Repository<CrewGather>,
     festivalRepository as unknown as Repository<AdminFestival>,
     {} as Repository<User>,
-    {
-      enqueueCrewStatus: jest.fn().mockResolvedValue(undefined),
-      enqueueCrewGather: jest.fn().mockResolvedValue(undefined),
-    } as unknown as SocialNotificationService,
+    socialNotifications as unknown as SocialNotificationService,
   );
-  return { service, crewRepository, memberRepository };
+  return { service, crewRepository, memberRepository, socialNotifications };
 }
 
 describe('CrewService authorization and invitations', () => {
@@ -459,6 +461,47 @@ describe('CrewService authorization and invitations', () => {
       where: { id: crew.id },
       lock: { mode: 'pessimistic_write' },
     });
+  });
+
+  it('queues a dissolution notice before deleting the crew in one transaction', async () => {
+    const { service, crewRepository, memberRepository, socialNotifications } =
+      setup();
+    memberRepository.findOne.mockResolvedValue({
+      crewId: crew.id,
+      userId: ownerId,
+    });
+    const operations: string[] = [];
+    const lockedCrew = { ...crew };
+    const lockedCrewRepository = {
+      findOne: jest.fn().mockResolvedValue(lockedCrew),
+      delete: jest.fn().mockImplementation(() => {
+        operations.push('delete');
+        return Promise.resolve();
+      }),
+    };
+    socialNotifications.enqueueCrewDissolved.mockImplementation(() => {
+      operations.push('enqueue');
+      return Promise.resolve();
+    });
+    const manager = {
+      getRepository: () => lockedCrewRepository,
+    };
+    Object.assign(crewRepository, {
+      manager: {
+        transaction: (
+          work: (transactionManager: typeof manager) => Promise<unknown>,
+        ) => work(manager),
+      },
+    });
+
+    await service.dissolve(crew.id, ownerId);
+
+    expect(socialNotifications.enqueueCrewDissolved).toHaveBeenCalledWith(
+      manager,
+      lockedCrew,
+      ownerId,
+    );
+    expect(operations).toEqual(['enqueue', 'delete']);
   });
 
   it('does not gather after the caller loses membership before the crew lock', async () => {

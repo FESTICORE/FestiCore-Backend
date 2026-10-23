@@ -710,6 +710,11 @@ export class CrewService {
     await this.crews.manager.transaction(async (manager) => {
       const locked = await this.lockedCrew(manager, id, callerId);
       this.owner(locked, callerId);
+      await this.socialNotifications.enqueueCrewDissolved(
+        manager,
+        locked,
+        callerId,
+      );
       await manager.getRepository(Crew).delete({ id });
     });
   }
