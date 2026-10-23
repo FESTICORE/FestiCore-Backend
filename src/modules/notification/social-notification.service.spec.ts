@@ -126,6 +126,46 @@ describe('SocialNotificationService', () => {
     expect(query.mock.calls[1][1]?.[2]).toBe('crew.gather:gather_123');
   });
 
+  it('snapshots all current crew members for a dissolution notice', async () => {
+    const { service } = setup();
+    const query = jest
+      .fn<Promise<unknown>, [string, unknown[]?]>()
+      .mockResolvedValue([]);
+    await service.enqueueCrewDissolved(
+      { query } as never,
+      { id: crewId } as never,
+      actorUserId,
+    );
+    expect(query.mock.calls[0][0]).toContain('CREW_DISSOLVED');
+    expect(query.mock.calls[1][0]).toContain('FROM "crew_members" r');
+    expect(query.mock.calls[1][0]).toContain('r."crewId" = $1');
+    expect(query.mock.calls[1][0]).not.toContain('r."userId" <> $2');
+    expect(query.mock.calls[1][0]).toContain('u."pushOptIn" = true');
+    expect(query.mock.calls[1][1]?.[2]).toBe(`crew.status:dissolved:${crewId}`);
+  });
+
+  it('delivers a queued dissolution notice after the crew is deleted', async () => {
+    const { service, query, sendSocialNotification } = setup();
+    query.mockResolvedValueOnce([
+      { apnsToken: 'aabb', apnsEnvironment: 'sandbox' },
+    ]);
+    const dissolved = {
+      ...job,
+      type: 'crew.status' as const,
+      eventKey: `crew.status:dissolved:${crewId}`,
+      payload: { crewId, dissolved: true },
+    };
+    await service.deliver(dissolved, new Date('2026-11-20T03:00:00Z'));
+    expect(query.mock.calls[0][0]).toContain(
+      'n."eventKey" = \'crew.status:dissolved:\' || n."subjectId"',
+    );
+    expect(sendSocialNotification).toHaveBeenCalledWith('aabb', 'sandbox', {
+      type: 'crew.status',
+      payload: dissolved.payload,
+      eventKey: dissolved.eventKey,
+    });
+  });
+
   it('rechecks device account, membership and token before sending', async () => {
     const { service, query, sendSocialNotification } = setup();
     await service.deliver(job, new Date('2026-11-20T03:00:00Z'));
