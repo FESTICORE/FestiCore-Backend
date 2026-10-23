@@ -246,8 +246,11 @@ describe('CrawlTimetableRevisionService', () => {
       { after: { imageSha256: string } },
     ][];
     expect(recordedCalls[0][1].after.imageSha256).toBe('a'.repeat(64));
+    const savedRevisions = save.mock.calls as unknown as [
+      { verifiedBy: string | null },
+    ][];
     expect(
-      save.mock.calls.every(([revision]) => revision.verifiedBy === null),
+      savedRevisions.every(([revision]) => revision.verifiedBy === null),
     ).toBe(true);
   });
 
