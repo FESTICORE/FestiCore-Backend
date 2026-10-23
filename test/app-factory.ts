@@ -21,6 +21,8 @@ import { FlagPackSyncService } from '../src/modules/flags/flag-pack-sync.service
 import { HealthController } from '../src/modules/health/controller/health.controller';
 import { HealthService } from '../src/modules/health/service/health.service';
 import { LegalController } from '../src/modules/legal/legal.controller';
+import { LegalService } from '../src/modules/legal/legal.service';
+import { DEFAULT_PRIVACY_CONTENT } from '../src/modules/legal/privacy-content';
 import { CacheService } from '../src/modules/redis/service/cache.service';
 import { FakeRepository } from './fake-repository';
 
@@ -120,6 +122,16 @@ export async function createTestApp(): Promise<TestContext> {
       AuthService,
       TokenService,
       HealthService,
+      {
+        provide: LegalService,
+        useValue: {
+          privacy: jest.fn().mockResolvedValue({
+            content: DEFAULT_PRIVACY_CONTENT,
+            version: 0,
+            updatedAt: null,
+          }),
+        },
+      },
       { provide: GoogleService, useValue: google },
       { provide: AppleService, useValue: apple },
       { provide: AppleRevokeRetryService, useValue: appleRetry },

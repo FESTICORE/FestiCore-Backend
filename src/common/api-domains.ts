@@ -104,6 +104,12 @@ export const API_DOMAINS: ApiDomain[] = [
     pathPrefix: 'admin/audit',
   },
   {
+    slug: 'admin-legal',
+    title: 'Admin Legal',
+    description: '개인정보처리방침 조회·수정',
+    pathPrefix: 'admin/legal',
+  },
+  {
     slug: 'admin-push',
     title: 'Admin Push',
     description: '등록 기기에 테스트 푸시 발송',

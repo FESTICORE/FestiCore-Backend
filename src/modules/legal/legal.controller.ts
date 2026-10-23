@@ -2,6 +2,7 @@ import { Controller, Get, Res } from '@nestjs/common';
 import { ApiExcludeController } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { Public } from '../auth/decorator/public.decorator';
+import { LegalService } from './legal.service';
 
 const basePath = '/api/v1/legal';
 
@@ -34,19 +35,20 @@ const home = page(
 <p>서비스 이용에 관한 문서는 <a href="${basePath}/terms">이용약관</a>과 <a href="${basePath}/privacy">개인정보처리방침</a>에서 확인할 수 있습니다.</p>`,
 );
 
-const privacy = page(
-  '개인정보처리방침',
-  `<p class="lead">패스티코어 운영팀은 서비스에서 처리하는 개인정보와 사용 목적을 다음과 같이 안내합니다.</p>
-<h2>처리하는 정보</h2><p>Google 또는 Apple 로그인 시 제공되는 계정 식별자와, 제공 범위에 따른 이메일·프로필 정보가 저장될 수 있습니다. 회원이 설정한 닉네임, 약관 동의 시각·버전과 선택 알림 설정을 처리합니다. 로그인 제공자 연결 해제를 위해 제공자의 재발급 토큰과 클라이언트 식별자를 저장할 수 있으며, 앱 인증에 사용되는 재발급 토큰도 처리합니다.</p>
-<p>알림을 등록한 기기의 식별자, 앱·운영체제 버전, 언어·시간대, APNs 및 Live Activity 푸시 토큰을 처리합니다. 회원이 저장한 공연 일정과 축제 구독, 깃발·크루 활동과 신고 내용, 클라이언트 관측 이벤트도 기능 제공을 위해 처리합니다.</p>
-<h2>이용 목적</h2><p>계정 인증과 회원 관리, 축제 일정 제공, 관심 정보 동기화, 요청한 알림 발송, 현장 소통 기능 제공, 서비스 오류 확인과 운영에 사용합니다.</p>
-<h2>Google 사용자 정보</h2><p>Google 로그인에서 접근하는 정보는 계정 식별자와 사용자가 허용한 이메일 및 기본 프로필입니다. 이 정보는 로그인 확인, 계정 연결과 프로필 표시에 사용하고 서비스 데이터베이스에 저장합니다. Google 계정 식별자와 이메일을 다른 이용자에게 공개하지 않습니다.</p>
-<h2>보유 기간</h2><p>회원 계정과 로그인 정보는 회원 탈퇴 시까지, 기기 등록과 축제 구독 정보는 기기 삭제 또는 회원 탈퇴 시까지 보유합니다. 법령에 따라 별도 보존이 필요한 정보는 해당 법령이 정한 기간 동안만 보존합니다. 등록된 기기의 서비스 관측 이벤트는 기기 삭제 또는 연결 계정 탈퇴 시 함께 삭제합니다.</p>
-<h2>외부 서비스 및 공유</h2><p>Google과 Apple은 소셜 로그인 인증에 사용합니다. Railway의 서버·데이터베이스·이미지 저장 인프라에서 서비스 정보를 처리하며, Apple Push Notification service를 이용해 요청한 기기에 알림을 전송합니다. 다른 이용자에게 소셜 로그인 제공자의 계정 식별자와 이메일을 공개하지 않습니다. 깃발·크루 기능에서는 참여자 구분을 위한 서비스 내부 사용자 ID가 다른 참여자에게 표시될 수 있습니다.</p>
-<h2>정보 삭제와 권리 행사</h2><p>회원은 앱의 회원 탈퇴 기능으로 계정 삭제를 요청할 수 있습니다. 탈퇴 시 로그인 토큰을 폐기하고 계정 및 연결된 기기·구독 정보를 삭제하며, 일부 활동 이력은 계정 식별 정보를 제거합니다. 기기 등록과 구독도 기기 API에서 삭제할 수 있습니다. 개인정보 열람·정정·삭제·처리정지에 관한 요청은 아래 문의처로 접수할 수 있습니다.</p>
-<h2>안전성 확보</h2><p>전송 구간 암호화, 접근 권한 제한, 인증 정보 보호와 운영 로그 점검을 적용합니다.</p>
-<h2>문의 및 시행일</h2><p>운영: 패스티코어 운영팀<br>개인정보 문의: <a href="mailto:suhwj81@gmail.com">suhwj81@gmail.com</a><br>시행일: 2026년 10월 22일</p>`,
-);
+export function renderPrivacyContent(content: string): string {
+  return content
+    .trim()
+    .split(/\n\s*\n/)
+    .map((block, index) => {
+      if (block.startsWith('## ')) {
+        const [heading, ...bodyLines] = block.split('\n');
+        return `<h2>${escapeHtml(heading.slice(3).trim())}</h2>${bodyLines.length ? `<p>${bodyLines.map(escapeHtml).join('<br>')}</p>` : ''}`;
+      }
+      const body = block.split('\n').map(escapeHtml).join('<br>');
+      return `<p${index === 0 ? ' class="lead"' : ''}>${body}</p>`;
+    })
+    .join('\n');
+}
 
 const terms = page(
   '서비스 이용약관',
@@ -62,11 +64,17 @@ const terms = page(
 @Public()
 @Controller('legal')
 export class LegalController {
-  private send(response: Response, html: string): void {
+  constructor(private readonly legal: LegalService) {}
+
+  private send(
+    response: Response,
+    html: string,
+    cacheControl = 'public, max-age=3600',
+  ): void {
     response
       .status(200)
       .type('html')
-      .set('Cache-Control', 'public, max-age=3600')
+      .set('Cache-Control', cacheControl)
       .set(
         'Content-Security-Policy',
         "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'",
@@ -80,8 +88,13 @@ export class LegalController {
   }
 
   @Get('privacy')
-  privacy(@Res() response: Response): void {
-    this.send(response, privacy);
+  async privacy(@Res() response: Response): Promise<void> {
+    const document = await this.legal.privacy();
+    this.send(
+      response,
+      page('개인정보처리방침', renderPrivacyContent(document.content)),
+      'no-store',
+    );
   }
 
   @Get('terms')

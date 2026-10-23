@@ -23,7 +23,9 @@ describe('Public legal pages (e2e)', () => {
         .expect(200);
 
       expect(response.headers['content-type']).toMatch(/^text\/html/);
-      expect(response.headers['cache-control']).toBe('public, max-age=3600');
+      expect(response.headers['cache-control']).toBe(
+        name === 'privacy' ? 'no-store' : 'public, max-age=3600',
+      );
       expect(response.headers['content-security-policy']).toContain(
         "default-src 'none'",
       );
