@@ -48,7 +48,10 @@ function validInstant(value: string): boolean {
   );
 }
 
-function validSets(sets: CrawlTimetableSet[]): boolean {
+function validSets(
+  sets: CrawlTimetableSet[],
+  allowEmptyArtist = false,
+): boolean {
   return (
     Array.isArray(sets) &&
     sets.length > 0 &&
@@ -57,7 +60,7 @@ function validSets(sets: CrawlTimetableSet[]): boolean {
       (set) =>
         set &&
         typeof set.artist === 'string' &&
-        !!set.artist.trim() &&
+        (allowEmptyArtist || !!set.artist.trim()) &&
         set.artist.length <= 160 &&
         typeof set.stageName === 'string' &&
         !!set.stageName.trim() &&
@@ -127,7 +130,7 @@ export class CrawlTimetableRevisionService {
       !validHttpsUrl(candidate.sourceUrl) ||
       !/^[0-9a-f]{64}$/i.test(candidate.contentHash) ||
       !/^[0-9a-f]{64}$/i.test(candidate.parserHash) ||
-      !validSets(candidate.sets)
+      !validSets(candidate.sets, true)
     ) {
       throw new BadRequestException('검증할 수 없는 공연 시간표입니다.');
     }
@@ -225,6 +228,8 @@ export class CrawlTimetableRevisionService {
       throw new BadRequestException('원본 이미지 해시가 검토 자료와 다릅니다.');
     const before = { status: revision.status, sets: revision.sets };
     if (correctedSets !== undefined) revision.sets = correctedSets;
+    if (!validSets(revision.sets))
+      throw new BadRequestException('수정한 공연 시간표가 올바르지 않습니다.');
     if (revision.sourceId) {
       const sources = await manager.query<
         { parser: string; parserConfig: Record<string, unknown> }[]

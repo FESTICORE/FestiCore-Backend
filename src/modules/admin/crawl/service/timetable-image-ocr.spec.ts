@@ -88,6 +88,33 @@ describe('timetable image OCR candidates', () => {
     ]);
   });
 
+  it('reads an artist after a printed start tick only when configured', () => {
+    const tsv = [
+      header,
+      word(1, 1, 20, '12:00'),
+      word(1, 2, 20, 'A I W E O'),
+      word(2, 1, 70, '12:30'),
+      word(3, 1, 88, 'nishina'),
+      word(4, 1, 130, '13:00'),
+      word(5, 1, 148, 'Conton Candy'),
+    ].join('\n');
+    expect(parseStageTsv(tsv, '2026-11-20', 'stg_review', 'after')).toEqual([
+      expect.objectContaining({
+        startsAt: '2026-11-20T12:00:00+09:00',
+        artistText: 'A I W E O',
+      }),
+      expect.objectContaining({
+        startsAt: '2026-11-20T12:30:00+09:00',
+        artistText: 'nishina',
+      }),
+      expect.objectContaining({
+        startsAt: '2026-11-20T13:00:00+09:00',
+        artistText: 'Conton Candy',
+        endsAt: null,
+      }),
+    ]);
+  });
+
   it('rejects unsafe image and region configuration', async () => {
     const image = await sharp({
       create: {

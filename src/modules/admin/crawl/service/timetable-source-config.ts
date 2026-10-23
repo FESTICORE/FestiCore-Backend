@@ -59,6 +59,8 @@ export function timetableSourceConfig(
         column.top < 0 ||
         column.width <= 0 ||
         column.height <= 0 ||
+        (column.artistPosition !== undefined &&
+          !['before', 'after'].includes(column.artistPosition)) ||
         column.left + column.width > 1 ||
         column.top + column.height > 1,
     ) ||
