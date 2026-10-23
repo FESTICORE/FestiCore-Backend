@@ -1,12 +1,4 @@
-import {
-  WONDERLIVET_ARTIST_IMAGES,
-  WONDERLIVET_MELON_DETAIL_URL,
-} from './wonderlivet-artist-images';
-
 // Both the image lookup and the download endpoint must apply this condition.
-const transitionalWonderlivetImages = Object.values(WONDERLIVET_ARTIST_IMAGES)
-  .map((url) => `'${url.replace(/'/g, "''")}'`)
-  .join(', ');
 
 export const PUBLIC_CRAWL_IMAGE_SQL = `(
   source.url LIKE 'https://mintpaper.co.kr/festivals%'
@@ -23,8 +15,6 @@ export const PUBLIC_CRAWL_IMAGE_SQL = `(
   OR (source.kind = 'artist-image'
     AND source."parserConfig"->>'festivalSourceUrl' ~ '^https://(ticket[.]melon[.]com|ticket[.]yes24[.]com|nol[.]yanolja[.]com|mintpaper[.]co[.]kr)/'
     AND image."originUrl" LIKE 'https://%')
-  OR (source.url = '${WONDERLIVET_MELON_DETAIL_URL}'
-    AND image."originUrl" IN (${transitionalWonderlivetImages}))
   OR (source.url ~ '^https://ticket[.]yes24[.]com/Perf/[0-9]+$'
     AND image."originUrl" LIKE 'https://tkfile.yes24.com/upload2/PerfBlog/%')
   OR (source.url = 'https://ticket.yes24.com/English/Genre/Concert'
