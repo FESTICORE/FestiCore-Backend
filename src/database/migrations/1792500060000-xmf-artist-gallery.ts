@@ -8,13 +8,13 @@ export class XmfArtistGallery1792500060000 implements MigrationInterface {
   async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(
       `INSERT INTO crawl_sources (kind, url, parser, "parserConfig", "createdAt")
-       SELECT 'artist-gallery', $1, 'html-text',
+       SELECT 'artist-gallery', $1::text, 'html-text',
          jsonb_build_object('seed', 'xmf-official-gallery', 'festivalSourceUrl', $2::text),
          now() - interval '1 day'
        WHERE NOT EXISTS (
          SELECT 1 FROM crawl_sources
-         WHERE kind = 'artist-gallery' AND url = $1
-           AND "parserConfig"->>'festivalSourceUrl' = $2
+         WHERE kind = 'artist-gallery' AND url = $1::text
+           AND "parserConfig"->>'festivalSourceUrl' = $2::text
        )`,
       [
         'https://xmfestival.com/lineup',
