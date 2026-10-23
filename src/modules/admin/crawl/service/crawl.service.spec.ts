@@ -226,7 +226,7 @@ describe('CrawlService scheduled runs', () => {
 describe('CrawlService official timetable image', () => {
   afterEach(() => jest.restoreAllMocks());
 
-  it('stores only a pending candidate from one official day image', async () => {
+  it('stores a partial OCR result as pending for manual completion', async () => {
     const { service, source, run, runsRepo, timetableRevisions } = harness();
     jest.spyOn(service, 'execute').mockRestore();
     source.kind = 'timetable';
@@ -237,7 +237,7 @@ describe('CrawlService official timetable image', () => {
         'https://ticket.melon.com/performance/index.htm?prodId=123',
       sourcePageUrl: 'https://official.example/notice/1',
       date: '2026-10-17',
-      expectedRows: '1',
+      expectedRows: '2',
       columns: JSON.stringify([
         {
           stageId: 'stg_main',

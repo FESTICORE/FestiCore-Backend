@@ -96,11 +96,26 @@ export class CrawlTimetableRevisionService {
     const query = this.revisions.createQueryBuilder('revision');
     if (sourceId) query.andWhere('revision.sourceId = :sourceId', { sourceId });
     if (status) query.andWhere('revision.status = :status', { status });
+    const revisions = await query
+      .orderBy('revision.createdAt', 'DESC')
+      .limit(100)
+      .getMany();
+    if (!revisions.length) return { items: [] };
+    const sources = await this.dataSource.query<
+      { id: string; expectedRows: string | null }[]
+    >(
+      `SELECT id, "parserConfig"->>'expectedRows' AS "expectedRows"
+       FROM crawl_sources WHERE id = ANY($1::uuid[]) AND parser = 'image-ocr'`,
+      [[...new Set(revisions.map((revision) => revision.sourceId))]],
+    );
+    const expectedRows = new Map(
+      sources.map((source) => [source.id, Number(source.expectedRows)]),
+    );
     return {
-      items: await query
-        .orderBy('revision.createdAt', 'DESC')
-        .limit(100)
-        .getMany(),
+      items: revisions.map((revision) => ({
+        ...revision,
+        expectedRows: expectedRows.get(revision.sourceId) ?? null,
+      })),
     };
   }
 
@@ -160,6 +175,24 @@ export class CrawlTimetableRevisionService {
         throw new BadRequestException('대기 중인 시간표만 검증할 수 있습니다.');
       const before = { status: revision.status, sets: revision.sets };
       if (correctedSets !== undefined) revision.sets = correctedSets;
+      if (revision.sourceId) {
+        const sources = await manager.query<
+          { parser: string; parserConfig: Record<string, unknown> }[]
+        >(`SELECT parser, "parserConfig" FROM crawl_sources WHERE id = $1`, [
+          revision.sourceId,
+        ]);
+        const source = sources[0];
+        if (source?.parser === 'image-ocr') {
+          const expectedRows = Number(source.parserConfig.expectedRows);
+          if (
+            !Number.isInteger(expectedRows) ||
+            revision.sets.length !== expectedRows
+          )
+            throw new BadRequestException(
+              `공식 원본의 공연 ${expectedRows}개를 모두 확인한 뒤 승인해 주세요.`,
+            );
+        }
+      }
       revision.status = 'verified';
       revision.verifiedAt = new Date();
       revision.verifiedBy = adminId;
