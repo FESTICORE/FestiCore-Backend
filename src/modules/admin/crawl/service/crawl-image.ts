@@ -1,19 +1,40 @@
 import { createHash } from 'node:crypto';
 import sharp from 'sharp';
 import { checkedUrl } from './crawl-fetch';
-import { melonSearchCandidates, yes24EventJson } from './crawl-parser';
+import {
+  eventPerformers,
+  melonSearchCandidates,
+  nolPosterUrl,
+  ticketCandidates,
+  yes24EventJson,
+} from './crawl-parser';
 
 const MAX_INPUT_BYTES = 5 * 1024 * 1024;
 const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
 const MAX_IMAGES_PER_RUN = 8;
+const MAX_MELON_DETAIL_IMAGES = 81;
 
 export function selectRunImages(
   urls: URL[],
   pageUrl: string,
   day: string,
 ): URL[] {
-  if (urls.length <= MAX_IMAGES_PER_RUN) return urls;
   const page = new URL(pageUrl);
+  if (
+    page.hostname === 'ticket.melon.com' &&
+    page.pathname === '/performance/index.htm'
+  )
+    return urls.slice(0, MAX_MELON_DETAIL_IMAGES);
+  if (
+    (page.hostname === 'ticket.yes24.com' &&
+      /^\/(?:English\/)?Perf\/\d+$/.test(page.pathname)) ||
+    (page.hostname === 'nol.yanolja.com' &&
+      /^\/ticket\/(?:products\/\d+|meta\/performance\/[\w%.-]+)$/.test(
+        page.pathname,
+      ))
+  )
+    return urls.slice(0, MAX_MELON_DETAIL_IMAGES);
+  if (urls.length <= MAX_IMAGES_PER_RUN) return urls;
   if (
     (page.hostname === 'ticket.melon.com' &&
       page.pathname === '/search/index.htm') ||
@@ -27,24 +48,7 @@ export function selectRunImages(
       (_, index) => urls[(start + index) % urls.length],
     );
   }
-  if (
-    page.hostname !== 'ticket.melon.com' ||
-    page.pathname !== '/performance/index.htm'
-  )
-    return urls.slice(0, MAX_IMAGES_PER_RUN);
-  const poster = urls[0];
-  const artists = urls.slice(1);
-  const dayNumber = Math.floor(Date.parse(`${day}T00:00:00Z`) / 86_400_000);
-  const start =
-    (Number.isFinite(dayNumber) ? dayNumber * (MAX_IMAGES_PER_RUN - 1) : 0) %
-    artists.length;
-  return [
-    poster,
-    ...Array.from(
-      { length: MAX_IMAGES_PER_RUN - 1 },
-      (_, index) => artists[(start + index) % artists.length],
-    ),
-  ];
+  return urls.slice(0, MAX_IMAGES_PER_RUN);
 }
 
 function melonDetailImages(html: string, pageUrl: string): URL[] | null {
@@ -85,6 +89,41 @@ function melonDetailImages(html: string, pageUrl: string): URL[] | null {
   return urls;
 }
 
+export function artistProfileImageUrl(
+  html: string,
+  pageUrl: string,
+  imageHint: string,
+): URL | null {
+  const page = html.slice(0, 2_000_000);
+  const tags: string[] = page.match(/<(?:img|meta|a|div)\b[^>]*>/gi) ?? [];
+  const candidates = [
+    ...tags.map(
+      (tag) => /\b(?:data-src|src|content)=["']([^"']+)["']/i.exec(tag)?.[1],
+    ),
+    ...[...page.matchAll(/url\(\s*["']?([^)'"\s]+)["']?\s*\)/gi)].map(
+      (match) => match[1],
+    ),
+  ];
+  for (const raw of candidates) {
+    if (!raw) continue;
+    try {
+      const url = checkedUrl(
+        new URL(raw.replace(/&amp;/gi, '&'), pageUrl).toString(),
+      );
+      if (
+        new URL(pageUrl).hostname === 'xmfestival.com' &&
+        (url.hostname !== 'cdn.imweb.me' ||
+          url.pathname !== `/thumbnail/${imageHint}`)
+      )
+        continue;
+      if (url.pathname.includes(imageHint)) return url;
+    } catch {
+      // Ignore unsafe or malformed image locations.
+    }
+  }
+  return null;
+}
+
 function melonSearchImages(html: string, pageUrl: string): URL[] | null {
   const candidates = melonSearchCandidates(html, pageUrl);
   if (candidates === null) return null;
@@ -108,21 +147,47 @@ function yes24DetailImages(html: string, pageUrl: string): URL[] | null {
   const page = new URL(pageUrl);
   if (
     page.hostname !== 'ticket.yes24.com' ||
-    !/^\/Perf\/\d+$/.test(page.pathname)
+    !/^\/(?:English\/)?Perf\/\d+$/.test(page.pathname)
   )
     return null;
   const event = yes24EventJson(html);
   if (!event) return [];
+  const urls = eventPerformers(event, pageUrl).flatMap((artist) =>
+    artist.sourceUrl ? [checkedUrl(artist.sourceUrl)] : [],
+  );
   try {
-    if (typeof event.image !== 'string') return [];
+    if (typeof event.image !== 'string') return urls;
     const image = checkedUrl(new URL(event.image, page).toString());
     return image.hostname === 'tkfile.yes24.com' &&
       image.pathname.startsWith('/upload2/PerfBlog/')
-      ? [image]
-      : [];
+      ? [image, ...urls]
+      : urls;
   } catch {
-    return [];
+    return urls;
   }
+}
+
+function nolDetailImages(html: string, pageUrl: string): URL[] | null {
+  const page = new URL(pageUrl);
+  if (
+    page.hostname !== 'nol.yanolja.com' ||
+    !/^\/ticket\/(?:products\/\d+|meta\/performance\/[\w%.-]+)$/.test(
+      page.pathname,
+    )
+  )
+    return null;
+  const event = yes24EventJson(html);
+  const poster = nolPosterUrl(html, page);
+  return [
+    ...new Map(
+      [
+        ...(poster ? [checkedUrl(poster)] : []),
+        ...eventPerformers(event, pageUrl).flatMap((artist) =>
+          artist.sourceUrl ? [checkedUrl(artist.sourceUrl)] : [],
+        ),
+      ].map((url) => [url.toString(), url]),
+    ).values(),
+  ];
 }
 
 function yes24EnglishFestivalImages(
@@ -232,6 +297,16 @@ export function discoverImageUrls(html: string, pageUrl: string): URL[] {
   if (yes24EnglishPosters) return yes24EnglishPosters;
   const yes24Images = yes24DetailImages(html, pageUrl);
   if (yes24Images) return yes24Images;
+  const nolImages = nolDetailImages(html, pageUrl);
+  if (nolImages) return nolImages;
+  const page = new URL(pageUrl);
+  if (page.hostname === 'nol.yanolja.com' && page.pathname === '/ticket') {
+    return ticketCandidates(html, pageUrl).flatMap((candidate) =>
+      candidate.posterUrl ? [checkedUrl(candidate.posterUrl)] : [],
+    );
+  }
+  const nolPoster = nolPosterUrl(html, new URL(pageUrl));
+  if (nolPoster) return [checkedUrl(nolPoster)];
   const urls: URL[] = [];
   const seen = new Set<string>();
   if (
@@ -312,6 +387,7 @@ export async function prepareCrawlImage(
     jpeg: 'image/jpeg',
     png: 'image/png',
     webp: 'image/webp',
+    gif: 'image/gif',
   };
   try {
     const image = sharp(bytes, {
@@ -325,7 +401,9 @@ export async function prepareCrawlImage(
       !metadata.width ||
       !metadata.height
     ) {
-      throw new Error('JPEG, PNG 또는 WebP 이미지 형식이 일치하지 않습니다.');
+      throw new Error(
+        'JPEG, PNG, GIF 또는 WebP 이미지 형식이 일치하지 않습니다.',
+      );
     }
     const body = await image
       .rotate()

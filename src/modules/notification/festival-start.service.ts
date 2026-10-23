@@ -133,12 +133,7 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
           if (outcome.status === 'fulfilled' && outcome.value) {
             claimed.push(outcome.value);
           } else if (outcome.status === 'rejected') {
-            this.logger.error(
-              '축제 시작 알림 작업 선점에 실패했습니다.',
-              outcome.reason instanceof Error
-                ? outcome.reason.stack
-                : String(outcome.reason),
-            );
+            this.logger.error('축제 시작 알림 작업 선점에 실패했습니다.');
           }
         }
         if (!claimed.length) break;
@@ -147,21 +142,13 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
         );
         for (const outcome of deliveries) {
           if (outcome.status === 'rejected') {
-            this.logger.error(
-              '축제 시작 알림 작업 처리에 실패했습니다.',
-              outcome.reason instanceof Error
-                ? outcome.reason.stack
-                : String(outcome.reason),
-            );
+            this.logger.error('축제 시작 알림 작업 처리에 실패했습니다.');
           }
         }
         if (claimed.length < SEND_CONCURRENCY) break;
       }
-    } catch (error) {
-      this.logger.error(
-        '축제 시작 알림 스케줄러 실행에 실패했습니다.',
-        error instanceof Error ? error.stack : String(error),
-      );
+    } catch {
+      this.logger.error('축제 시작 알림 스케줄러 실행에 실패했습니다.');
     } finally {
       this.running = false;
     }

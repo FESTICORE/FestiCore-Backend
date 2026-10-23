@@ -1,11 +1,29 @@
 import sharp from 'sharp';
 import {
+  artistProfileImageUrl,
   discoverImageUrls,
   prepareCrawlImage,
   selectRunImages,
 } from './crawl-image';
 
 describe('crawl image safety', () => {
+  it('converts a bounded GIF poster to stored WebP', async () => {
+    const gif = await sharp({
+      create: {
+        width: 2,
+        height: 2,
+        channels: 4,
+        background: '#fa7a00',
+      },
+    })
+      .gif()
+      .toBuffer();
+    const prepared = await prepareCrawlImage(gif, 'image/gif');
+    expect((await sharp(prepared.body).metadata()).format).toBe('webp');
+    expect(prepared.key).toMatch(/^crawl\/[a-f0-9]{64}\.webp$/);
+    await expect(prepareCrawlImage(gif, 'image/png')).rejects.toThrow();
+  });
+
   it('discovers only bounded public HTTPS image candidates', () => {
     const html = `<img src="/poster.png"><img src="http://bad.example.com/x.jpg">
       <img data-src="https://cdn.example.com/photo.jpg?x=1&amp;y=2">
@@ -97,6 +115,81 @@ describe('crawl image safety', () => {
     ).toEqual(['https://tkfile.yes24.com/upload2/PerfBlog/cdf.jpg']);
   });
 
+  it('collects only explicitly paired YES24 performer images from its image host', () => {
+    const html = `<script type="application/ld+json">${JSON.stringify({
+      '@type': 'Event',
+      image: 'https://tkfile.yes24.com/upload2/PerfBlog/poster.jpg',
+      performer: [
+        {
+          '@type': 'MusicGroup',
+          name: 'Band A',
+          image: 'https://tkfile.yes24.com/artists/a.jpg',
+        },
+        {
+          '@type': 'Person',
+          name: 'Singer B',
+          image: 'https://evil.example/b.jpg',
+        },
+      ],
+    })}</script><img src="https://tkfile.yes24.com/artists/unpaired.jpg">`;
+    expect(
+      discoverImageUrls(html, 'https://ticket.yes24.com/Perf/60590').map(
+        String,
+      ),
+    ).toEqual([
+      'https://tkfile.yes24.com/upload2/PerfBlog/poster.jpg',
+      'https://tkfile.yes24.com/artists/a.jpg',
+    ]);
+  });
+
+  it('collects paired performer images from an English YES24 detail', () => {
+    const html = `<script type="application/ld+json">${JSON.stringify({
+      '@type': 'Event',
+      performer: {
+        '@type': 'Person',
+        name: 'Singer',
+        image: 'https://stkfile.yes24.com/artists/singer.jpg',
+      },
+    })}</script>`;
+    expect(
+      discoverImageUrls(
+        html,
+        'https://ticket.yes24.com/English/Perf/60590',
+      ).map(String),
+    ).toEqual(['https://stkfile.yes24.com/artists/singer.jpg']);
+  });
+
+  it('keeps all verified English YES24 detail images within the detail limit', () => {
+    const urls = Array.from(
+      { length: 13 },
+      (_, index) => new URL(`https://tkfile.yes24.com/artists/${index}.jpg`),
+    );
+    expect(
+      selectRunImages(
+        urls,
+        'https://ticket.yes24.com/English/Perf/60590',
+        '2026-10-24',
+      ),
+    ).toHaveLength(13);
+  });
+
+  it('collects NOL performer images only from the structured performer entry', () => {
+    const html = `<script type="application/ld+json">${JSON.stringify({
+      '@type': 'Event',
+      performer: {
+        '@type': 'Person',
+        name: 'Singer C',
+        image: 'https://ticketimage.interpark.com/artist/c.jpg',
+      },
+    })}</script><img src="https://ticketimage.interpark.com/artist/unpaired.jpg">`;
+    expect(
+      discoverImageUrls(
+        html,
+        'https://nol.yanolja.com/ticket/products/26013406',
+      ).map(String),
+    ).toEqual(['https://ticketimage.interpark.com/artist/c.jpg']);
+  });
+
   it('selects only matching YES24 English festival card posters', () => {
     const card = (id: string, genre: string, posterId = id) =>
       `<ul class="list_wrap"><li class="poster"><a href="/English/Perf/${id}"><img src="https://stkfile.yes24.com/upload2/PerfBlog/202610/20261012/20261012-${posterId}.jpg"></a></li><li class="conlist"><h3><a href="/English/Perf/${id}">Festival ${id}</a></h3><span>Genre</span>: [${genre}]</li></ul><div class="btn">`;
@@ -116,7 +209,28 @@ describe('crawl image safety', () => {
     ]);
   });
 
-  it('limits each Melon detail run and rotates artist images across days', () => {
+  it('stores only the NOL product poster from the known ticket image host', () => {
+    const html = `<meta property="og:image" content="https://ticketimage.interpark.com/Play/image/large/26/26013406_p.gif"><img src="https://evil.example/other.jpg">`;
+    expect(
+      discoverImageUrls(
+        html,
+        'https://nol.yanolja.com/ticket/products/26013406',
+      ).map(String),
+    ).toEqual([
+      'https://ticketimage.interpark.com/Play/image/large/26/26013406_p.gif',
+    ]);
+  });
+
+  it('downloads only matched festival posters from the public NOL home', () => {
+    const html = String.raw`<script>self.__next_f.push([1,\"action\":{\"web\":\"https://nol.yanolja.com/ticket/products/26015181\"},\"thumbnail\":\"https://ticketimage.interpark.com/Play/image/large/26/26015181_p.gif\",\"title\":\"썸띵 뉴 뮤직 페스티벌 2026\"},{\"action\":{\"web\":\"https://nol.yanolja.com/ticket/products/26013510\"},\"thumbnail\":\"https://ticketimage.interpark.com/Play/image/large/26/99999999_p.gif\",\"title\":\"서울 뮤직 페스티벌 2026\"}]);</script>`;
+    expect(
+      discoverImageUrls(html, 'https://nol.yanolja.com/ticket').map(String),
+    ).toEqual([
+      'https://ticketimage.interpark.com/Play/image/large/26/26015181_p.gif',
+    ]);
+  });
+
+  it('collects all available Melon detail artist images in one run', () => {
     const urls = Array.from(
       { length: 22 },
       (_, index) => new URL(`https://cdnimg.melon.co.kr/${index}.jpg`),
@@ -124,11 +238,58 @@ describe('crawl image safety', () => {
     const page = 'https://ticket.melon.com/performance/index.htm?prodId=213793';
     const first = selectRunImages(urls, page, '2026-10-21');
     const second = selectRunImages(urls, page, '2026-10-22');
-    expect(first).toHaveLength(8);
-    expect(second).toHaveLength(8);
-    expect(first[0]).toBe(urls[0]);
-    expect(second[0]).toBe(urls[0]);
-    expect(second.slice(1).map(String)).not.toEqual(first.slice(1).map(String));
+    expect(first).toEqual(urls);
+    expect(second).toEqual(urls);
+    expect(
+      selectRunImages(
+        [
+          ...urls,
+          ...Array.from(
+            { length: 70 },
+            (_, index) =>
+              new URL(`https://cdnimg.melon.co.kr/more-${index}.jpg`),
+          ),
+        ],
+        page,
+        '2026-10-21',
+      ),
+    ).toHaveLength(81);
+  });
+
+  it('finds a configured profile image on the current official page', () => {
+    const page = 'https://artist.example.com/profile';
+    const html = `<img src="https://artist.example.com/logo.png">
+      <img src="/photos/main-profile.jpg"><img src="http://unsafe.example/bad.jpg">`;
+    expect(artistProfileImageUrl(html, page, 'main-profile')?.toString()).toBe(
+      'https://artist.example.com/photos/main-profile.jpg',
+    );
+    expect(artistProfileImageUrl(html, page, 'missing')).toBeNull();
+    expect(artistProfileImageUrl(html, page, 'bad.jpg')).toBeNull();
+  });
+
+  it('finds an official profile image in a CSS background', () => {
+    const html = `<section style="background: url('/photos/group-profile.jpg')">
+      <div style="background: url('http://unsafe.example/group-profile.jpg')"></div>`;
+    expect(
+      artistProfileImageUrl(
+        html,
+        'https://artist.example.com/profile',
+        'group-profile.jpg',
+      )?.toString(),
+    ).toBe('https://artist.example.com/photos/group-profile.jpg');
+  });
+
+  it('finds the configured artist card in a lazy-loaded gallery div', () => {
+    const html = `<img src="https://other.example.com/thumbnail/20260811/354f5ae07ab1d.jpg">
+      <a><div class="img_wrap" data-src="https://cdn.imweb.me/thumbnail/20260811/other.jpg"></div></a>
+      <a><div class="img_wrap" data-src="https://cdn.imweb.me/thumbnail/20260811/354f5ae07ab1d.jpg"></div></a>`;
+    expect(
+      artistProfileImageUrl(
+        html,
+        'https://xmfestival.com/lineup',
+        '20260811/354f5ae07ab1d.jpg',
+      )?.toString(),
+    ).toBe('https://cdn.imweb.me/thumbnail/20260811/354f5ae07ab1d.jpg');
   });
 
   it('normalizes a valid image to content-addressed WebP without trusting its extension', async () => {

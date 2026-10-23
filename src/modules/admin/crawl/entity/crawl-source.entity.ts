@@ -7,7 +7,13 @@ import {
 } from 'typeorm';
 
 export type CrawlKind =
-  'timetable' | 'notice' | 'directions' | 'days' | 'discovery';
+  | 'timetable'
+  | 'notice'
+  | 'directions'
+  | 'days'
+  | 'discovery'
+  | 'artist-gallery'
+  | 'artist-image';
 export type CrawlParser =
   'html-table' | 'html-text' | 'image-ocr' | 'regex-days' | 'ticket-list';
 

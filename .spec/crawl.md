@@ -13,11 +13,18 @@
 
 - [NOL 티켓 콘서트 장르](https://nol.yanolja.com/ticket/genre/concert): 목록의 직렬화된 공연 URL 중 페스티벌 제목만 후보로 삼는다. 카드에 행사 날짜 전체와 장소가 있을 때만 저장 후보에 포함하고, 예매 오픈 시각을 행사 날짜로 쓰지 않는다. 파서 버전을 갱신해 기존 목록도 다시 처리한다. 식별 가능한 크롤러 요청에 403이 반환되고 격리된 일반 Chrome에도 차단 화면이 표시되어 운영 수집 성공은 확인되지 않았다. 실행 이력에 실패로 기록하고 연속 3회 실패 시 관리자 알림을 만든다.
 - [멜론티켓 페스티벌 목록](https://ticket.melon.com/concert/index.htm): 페이지가 사용하는 공개 `prodList.json?perfGenreCode=GENRE_CON_FESTIVAL` 목록 응답을 수집한다. 이 장르에도 일반 공연이 섞여 있어 제목에 축제 표시가 필요하다. 공식 정보로 확인한 `WONDERLIVET`과 `COUNTDOWN FANTASY`는 예외로 삼고, 콘서트·오케스트라 제목은 제외한다.
-- [멜론티켓 원더리벳 검색 결과](https://ticket.melon.com/search/index.htm?q=WONDERLIVET): 페스티벌 장르 목록에서 누락되는 원더리벳을 검색 결과의 공연 행에서 수집한다. 행의 공연 ID·날짜·장소·포스터를 함께 읽으며 지난 행사와 날짜 없는 결과는 공개 목록에서 제외한다.
+- [멜론티켓 원더리벳 검색 결과](https://ticket.melon.com/search/index.htm?q=WONDERLIVET): 페스티벌 장르 목록에서 누락되는 원더리벳을 검색 결과의 공연 행에서 수집한다. 행의 공연 ID·날짜·장소·포스터를 함께 읽으며 날짜 없는 결과는 공개 목록에서 제외한다. 지난 행사는 일정 그대로 보존한다.
+- [멜론티켓 영문 festival 검색 결과](https://ticket.melon.com/search/index.htm?q=festival): 한글 `페스티벌` 검색과 장르 목록에 잡히지 않는 영문 제목 공연을 같은 검증 파서로 수집한다. 결과에 지난 공연도 포함되므로 일정을 그대로 보존하며, 현재 또는 미래 공연 수 증가를 보장하지 않는다.
 - [YES24 티켓 콘서트 목록](https://ticket.yes24.com/English/Genre/Concert): 장르가 Festival인 상품을 후보로 추린다.
 - [YES24 국내 페스티벌 장르 AJAX 목록](https://ticket.yes24.com/New/Genre/Ajax/GenreList_Data.aspx?genre=15464&sort=0&area=&genretype=2&pCurPage=1&pPageSize=30): 공개 목록의 `ListTotalCnt`를 읽어 필요할 때 최대 4페이지를 순차 수집한다(페이지당 최대 2 MB, 페이지당 robots.txt 재확인). 공연 ID로 상품 URL을 구성하고 카드의 날짜와 장소를 수집하며, 제목 검증과 중복 제거를 적용해 최대 100개 후보를 만든다. 카드의 `data-src` 포스터 URL은 기존 이미지 검증·보관 경로의 수집 후보가 된다. 네트워크, robots.txt, 이미지 형식 검증이 실패하면 해당 이미지 보관은 보장되지 않는다.
 
-확인된 멜론·YES24 상품 URL은 별도 상세 소스로 등록해 다음 KST 예약 실행부터 수집한다. 멜론 상세에서 출연진 이름과 공식 사진 URL을, YES24 상세의 공개 구조화 데이터에서 일정·장소·포스터를 읽는다. 이미지는 매 실행 최대 8개만 가져오고 멜론 출연진 사진은 날짜별로 순환해 수집한다. 사진은 WebP 보관에 성공한 경우에만 공개 경로를 제공한다. NOL 기본 소스는 지속된 403으로 이번 마이그레이션에서 비활성화한다. 공연 시작 시각과 무대별 타임테이블은 공식 정보가 확인되기 전에는 생성하지 않는다.
+확인된 멜론·YES24 상품 URL은 별도 상세 소스로 등록해 다음 KST 예약 실행부터 수집한다. 멜론 상세에서 출연진 이름과 공식 사진 URL을, YES24 국내·영어 상세의 공개 구조화 데이터에서 일정·장소·포스터·사진과 이름이 짝지어진 출연진을 읽는다. 상세 이미지 수집 한도는 81개(포스터와 출연진 사진), 다른 소스 이미지는 최대 8개다. 사진은 WebP 보관에 성공한 경우에만 공개 경로를 제공하며, 구조화 데이터에 개별 사진이 없으면 생성하지 않는다. NOL 기본 소스는 지속된 403으로 이번 마이그레이션에서 비활성화한다. 공연 시작 시각과 무대별 타임테이블은 공식 정보가 확인되기 전에는 생성하지 않는다.
+
+2026-10-23 확인한 [WONDERLIVET 2026 멜론 상세](https://ticket.melon.com/performance/index.htm?prodId=213793)에는 출연진 40명이 있다. 개발 API에는 현재 40명 중 33명의 개별 사진이 보관되어 있다. 나머지 7명(CHiCO with HoneyWorks, Suisei Hoshimachi, Humbreaders, Chevon, Brandy Senki, Conton Candy, CLAN QUEEN)의 멜론 이미지 주소는 모두 동일한 기본 이미지 경로이므로 실제 사진으로 취급하지 않는다. [공동 주최사 ぴあ의 공식 발표](https://corporate.pia.jp/news/detail_wonderlivet_20260826.html)는 42팀을 명시하며, 멜론 상세에 없는 A I W E O와 KUROMI를 포함한다. [축제 공식 사이트](https://www.wonderli.vet/home)는 42팀과 타임테이블 공개를 명시하지만 `robots.txt`가 `/api` 수집을 금지하므로 해당 경로를 예약 크롤러에 연결하지 않는다. 두 팀의 이미지와 42팀 전체 시간·무대의 허용되는 공식 원본을 확인하고 출처별 중복 제거를 구현하기 전까지 42팀 및 타임테이블 수집 완료로 표시하지 않는다.
+
+아티스트 사진 대체는 소스별 `artist-image` 크롤로 처리한다. 관리자 소스 생성 API에 `kind: "artist-image"`, `parser: "html-text"`, 공식 프로필 페이지 `url`, `parserConfig: { "festivalSourceUrl": "예매 상세 URL", "artistName": "출연진 이름", "imageHint": "프로필 이미지 경로의 고유 부분" }`을 등록한다. 수집기는 매일 원본 HTML에서 힌트와 일치하는 HTTPS 이미지 주소를 다시 찾고 robots 정책·응답 MIME·디코딩·크기 제한을 통과한 파일만 WebP로 보관한다. 공개 상세 API는 축제 원본 URL과 출연진 이름이 모두 일치하는 저장 이미지를 선택한다. 코드에 특정 아티스트 사진 URL을 추가하지 않는다. 원더리벳 7팀의 후보 출처는 [CHiCO 공식 사이트](https://www.chicoxxx.com/), [hololive 프로필](https://hololive.hololivepro.com/talents/hoshimachi-suisei/), [Humbreaders 프로필](https://humbreaders.com/profile/), [Avex Chevon 프로필](https://avexnet.jp/contents/CHEVO-WORK-0001), [Brandy Senki 프로필](https://brandysenki.com/biography), [Conton Candy 공식 뉴스](https://contoncandy.fanpla.jp/news/2/), [CLAN QUEEN 공식 사이트](https://www.clanqueen.jp/)다. 소스 등록·배포·실제 이미지 보관은 별도 운영 검증이 필요하며, 외부 재배포 허락은 확인되지 않았다.
+
+NOL의 공개 상품·공연정보 상세 HTML이 입력되면 공연명과 명시된 `기간`/`일시`, `장소`를 축제 발견 후보로 읽는다. 별도 티켓 오픈 날짜는 행사 날짜로 사용하지 않으며 유효하지 않은 날짜·장소는 거부한다. 2026-10-22 서버 직접 요청에서 콘서트 목록과 상품 상세가 각각 HTTP 403이었으므로 이 파서의 테스트 통과는 운영 수집 성공을 뜻하지 않는다. `robots.txt`의 `/discovery/` 제외 경로는 수집하지 않고, 비활성화된 NOL 예약 소스를 접근 가능성이 검증되기 전에 켜지 않는다.
 
 새 소스 마이그레이션은 URL이 이미 있으면 중복 등록하지 않는다. 기존 NOL·YES24 소스와 멜론 대체 소스는 `createdAt`을 전날로 등록해 배포 후 첫 예약 점검에서 실행한다. 멜론의 기존 `v=1` 소스는 대체 소스가 존재할 때 비활성화해 같은 목록의 중복 실행을 막는다.
 
@@ -100,6 +107,7 @@
 ## 이미지, 실패와 보안
 
 수집된 이미지는 형식·크기 검사를 거쳐 WebP로 다시 인코딩하고 메타데이터를 제거해 서버의 이미지 저장소에 보관한다. 원본 HTML/JSON 스냅샷도 같은 비공개 오브젝트 저장소에 30일 보관한다. 관리자 이미지·스냅샷 URL은 세션을 검사하며 외부 원본 URL로 리디렉션하지 않는다. 이미지 목록은 원본 URL, 수집 실행 ID, 보관 URL을 보여준다.
+멜론·YES24·NOL 공연 상세는 포스터와 확인된 출연진 사진을 한 번의 실행에서 최대 81개까지 수집한다. 다른 소스는 실행당 최대 8개를 유지한다. 출연진 사진이 공식 원본에 없거나 이미지 검증에 실패하면 상세 응답의 `imageUrl`은 `null`이다.
 
 - HTTPS 공개 주소만 수집하고 DNS·연결 대상, 응답 크기, 시간 제한 및 `robots.txt`를 검사한다. 거부되면 소스 등록·시험은 422, 예약 실행은 `failed` 이력으로 기록한다.
 - 소스·제안·이미지·스냅샷이 없으면 404다. 유효한 Bearer JWT가 없으면 401, 관리자 역할 또는 출처가 허용되지 않으면 403이다.

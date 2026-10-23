@@ -51,6 +51,7 @@ export class PublicFestivalMapController {
       .set({
         'Content-Type': 'image/webp',
         'Cache-Control': 'public, max-age=86400',
+        'Cross-Origin-Resource-Policy': 'cross-origin',
         'X-Content-Type-Options': 'nosniff',
       })
       .send(bytes);
@@ -80,6 +81,7 @@ export class PublicFestivalMapController {
       .set({
         'Content-Type': 'image/webp',
         'Cache-Control': 'public, max-age=31536000, immutable',
+        'Cross-Origin-Resource-Policy': 'cross-origin',
         'X-Content-Type-Options': 'nosniff',
       })
       .send(bytes);

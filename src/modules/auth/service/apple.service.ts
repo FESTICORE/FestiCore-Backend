@@ -252,10 +252,8 @@ export class AppleService {
         .setAudience(APPLE_ISSUER)
         .setSubject(clientId)
         .sign(key);
-    } catch (error) {
-      this.logger.error(
-        `Apple client secret 생성 실패: ${(error as Error).message}`,
-      );
+    } catch {
+      this.logger.error('Apple client secret 생성 실패');
       return undefined;
     }
   }

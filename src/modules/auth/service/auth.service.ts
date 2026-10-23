@@ -7,6 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { randomBytes } from 'node:crypto';
 import { DataSource, QueryFailedError, Repository } from 'typeorm';
 import { SocialLoginDto } from '../dto/social-login.dto';
 import { RefreshToken } from '../entity/refresh-token.entity';
@@ -18,6 +19,7 @@ import { AppleService } from './apple.service';
 import { AppleRevokeRetryService } from './apple-revoke-retry.service';
 import { GoogleService } from './google.service';
 import { TokenService } from './token.service';
+import { OauthTokenCipher } from './oauth-token-cipher';
 import { CURRENT_TERMS_VERSION } from '../terms';
 
 // Postgres unique 제약 위반 코드.
@@ -57,6 +59,7 @@ export interface LoginResult {
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
+  private readonly oauthCipher = new OauthTokenCipher(process.env);
 
   constructor(
     private readonly google: GoogleService,
@@ -89,7 +92,11 @@ export class AuthService {
       const updated = await this.userRepo.update(
         { id: user.id },
         {
-          oauthWebRefreshToken: grant.refreshToken,
+          oauthWebRefreshToken: this.oauthCipher.encode(
+            grant.refreshToken,
+            user.id,
+            'oauthWebRefreshToken',
+          ),
           oauthWebClientId: grant.clientId ?? null,
         },
       );
@@ -125,9 +132,30 @@ export class AuthService {
     return this.token.issue(user);
   }
 
-  /** 로그아웃: 해당 사용자의 refresh 토큰 전체 폐기 */
+  /** 로그아웃: 계정 토큰과 계정 소유 기기 전체의 푸시 수신을 해제한다. */
   async logout(userId: string): Promise<void> {
-    await this.token.revokeAllForUser(userId);
+    await this.dataSource.transaction(async (manager) => {
+      await manager.query(
+        `UPDATE "devices"
+         SET "apnsToken" = NULL, "liveActivityPushToStartToken" = NULL,
+             "liveActivityPushToken" = NULL, "liveActivityFestivalId" = NULL,
+             "liveActivityId" = NULL, "updatedAt" = now()
+         WHERE "userId" = $1`,
+        [userId],
+      );
+      // 핀·다운로드 기록은 유지하고 이 계정의 푸시 구독만 해제한다.
+      await manager.query(
+        `UPDATE "device_subscriptions"
+         SET "packUpdates" = false, "festivalStarts" = false, "reminders" = false
+         WHERE "deviceId" IN (SELECT "id" FROM "devices" WHERE "userId" = $1)`,
+        [userId],
+      );
+      await manager.query(
+        `UPDATE "refresh_tokens" SET "revokedAt" = now()
+         WHERE "userId" = $1 AND "revokedAt" IS NULL`,
+        [userId],
+      );
+    });
   }
 
   async me(
@@ -200,6 +228,16 @@ export class AuthService {
           [userId],
         );
         if (!user) throw new NotFoundException('사용자를 찾을 수 없습니다.');
+        const oauthRefreshToken = this.oauthCipher.decode(
+          user.oauthRefreshToken,
+          user.id,
+          'oauthRefreshToken',
+        );
+        const oauthWebRefreshToken = this.oauthCipher.decode(
+          user.oauthWebRefreshToken,
+          user.id,
+          'oauthWebRefreshToken',
+        );
         const [admin] = await manager.query<{ id: string; role: string }[]>(
           `SELECT "id", "role" FROM "admin_accounts" WHERE "userId" = $1 AND "active" = true FOR UPDATE`,
           [userId],
@@ -230,17 +268,17 @@ export class AuthService {
           );
         }
         const failedAppleRevokes: { token: string; clientId?: string }[] = [];
-        if (user.oauthRefreshToken) {
+        if (oauthRefreshToken) {
           if (user.provider === 'google') {
-            await this.google.revokeConnection(user.oauthRefreshToken);
+            await this.google.revokeConnection(oauthRefreshToken);
           } else {
             const succeeded = await this.apple.revokeConnection(
-              user.oauthRefreshToken,
+              oauthRefreshToken,
               user.oauthClientId ?? undefined,
             );
             if (!succeeded)
               failedAppleRevokes.push({
-                token: user.oauthRefreshToken,
+                token: oauthRefreshToken,
                 clientId: user.oauthClientId ?? undefined,
               });
           }
@@ -250,19 +288,19 @@ export class AuthService {
           );
         }
         if (
-          user.oauthWebRefreshToken &&
-          user.oauthWebRefreshToken !== user.oauthRefreshToken
+          oauthWebRefreshToken &&
+          oauthWebRefreshToken !== oauthRefreshToken
         ) {
           if (user.provider === 'google') {
-            await this.google.revokeConnection(user.oauthWebRefreshToken);
+            await this.google.revokeConnection(oauthWebRefreshToken);
           } else {
             const succeeded = await this.apple.revokeConnection(
-              user.oauthWebRefreshToken,
+              oauthWebRefreshToken,
               user.oauthWebClientId ?? undefined,
             );
             if (!succeeded)
               failedAppleRevokes.push({
-                token: user.oauthWebRefreshToken,
+                token: oauthWebRefreshToken,
                 clientId: user.oauthWebClientId ?? undefined,
               });
           }
@@ -350,6 +388,12 @@ export class AuthService {
         )`,
           [userId],
         );
+        await manager.query(
+          `DELETE FROM "metric_events" WHERE "deviceId" IN (
+          SELECT "id" FROM "devices" WHERE "userId" = $1
+        )`,
+          [userId],
+        );
         await manager.query(`DELETE FROM "devices" WHERE "userId" = $1`, [
           userId,
         ]);
@@ -414,7 +458,11 @@ export class AuthService {
     const updated = await this.userRepo.update(
       { id: user.id },
       {
-        oauthRefreshToken: grant.refreshToken,
+        oauthRefreshToken: this.oauthCipher.encode(
+          grant.refreshToken,
+          user.id,
+          'oauthRefreshToken',
+        ),
         oauthClientId: grant.clientId ?? null,
       },
     );
@@ -460,7 +508,11 @@ export class AuthService {
         this.userRepo.create({
           ...where,
           email: profile.email ?? null,
-          nickname: profile.name?.slice(0, 30) ?? null,
+          nickname:
+            Array.from(profile.name?.trim() ?? '')
+              .slice(0, 12)
+              .join('') ||
+            `관객-${randomBytes(2).toString('hex').toUpperCase()}`,
           nicknameConfirmed: false,
           termsAcceptedAt: null,
           termsVersion: null,

@@ -100,6 +100,11 @@ describe('Auth (e2e)', () => {
     expect(paths['/api/v1/auth/session']).toBeUndefined();
     expect(paths['/api/v1/auth/me']).toBeUndefined();
     expect(paths['/api/v1/auth/logout']?.post).toBeDefined();
+    expect(paths['/api/v1/auth/logout']?.post?.parameters).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'X-Device-Id' }),
+      ]),
+    );
     expect(paths['/api/v1/me']?.get).toBeDefined();
     expect(paths['/api/v1/me']?.delete).toBeDefined();
   });

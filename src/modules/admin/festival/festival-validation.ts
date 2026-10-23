@@ -156,6 +156,15 @@ export function validateDraft(
       ends = Date.parse(set.endsAt);
     if (ends <= starts) errors.push(`sets[${i}]: 종료가 시작보다 빠름`);
     if (
+      set.imageUrl !== undefined &&
+      set.imageUrl !== null &&
+      (typeof set.imageUrl !== 'string' ||
+        !/^\/api\/v1\/festivals\/images\/[0-9a-f-]{36}\.webp$/.test(
+          set.imageUrl,
+        ))
+    )
+      errors.push(`sets[${i}]: 보관된 출연진 이미지 경로만 허용`);
+    if (
       Array.isArray(days) &&
       !days.some(
         (day) =>

@@ -84,12 +84,9 @@ export class PublicLiveService {
         );
         this.lastRateLimitCleanupMinute = minute;
         this.rateLimitCleanupFailed = false;
-      } catch (error) {
+      } catch {
         this.rateLimitCleanupFailed = true;
-        this.logger.error(
-          '지난 라이브 요청 제한 기록 정리에 실패했습니다.',
-          error instanceof Error ? error.stack : String(error),
-        );
+        this.logger.error('지난 라이브 요청 제한 기록 정리에 실패했습니다.');
         throw new ServiceUnavailableException(
           '라이브 요청 제한을 확인할 수 없습니다.',
         );

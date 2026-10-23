@@ -2,10 +2,13 @@
 
 FestiCore 백엔드는 Railway에서 **develop / production** 두 환경으로 운영한다.
 
-| 환경       | 연결 브랜치 | API 도메인                             | AdminWeb 도메인                                  | 용도          |
-| ---------- | ----------- | -------------------------------------- | ------------------------------------------------ | ------------- |
-| develop    | `develop`   | `https://festicore-dev.up.railway.app` | `https://festicoreadmin-dev.up.railway.app`       | 개발/스테이징 |
-| production | `main`      | `https://festicore.up.railway.app`     | `https://festicoreadmin.up.railway.app`           | 운영          |
+2026-10-21 Railway 환경변수 보안 공지에 따른 점검·교체 순서는
+[보안 공지 대응 문서](SECURITY-INCIDENT-2026-10-21.md)에 기록한다.
+
+| 환경       | 연결 브랜치 | API 도메인                             | AdminWeb 도메인                             | 용도          |
+| ---------- | ----------- | -------------------------------------- | ------------------------------------------- | ------------- |
+| develop    | `develop`   | `https://festicore-dev.up.railway.app` | `https://festicoreadmin-dev.up.railway.app` | 개발/스테이징 |
+| production | `main`      | `https://festicore.up.railway.app`     | `https://festicoreadmin.up.railway.app`     | 운영          |
 
 ## 1. 프로젝트/환경 구성
 
@@ -65,6 +68,9 @@ APNS_KEY_ID=                               # APNs Auth Key ID
 APNS_PRIVATE_KEY=                          # APNs .p8 키, 개행은 \n
 APNS_BUNDLE_ID=                            # iOS 앱 bundle ID (apns-topic)
 APPLE_REVOKE_ENCRYPTION_KEY=                # Apple 폐기 재시도 토큰 암호화: 32바이트 base64 또는 64자리 hex, 환경별 별도 키
+OAUTH_TOKEN_ENCRYPTION_KEY=                 # 사용자 OAuth 갱신 토큰 전용 32바이트 base64 또는 64자리 hex 키
+OAUTH_TOKEN_ENCRYPTION_PREVIOUS_KEY=        # 키 교체 기간에만 사용; 이전 암호문이 남아 있는 동안 유지
+OAUTH_TOKEN_ENCRYPTION_WRITE=false          # 모든 인스턴스에 복호화 코드와 현재 키가 배포된 뒤 true
 RAILWAY_BUCKET_NAME=                        # 각 환경의 비공개 이미지 버킷
 RAILWAY_BUCKET_REGION=
 RAILWAY_BUCKET_ENDPOINT=
@@ -91,9 +97,30 @@ AWS_S3_URL_STYLE=virtual                    # 엔드포인트가 경로 방식�
 Google 웹은 Google Identity Services에서 받은 ID 토큰을 모바일 앱과 동일한
 `POST /api/v1/auth/login`에 `{ "provider": "google", "token": "<idToken>" }`으로 보낸다.
 웹 클라이언트의 승인된 JavaScript 원본에는 실제 웹사이트의 HTTPS origin을 등록한다.
+Google OAuth 브랜딩에 등록할 공개 페이지 URL은 환경별로 다음과 같다.
+
+| 환경       | 홈페이지                                                 | 개인정보처리방침                                            | 이용약관                                                  |
+| ---------- | -------------------------------------------------------- | ----------------------------------------------------------- | --------------------------------------------------------- |
+| develop    | `https://festicore-dev.up.railway.app/api/v1/legal/home` | `https://festicore-dev.up.railway.app/api/v1/legal/privacy` | `https://festicore-dev.up.railway.app/api/v1/legal/terms` |
+| production | `https://festicore.up.railway.app/api/v1/legal/home`     | `https://festicore.up.railway.app/api/v1/legal/privacy`     | `https://festicore.up.railway.app/api/v1/legal/terms`     |
+
+브랜딩 등록 전에 해당 환경에서 세 URL의 공개 HTTPS 응답과 페이지 간 링크를 확인한다.
+운영 주체·문의처·보유기간·위탁 현황·효력일은 실제 운영 사실과 대조해 확정한다.
 백엔드의 Google 리디렉션 URI는 사용하지 않는다. `GOOGLE_CLIENT_ID`는 웹 클라이언트 ID,
 `GOOGLE_MOBILE_CLIENT_IDS`는 iOS/Android 클라이언트 ID 목록이며,
 백엔드는 이 목록으로 ID 토큰의 audience를 검증한다.
+
+Google 로그인 동의 화면의 표시 이름은 OAuth 클라이언트 이름이 아니라
+Google 인증 플랫폼의 **브랜딩 > 앱 이름**에서 정한다. 2026-10-22 확인 시
+`festicore` 프로젝트의 앱 이름은 `패스티코어`로 저장되어 있으나 게시 상태는
+`테스트 중`이며, 홈페이지·개인정보처리방침·서비스 약관 URL이 비어 있어
+`앱 게시` 버튼이 비활성화되어 있다. 테스트 상태에서는 로그인 동의 화면에
+앱 이름 대신 Railway 도메인이 표시될 수 있다. Google의 브랜드 인증을 위해서는
+실제 공개된 정책 페이지와 소유권을 검증할 수 있는 도메인을 준비하고,
+브랜딩 정보를 완성한 뒤 게시·인증 상태를 확인해야 한다. 현재 등록된
+`*.up.railway.app` 서브도메인은 공유 서비스 도메인이므로 커스텀 도메인 사용을
+검토한다. [Google 브랜딩 안내](https://support.google.com/cloud/answer/15549049),
+[도메인 검증 안내](https://developers.google.com/identity/verification/authentication-policy-compliance)
 
 이미지 저장은 Railway 환경마다 분리된 비공개 버킷을 사용한다. 현재 개발 버킷은
 `festicore-images-dev`, 운영 버킷은 `festicore-images-prod`이다. 버킷 자격증명은
@@ -113,6 +140,22 @@ Apple 토큰 폐기가 실패하면 탈퇴 트랜잭션에서 암호화된 재�
 작업자는 1분마다 최대 10건을 처리하고 최대 12회 지수 간격으로 재시도한다.
 12회 실패한 작업은 `apple_revoke_retries.exhaustedAt`에 표시되며 운영 점검이 필요하다.
 기존 암호문이 남아 있는 동안 키를 변경하면 복호화할 수 없으므로 키를 보존해야 한다.
+
+사용자 OAuth 갱신 토큰 암호화는 단계적으로 활성화한다. 환경별로 별도
+`OAUTH_TOKEN_ENCRYPTION_KEY`를 설정하고 `OAUTH_TOKEN_ENCRYPTION_WRITE=false`로
+복호화 가능한 버전을 모든 인스턴스에 먼저 배포한다. 구 버전 인스턴스가 완전히
+종료된 것을 확인한 뒤에만 쓰기를 `true`로 변경한다. 읽기는 기존 평문과 버전 1
+암호문을 모두 지원한다. 쓰기 전환 후 `npm run oauth-token:backfill`을 환경별로
+실행하고 평문 잔여 행이 0건인지 확인한다. 실행 중 다른 트랜잭션이 행을 잠그면
+명령이 실패할 수 있으므로 잠금이 풀린 뒤 다시 실행한다. 키 교체는 먼저 기존
+현재 키를 유지하고 새 키를 `OAUTH_TOKEN_ENCRYPTION_PREVIOUS_KEY`에 넣어 모든
+인스턴스를 배포한다. 이 단계의 쓰기는 기존 키로 계속 암호화한다. 모든 인스턴스가
+두 키를 읽을 수 있음을 확인한 뒤 현재 키와 이전 키의 위치를 바꿔 배포한다.
+롤링 중 양쪽 인스턴스가 두 키를 읽을 수 있으므로 쓰기를 계속 암호화한다.
+이전 키로 암호화된 행도 배치 명령으로 새 키에 재암호화하고 0건임을 확인한 뒤
+이전 키를 제거한다.
+암호문에 필요한 키가 없으면 회원 탈퇴의 provider 연동 해제가 실패하므로
+키를 제거하기 전에 해당 행을 확인해야 한다.
 
 축제 시작 알림은 발행된 팩의 `days[].startsAt`에서 예약되며 서버 프로세스가
 매분 대기 작업을 확인한다. `APNS_*` 네 변수는 develop/production 서비스에 각각
