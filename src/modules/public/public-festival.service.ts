@@ -56,6 +56,31 @@ function storedArtistImageUrl(value: unknown): string | null {
     : null;
 }
 
+function artistNameKeys(name: string): string[] {
+  const normalize = (value: string) =>
+    value.normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase();
+  const keys = [normalize(name)];
+  const parts = /^(.+?)\s*[（(]([^()（）]+)[）)]$/.exec(name.trim());
+  if (parts) {
+    const [, primary, alias] = parts;
+    const koreanAndLatin =
+      (/[가-힣]/.test(primary) && /[a-zA-Z]/.test(alias)) ||
+      (/[a-zA-Z]/.test(primary) && /[가-힣]/.test(alias));
+    if (koreanAndLatin) keys.push(normalize(primary), normalize(alias));
+  }
+  return [...new Set(keys)];
+}
+
+function artistImageForName(
+  name: string,
+  imageByName: Map<string, Set<string>>,
+): string | null {
+  const images = new Set(
+    artistNameKeys(name).flatMap((key) => [...(imageByName.get(key) ?? [])]),
+  );
+  return images.size === 1 ? [...images][0] : null;
+}
+
 function projectDirections(value: unknown): Document {
   const direction = fields(value, [
     'shuttle',
@@ -288,7 +313,10 @@ export class PublicFestivalService {
     return discoverySummaries(discoveryRows, publishedRows);
   }
 
-  private async attachStoredImages(entries: DiscoverySummary[]): Promise<void> {
+  private async attachStoredImages(
+    entries: DiscoverySummary[],
+    includeTimetableArtists = false,
+  ): Promise<Map<string, string>> {
     const imageUrls = [
       ...new Set(
         entries.flatMap((entry) => [
@@ -316,7 +344,7 @@ export class PublicFestivalService {
     const festivalSourceUrls = [
       ...new Set(
         entries
-          .filter((entry) => entry.artists?.length)
+          .filter((entry) => includeTimetableArtists || entry.artists?.length)
           .map((entry) => entry.sourceUrl),
       ),
     ];
@@ -398,6 +426,7 @@ export class PublicFestivalService {
         };
       });
     }
+    return profileImageByArtist;
   }
 
   async detail(id: string) {
@@ -417,7 +446,7 @@ export class PublicFestivalService {
         code: 'FESTIVAL_NOT_FOUND',
         message: '축제를 찾을 수 없습니다.',
       });
-    await this.attachStoredImages([entry]);
+    const profileImages = await this.attachStoredImages([entry], true);
     const revisions = await this.dataSource.query<
       {
         id: string;
@@ -439,10 +468,22 @@ export class PublicFestivalService {
          revision."createdAt" DESC, revision.id DESC`,
       [entry.sourceUrl],
     );
-    const artistImages = new Map(
-      entry.artists?.map((artist) => [artist.name, artist.imageUrl ?? null]) ??
-        [],
-    );
+    const artistImages = new Map<string, Set<string>>();
+    const addArtistImage = (name: string, imageUrl: string) => {
+      for (const key of artistNameKeys(name)) {
+        const images = artistImages.get(key) ?? new Set<string>();
+        images.add(imageUrl);
+        artistImages.set(key, images);
+      }
+    };
+    for (const artist of entry.artists ?? []) {
+      if (artist.imageUrl) addArtistImage(artist.name, artist.imageUrl);
+    }
+    for (const [key, imageId] of profileImages) {
+      const [festivalSourceUrl, artistName] = key.split('\u0000');
+      if (festivalSourceUrl === entry.sourceUrl)
+        addArtistImage(artistName, `/api/v1/festivals/images/${imageId}.webp`);
+    }
     const timetable = (revisions ?? []).flatMap((revision) =>
       revision.sets.map((set, index) => ({
         id: `${revision.id}-${index}`,
@@ -451,7 +492,7 @@ export class PublicFestivalService {
         stageName: set.stageName,
         startsAt: set.startsAt,
         endsAt: set.endsAt,
-        imageUrl: artistImages.get(set.artist) ?? null,
+        imageUrl: artistImageForName(set.artist, artistImages),
         sourceUrl: revision.sourceUrl,
         sourceImageUrl: revision.sourceImageId
           ? `/api/v1/festivals/images/${revision.sourceImageId}.webp`
@@ -469,7 +510,7 @@ export class PublicFestivalService {
     const artists = new Map(
       (entry.artists ?? []).map((artist) => [
         artist.name,
-        artist.imageUrl ?? null,
+        artistImageForName(artist.name, artistImages),
       ]),
     );
     for (const set of timetable) {
