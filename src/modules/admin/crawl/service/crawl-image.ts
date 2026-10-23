@@ -1,9 +1,5 @@
 import { createHash } from 'node:crypto';
 import sharp from 'sharp';
-import {
-  WONDERLIVET_ARTIST_IMAGES,
-  WONDERLIVET_MELON_DETAIL_URL,
-} from '../../../public/wonderlivet-artist-images';
 import { checkedUrl } from './crawl-fetch';
 import {
   melonSearchCandidates,
@@ -80,12 +76,34 @@ function melonDetailImages(html: string, pageUrl: string): URL[] | null {
     if (image) add(image, 'cdnimg.melon.co.kr');
     if (urls.length >= 81) break;
   }
-  if (pageUrl === WONDERLIVET_MELON_DETAIL_URL) {
-    for (const image of Object.values(WONDERLIVET_ARTIST_IMAGES)) {
-      add(image, new URL(image).hostname);
+  return urls;
+}
+
+export function artistProfileImageUrl(
+  html: string,
+  pageUrl: string,
+  imageHint: string,
+): URL | null {
+  const page = html.slice(0, 2_000_000);
+  const tags: string[] = page.match(/<(?:img|meta)\b[^>]*>/gi) ?? [];
+  const candidates = [
+    ...tags.map((tag) => /\b(?:src|content)=["']([^"']+)["']/i.exec(tag)?.[1]),
+    ...[...page.matchAll(/url\(\s*["']?([^)'"\s]+)["']?\s*\)/gi)].map(
+      (match) => match[1],
+    ),
+  ];
+  for (const raw of candidates) {
+    if (!raw) continue;
+    try {
+      const url = checkedUrl(
+        new URL(raw.replace(/&amp;/gi, '&'), pageUrl).toString(),
+      );
+      if (url.pathname.includes(imageHint)) return url;
+    } catch {
+      // Ignore unsafe or malformed image locations.
     }
   }
-  return urls;
+  return null;
 }
 
 function melonSearchImages(html: string, pageUrl: string): URL[] | null {

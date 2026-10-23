@@ -254,6 +254,43 @@ describe('CrawlService source audit', () => {
     });
   });
 
+  it('rejects an artist profile source without a safe event mapping', async () => {
+    const { service, dataSource } = harness();
+    const dto = {
+      kind: 'artist-image',
+      url: 'https://artist.example.com/profile',
+      parser: 'html-text',
+      parserConfig: {
+        artistName: 'Artist',
+        festivalSourceUrl: 'http://127.0.0.1/private',
+        imageHint: 'profile-photo',
+      },
+    } as CreateCrawlSourceDto;
+    await expect(service.createSource(dto, 'admin-1')).rejects.toThrow(
+      'festivalSourceUrl',
+    );
+    expect(dataSource.transaction).not.toHaveBeenCalled();
+  });
+
+  it('requires a distinctive image hint for an artist profile', async () => {
+    const { service, dataSource } = harness();
+    const dto = {
+      kind: 'artist-image',
+      url: 'https://artist.example.com/profile',
+      parser: 'html-text',
+      parserConfig: {
+        artistName: 'Artist',
+        festivalSourceUrl:
+          'https://ticket.melon.com/performance/index.htm?prodId=213793',
+        imageHint: 'logo',
+      },
+    } as CreateCrawlSourceDto;
+    await expect(service.createSource(dto, 'admin-1')).rejects.toThrow(
+      'imageHint',
+    );
+    expect(dataSource.transaction).not.toHaveBeenCalled();
+  });
+
   it('records the previous and new source settings', async () => {
     const { service, source, dataSource, audit } = harness();
     const checkRobots = jest
@@ -315,6 +352,51 @@ describe('CrawlService source audit', () => {
 });
 
 describe('CrawlService manual runs and snapshots', () => {
+  it('stores the image found on a configured artist profile without creating a proposal', async () => {
+    const { service, source, run, runsRepo, execute } = harness();
+    execute.mockRestore();
+    source.kind = 'artist-image';
+    source.url = 'https://artist.example.com/profile';
+    source.parser = 'html-text';
+    source.parserConfig = {
+      artistName: 'Artist',
+      festivalSourceUrl:
+        'https://ticket.melon.com/performance/index.htm?prodId=213793',
+      imageHint: 'profile-photo',
+    };
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({
+      status: 200,
+      body: '<img src="/photos/profile-photo.jpg">',
+    });
+    const captureImages = jest
+      .spyOn(
+        service as unknown as {
+          captureImages(
+            source: CrawlSource,
+            run: CrawlRun,
+            urls: URL[],
+          ): Promise<string[]>;
+        },
+        'captureImages',
+      )
+      .mockResolvedValue(['/api/v1/admin/crawl/images/image-1']);
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(null),
+    }));
+    const proposalItems = jest.spyOn(service, 'proposalItems');
+
+    await service.execute(run, source);
+
+    expect(captureImages.mock.calls[0][2].map(String)).toEqual([
+      'https://artist.example.com/photos/profile-photo.jpg',
+    ]);
+    expect(run.result).toBe('nochange-parsed');
+    expect(proposalItems).not.toHaveBeenCalled();
+  });
+
   it('reparses an unchanged English YES24 listing after the parser update', async () => {
     const { service, source, run, runsRepo, execute } = harness();
     execute.mockRestore();

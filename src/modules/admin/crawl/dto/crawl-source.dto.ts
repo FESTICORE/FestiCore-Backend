@@ -16,6 +16,7 @@ const KINDS: CrawlKind[] = [
   'directions',
   'days',
   'discovery',
+  'artist-image',
 ];
 const PARSERS: CrawlParser[] = [
   'html-table',
@@ -50,8 +51,14 @@ export class CreateCrawlSourceDto {
   @ApiProperty({
     type: 'object',
     additionalProperties: { type: 'string' },
-    example: { sourceName: '축제 공식 사이트' },
-    description: '파서별 설정. 적용 가능한 키는 파서 구현에 따릅니다.',
+    example: {
+      festivalSourceUrl:
+        'https://ticket.melon.com/performance/index.htm?prodId=213793',
+      artistName: '아티스트 이름',
+      imageHint: 'profile-photo',
+    },
+    description:
+      '파서별 설정. artist-image는 축제 예매 상세 URL, 출연진 이름, 공식 프로필 이미지 경로의 고유 부분을 지정합니다.',
   })
   @IsObject()
   parserConfig!: Record<string, string>;

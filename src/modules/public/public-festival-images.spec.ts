@@ -1,17 +1,14 @@
 import { discoverySummaries } from './crawl-catalog';
 import { PublicFestivalService } from './public-festival.service';
-import {
-  WONDERLIVET_ARTIST_IMAGES,
-  WONDERLIVET_MELON_DETAIL_URL,
-} from './wonderlivet-artist-images';
-
-describe('discovered festival official artist images', () => {
-  it('serves a locally stored official replacement for a Melon placeholder', async () => {
+describe('discovered festival artist profile images', () => {
+  it('serves a stored profile image matched by festival source and artist', async () => {
+    const sourceUrl =
+      'https://ticket.melon.com/performance/index.htm?prodId=213793';
     const candidate = {
       name: 'WONDERLIVET 2026',
       venue: 'KINTEX',
       date: '2026.11.20 - 2026.11.22',
-      url: WONDERLIVET_MELON_DETAIL_URL,
+      url: sourceUrl,
       artists: [
         {
           name: 'Brandy Senki',
@@ -25,9 +22,11 @@ describe('discovered festival official artist images', () => {
       .fn()
       .mockResolvedValueOnce([{ candidate }])
       .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([
         {
-          originUrl: WONDERLIVET_ARTIST_IMAGES['Brandy Senki'],
+          festivalSourceUrl: sourceUrl,
+          artistName: 'Brandy Senki',
           id: imageId,
         },
       ]);
@@ -45,11 +44,9 @@ describe('discovered festival official artist images', () => {
         },
       ],
     });
-    const imageQuery = (
+    const profileQuery = (
       query.mock.calls as unknown as [string, [string[]]][]
-    )[2];
-    expect(imageQuery[1][0]).toEqual([
-      WONDERLIVET_ARTIST_IMAGES['Brandy Senki'],
-    ]);
+    )[3];
+    expect(profileQuery[1][0]).toEqual([sourceUrl]);
   });
 });
