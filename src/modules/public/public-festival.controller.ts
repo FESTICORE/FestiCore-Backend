@@ -202,7 +202,7 @@ export class PublicFestivalController {
     const principal = deviceId
       ? await this.deviceAuth.resolveOptionalPrincipal(request)
       : undefined;
-    response.setHeader('Vary', 'Authorization, X-Device-Id');
+    response.setHeader('Vary', 'Origin, Authorization, X-Device-Id');
     if (deviceId && principal) {
       try {
         const { items } = await this.devices.listSubscriptions(
@@ -240,7 +240,7 @@ export class PublicFestivalController {
   @ApiOperation({
     summary: '축제 상세 정보',
     description:
-      '목록의 축제 ID로 상세를 조회합니다. 발견된 축제는 확인된 일정·장소·보관 포스터·출연진·ticketLinks를 반환하고 타임테이블은 발행 전 빈 목록입니다. 발행된 축제는 thumbUrl과 ticketLinks를 포함한 공개 팩을 반환합니다. 요청 본문은 없습니다.',
+      '목록의 축제 ID로 상세를 조회합니다. 발견된 축제는 검증된 공식 시간표가 있으면 날짜·무대·아티스트·시작 시각·종료 시각(미공개 시 null)·출처 URL·원본 이미지 URL을 timetable에 반환합니다. 검증된 공연별 시각이 없으면 빈 배열입니다. 발행 축제는 공개된 팩의 시간표를 반환합니다. 요청 본문은 없습니다.',
   })
   @ApiParam({
     name: 'id',
@@ -249,32 +249,41 @@ export class PublicFestivalController {
   })
   @ApiResponse({
     status: 200,
-    description: '축제 상세와 확인된 출연진, 이미지 경로',
+    description: '축제 상세와 발행된 타임테이블 또는 발견 출연진',
     schema: {
       type: 'object',
       example: {
         code: 'SUCCESS',
         data: {
           id: 'fst_0123456789abcdef',
-          name: 'WONDERLIVET 2026 (원더리벳 2026)',
-          venue: 'KINTEX HALL 7/8/9/10',
-          firstDate: '2026-11-20',
-          lastDate: '2026-11-22',
-          status: 'discovered',
-          packVersion: 0,
+          name: '샘플 페스티벌',
+          venue: '서울 공연장',
+          timezone: 'Asia/Seoul',
+          packVersion: 1,
           thumbUrl:
             '/api/v1/festivals/images/00000000-0000-4000-8000-000000000001.webp',
-          ticketLinks: [
+          ticketLinks: [],
+          days: [
             {
-              label: '멜론티켓',
-              url: 'https://ticket.melon.com/performance/index.htm?prodId=213793',
+              date: '2026-11-20',
+              startsAt: '2026-11-20T12:00:00+09:00',
+              endsAt: '2026-11-20T22:00:00+09:00',
             },
           ],
-          sourceUrl:
-            'https://ticket.melon.com/performance/index.htm?prodId=213793',
-          officialInstagramUrl: null,
-          artists: [{ name: 'THE ORAL CIGARETTES', imageUrl: null }],
-          timetable: [],
+          stages: [{ id: 'stg_main', name: '메인 무대', order: 1 }],
+          timetable: [
+            {
+              id: 'set_example',
+              date: '2026-11-20',
+              stageId: 'stg_main',
+              stageName: '메인 무대',
+              artist: '샘플 밴드',
+              startsAt: '2026-11-20T13:00:00+09:00',
+              endsAt: '2026-11-20T14:00:00+09:00',
+              imageUrl:
+                '/api/v1/festivals/images/00000000-0000-4000-8000-000000000002.webp',
+            },
+          ],
         },
         message: '성공적으로 처리되었습니다.',
       },

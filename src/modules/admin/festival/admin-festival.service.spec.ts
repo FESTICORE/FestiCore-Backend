@@ -10,9 +10,20 @@ describe('AdminFestivalService optimistic edits', () => {
         find: jest.fn().mockResolvedValue([
           {
             id: 'fst_12345678',
-            draft: { name: 'Festival', venue: 'Seoul', days: [] },
+            draft: {
+              name: 'Festival',
+              venue: 'Seoul',
+              days: [],
+              thumbUrl: 'https://example.com/poster.webp',
+            },
             draftVersion: 1,
             publishedVersion: 0,
+          },
+          {
+            id: 'fst_87654321',
+            draft: { name: 'Second', venue: 'Busan', days: [], thumbUrl: null },
+            draftVersion: 2,
+            publishedVersion: 1,
           },
         ]),
       } as never,
@@ -22,8 +33,29 @@ describe('AdminFestivalService optimistic edits', () => {
       {} as never,
     );
 
-    await expect(service.list()).resolves.toMatchObject({
-      items: [{ id: 'fst_12345678', openProposals: 0 }],
+    await expect(service.list()).resolves.toEqual({
+      items: [
+        {
+          id: 'fst_12345678',
+          name: 'Festival',
+          venue: 'Seoul',
+          days: [],
+          thumbUrl: 'https://example.com/poster.webp',
+          draftVersion: 1,
+          publishedVersion: 0,
+          openProposals: 0,
+        },
+        {
+          id: 'fst_87654321',
+          name: 'Second',
+          venue: 'Busan',
+          days: [],
+          thumbUrl: null,
+          draftVersion: 2,
+          publishedVersion: 1,
+          openProposals: 0,
+        },
+      ],
     });
     expect(query).toHaveBeenCalledTimes(1);
   });
@@ -186,6 +218,38 @@ describe('festival edit audit', () => {
   });
 });
 
+describe('festival source freshness warnings', () => {
+  it('warns only after seven days while allowing draft reads', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-11-25T12:00:00+09:00'));
+    try {
+      const row = {
+        id: 'fst_12345678',
+        draft: {
+          source: { name: 'Official', verifiedAt: '2026-11-18T12:00:00+09:00' },
+        },
+        draftVersion: 1,
+      };
+      const service = new AdminFestivalService(
+        { findOneBy: jest.fn().mockResolvedValue(row) } as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        {} as never,
+      );
+
+      await expect(service.getDraft(row.id)).resolves.toMatchObject({
+        warnings: [],
+      });
+      jest.setSystemTime(new Date('2026-11-25T12:00:00.001+09:00'));
+      await expect(service.getDraft(row.id)).resolves.toMatchObject({
+        warnings: [expect.stringContaining('7일')],
+      });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+});
+
 describe('pack update delivery queue', () => {
   it('queues subscribers and audits publish and rollback in the same transaction', async () => {
     const draft = {
@@ -209,7 +273,12 @@ describe('pack update delivery queue', () => {
       rules: [],
       mapImageUrl: null,
       mapAspect: null,
-      source: { name: 'Official', verifiedAt: '2026-11-18T12:00:00+09:00' },
+      source: {
+        name: 'Official',
+        verifiedAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000)
+          .toISOString()
+          .replace(/\.\d{3}Z$/, 'Z'),
+      },
     };
     const row = {
       id: draft.id,
@@ -257,6 +326,7 @@ describe('pack update delivery queue', () => {
     ).resolves.toMatchObject({
       packVersion: 1,
       pushedDevices: 2,
+      warnings: [expect.stringContaining('7일')],
     });
     const calls = query.mock.calls as unknown[][];
     expect(calls[0][0]).toContain('s."packUpdates" = true');

@@ -38,6 +38,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx eslint 'src/**/*.ts' 'test/**/*.ts'
+      - run: npx tsc --noEmit --incremental false
       - run: npm run build
       - run: npm test -- --runInBand
       - run: npm run test:e2e -- --runInBand

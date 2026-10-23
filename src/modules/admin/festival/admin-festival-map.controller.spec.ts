@@ -109,10 +109,8 @@ describe('admin festival map upload', () => {
           adminRequest,
         ),
       ).rejects.toThrow('audit failed');
-      expect(log).toHaveBeenCalledWith(
-        expect.stringContaining(key),
-        expect.stringContaining('delete failed'),
-      );
+      expect(log).toHaveBeenCalledWith(expect.stringContaining(key));
+      expect(JSON.stringify(log.mock.calls)).not.toContain('delete failed');
     } finally {
       log.mockRestore();
     }

@@ -236,6 +236,241 @@ function mintPaperCandidates(
   return [...candidates.values()];
 }
 
+function xmfNoticeCandidates(
+  body: string,
+  base: string,
+): FestivalCandidate[] | null {
+  const source = new URL(base);
+  if (source.hostname !== 'xmfestival.com' || source.pathname !== '/notice')
+    return null;
+  if (body.length > 2_000_000) return [];
+
+  // The organizer publishes several announcements on this page. Read only the
+  // final-lineup announcement so notices for other years cannot add performers.
+  const heading = /\[\s*(XMF\s+(20\d{2}))\s+최종\s+라인업\s+공개\s*\]/i.exec(
+    body,
+  );
+  if (!heading) return [];
+  const nextNotice = body.indexOf(
+    'class="acd_row',
+    heading.index + heading[0].length,
+  );
+  const announcement = plainText(
+    body.slice(
+      heading.index,
+      nextNotice < 0
+        ? heading.index + 20_000
+        : Math.min(nextNotice, heading.index + 20_000),
+    ),
+  );
+  const dates = /(\d{1,2})월\s*(\d{1,2})일부터\s*(\d{1,2})일까지/.exec(
+    announcement,
+  );
+  const venue = /이틀간\s+(.{2,80}?)에서\s+열리는/.exec(announcement)?.[1];
+  if (!dates || !venue) return [];
+  const year = Number(heading[2]);
+  const first = Number(dates[2]);
+  const last = Number(dates[3]);
+  const monthNumber = Number(dates[1]);
+  const validDay = (day: number) =>
+    day > 0 &&
+    new Date(Date.UTC(year, monthNumber - 1, day)).getUTCDate() === day &&
+    new Date(Date.UTC(year, monthNumber - 1, day)).getUTCMonth() + 1 ===
+      monthNumber;
+  if (!validDay(first) || !validDay(last) || last < first) return [];
+
+  const dayOne =
+    /첫날인\s+\d{1,2}월\s+\d{1,2}일에는\s+(.+?)\s+등\s+(\d{1,2})팀/.exec(
+      announcement,
+    );
+  const dayTwo =
+    /둘째\s+날인\s+\d{1,2}일\s+무대는\s+(.+?)\s+등\s+(\d{1,2})팀/.exec(
+      announcement,
+    );
+  if (!dayOne || !dayTwo) return [];
+  const names = [dayOne, dayTwo].flatMap((day) => {
+    const artists = day[1]
+      .split(/\s*,\s*/)
+      .map((name) => name.replace(/\s*\([^()]*\)\s*$/, '').trim());
+    return artists.length === Number(day[2]) ? artists : [];
+  });
+  if (names.length !== Number(dayOne[2]) + Number(dayTwo[2])) return [];
+  const openingDjs =
+    /첫날은\s+(DJ\s+[^,]+?)\s*,\s*둘째\s+날은\s+(.+?)가\s+오프닝\s+무대/.exec(
+      announcement,
+    );
+  if (openingDjs) {
+    names.push(
+      openingDjs[1].replace(/\s*\([^()]*\)\s*$/, '').trim(),
+      openingDjs[2].replace(/\s*\([^()]*\)\s*$/, '').trim(),
+    );
+  }
+  if (names.some((name) => !name || name.length > 160)) return [];
+  const day = (value: number) =>
+    `${year}.${String(monthNumber).padStart(2, '0')}.${String(value).padStart(2, '0')}`;
+  return [
+    {
+      name: heading[1],
+      url: source.toString(),
+      date: `${day(first)} - ${day(last)}`,
+      venue,
+      artists: [...new Set(names)].map((name) => ({ name })),
+    },
+  ];
+}
+
+function officialLineupCandidates(
+  body: string,
+  base: string,
+  config: Record<string, string>,
+): FestivalCandidate[] | null {
+  const source = new URL(base);
+  const isMintPost =
+    (source.hostname === 'mintpaper.co.kr' ||
+      source.hostname === 'www.mintpaper.co.kr') &&
+    source.pathname === '/posts/4819';
+  const isOnewayNotice =
+    source.hostname === 'ticket.melon.com' &&
+    source.pathname === '/csoon/detail.htm' &&
+    source.searchParams.get('csoonId') === '12728';
+  if (!isMintPost && !isOnewayNotice) return null;
+  if (body.length > 2_000_000) return [];
+  let festivalUrl: URL;
+  try {
+    festivalUrl = new URL(config.festivalSourceUrl);
+  } catch {
+    return [];
+  }
+  if (
+    festivalUrl.protocol !== 'https:' ||
+    festivalUrl.username ||
+    festivalUrl.password
+  )
+    return [];
+
+  if (isMintPost) {
+    const title = /<h1\b[^>]*>([\s\S]*?)<\/h1>/i.exec(body)?.[1];
+    const article =
+      /<div\b[^>]*class=["'][^"']*\bPostContent_content\S*[^"']*["'][^>]*>([\s\S]*?)<\/div>/i.exec(
+        body,
+      )?.[1];
+    if (!title || !article) return [];
+    const name = plainText(title)
+      .normalize('NFKC')
+      .replace(/\s*1차 라인업 공개\s*$/, '')
+      .trim();
+    if (!/^COUNTDOWN FANTASY 20\d{2}-20\d{2}$/.test(name)) return [];
+    const lineup = article.split(/<br\s*\/?\s*>/i);
+    const day = lineup.findIndex((line) =>
+      /12[.．]31/i.test(plainText(line).normalize('NFKC')),
+    );
+    if (day < 0) return [];
+    const artists: { name: string }[] = [];
+    for (const line of lineup.slice(day + 1, day + 81)) {
+      if (/and\s+many\s+more/i.test(plainText(line).normalize('NFKC'))) break;
+      if (
+        !/<a\b[^>]*href=["']https:\/\/www\.instagram\.com\/[A-Za-z0-9._]+\/?["']/i.test(
+          line,
+        )
+      )
+        continue;
+      const artistName = plainText(line.split(/<a\b/i)[0])
+        .normalize('NFKC')
+        .trim();
+      if (artistName && artistName.length <= 160)
+        artists.push({ name: artistName });
+    }
+    if (artists.length !== 12) return [];
+    return [{ name, url: source.toString(), artists }];
+  }
+
+  const content =
+    /<div\b[^>]*class=["'][^"']*\bconcert_info_txt\b[^"']*["'][^>]*>([\s\S]*?)<\/div>/i.exec(
+      body,
+    )?.[1];
+  const info =
+    /<div\b[^>]*class=["'][^"']*\bdata_txt\b[^"']*["'][^>]*>([\s\S]*?)<\/div>/i.exec(
+      body,
+    )?.[1];
+  if (
+    !content ||
+    !info ||
+    !/공\s*연\s*명\s*:\s*원웨이 페스티벌 2026/.test(plainText(info))
+  )
+    return [];
+  const text = plainText(content);
+  const lineup = /\[1차 라인업\]\s*(.+?)\s*그리고 이게 끝이 아닙니다\./.exec(
+    text,
+  )?.[1];
+  if (!lineup) return [];
+  const names = lineup.split(/\s*,\s*|\s+and\s+/i).map((name) => name.trim());
+  if (names.length !== 11 || names.some((name) => !name || name.length > 160))
+    return [];
+  return [
+    {
+      name: '원웨이 페스티벌 2026',
+      url: source.toString(),
+      artists: names.map((name) => ({ name })),
+    },
+  ];
+}
+
+function seoulCultureLineupCandidates(
+  body: string,
+  base: string,
+  config: Record<string, string>,
+): FestivalCandidate[] | null {
+  const source = new URL(base);
+  const isCulturePortal =
+    source.hostname === 'culture.seoul.go.kr' &&
+    source.pathname === '/culture/culture/cultureEvent/view.do' &&
+    source.searchParams.get('cultcode') === '159493';
+  const isFunSeoul =
+    source.hostname === 'festival.seoul.go.kr' &&
+    source.pathname === '/festival/main/festivalView.do' &&
+    source.searchParams.get('festacode') === '848';
+  if (!isCulturePortal && !isFunSeoul) return null;
+  if (body.length > 2_000_000) return [];
+
+  const text = plainText(body);
+  const name = /(20\d{2} 서울뮤직페스티벌)/.exec(text)?.[1];
+  if (!name) return [];
+  const alt = [...body.matchAll(/<img\b[^>]*\balt="([^"]{1,500})"[^>]*>/gi)]
+    .map((match) => match[1])
+    .find((value) => value.includes('LINE UP IN '));
+  const lineup = /LINE UP IN\s+([^"<>]+)/.exec(alt ?? '')?.[1];
+  if (!lineup) return [];
+  const dateParts = /(20\d{2})년\s*(\d{1,2})월\s*(\d{1,2})일/.exec(alt ?? '');
+  if (!dateParts || !name.startsWith(dateParts[1])) return [];
+  const [, year, month, day] = dateParts;
+  const parsedDate = new Date(Date.UTC(+year, +month - 1, +day));
+  if (
+    parsedDate.getUTCFullYear() !== +year ||
+    parsedDate.getUTCMonth() + 1 !== +month ||
+    parsedDate.getUTCDate() !== +day
+  )
+    return [];
+  const names = lineup.split('|').map((name) => name.trim());
+  const expectedArtists = Number(config.expectedArtists);
+  if (
+    !Number.isInteger(expectedArtists) ||
+    expectedArtists < 1 ||
+    expectedArtists > 80 ||
+    names.length !== expectedArtists ||
+    new Set(names).size !== expectedArtists ||
+    names.some((name) => !name || name.length > 80)
+  )
+    return [];
+  return [
+    {
+      name,
+      url: source.toString(),
+      date: `${year}.${month.padStart(2, '0')}.${day.padStart(2, '0')}`,
+      artists: names.map((name) => ({ name })),
+    },
+  ];
+}
+
 function taggedText(html: string, tagOrClass: string): string | undefined {
   const match = new RegExp(
     `<(?:${tagOrClass})\\b[^>]*>([\\s\\S]*?)<\\/(?:${tagOrClass})>`,
@@ -509,6 +744,67 @@ export function yes24EventJson(body: string): Record<string, unknown> | null {
   return null;
 }
 
+export function eventPerformers(
+  event: Record<string, unknown> | null,
+  pageUrl: string,
+): { name: string; sourceUrl?: string }[] {
+  const value = event?.performer;
+  const entries = Array.isArray(value) ? value : value ? [value] : [];
+  const artists = new Map<string, { name: string; sourceUrl?: string }>();
+  for (const entry of entries.slice(0, 160)) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    const performer = entry as Record<string, unknown>;
+    if (
+      !['Person', 'MusicGroup', 'PerformingGroup'].includes(
+        String(performer['@type']),
+      ) ||
+      typeof performer.name !== 'string'
+    )
+      continue;
+    const name = performer.name.trim();
+    if (
+      !name ||
+      name.length > 160 ||
+      /[<>\\]/.test(name) ||
+      [...name].some((character) => {
+        const code = character.charCodeAt(0);
+        return code < 32 || code === 127;
+      })
+    )
+      continue;
+    const artist: { name: string; sourceUrl?: string } = { name };
+    if (typeof performer.image === 'string') {
+      try {
+        const image = new URL(performer.image, pageUrl);
+        const page = new URL(pageUrl);
+        const trusted =
+          (page.hostname === 'ticket.yes24.com' &&
+            ['tkfile.yes24.com', 'stkfile.yes24.com'].includes(
+              image.hostname,
+            )) ||
+          (page.hostname === 'nol.yanolja.com' &&
+            image.hostname === 'ticketimage.interpark.com');
+        if (
+          image.protocol === 'https:' &&
+          !image.username &&
+          !image.password &&
+          !image.port &&
+          trusted
+        )
+          artist.sourceUrl = image.toString();
+      } catch {
+        /* Ignore malformed performer image URLs. */
+      }
+    }
+    if (
+      !artists.has(name) ||
+      (!artists.get(name)?.sourceUrl && artist.sourceUrl)
+    )
+      artists.set(name, artist);
+  }
+  return [...artists.values()];
+}
+
 function yes24DetailCandidates(
   body: string,
   base: string,
@@ -516,7 +812,7 @@ function yes24DetailCandidates(
   const source = new URL(base);
   if (
     source.hostname !== 'ticket.yes24.com' ||
-    !/^\/Perf\/\d+$/.test(source.pathname)
+    !/^\/(?:English\/)?Perf\/\d+$/.test(source.pathname)
   )
     return null;
   const event = yes24EventJson(body);
@@ -547,6 +843,8 @@ function yes24DetailCandidates(
     date: `${start} ~ ${end}`,
     venue: venue.trim(),
   };
+  const artists = eventPerformers(event, base);
+  if (artists.length) candidate.artists = artists;
   if (typeof event.image === 'string') {
     try {
       const image = new URL(event.image, source);
@@ -557,6 +855,117 @@ function yes24DetailCandidates(
     }
   }
   return [candidate];
+}
+
+function nolDetailCandidates(
+  body: string,
+  base: string,
+): FestivalCandidate[] | null {
+  const source = new URL(base);
+  if (
+    source.hostname !== 'nol.yanolja.com' ||
+    !/^\/ticket\/(?:products\/\d+|meta\/performance\/[\w%.-]+)$/.test(
+      source.pathname,
+    )
+  )
+    return null;
+  if (body.length > 2_000_000) return [];
+
+  const event = yes24EventJson(body);
+  const text = plainText(body);
+  const heading = /<h1\b[^>]*>([\s\S]*?)<\/h1>/i.exec(body)?.[1];
+  const name =
+    (typeof event?.name === 'string' ? event.name : null) ??
+    (heading ? plainText(heading) : '');
+  if (
+    CONCERT_TITLE.test(name) ||
+    !(isFestivalTitle(name) || VERIFIED_FESTIVAL_BRAND.test(name))
+  )
+    return [];
+
+  const dateText =
+    /(?:^|\s)(?:기간|일시)\s+(20\d{2}\.\d{2}\.\d{2}(?:\s*[~–-]\s*20\d{2}\.\d{2}\.\d{2})?)/.exec(
+      text,
+    )?.[1];
+  const start = typeof event?.startDate === 'string' ? event.startDate : '';
+  const end = typeof event?.endDate === 'string' ? event.endDate : start;
+  const structuredDate =
+    /^20\d{2}-\d{2}-\d{2}$/.test(start) && /^20\d{2}-\d{2}-\d{2}$/.test(end)
+      ? nolEventDate(
+          `${start.replaceAll('-', '.')} ~ ${end.replaceAll('-', '.')}`,
+        )
+      : undefined;
+  const date = structuredDate ?? (dateText && nolEventDate(dateText));
+  const location = event?.location;
+  const structuredVenue =
+    location && typeof location === 'object' && 'name' in location
+      ? location.name
+      : null;
+  const venueText =
+    /(?:^|\s)장소\s+(.{2,160}?)\s+(?:기간|일시)\s+20\d{2}\./.exec(text)?.[1];
+  const venue =
+    typeof structuredVenue === 'string'
+      ? structuredVenue.trim()
+      : venueText?.replace(/^장소\s+/, '').trim();
+  if (
+    !date ||
+    !venue ||
+    venue.length > 160 ||
+    /^(?:장소|기간|일시)$/.test(venue) ||
+    /[<>\\]/.test(venue)
+  )
+    return [];
+  const candidate: FestivalCandidate = {
+    name,
+    url: source.toString(),
+    date,
+    venue,
+  };
+  const artists = eventPerformers(event, base);
+  if (artists.length) candidate.artists = artists;
+  const poster = nolPosterUrl(body, source);
+  if (poster) candidate.posterUrl = poster;
+  return [candidate];
+}
+
+export function nolPosterUrl(body: string, source: URL): string | null {
+  if (
+    source.hostname !== 'nol.yanolja.com' ||
+    !/^\/ticket\/products\/\d+$/.test(source.pathname)
+  )
+    return null;
+  const event = yes24EventJson(body);
+  const poster =
+    (typeof event?.image === 'string' ? event.image : null) ??
+    /<meta\b[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i.exec(
+      body,
+    )?.[1];
+  if (poster) {
+    try {
+      const image = new URL(poster, source);
+      if (
+        image.protocol === 'https:' &&
+        image.hostname === 'ticketimage.interpark.com' &&
+        /^\/Play\/image\/large\/\d+\/\d+_p\.(?:gif|jpe?g|png|webp)$/i.test(
+          image.pathname,
+        )
+      )
+        return image.toString();
+    } catch {
+      /* Ignore malformed poster URLs. */
+    }
+  }
+  return null;
+}
+
+function canonicalNolProductUrl(url: URL): URL {
+  if (url.hostname !== 'nol.yanolja.com') return url;
+  const match = /^\/ticket\/places\/\d+\/products\/(\d+)$/.exec(url.pathname);
+  if (match) {
+    url.pathname = `/ticket/products/${match[1]}`;
+    url.search = '';
+  }
+  return url;
 }
 
 function yes24FestivalCandidates(
@@ -628,7 +1037,17 @@ function yes24FestivalCandidates(
   return [...candidates.values()];
 }
 
-function ticketCandidates(body: string, base: string): FestivalCandidate[] {
+export function ticketCandidates(
+  body: string,
+  base: string,
+  config: Record<string, string> = {},
+): FestivalCandidate[] {
+  const seoulCultureLineup = seoulCultureLineupCandidates(body, base, config);
+  if (seoulCultureLineup) return seoulCultureLineup;
+  const officialLineup = officialLineupCandidates(body, base, config);
+  if (officialLineup) return officialLineup;
+  const xmfNotice = xmfNoticeCandidates(body, base);
+  if (xmfNotice) return xmfNotice;
   const mintPaper = mintPaperCandidates(body, base);
   if (mintPaper) return mintPaper;
   const melonSearch = melonSearchCandidates(body, base);
@@ -637,6 +1056,8 @@ function ticketCandidates(body: string, base: string): FestivalCandidate[] {
   if (melonDetail) return melonDetail;
   const yes24Detail = yes24DetailCandidates(body, base);
   if (yes24Detail) return yes24Detail;
+  const nolDetail = nolDetailCandidates(body, base);
+  if (nolDetail) return nolDetail;
   const melon = melonFestivalCandidates(body, base);
   if (melon) return melon;
   const yes24 = yes24FestivalCandidates(body, base);
@@ -681,6 +1102,7 @@ function ticketCandidates(body: string, base: string): FestivalCandidate[] {
     )
       continue;
     url.hash = '';
+    canonicalNolProductUrl(url);
     const card =
       cards.find((item) => match.index >= item.start && match.index < item.end)
         ?.html ?? match[0];
@@ -726,12 +1148,32 @@ function ticketCandidates(body: string, base: string): FestivalCandidate[] {
     )
       continue;
     url.hash = '';
+    canonicalNolProductUrl(url);
     const entry: FestivalCandidate = { name, url: url.toString() };
     if (
       sourceUrl.hostname === 'nol.yanolja.com' &&
       url.hostname === 'nol.yanolja.com' &&
       /^\/ticket\/products\/\d+$/.test(url.pathname)
     ) {
+      const productId = url.pathname.split('/').at(-1);
+      const thumbnail = /"thumbnail":"([^"]{1,500})"/.exec(match[0])?.[1];
+      if (thumbnail && productId) {
+        try {
+          const image = new URL(thumbnail);
+          const posterProductId =
+            /^\/Play\/image\/large\/\d+\/(\d+)_p\.(?:gif|jpe?g|png|webp)$/i.exec(
+              image.pathname,
+            )?.[1];
+          if (
+            image.protocol === 'https:' &&
+            image.hostname === 'ticketimage.interpark.com' &&
+            posterProductId === productId
+          )
+            entry.posterUrl = image.toString();
+        } catch {
+          /* Ignore malformed card thumbnails. */
+        }
+      }
       const dateInfo = /"dateInfo":"([^"]{1,80})"/.exec(match[3])?.[1];
       const date = dateInfo && nolEventDate(dateInfo);
       if (date) entry.date = date;
@@ -824,7 +1266,7 @@ export async function parseCrawl(
     };
   }
   if (source.parser === 'ticket-list') {
-    const links = ticketCandidates(body, source.url);
+    const links = ticketCandidates(body, source.url, config);
     if (!links.length) throw new Error('공개 예매 링크를 찾지 못했습니다.');
     return links;
   }

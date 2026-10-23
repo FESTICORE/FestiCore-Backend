@@ -26,6 +26,33 @@ const draft = {
 };
 
 describe('festival draft validation', () => {
+  it('accepts stored set images and rejects external image URLs', () => {
+    const set = {
+      stageId: 'stg_12345678',
+      artist: 'A',
+      startsAt: '2026-11-20T13:00:00+09:00',
+      endsAt: '2026-11-20T14:00:00+09:00',
+    };
+    expect(
+      validateDraft({
+        ...draft,
+        sets: [
+          {
+            ...set,
+            imageUrl:
+              '/api/v1/festivals/images/00000000-0000-4000-8000-000000000001.webp',
+          },
+        ],
+      }),
+    ).toEqual([]);
+    expect(
+      validateDraft({
+        ...draft,
+        sets: [{ ...set, imageUrl: 'https://example.com/artist.jpg' }],
+      }),
+    ).toContain('sets[0]: 보관된 출연진 이미지 경로만 허용');
+  });
+
   it('rejects overlapping sets on the same stage', () => {
     const errors = validateDraft(
       {

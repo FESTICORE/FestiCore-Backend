@@ -8,6 +8,7 @@ import { createHash } from 'crypto';
 import { DataSource, Repository } from 'typeorm';
 import { AdminFestival } from '../admin/festival/festival.entity';
 import { festivalSetId } from '../admin/festival/festival-set-id';
+import { CrawlTimetableSet } from '../admin/crawl/entity/crawl-timetable-revision.entity';
 import { PUBLIC_CRAWL_IMAGE_SQL } from './crawl-image-policy';
 import { Flag } from '../flags/flag.entity';
 import { CacheService } from '../redis/service/cache.service';
@@ -46,6 +47,38 @@ function publicImageUrl(value: unknown): string | null {
       value.startsWith('/api/v1/festivals/images/'))
     ? value
     : null;
+}
+
+function storedArtistImageUrl(value: unknown): string | null {
+  return typeof value === 'string' &&
+    /^\/api\/v1\/festivals\/images\/[0-9a-f-]{36}\.webp$/.test(value)
+    ? value
+    : null;
+}
+
+function artistNameKeys(name: string): string[] {
+  const normalize = (value: string) =>
+    value.normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase();
+  const keys = [normalize(name)];
+  const parts = /^(.+?)\s*[（(]([^()（）]+)[）)]$/.exec(name.trim());
+  if (parts) {
+    const [, primary, alias] = parts;
+    const koreanAndLatin =
+      (/[가-힣]/.test(primary) && /[a-zA-Z]/.test(alias)) ||
+      (/[a-zA-Z]/.test(primary) && /[가-힣]/.test(alias));
+    if (koreanAndLatin) keys.push(normalize(primary), normalize(alias));
+  }
+  return [...new Set(keys)];
+}
+
+function artistImageForName(
+  name: string,
+  imageByName: Map<string, Set<string>>,
+): string | null {
+  const images = new Set(
+    artistNameKeys(name).flatMap((key) => [...(imageByName.get(key) ?? [])]),
+  );
+  return images.size === 1 ? [...images][0] : null;
 }
 
 function projectDirections(value: unknown): Document {
@@ -100,7 +133,27 @@ function projectPack(pack: Document): Document {
     'startsAt',
     'endsAt',
     'note',
-  ]).map((set) => ({ ...set, id: festivalSetId(set) }));
+    'imageUrl',
+  ]).map((set) => ({
+    ...set,
+    id: festivalSetId(set),
+    imageUrl: storedArtistImageUrl(set.imageUrl),
+  }));
+  const stageNames = new Map(
+    requiredArray(result.stages)
+      .filter((stage) => typeof stage.id === 'string')
+      .map((stage) => [stage.id, stage.name]),
+  );
+  result.timetable = requiredArray(result.sets)
+    .sort((a, b) => String(a.startsAt).localeCompare(String(b.startsAt)))
+    .map((set) => ({
+      ...set,
+      date:
+        typeof set.startsAt === 'string'
+          ? dateInSeoul(new Date(set.startsAt))
+          : null,
+      stageName: stageNames.get(set.stageId) ?? null,
+    }));
   result.zones = projectedArray(pack.zones, [
     'id',
     'name',
@@ -203,19 +256,28 @@ export class PublicFestivalService {
       `WITH candidates AS (
          SELECT item->'after' AS candidate,
            item->'after'->>'url' AS url,
+           catalog.url AS "catalogUrl",
            item->>'decision' AS decision,
            p.status AS "proposalStatus",
            p."createdAt" AS created_at,
            p.id AS proposal_id
          FROM crawl_proposals p
+         LEFT JOIN crawl_sources source ON source.id = p."sourceId"
          CROSS JOIN LATERAL jsonb_array_elements(p.items) item
+         CROSS JOIN LATERAL jsonb_array_elements_text(
+           CASE WHEN jsonb_typeof(source."parserConfig"->'festivalSourceUrls') = 'array'
+             THEN source."parserConfig"->'festivalSourceUrls'
+             ELSE jsonb_build_array(COALESCE(
+               NULLIF(source."parserConfig"->>'festivalSourceUrl', ''),
+               item->'after'->>'url')) END
+         ) catalog(url)
          WHERE p.kind = 'festival.new'
            AND item->'after'->>'url' IS NOT NULL
        ), latest AS (
          SELECT DISTINCT ON (url) * FROM candidates
          ORDER BY url, created_at DESC, proposal_id DESC
        ), details AS (
-         SELECT url,
+         SELECT "catalogUrl" AS url,
            (array_agg(candidate->>'officialInstagramUrl' ORDER BY created_at DESC, proposal_id DESC)
              FILTER (WHERE decision IS DISTINCT FROM 'rejected'
                AND "proposalStatus" IS DISTINCT FROM 'rejected'
@@ -229,7 +291,7 @@ export class PublicFestivalService {
                AND "proposalStatus" IS DISTINCT FROM 'rejected'
                AND jsonb_array_length(CASE WHEN jsonb_typeof(candidate->'artists') = 'array'
                  THEN candidate->'artists' ELSE '[]'::jsonb END) > 0))[1] AS artists
-         FROM candidates GROUP BY url
+         FROM candidates GROUP BY "catalogUrl"
        )
        SELECT latest.candidate || jsonb_strip_nulls(jsonb_build_object(
            'officialInstagramUrl', details.account, 'posterUrl', details.poster,
@@ -251,7 +313,10 @@ export class PublicFestivalService {
     return discoverySummaries(discoveryRows, publishedRows);
   }
 
-  private async attachStoredImages(entries: DiscoverySummary[]): Promise<void> {
+  private async attachStoredImages(
+    entries: DiscoverySummary[],
+    includeTimetableArtists = false,
+  ): Promise<Map<string, string>> {
     const imageUrls = [
       ...new Set(
         entries.flatMap((entry) => [
@@ -276,6 +341,48 @@ export class PublicFestivalService {
     const imageByUrl = new Map(
       images.map((image) => [image.originUrl, image.id]),
     );
+    const festivalSourceUrls = [
+      ...new Set(
+        entries
+          .filter((entry) => includeTimetableArtists || entry.artists?.length)
+          .map((entry) => entry.sourceUrl),
+      ),
+    ];
+    const profileImages = festivalSourceUrls.length
+      ? await this.dataSource.query<
+          {
+            festivalSourceUrl: string;
+            artistName: string;
+            artistAlias: string | null;
+            id: string;
+          }[]
+        >(
+          `SELECT DISTINCT ON (source."parserConfig"->>'festivalSourceUrl', source."parserConfig"->>'artistName')
+             source."parserConfig"->>'festivalSourceUrl' AS "festivalSourceUrl",
+             source."parserConfig"->>'artistName' AS "artistName",
+             source."parserConfig"->>'artistAlias' AS "artistAlias", image.id
+           FROM crawl_images image
+           JOIN crawl_sources source ON source.id = image."sourceId"
+           WHERE source.kind = 'artist-image'
+             AND source."parserConfig"->>'festivalSourceUrl' = ANY($1::text[])
+             AND ${PUBLIC_CRAWL_IMAGE_SQL}
+           ORDER BY source."parserConfig"->>'festivalSourceUrl',
+             source."parserConfig"->>'artistName', image."lastSeenAt" DESC`,
+          [festivalSourceUrls],
+        )
+      : [];
+    const profileImageByArtist = new Map(
+      profileImages.map((image) => [
+        `${image.festivalSourceUrl}\u0000${image.artistName}`,
+        image.id,
+      ]),
+    );
+    for (const image of profileImages) {
+      if (!image.artistAlias) continue;
+      const key = `${image.festivalSourceUrl}\u0000${image.artistAlias}`;
+      if (!profileImageByArtist.has(key))
+        profileImageByArtist.set(key, image.id);
+    }
     const englishProductIds = [
       ...new Set(
         entries.flatMap((entry) => {
@@ -322,13 +429,16 @@ export class PublicFestivalService {
       if (posterId)
         entry.thumbUrl = `/api/v1/festivals/images/${posterId}.webp`;
       entry.artists = entry.artists?.map((artist) => {
-        const imageId = artist.sourceUrl && imageByUrl.get(artist.sourceUrl);
+        const imageId =
+          profileImageByArtist.get(`${entry.sourceUrl}\u0000${artist.name}`) ??
+          (artist.sourceUrl && imageByUrl.get(artist.sourceUrl));
         return {
           ...artist,
           imageUrl: imageId ? `/api/v1/festivals/images/${imageId}.webp` : null,
         };
       });
     }
+    return profileImageByArtist;
   }
 
   async detail(id: string) {
@@ -348,7 +458,76 @@ export class PublicFestivalService {
         code: 'FESTIVAL_NOT_FOUND',
         message: '축제를 찾을 수 없습니다.',
       });
-    await this.attachStoredImages([entry]);
+    const profileImages = await this.attachStoredImages([entry], true);
+    const revisions = await this.dataSource.query<
+      {
+        id: string;
+        sourceUrl: string;
+        sourceImageId: string | null;
+        verifiedAt: Date;
+        sets: CrawlTimetableSet[];
+      }[]
+    >(
+      `SELECT DISTINCT ON (revision."sourceId")
+         revision.id, revision."sourceUrl", revision."verifiedAt", revision."sets",
+         CASE WHEN image.id IS NOT NULL AND ${PUBLIC_CRAWL_IMAGE_SQL}
+           THEN image.id ELSE NULL END AS "sourceImageId"
+       FROM crawl_timetable_revisions revision
+       LEFT JOIN crawl_images image ON image.id = revision."imageId"
+       LEFT JOIN crawl_sources source ON source.id = image."sourceId"
+       WHERE revision."festivalSourceUrl" = $1 AND revision.status = 'verified'
+       ORDER BY revision."sourceId", revision."verifiedAt" DESC,
+         revision."createdAt" DESC, revision.id DESC`,
+      [entry.sourceUrl],
+    );
+    const artistImages = new Map<string, Set<string>>();
+    const addArtistImage = (name: string, imageUrl: string) => {
+      for (const key of artistNameKeys(name)) {
+        const images = artistImages.get(key) ?? new Set<string>();
+        images.add(imageUrl);
+        artistImages.set(key, images);
+      }
+    };
+    for (const artist of entry.artists ?? []) {
+      if (artist.imageUrl) addArtistImage(artist.name, artist.imageUrl);
+    }
+    for (const [key, imageId] of profileImages) {
+      const [festivalSourceUrl, artistName] = key.split('\u0000');
+      if (festivalSourceUrl === entry.sourceUrl)
+        addArtistImage(artistName, `/api/v1/festivals/images/${imageId}.webp`);
+    }
+    const timetable = (revisions ?? []).flatMap((revision) =>
+      revision.sets.map((set, index) => ({
+        id: `${revision.id}-${index}`,
+        artist: set.artist,
+        date: set.date,
+        stageName: set.stageName,
+        startsAt: set.startsAt,
+        endsAt: set.endsAt,
+        imageUrl: artistImageForName(set.artist, artistImages),
+        sourceUrl: revision.sourceUrl,
+        sourceImageUrl: revision.sourceImageId
+          ? `/api/v1/festivals/images/${revision.sourceImageId}.webp`
+          : null,
+        verifiedAt: revision.verifiedAt,
+      })),
+    );
+    timetable.sort(
+      (a, b) =>
+        Date.parse(a.startsAt) - Date.parse(b.startsAt) ||
+        a.stageName.localeCompare(b.stageName) ||
+        a.artist.localeCompare(b.artist) ||
+        a.id.localeCompare(b.id),
+    );
+    const artists = new Map(
+      (entry.artists ?? []).map((artist) => [
+        artist.name,
+        artistImageForName(artist.name, artistImages),
+      ]),
+    );
+    for (const set of timetable) {
+      if (!artists.has(set.artist)) artists.set(set.artist, set.imageUrl);
+    }
     return {
       id: entry.id,
       name: entry.name,
@@ -362,12 +541,8 @@ export class PublicFestivalService {
       ticketLinks: entry.ticketLinks,
       sourceUrl: entry.sourceUrl,
       officialInstagramUrl: entry.officialInstagramUrl ?? null,
-      artists:
-        entry.artists?.map((artist) => ({
-          name: artist.name,
-          imageUrl: artist.imageUrl ?? null,
-        })) ?? [],
-      timetable: [],
+      artists: [...artists].map(([name, imageUrl]) => ({ name, imageUrl })),
+      timetable,
     };
   }
 

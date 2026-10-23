@@ -14,6 +14,11 @@ function source(
   } as CrawlSource;
 }
 
+const CDF_OFFICIAL_HTML =
+  '<h1 class="NormalView_title__3ywx_">𝗖𝗢𝗨𝗡𝗧𝗗𝗢𝗪𝗡 𝗙𝗔𝗡𝗧𝗔𝗦𝗬 𝟮𝟬𝟮𝟲-𝟮𝟬𝟮𝟳 1차 라인업 공개</h1><div class="mb-20 PostContent_content__1w8Py"><figure class="image"><img src="https://mintpaper.s3.ap-northeast-2.amazonaws.com/CDF_2627_1_927427bb10.jpg"></figure><p>&nbsp;</p><p><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">𝗖𝗢𝗨𝗡𝗧𝗗𝗢𝗪𝗡&nbsp;𝗙𝗔𝗡𝗧𝗔𝗦𝗬&nbsp;𝟮𝟬𝟮𝟲-𝟮𝟬𝟮𝟳</span><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">1차&nbsp;라인업을&nbsp;공개합니다.</span><br><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">✦°｡⋆⸜&nbsp;🪩&nbsp;⸝⋆｡°✦</span><br><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">⊹&nbsp;𝟭𝟮.𝟯𝟭&nbsp;𝙏𝙃𝙐</span><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">극동아시아타이거즈&nbsp;</span><a href="https://www.instagram.com/far_east_asian_tigers/">@far_east_asian_tigers</a><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">LOW&nbsp;HIGH&nbsp;LOW&nbsp;</span><a href="https://www.instagram.com/band_lowhighlow/">@band_lowhighlow</a><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">THE&nbsp;SOLUTIONS&nbsp;</span><a href="https://www.instagram.com/the_solutions/">@the_solutions</a><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">실리카겔&nbsp;</span><a href="https://www.instagram.com/silicagel.official/">@silicagel.official</a><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">AxMxP&nbsp;</span><a href="https://www.instagram.com/axmxp_official/">@axmxp_official</a><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">FTISLAND&nbsp;</span><a href="https://www.instagram.com/ftisland/">@ftisland</a><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">OYSTERS&nbsp;</span><a href="https://www.instagram.com/oysters.999/">@oysters.999</a><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">ONEWE(원위)&nbsp;</span><a href="https://www.instagram.com/official_onewe/">@official_onewe</a><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">IDIOTAPE&nbsp;</span><a href="https://www.instagram.com/idiotapeofficial/">@idiotapeofficial</a><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">KARDI&nbsp;</span><a href="https://www.instagram.com/bandkardi_/">@bandkardi_</a><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">포져군단&nbsp;</span><a href="https://www.instagram.com/poseridiott/">@poseridiott</a><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">혁오&nbsp;</span><a href="https://www.instagram.com/hyukohofficial/">@hyukohofficial</a><br><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">𝚊𝚗𝚍&nbsp;𝚖𝚊𝚗𝚢&nbsp;𝚖𝚘𝚛𝚎..</span><br><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">⌁&nbsp;─────&nbsp;⚠️&nbsp;─────&nbsp;⌁</span><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">⊹&nbsp;주요&nbsp;일정</span><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">10월&nbsp;13일(화)&nbsp;티켓&nbsp;오픈</span><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">11월&nbsp;3일(화)&nbsp;2차&nbsp;라인업&nbsp;발표</span><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">12월&nbsp;31일(목)&nbsp;CDF2026-2027</span><br><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">𝗖𝗢𝗨𝗡𝗧𝗗𝗢𝗪𝗡&nbsp;𝗙𝗔𝗡𝗧𝗔𝗦𝗬&nbsp;𝟮𝟬𝟮𝟲-𝟮𝟬𝟮𝟳</span><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">𝟭𝟮.𝟯𝟭(𝗧𝗛𝗨)&nbsp;𝗮𝘁&nbsp;𝗞𝗜𝗡𝗧𝗘𝗫&nbsp;𝗛𝗔𝗟𝗟&nbsp;𝟳-𝟴</span><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">🎫┃𝙉𝙊𝙇&nbsp;·&nbsp;𝙔𝙀𝙎𝟮𝟰&nbsp;·&nbsp;𝙉𝘼𝙑𝙀𝙍&nbsp;·&nbsp;𝟮𝙏𝙈</span><br><br><a href="https://www.instagram.com/explore/tags/countdownfantasy/">#COUNTDOWNFANTASY</a><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">&nbsp;</span><a href="https://www.instagram.com/explore/tags/%EC%B9%B4%EC%9A%B4%ED%8A%B8%EB%8B%A4%EC%9A%B4%ED%8C%90%ED%83%80%EC%A7%8020262027/">#카운트다운판타지20262027</a><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">&nbsp;</span><a href="https://www.instagram.com/explore/tags/cdf20262027/">#CDF20262027</a></p><p>&nbsp;</p><hr><p style="margin-left:0px;">&nbsp;</p><p style="margin-left:0px;">&nbsp;</p><p style="margin-left:0px;"><a href="https://www.mintpaper.co.kr/"><span class="text-small" style="background-color:transparent!important;color:rgb(153,153,153);"><u>www.mintpaper.com</u></span></a><br><span class="text-small" style="background-color:rgb(244,244,244);color:rgb(153,153,153);">facebook </span><a href="https://www.facebook.com/GrandMintFest/" target="_blank" rel="noopener noreferrer"><span class="text-small" style="background-color:transparent!important;color:rgb(153,153,153);"><u>@grandmintfestival</u></span></a><br><span class="text-small" style="background-color:rgb(244,244,244);color:rgb(153,153,153);">instagram </span><a href="https://www.instagram.com/grandmintfestival/" target="_blank" rel="noopener noreferrer"><span class="text-small" style="background-color:transparent!important;color:rgb(153,153,153);"><u>@grandmintfestival</u></span></a></p></div>';
+const ONEWAY_OFFICIAL_HTML =
+  '<div class="data_txt">\n                                \t<p class="" style="font: 13px " helvetica="" neue";="" margin:="" 0px;"=""><span style="font-size: 11pt;">원웨이 페스티벌 2026 - 슈퍼얼리버드</span></p><p class="" style="font: 13px " helvetica="" neue";="" min-height:="" 15px;="" margin:="" 0px;"=""><br></p><p class="" style="font: 13px " helvetica="" neue";="" min-height:="" 15px;="" margin:="" 0px;"=""><br></p><p class="" style="text-align: justify; font: 13px " helvetica="" neue";="" margin:="" 0px;"=""><span style="font-size: 11pt;">- 공 연 명 : 원웨이 페스티벌 2026</span></p><p class="" style="text-align: justify; font: 13px " helvetica="" neue";="" margin:="" 0px;"=""><span style="font-size: 11pt;">- 공연일시 : 2026. 12. 26- 12. 27</span></p><p class="" style="text-align: justify; font: 13px " helvetica="" neue";="" margin:="" 0px;"=""><span style="font-size: 11pt;">- 공연장소 : 킨텍스 제2전시장 10홀</span></p><p class="" style="text-align: justify; font: 13px " helvetica="" neue";="" margin:="" 0px;"=""><span style="font-size: 11pt;">&nbsp;</span></p><p class="" style="text-align: justify; font: 13px " helvetica="" neue";="" margin:="" 0px;"=""><span style="font-size: 11pt;">*슈퍼 얼리버드 티켓은 양일권(2일권)입니다.</span></p><p class="" style="font: 13px " helvetica="" neue";="" margin:="" 0px;"=""><span style="font-size: 11pt;">*한 ID당 8매까지 예매 가능합니다.</span></p><p class="" style="font: 13px " apple="" sd="" gothic="" neo";="" margin:="" 0px;"=""><span class="" style="font-size: 11pt;" helvetica="" neue";"="">*</span><span style="font-size: 11pt;">한정</span><span class="" style="font-size: 11pt;" helvetica="" neue";"=""> </span><span style="font-size: 11pt;">수량으로</span><span class="" style="font-size: 11pt;" helvetica="" neue";"=""> </span><span style="font-size: 11pt;">조기</span><span class="" style="font-size: 11pt;" helvetica="" neue";"=""> </span><span style="font-size: 11pt;">매진될</span><span class="" style="font-size: 11pt;" helvetica="" neue";"=""> </span><span style="font-size: 11pt;">수</span><span class="" style="font-size: 11pt;" helvetica="" neue";"=""> </span><span style="font-size: 11pt;">있습니다</span><span class="" style="font-size: 11pt;" helvetica="" neue";"="">.</span></p></div><div class="concert_info_txt">\n                                \t<p class="" style="text-align: justify; font: 13px " helvetica="" neue";="" margin:="" 0px;"=""><span style="font-size: 11pt;">2026년의 마지막 주말과 주일</span></p><p class="" style="text-align: justify; font: 13px " helvetica="" neue";="" margin:="" 0px;"=""><span style="font-size: 11pt;">수많은 워십 아티스트와 그리스도인들이 한자리에 모여</span></p><p class="" style="text-align: justify; font: 13px " helvetica="" neue";="" margin:="" 0px;"=""><span style="font-size: 11pt;">함께 하나님을 예배하고, 교제하고, 문화를 나누는</span></p><p class="" style="text-align: justify; font: 13px " helvetica="" neue";="" margin:="" 0px;"=""><span style="font-size: 11pt;">그리스도인들의 워십 페스티벌</span></p><p class="" style="text-align: justify; font: 13px " helvetica="" neue";="" margin:="" 0px;"=""><span style="font-size: 11pt;">&nbsp;</span></p><p class="" style="text-align: justify; font: 13px " helvetica="" neue";="" margin:="" 0px;"=""><span style="font-size: 11pt;">ONE WAY FESTIVAL 2026은</span><br><span style="font-size: 11pt;">찬양과 예배만을 위한 집회도,</span><br><span style="font-size: 11pt;">공연만을 위한 페스티벌도 아닙니다.</span></p><p class="" style="text-align: justify; font: 13px " helvetica="" neue";="" margin:="" 0px;"=""><span style="font-size: 11pt;">그리스도인들이 함께 머물고 즐기고 나누는</span><br><span style="font-size: 11pt;">새로운 축제의 문화입니다.</span></p><p class="" style="text-align: justify; font: 13px " helvetica="" neue";="" margin:="" 0px;"=""><span style="font-size: 11pt;">&nbsp;</span></p><p class="" style="text-align: justify; font: 13px " helvetica="" neue";="" margin:="" 0px;"=""><span style="font-size: 11pt;">[1차 라인업]</span></p><p class="" style="text-align: justify; font: 13px " helvetica="" neue";="" margin:="" 0px;"=""><span style="font-size: 11pt;">마커스워십, 기프티드, 커피소년X제이레빗 혜선, 레비스탕스, 위클레시아, 달빛마을, 홀라이프 워십, 브리지임팩트, 히스플랜, 시온의대로 and 소향 그리고 이게 끝이 아닙니다. 더 많은 팀들이 출연할 예정입니다.</span></p><p class="" style="text-align: justify; font: 13px " helvetica="" neue";="" margin:="" 0px;"=""><span style="font-size: 11pt;">&nbsp;</span></p><p class="" style="font: 13px " helvetica="" neue";="" margin:="" 0px;"=""><span class="" style="font-size: 11pt;" apple="" sd="" gothic="" neo";"="">인스타그램</span><span style="font-size: 11pt;">: instagram.com/oneway_festival</span></p></div>';
+
 describe('crawl parsers', () => {
   it('reads a configured timetable table into stable set candidates', async () => {
     const html =
@@ -84,6 +89,26 @@ describe('crawl parsers', () => {
     ]);
   });
 
+  it('uses only the matching NOL product poster from a public listing card', async () => {
+    const nol = source('ticket-list', 'discovery');
+    nol.url = 'https://nol.yanolja.com/ticket';
+    const html = String.raw`<script>self.__next_f.push([1,\"action\":{\"web\":\"https://nol.yanolja.com/ticket/products/26015181\"},\"thumbnail\":\"https://ticketimage.interpark.com/Play/image/large/26/26015181_p.gif\",\"title\":\"썸띵 뉴 뮤직 페스티벌 2026\",\"dateInfo\":\"내일 17:00\"},{\"action\":{\"web\":\"https://nol.yanolja.com/ticket/products/26013510\"},\"thumbnail\":\"https://ticketimage.interpark.com/Play/image/large/26/99999999_p.gif\",\"title\":\"서울 뮤직 페스티벌 2026\",\"dateInfo\":\"26.11.07 ~ 26.11.08\",\"locationDetails\":[\"인천남동체육관\"]}]);</script>`;
+    expect(await parseCrawl(nol, html)).toEqual([
+      {
+        name: '썸띵 뉴 뮤직 페스티벌 2026',
+        url: 'https://nol.yanolja.com/ticket/products/26015181',
+        posterUrl:
+          'https://ticketimage.interpark.com/Play/image/large/26/26015181_p.gif',
+      },
+      {
+        name: '서울 뮤직 페스티벌 2026',
+        url: 'https://nol.yanolja.com/ticket/products/26013510',
+        date: '2026.11.07 - 2026.11.08',
+        venue: '인천남동체육관',
+      },
+    ]);
+  });
+
   it('reads verified NOL event dates and venues without treating opening times as event dates', async () => {
     const nol = source('ticket-list', 'discovery');
     nol.url = 'https://nol.yanolja.com/ticket';
@@ -98,6 +123,21 @@ describe('crawl parsers', () => {
       {
         name: '썸띵 뉴 뮤직 페스티벌 2026',
         url: 'https://nol.yanolja.com/ticket/products/26015181',
+      },
+    ]);
+  });
+
+  it('normalizes NOL place-product links to a single detail URL', async () => {
+    const nol = source('ticket-list', 'discovery');
+    nol.url = 'https://nol.yanolja.com/ticket/genre/concert';
+    const html = String.raw`<script>self.__next_f.push([1,"action":{"web":"https://nol.yanolja.com/ticket/places/25000827/products/26011660"},"title":"서울 뮤직 페스티벌","dateInfo":"26.11.07 ~ 26.11.08","locationDetails":["서울 공연장"]}]);</script>`;
+
+    expect(await parseCrawl(nol, html)).toEqual([
+      {
+        name: '서울 뮤직 페스티벌',
+        url: 'https://nol.yanolja.com/ticket/products/26011660',
+        date: '2026.11.07 - 2026.11.08',
+        venue: '서울 공연장',
       },
     ]);
   });
@@ -117,6 +157,81 @@ describe('crawl parsers', () => {
         venue: '부산 공연장',
       },
     ]);
+  });
+
+  it('reads a NOL product detail event date and venue rather than ticket opening time', async () => {
+    const nol = source('ticket-list', 'discovery');
+    nol.url = 'https://nol.yanolja.com/ticket/products/26007651';
+    const html = `<html><head><title>NOL 티켓</title></head><body>
+      <p>오픈 예정 2026.10.01 12:00</p><h1>NOL FESTIVAL : DAY 1 - K-POP STAGE</h1>
+      <nav>공지사항 상품상세 장소</nav>
+      <dl><dt>장소</dt><dd>일산 킨텍스 제 2전시장</dd><dt>기간</dt><dd>2026.10.17</dd></dl>
+    </body></html>`;
+    expect(await parseCrawl(nol, html)).toEqual([
+      {
+        name: 'NOL FESTIVAL : DAY 1 - K-POP STAGE',
+        url: nol.url,
+        date: '2026.10.17',
+        venue: '일산 킨텍스 제 2전시장',
+      },
+    ]);
+  });
+
+  it('uses a NOL product poster from the official ticket image host', async () => {
+    const nol = source('ticket-list', 'discovery');
+    nol.url = 'https://nol.yanolja.com/ticket/products/26013406';
+    const html = `<meta property="og:image" content="https://ticketimage.interpark.com/Play/image/large/26/26013406_p.gif" />
+      <h1>NOL FESTIVAL 2026</h1><div>장소 킨텍스 일시 2026.10.17</div>`;
+
+    expect(await parseCrawl(nol, html)).toEqual([
+      {
+        name: 'NOL FESTIVAL 2026',
+        url: nol.url,
+        date: '2026.10.17',
+        venue: '킨텍스',
+        posterUrl:
+          'https://ticketimage.interpark.com/Play/image/large/26/26013406_p.gif',
+      },
+    ]);
+  });
+
+  it('reads a NOL performance page only when its event date and venue are valid', async () => {
+    const nol = source('ticket-list', 'discovery');
+    nol.url = 'https://nol.yanolja.com/ticket/products/26014568';
+    const html = `<h1>COUNTDOWN FANTASY 2026-2027</h1>
+      <div>장르 콘서트 &gt; 페스티벌</div>
+      <div>장소 킨텍스 제2전시장 7홀, 8홀 일시 2026.12.31~2026.12.31</div>`;
+    expect(await parseCrawl(nol, html)).toEqual([
+      {
+        name: 'COUNTDOWN FANTASY 2026-2027',
+        url: nol.url,
+        date: '2026.12.31 - 2026.12.31',
+        venue: '킨텍스 제2전시장 7홀, 8홀',
+      },
+    ]);
+    await expect(
+      parseCrawl(
+        nol,
+        '<h1>COUNTDOWN FANTASY 2026-2027</h1><p>장소 킨텍스 일시 2026.02.30</p>',
+      ),
+    ).rejects.toThrow('공개 예매 링크를 찾지 못했습니다.');
+  });
+
+  it('rejects a NOL concert and navigation text masquerading as a venue', async () => {
+    const nol = source('ticket-list', 'discovery');
+    nol.url = 'https://nol.yanolja.com/ticket/products/26014568';
+    await expect(
+      parseCrawl(
+        nol,
+        '<h1>재즈 페스티벌 콘서트</h1><p>장소 킨텍스 일시 2026.12.31</p>',
+      ),
+    ).rejects.toThrow('공개 예매 링크를 찾지 못했습니다.');
+    await expect(
+      parseCrawl(
+        nol,
+        '<h1>COUNTDOWN FANTASY 2026-2027</h1><nav>장소</nav><p>기간 2026.12.31</p>',
+      ),
+    ).rejects.toThrow('공개 예매 링크를 찾지 못했습니다.');
   });
 
   it('reads the Melon festival category JSON and rejects concerts included in the category', async () => {
@@ -335,6 +450,44 @@ describe('crawl parsers', () => {
     ]);
   });
 
+  it('reads only the XMF official final-lineup notice and verifies both day counts', async () => {
+    const xmf = source('ticket-list', 'discovery');
+    xmf.url = 'https://xmfestival.com/notice';
+    const html = `<div class="acd_row"><h4>[XMF 2027 개최 고지]</h4><p>2027. 07 TOKYO</p></div>
+      <div class="acd_row"><h4>[XMF 2026 최종 라인업 공개]</h4><div class="board_contents">
+      <p>XMF 조직위원회는 10월 3일부터 4일까지 이틀간 인천 파라다이스시티에서 열리는 XMF 2026의 출연진을 공개했다.</p>
+      <p>첫날인 10월 3일에는 아도(Ado), 루시(LUCY), 윤하(YOUNHA), 콜드레인(coldrain), FT아일랜드(FTISLAND), 나카시마 미카(MIKA NAKASHIMA), 하츠웨이브(hrtz.wav), 마이 헤어 이즈 배드(My Hair is Bad), 노벨브라이트(Novelbright), 원위(ONEWE), 피플 원(PEOPLE 1) 등 11팀이 관객과 만난다.</p>
+      <p>둘째 날인 4일 무대는 데이식스(DAY6), 원오크록(ONE OK ROCK), YB, 우버월드(UVERworld), 에에! 그룹(Ae! group), 하이파이유니콘(Hi-Fi Un!corn), 마르시(Marcy), 사우시 독(Saucy Dog), 에스플릿(Splayit), 더 픽스(THE FIX), 엑스디너리 히어로즈(Xdinary Heroes) 등 11팀이 공연을 이어간다. 이와 함께 첫날은 DJ 야베 유나(YUNA YABE), 둘째 날은 에무뉴(EMNW)가 오프닝 무대를 맡는다.</p>
+      </div></div>`;
+    const candidate = (await parseCrawl(xmf, html)) as {
+      name: string;
+      url: string;
+      date: string;
+      venue: string;
+      artists: { name: string }[];
+    }[];
+    expect(candidate).toHaveLength(1);
+    expect(candidate[0]).toMatchObject({
+      name: 'XMF 2026',
+      url: xmf.url,
+      date: '2026.10.03 - 2026.10.04',
+      venue: '인천 파라다이스시티',
+    });
+    expect(candidate[0].artists).toHaveLength(24);
+    expect(candidate[0].artists.map((artist) => artist.name)).toEqual(
+      expect.arrayContaining([
+        '아도',
+        'YB',
+        '엑스디너리 히어로즈',
+        'DJ 야베 유나',
+        '에무뉴',
+      ]),
+    );
+    await expect(
+      parseCrawl(xmf, html.replace('등 11팀이 공연을', '등 12팀이 공연을')),
+    ).rejects.toThrow('공개 예매 링크');
+  });
+
   it('reads a YES24 detail Event without inventing a timetable', async () => {
     const yes24 = source('ticket-list', 'discovery');
     yes24.url = 'https://ticket.yes24.com/Perf/60590';
@@ -355,6 +508,105 @@ describe('crawl parsers', () => {
         date: '2026-12-31 ~ 2026-12-31',
         venue: '킨텍스 제2전시장 7홀, 8홀',
         posterUrl: 'https://tkfile.yes24.com/upload2/PerfBlog/cdf.jpg',
+      },
+    ]);
+  });
+
+  it('reads only valid, unique Event performers from a YES24 detail', async () => {
+    const yes24 = source('ticket-list', 'discovery');
+    yes24.url = 'https://ticket.yes24.com/Perf/60590';
+    const html = `<script type="application/ld+json">${JSON.stringify({
+      '@type': 'Event',
+      name: 'COUNTDOWN FANTASY 2026-2027',
+      startDate: '2026-12-31',
+      endDate: '2026-12-31',
+      location: { name: '킨텍스' },
+      performer: [
+        { '@type': 'MusicGroup', name: '밴드 A' },
+        {
+          '@type': 'MusicGroup',
+          name: '밴드 A',
+          image: 'https://tkfile.yes24.com/artists/band-a.jpg',
+        },
+        { '@type': 'Person', name: '가수 B' },
+        { '@type': 'MusicGroup', name: '<img onerror=bad>' },
+        { '@type': 'Organization', name: '예매처' },
+        {
+          '@type': 'MusicGroup',
+          name: '외부 링크가 있는 가수',
+          url: 'https://evil.example',
+          image: 'https://evil.example/not-artist.jpg',
+        },
+      ],
+    })}</script>`;
+    const result = (await parseCrawl(yes24, html)) as {
+      artists?: { name: string }[];
+    }[];
+    expect(result[0].artists).toEqual([
+      {
+        name: '밴드 A',
+        sourceUrl: 'https://tkfile.yes24.com/artists/band-a.jpg',
+      },
+      { name: '가수 B' },
+      { name: '외부 링크가 있는 가수' },
+    ]);
+  });
+
+  it('reads paired performers from the English YES24 detail route', async () => {
+    const yes24 = source('ticket-list', 'discovery');
+    yes24.url = 'https://ticket.yes24.com/English/Perf/60590';
+    const html = `<script type="application/ld+json">${JSON.stringify({
+      '@type': 'Event',
+      name: 'COUNTDOWN FANTASY 2026-2027',
+      startDate: '2026-12-31',
+      endDate: '2026-12-31',
+      location: { name: '킨텍스' },
+      performer: [
+        {
+          '@type': 'MusicGroup',
+          name: '밴드 A',
+          image: 'https://tkfile.yes24.com/artists/band-a.jpg',
+        },
+      ],
+    })}</script>`;
+    const result = (await parseCrawl(yes24, html)) as {
+      artists?: { name: string; sourceUrl?: string }[];
+    }[];
+    expect(result[0].artists).toEqual([
+      {
+        name: '밴드 A',
+        sourceUrl: 'https://tkfile.yes24.com/artists/band-a.jpg',
+      },
+    ]);
+  });
+
+  it('reads a single structured performer from a NOL event without creating set times', async () => {
+    const nol = source('ticket-list', 'discovery');
+    nol.url = 'https://nol.yanolja.com/ticket/products/26014568';
+    const html = `<script type="application/ld+json">${JSON.stringify({
+      '@type': 'Event',
+      name: 'COUNTDOWN FANTASY 2026-2027',
+      startDate: '2026-12-31',
+      endDate: '2026-12-31',
+      location: { name: '킨텍스' },
+      performer: {
+        '@type': 'Person',
+        name: '가수 C',
+        image: 'https://ticketimage.interpark.com/artist/c.jpg',
+      },
+    })}</script>`;
+    expect(await parseCrawl(nol, html)).toEqual([
+      {
+        name: 'COUNTDOWN FANTASY 2026-2027',
+        url: nol.url,
+        date: '2026.12.31 - 2026.12.31',
+        venue: '킨텍스',
+        artists: [
+          {
+            name: '가수 C',
+            sourceUrl: 'https://ticketimage.interpark.com/artist/c.jpg',
+          },
+        ],
       },
     ]);
   });
@@ -494,6 +746,94 @@ describe('crawl parsers', () => {
         officialInstagramUrl: 'https://www.instagram.com/grandmintfestival/',
       },
     ]);
+  });
+
+  it('reads Seoul festival performers from the city portal image description', async () => {
+    const city = source('ticket-list', 'discovery', {
+      expectedArtists: '6',
+    });
+    city.url =
+      'https://culture.seoul.go.kr/culture/culture/cultureEvent/view.do?cultcode=159493&menuNo=200011';
+    const html = `<h2>2026 서울뮤직페스티벌</h2><img alt="2026 서울뮤직페스티벌 2026년 10월 24일 노들섬 부대행사 | 12:00 PM~ 본 공연 | 05:00 PM~ LINE UP IN 폴킴 | 권진아 | 옥상달빛 | 너드커넥션 | 추다해차지스 | 김창완밴드">`;
+    expect(await parseCrawl(city, html)).toEqual([
+      {
+        name: '2026 서울뮤직페스티벌',
+        url: city.url,
+        date: '2026.10.24',
+        artists: [
+          '폴킴',
+          '권진아',
+          '옥상달빛',
+          '너드커넥션',
+          '추다해차지스',
+          '김창완밴드',
+        ].map((name) => ({ name })),
+      },
+    ]);
+    city.url =
+      'https://festival.seoul.go.kr/festival/main/festivalView.do?festacode=848';
+    const funSeoul = (await parseCrawl(city, html)) as {
+      name: string;
+      url: string;
+      date: string;
+      artists: { name: string }[];
+    }[];
+    expect(funSeoul[0]).toMatchObject({
+      name: '2026 서울뮤직페스티벌',
+      url: city.url,
+      date: '2026.10.24',
+    });
+    expect(funSeoul[0].artists).toHaveLength(6);
+    await expect(
+      parseCrawl(city, html.replace('2026년', '2025년')),
+    ).rejects.toThrow('공개 예매 링크');
+    city.parserConfig.expectedArtists = '7';
+    await expect(parseCrawl(city, html)).rejects.toThrow('공개 예매 링크');
+  });
+
+  it('extracts 12 CDF performers from the official Mint Paper post HTML', async () => {
+    const mint = source('ticket-list', 'discovery', {
+      festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
+    });
+    mint.url = 'https://www.mintpaper.co.kr/posts/4819';
+    const html = CDF_OFFICIAL_HTML;
+    const candidates = (await parseCrawl(mint, html)) as {
+      name: string;
+      url: string;
+      artists: { name: string }[];
+    }[];
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].url).toBe(mint.url);
+    expect(candidates[0].name).toBe('COUNTDOWN FANTASY 2026-2027');
+    expect(candidates[0].artists).toHaveLength(12);
+    expect(candidates[0].artists.map((artist) => artist.name)).toEqual(
+      expect.arrayContaining(['극동아시아타이거즈', 'LOW HIGH LOW', '혁오']),
+    );
+    await expect(parseCrawl(mint, html.replace('혁오', ''))).rejects.toThrow(
+      '공개 예매 링크',
+    );
+  });
+
+  it('extracts 11 Oneway performers from the official Melon notice HTML', async () => {
+    const melon = source('ticket-list', 'discovery', {
+      festivalSourceUrl:
+        'https://ticket.melon.com/performance/index.htm?prodId=213769',
+    });
+    melon.url = 'https://ticket.melon.com/csoon/detail.htm?csoonId=12728';
+    const candidates = (await parseCrawl(melon, ONEWAY_OFFICIAL_HTML)) as {
+      name: string;
+      url: string;
+      artists: { name: string }[];
+    }[];
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].url).toBe(melon.url);
+    expect(candidates[0].artists).toHaveLength(11);
+    expect(candidates[0].artists.map((artist) => artist.name)).toEqual(
+      expect.arrayContaining(['마커스워십', '커피소년X제이레빗 혜선', '소향']),
+    );
+    await expect(
+      parseCrawl(melon, ONEWAY_OFFICIAL_HTML.replace('and 소향', '')),
+    ).rejects.toThrow('공개 예매 링크');
   });
 
   it('rejects a listing without a real festival candidate', async () => {

@@ -38,6 +38,7 @@ describe('GET festival map image', () => {
       .expect(200);
     expect(result.headers['content-type']).toMatch(/^image\/webp/);
     expect(result.headers['x-content-type-options']).toBe('nosniff');
+    expect(result.headers['cross-origin-resource-policy']).toBe('cross-origin');
     expect(result.body).toEqual(bytes);
     expect(readFestivalMap).toHaveBeenCalledWith(
       'fst_01234567',
@@ -55,5 +56,6 @@ describe('GET festival map image', () => {
     expect(result.body).toEqual(bytes);
     expect(result.headers['content-type']).toMatch(/^image\/webp/);
     expect(result.headers['x-content-type-options']).toBe('nosniff');
+    expect(result.headers['cross-origin-resource-policy']).toBe('cross-origin');
   });
 });

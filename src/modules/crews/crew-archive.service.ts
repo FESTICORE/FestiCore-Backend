@@ -34,13 +34,9 @@ export class CrewArchiveService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   onModuleInit() {
-    void this.run().catch((error: unknown) =>
-      this.logger.error('크루 아카이브 실패', error),
-    );
+    void this.run().catch(() => this.logger.error('크루 아카이브 실패'));
     this.timer = setInterval(() => {
-      void this.run().catch((error: unknown) =>
-        this.logger.error('크루 아카이브 실패', error),
-      );
+      void this.run().catch(() => this.logger.error('크루 아카이브 실패'));
     }, 60 * 60_000);
     this.timer.unref();
   }

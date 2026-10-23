@@ -146,13 +146,8 @@ export class AdminFestivalMapController {
     } catch (error) {
       try {
         await this.storage.delete(key);
-      } catch (cleanupError) {
-        this.logger.error(
-          `감사 기록 실패 후 지도 객체 삭제 실패: ${key}`,
-          cleanupError instanceof Error
-            ? cleanupError.stack
-            : String(cleanupError),
-        );
+      } catch {
+        this.logger.error(`감사 기록 실패 후 지도 객체 삭제 실패: ${key}`);
       }
       throw error;
     }

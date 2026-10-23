@@ -124,6 +124,7 @@ export class FlagsController {
       .set({
         'Content-Type': 'image/webp',
         'Cache-Control': 'public, max-age=60',
+        'Cross-Origin-Resource-Policy': 'cross-origin',
         'X-Content-Type-Options': 'nosniff',
       })
       .send(bytes);
@@ -151,6 +152,7 @@ export class FlagsController {
       .set({
         'Content-Type': 'image/webp',
         'Cache-Control': 'public, max-age=60',
+        'Cross-Origin-Resource-Policy': 'cross-origin',
         'X-Content-Type-Options': 'nosniff',
       })
       .send(bytes);
@@ -879,6 +881,44 @@ export class AdminFlagsController {
   @ApiResponse({ status: 403, description: 'viewer 이상 권한 없음' })
   flags(@Param('festivalId') id: string) {
     return this.service.adminFlags(id);
+  }
+  @Get('festivals/:festivalId/bearers')
+  @AdminRoles('viewer', 'editor', 'owner')
+  @ApiParam({ name: 'festivalId', description: '축제 ID', example: 'fst_123' })
+  @ApiOperation({
+    summary: '축제 기수 및 깃발 상태 목록',
+    description:
+      'Bearer JWT와 viewer 이상 역할이 필요합니다. 해당 축제 기수의 별명, 소유자 여부, 연결 깃발과 현재 현장 상태를 조회합니다. 응답은 Cache-Control: no-store입니다.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: '축제 기수 목록',
+    schema: {
+      example: {
+        items: [
+          {
+            userId: '550e8400-e29b-41d4-a716-446655440000',
+            nickname: '기수',
+            flagId: 'flg_123',
+            flagName: '파란 깃발',
+            isOwner: true,
+            joinedAt: '2026-10-21T00:00:00.000Z',
+            hidden: false,
+            status: 'active',
+          },
+        ],
+      },
+    },
+  })
+  @ApiResponse({ status: 401, description: '유효한 access JWT가 없습니다.' })
+  @ApiResponse({ status: 403, description: 'viewer 이상 권한 없음' })
+  @ApiResponse({ status: 404, description: '축제를 찾을 수 없음' })
+  bearers(
+    @Param('festivalId') id: string,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    response.setHeader('Cache-Control', 'no-store');
+    return this.service.adminBearers(id);
   }
   @Get('flags/reported')
   @AdminRoles('viewer', 'editor', 'owner')

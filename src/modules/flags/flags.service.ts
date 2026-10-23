@@ -16,7 +16,7 @@ import {
   createHmac,
   randomBytes,
 } from 'crypto';
-import { DataSource, EntityManager, IsNull, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, IsNull, Repository } from 'typeorm';
 import { AdminFestival } from '../admin/festival/festival.entity';
 import { AdminAuditService } from '../admin/audit/admin-audit.service';
 import { User } from '../auth/entity/user.entity';
@@ -47,6 +47,7 @@ import {
   FlagClaimThrottleService,
 } from './flag-claim-throttle.service';
 import { FlagPackSyncService } from './flag-pack-sync.service';
+import { SocialNotificationService } from '../notification/social-notification.service';
 
 const codeAlphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 function newCode(): string {
@@ -88,6 +89,7 @@ export class FlagsService {
     private readonly images: ImageStorageService,
     private readonly packSync: FlagPackSyncService,
     private readonly adminAudit: AdminAuditService,
+    private readonly socialNotifications: SocialNotificationService,
   ) {}
 
   private codeKey(): Buffer {
@@ -807,6 +809,7 @@ export class FlagsService {
         zoneId: flag.zoneId,
         activity: flag.activity,
       });
+      await this.socialNotifications.enqueueFlagStatus(manager, flag, userId);
       const response = statusView(flag);
       await this.remember(
         manager,
@@ -1062,6 +1065,45 @@ export class FlagsService {
         reportCount: flag.reportCount,
         status: statusView(flag),
       })),
+    };
+  }
+
+  async adminBearers(festivalId: string) {
+    if (!(await this.festivals.exists({ where: { id: festivalId } })))
+      throw new NotFoundException({ code: 'NOT_FOUND' });
+    const bearers = await this.bearers.find({
+      where: { festivalId },
+      order: { createdAt: 'ASC', id: 'ASC' },
+    });
+    if (!bearers.length) return { items: [] };
+    const [flags, users] = await Promise.all([
+      this.flags.find({
+        where: { festivalId, id: In(bearers.map((bearer) => bearer.flagId)) },
+      }),
+      this.users.find({
+        select: { id: true, nickname: true },
+        where: { id: In(bearers.map((bearer) => bearer.userId)) },
+      }),
+    ]);
+    const flagsById = new Map(flags.map((flag) => [flag.id, flag]));
+    const usersById = new Map(users.map((user) => [user.id, user]));
+    return {
+      items: bearers.flatMap((bearer) => {
+        const flag = flagsById.get(bearer.flagId);
+        if (!flag) return [];
+        return [
+          {
+            userId: bearer.userId,
+            nickname: usersById.get(bearer.userId)?.nickname ?? null,
+            flagId: flag.id,
+            flagName: flag.name,
+            isOwner: bearer.isOwner,
+            joinedAt: bearer.createdAt.toISOString(),
+            hidden: flag.hidden,
+            status: flag.status,
+          },
+        ];
+      }),
     };
   }
 }

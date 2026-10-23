@@ -14,6 +14,61 @@ import { AuthService } from './auth.service';
 import { FlagPackSyncService } from '../../flags/flag-pack-sync.service';
 import { GoogleService } from './google.service';
 import { TokenService } from './token.service';
+import { OauthTokenCipher } from './oauth-token-cipher';
+
+describe('AuthService logout account devices', () => {
+  const userId = '00000000-0000-4000-8000-000000000001';
+
+  function setup() {
+    const query = jest.fn().mockResolvedValue([]);
+    const transaction = jest
+      .fn()
+      .mockImplementation(
+        (work: (manager: EntityManager) => Promise<unknown>) =>
+          work({ query } as unknown as EntityManager),
+      );
+    const service = new AuthService(
+      {} as GoogleService,
+      {} as AppleService,
+      {} as TokenService,
+      {} as Repository<User>,
+      { transaction } as unknown as DataSource,
+      {} as AppleRevokeRetryService,
+      {} as FlagPackSyncService,
+    );
+    return { service, query, transaction };
+  }
+
+  it('계정 소유 기기 전체의 푸시 수신과 refresh 토큰을 같은 트랜잭션에서 해제한다', async () => {
+    const { service, query, transaction } = setup();
+    await service.logout(userId);
+    expect(transaction).toHaveBeenCalledTimes(1);
+    expect(query).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining('WHERE "userId" = $1'),
+      [userId],
+    );
+    expect(query).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('SELECT "id" FROM "devices" WHERE "userId" = $1'),
+      [userId],
+    );
+    expect(query).toHaveBeenNthCalledWith(
+      3,
+      expect.stringContaining('UPDATE "refresh_tokens"'),
+      [userId],
+    );
+  });
+
+  it('기기 정리가 실패하면 refresh 토큰 폐기를 실행하지 않는다', async () => {
+    const { service, query } = setup();
+    query.mockRejectedValueOnce(new Error('device update failed'));
+    await expect(service.logout(userId)).rejects.toThrow(
+      'device update failed',
+    );
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe('AuthService web grant replacement', () => {
   it('binds a pending admin grant only after Google verifies the email', async () => {
@@ -177,7 +232,58 @@ describe('AuthService web grant replacement', () => {
     expect(app.newUser).toBe(true);
     expect(web).toEqual({ userId: 'shared-user', newUser: false });
     expect(users).toHaveLength(1);
+    expect(users[0].nickname).toMatch(/^관객-[0-9A-F]{4}$/);
   });
+
+  it.each([
+    [
+      '  열두글자를넘어가는긴닉네임입니다  ',
+      '열두글자를넘어가는긴닉네임입니다'.slice(0, 12),
+    ],
+    ['12345678901😀', '12345678901😀'],
+  ])(
+    'trims a social profile name without splitting Unicode characters',
+    async (name, expected) => {
+      const save = jest
+        .fn()
+        .mockImplementation((user: User) =>
+          Promise.resolve({ ...user, id: 'new-user' }),
+        );
+      const service = new AuthService(
+        {
+          verify: jest.fn().mockResolvedValue({
+            provider: 'google',
+            providerId: 'new-subject',
+            name,
+          }),
+        } as unknown as GoogleService,
+        {} as AppleService,
+        {
+          issue: jest.fn().mockResolvedValue({
+            accessToken: 'access',
+            refreshToken: 'refresh',
+          }),
+        } as unknown as TokenService,
+        {
+          findOne: jest.fn().mockResolvedValue(null),
+          create: jest.fn().mockImplementation((user: User) => user),
+          save,
+        } as unknown as Repository<User>,
+        {} as DataSource,
+        {} as AppleRevokeRetryService,
+        {} as FlagPackSyncService,
+      );
+
+      const result = await service.login({
+        provider: 'google',
+        token: 'id-token',
+      });
+      expect(result.user.nickname).toBe(expected);
+      expect(save).toHaveBeenCalledWith(
+        expect.objectContaining({ nickname: result.user.nickname }),
+      );
+    },
+  );
 
   it('keeps provider authorization active when replacing a web refresh token', async () => {
     const user = {
@@ -224,6 +330,65 @@ describe('AuthService web grant replacement', () => {
       },
     );
     expect(revokeConnection).not.toHaveBeenCalled();
+  });
+
+  it('웹 OAuth 갱신 토큰을 암호화 모드에서 암호문으로 저장한다', async () => {
+    const previousKey = process.env.OAUTH_TOKEN_ENCRYPTION_KEY;
+    const previousWrite = process.env.OAUTH_TOKEN_ENCRYPTION_WRITE;
+    process.env.OAUTH_TOKEN_ENCRYPTION_KEY = Buffer.alloc(32, 8).toString(
+      'base64',
+    );
+    process.env.OAUTH_TOKEN_ENCRYPTION_WRITE = 'true';
+    try {
+      const user = {
+        id: 'user-id',
+        provider: 'apple',
+        providerId: 'subject',
+      } as User;
+      const update = jest.fn().mockResolvedValue({ affected: 1 });
+      const service = new AuthService(
+        {} as GoogleService,
+        {} as AppleService,
+        {} as TokenService,
+        {
+          findOne: jest.fn().mockResolvedValue(user),
+          update,
+        } as unknown as Repository<User>,
+        {} as DataSource,
+        {} as AppleRevokeRetryService,
+        {} as FlagPackSyncService,
+      );
+
+      await service.completeWebLogin(
+        { provider: 'apple', providerId: 'subject' },
+        {
+          refreshToken: 'web-token',
+          subject: 'subject',
+          clientId: 'web-client',
+        },
+      );
+
+      const calls = update.mock.calls as unknown as [
+        unknown,
+        { oauthWebRefreshToken: string },
+      ][];
+      const stored = calls[0][1].oauthWebRefreshToken;
+      expect(stored).not.toContain('web-token');
+      expect(
+        new OauthTokenCipher(process.env).decode(
+          stored,
+          user.id,
+          'oauthWebRefreshToken',
+        ),
+      ).toBe('web-token');
+    } finally {
+      if (previousKey === undefined)
+        delete process.env.OAUTH_TOKEN_ENCRYPTION_KEY;
+      else process.env.OAUTH_TOKEN_ENCRYPTION_KEY = previousKey;
+      if (previousWrite === undefined)
+        delete process.env.OAUTH_TOKEN_ENCRYPTION_WRITE;
+      else process.env.OAUTH_TOKEN_ENCRYPTION_WRITE = previousWrite;
+    }
   });
 
   it('retries Apple grant revocation when account is deleted during web callback', async () => {
@@ -365,6 +530,10 @@ describe('AuthService 회원 탈퇴의 크루 소유권', () => {
       expect.stringContaining('DELETE FROM "devices" WHERE "userId" = $1'),
       [userId],
     );
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining('DELETE FROM "metric_events"'),
+      [userId],
+    );
   });
 
   it('다른 멤버가 없으면 크루를 지우고 계정을 삭제한다', async () => {
@@ -430,14 +599,22 @@ describe('AuthService 회원 탈퇴의 깃발과 Apple 재시도', () => {
   const userId = '00000000-0000-4000-8000-000000000001';
   const flagId = 'flg_1234567890abcdef';
 
-  function setup(options: { successor?: string; apple?: boolean } = {}) {
+  function setup(
+    options: {
+      successor?: string;
+      apple?: boolean;
+      refreshToken?: string;
+    } = {},
+  ) {
     const query = jest.fn().mockImplementation((sql: string) => {
       if (sql.includes('FROM "users"') && sql.includes('FOR UPDATE'))
         return [
           {
             id: userId,
             provider: options.apple ? 'apple' : 'google',
-            oauthRefreshToken: options.apple ? 'private-refresh-token' : null,
+            oauthRefreshToken: options.apple
+              ? (options.refreshToken ?? 'private-refresh-token')
+              : null,
             oauthClientId: options.apple ? 'apple-client' : null,
           },
         ];
@@ -464,7 +641,9 @@ describe('AuthService 회원 탈퇴의 깃발과 Apple 재시도', () => {
       findOne: jest.fn().mockResolvedValue({
         id: userId,
         provider: options.apple ? 'apple' : 'google',
-        oauthRefreshToken: options.apple ? 'private-refresh-token' : null,
+        oauthRefreshToken: options.apple
+          ? (options.refreshToken ?? 'private-refresh-token')
+          : null,
         oauthClientId: options.apple ? 'apple-client' : null,
       }),
     } as unknown as Repository<User>;
@@ -542,6 +721,40 @@ describe('AuthService 회원 탈퇴의 깃발과 Apple 재시도', () => {
       manager,
     );
     expect(remove).toHaveBeenCalledWith(User, { id: userId });
+  });
+
+  it('암호화된 사용자 토큰을 복호화해 Apple 철회와 재시도 작업에 사용한다', async () => {
+    const previousKey = process.env.OAUTH_TOKEN_ENCRYPTION_KEY;
+    const previousWrite = process.env.OAUTH_TOKEN_ENCRYPTION_WRITE;
+    const key = Buffer.alloc(32, 7).toString('base64');
+    process.env.OAUTH_TOKEN_ENCRYPTION_KEY = key;
+    process.env.OAUTH_TOKEN_ENCRYPTION_WRITE = 'true';
+    try {
+      const encrypted = new OauthTokenCipher(process.env).encode(
+        'private-refresh-token',
+        userId,
+        'oauthRefreshToken',
+      );
+      const { service, enqueue, manager } = setup({
+        apple: true,
+        refreshToken: encrypted,
+      });
+
+      await service.withdraw(userId);
+
+      expect(enqueue).toHaveBeenCalledWith(
+        'private-refresh-token',
+        'apple-client',
+        manager,
+      );
+    } finally {
+      if (previousKey === undefined)
+        delete process.env.OAUTH_TOKEN_ENCRYPTION_KEY;
+      else process.env.OAUTH_TOKEN_ENCRYPTION_KEY = previousKey;
+      if (previousWrite === undefined)
+        delete process.env.OAUTH_TOKEN_ENCRYPTION_WRITE;
+      else process.env.OAUTH_TOKEN_ENCRYPTION_WRITE = previousWrite;
+    }
   });
 
   it('재시도 건 저장이 실패하면 계정을 삭제하지 않는다', async () => {
