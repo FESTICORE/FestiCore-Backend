@@ -211,6 +211,73 @@ describe('ApnsService', () => {
     });
   });
 
+  it.each(['5', '10'] as const)(
+    'sends a Live Activity update at priority %s with its own APNs topic',
+    async (priority) => {
+      const { session, stream } = mockResponse(200);
+      const service = new ApnsService(config(credentials));
+      const state = { festivalId: 'fst_12345678', phase: 'open' };
+      const before = Math.floor(Date.now() / 1000);
+
+      await expect(
+        service.sendLiveActivityUpdate(
+          DEVICE_TOKEN,
+          'production',
+          state,
+          priority,
+        ),
+      ).resolves.toEqual({ accepted: true, permanent: false });
+
+      const after = Math.floor(Date.now() / 1000);
+      const headers = (
+        session.request.mock.calls as unknown[][]
+      )[0][0] as Record<string, string>;
+      expect(headers['apns-topic']).toBe(
+        `${credentials.APNS_BUNDLE_ID}.push-type.liveactivity`,
+      );
+      expect(headers['apns-push-type']).toBe('liveactivity');
+      expect(headers['apns-priority']).toBe(priority);
+      expect(headers).not.toHaveProperty('apns-collapse-id');
+      expect(Number(headers['apns-expiration'])).toBeGreaterThanOrEqual(
+        before + 600,
+      );
+      expect(Number(headers['apns-expiration'])).toBeLessThanOrEqual(
+        after + 600,
+      );
+      const payload = JSON.parse(
+        (stream.end.mock.calls as unknown[][])[0][0] as string,
+      ) as { aps: Record<string, unknown> };
+      expect(payload).toEqual({
+        aps: {
+          timestamp: payload.aps.timestamp,
+          event: 'update',
+          'content-state': state,
+          'stale-date': payload.aps['stale-date'],
+        },
+      });
+      const timestamp = payload.aps.timestamp as number;
+      expect(typeof timestamp).toBe('number');
+      expect(timestamp).toBeGreaterThanOrEqual(before);
+      expect(timestamp).toBeLessThanOrEqual(after);
+      expect(payload.aps['stale-date']).toBe(timestamp + 3600);
+    },
+  );
+
+  it('rejects an oversized Live Activity update before connecting', async () => {
+    const service = new ApnsService(config(credentials));
+
+    await expect(
+      service.sendLiveActivityUpdate(DEVICE_TOKEN, 'sandbox', {
+        description: '가'.repeat(1400),
+      }),
+    ).resolves.toEqual({
+      accepted: false,
+      permanent: false,
+      reason: 'PayloadTooLarge',
+    });
+    expect(connect).not.toHaveBeenCalled();
+  });
+
   it.each([true, false])(
     'routes a festival reminder based on downloaded pack state %s',
     async (hasPack) => {
