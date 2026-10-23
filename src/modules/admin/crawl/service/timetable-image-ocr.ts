@@ -12,6 +12,7 @@ export interface TimetableImageColumn {
   top: number;
   width: number;
   height: number;
+  artistPosition?: 'before' | 'after';
 }
 
 export interface TimetableImageOcrConfig {
@@ -111,6 +112,7 @@ export function parseStageTsv(
   tsv: string,
   date: string,
   stageId: string,
+  artistPosition: 'before' | 'after' = 'before',
 ): TimetableImageCandidate[] {
   const lines = parseLines(tsv);
   const candidates: TimetableImageCandidate[] = [];
@@ -122,17 +124,34 @@ export function parseStageTsv(
     const start = matches[0][0];
     const end = matches[1]?.[0] ?? null;
     if (end && end <= start) continue;
-    const onLine = line.text.slice(0, matches[0].index).trim();
-    const nearby = lines
-      .slice(0, index)
-      .filter(
-        (prior) =>
-          prior.top > previousTimeTop &&
-          line.top - prior.top <= 130 &&
-          ![...prior.text.matchAll(TIME)].length,
-      )
-      .slice(-2)
-      .map((prior) => prior.text);
+    const onLine =
+      artistPosition === 'after'
+        ? line.text
+            .slice(
+              (matches.at(-1)?.index ?? 0) + (matches.at(-1)?.[0].length ?? 0),
+            )
+            .trim()
+        : line.text.slice(0, matches[0].index).trim();
+    const nearby =
+      artistPosition === 'after'
+        ? onLine
+          ? []
+          : lines
+              .slice(index + 1)
+              .filter((next) => next.top - line.top <= 130)
+              .slice(0, 2)
+              .filter((next) => ![...next.text.matchAll(TIME)].length)
+              .map((next) => next.text)
+        : lines
+            .slice(0, index)
+            .filter(
+              (prior) =>
+                prior.top > previousTimeTop &&
+                line.top - prior.top <= 130 &&
+                ![...prior.text.matchAll(TIME)].length,
+            )
+            .slice(-2)
+            .map((prior) => prior.text);
     const artistText = [onLine, ...nearby]
       .map((part) => part.replace(/\s+/g, ' ').trim())
       .filter(Boolean)
@@ -190,6 +209,8 @@ export async function extractTimetableImageCandidates(
       ![column.left, column.top, column.width, column.height].every(
         (value) => Number.isFinite(value) && value >= 0 && value <= 1,
       ) ||
+      (column.artistPosition !== undefined &&
+        !['before', 'after'].includes(column.artistPosition)) ||
       column.width <= 0 ||
       column.height <= 0 ||
       column.left + column.width > 1 ||
@@ -217,7 +238,9 @@ export async function extractTimetableImageCandidates(
       .png()
       .toBuffer();
     const tsv = await runner(crop);
-    results.push(...parseStageTsv(tsv, date, column.stageId));
+    results.push(
+      ...parseStageTsv(tsv, date, column.stageId, column.artistPosition),
+    );
   }
   return results;
 }
