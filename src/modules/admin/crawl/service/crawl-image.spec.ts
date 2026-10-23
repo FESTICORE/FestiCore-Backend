@@ -115,6 +115,50 @@ describe('crawl image safety', () => {
     ).toEqual(['https://tkfile.yes24.com/upload2/PerfBlog/cdf.jpg']);
   });
 
+  it('collects only explicitly paired YES24 performer images from its image host', () => {
+    const html = `<script type="application/ld+json">${JSON.stringify({
+      '@type': 'Event',
+      image: 'https://tkfile.yes24.com/upload2/PerfBlog/poster.jpg',
+      performer: [
+        {
+          '@type': 'MusicGroup',
+          name: 'Band A',
+          image: 'https://tkfile.yes24.com/artists/a.jpg',
+        },
+        {
+          '@type': 'Person',
+          name: 'Singer B',
+          image: 'https://evil.example/b.jpg',
+        },
+      ],
+    })}</script><img src="https://tkfile.yes24.com/artists/unpaired.jpg">`;
+    expect(
+      discoverImageUrls(html, 'https://ticket.yes24.com/Perf/60590').map(
+        String,
+      ),
+    ).toEqual([
+      'https://tkfile.yes24.com/upload2/PerfBlog/poster.jpg',
+      'https://tkfile.yes24.com/artists/a.jpg',
+    ]);
+  });
+
+  it('collects NOL performer images only from the structured performer entry', () => {
+    const html = `<script type="application/ld+json">${JSON.stringify({
+      '@type': 'Event',
+      performer: {
+        '@type': 'Person',
+        name: 'Singer C',
+        image: 'https://ticketimage.interpark.com/artist/c.jpg',
+      },
+    })}</script><img src="https://ticketimage.interpark.com/artist/unpaired.jpg">`;
+    expect(
+      discoverImageUrls(
+        html,
+        'https://nol.yanolja.com/ticket/products/26013406',
+      ).map(String),
+    ).toEqual(['https://ticketimage.interpark.com/artist/c.jpg']);
+  });
+
   it('selects only matching YES24 English festival card posters', () => {
     const card = (id: string, genre: string, posterId = id) =>
       `<ul class="list_wrap"><li class="poster"><a href="/English/Perf/${id}"><img src="https://stkfile.yes24.com/upload2/PerfBlog/202610/20261012/20261012-${posterId}.jpg"></a></li><li class="conlist"><h3><a href="/English/Perf/${id}">Festival ${id}</a></h3><span>Genre</span>: [${genre}]</li></ul><div class="btn">`;

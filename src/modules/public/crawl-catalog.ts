@@ -91,7 +91,10 @@ function officialPosterUrl(raw: unknown): string | null {
   }
 }
 
-function verifiedArtists(raw: unknown): { name: string; sourceUrl?: string }[] {
+function verifiedArtists(
+  raw: unknown,
+  sourceHost: string,
+): { name: string; sourceUrl?: string }[] {
   if (!Array.isArray(raw)) return [];
   const artists: { name: string; sourceUrl?: string }[] = [];
   for (const value of raw.slice(0, 80)) {
@@ -103,11 +106,19 @@ function verifiedArtists(raw: unknown): { name: string; sourceUrl?: string }[] {
     if (typeof rawUrl === 'string') {
       try {
         const url = new URL(rawUrl);
+        const trusted =
+          (sourceHost === 'ticket.melon.com' &&
+            url.hostname === 'cdnimg.melon.co.kr') ||
+          (sourceHost === 'ticket.yes24.com' &&
+            ['tkfile.yes24.com', 'stkfile.yes24.com'].includes(url.hostname)) ||
+          (sourceHost === 'nol.yanolja.com' &&
+            url.hostname === 'ticketimage.interpark.com');
         if (
           url.protocol === 'https:' &&
-          url.hostname === 'cdnimg.melon.co.kr' &&
+          trusted &&
           !url.username &&
-          !url.password
+          !url.password &&
+          !url.port
         )
           artist.sourceUrl = url.toString();
       } catch {
@@ -301,7 +312,7 @@ export function discoverySummaries(
     if (publishedKeys.has(key)) continue;
     const instagramUrl = officialInstagramUrl(value.officialInstagramUrl);
     const posterUrl = officialPosterUrl(value.posterUrl);
-    const artists = verifiedArtists(value.artists);
+    const artists = verifiedArtists(value.artists, url.hostname);
     const existing = found.get(key);
     if (existing) {
       if (
@@ -324,8 +335,20 @@ export function discoverySummaries(
           url: instagramUrl,
         });
       if (posterUrl && !existing.posterUrl) existing.posterUrl = posterUrl;
-      if (artists.length && !existing.artists?.length)
-        existing.artists = artists;
+      if (artists.length) {
+        const merged = new Map(
+          existing.artists?.map((artist) => [artist.name, artist]) ?? [],
+        );
+        for (const artist of artists) {
+          const current = merged.get(artist.name);
+          if (
+            (current && !current.sourceUrl && artist.sourceUrl) ||
+            (!current && merged.size < 80)
+          )
+            merged.set(artist.name, artist);
+        }
+        existing.artists = [...merged.values()];
+      }
       continue;
     }
     const id = `fst_${createHash('sha256').update(key).digest('hex').slice(0, 16)}`;

@@ -189,6 +189,130 @@ describe('ticket discovery catalog', () => {
     ]);
   });
 
+  it('keeps source-paired artist images only from the corresponding ticket host', () => {
+    const base = {
+      name: 'FESTIVAL 2026',
+      venue: '킨텍스',
+      date: '2026.11.07 - 2026.11.08',
+    };
+    const yes24 = discoverySummaries([
+      {
+        candidate: {
+          ...base,
+          url: 'https://ticket.yes24.com/Perf/60590',
+          artists: [
+            { name: 'A', sourceUrl: 'https://tkfile.yes24.com/artists/a.jpg' },
+            {
+              name: 'B',
+              sourceUrl: 'https://ticketimage.interpark.com/artists/b.jpg',
+            },
+          ],
+        },
+      },
+    ])[0];
+    const nol = discoverySummaries([
+      {
+        candidate: {
+          ...base,
+          url: 'https://nol.yanolja.com/ticket/products/26013406',
+          artists: [
+            {
+              name: 'C',
+              sourceUrl: 'https://ticketimage.interpark.com/artists/c.jpg',
+            },
+            { name: 'D', sourceUrl: 'https://tkfile.yes24.com/artists/d.jpg' },
+          ],
+        },
+      },
+    ])[0];
+    expect(yes24.artists).toEqual([
+      { name: 'A', sourceUrl: 'https://tkfile.yes24.com/artists/a.jpg' },
+      { name: 'B' },
+    ]);
+    expect(nol.artists).toEqual([
+      {
+        name: 'C',
+        sourceUrl: 'https://ticketimage.interpark.com/artists/c.jpg',
+      },
+      { name: 'D' },
+    ]);
+  });
+
+  it('adds a paired image to an artist already named by another source for the same event', () => {
+    const base = {
+      name: 'FESTIVAL 2026',
+      venue: '킨텍스',
+      date: '2026.11.07 - 2026.11.08',
+    };
+    const entries = discoverySummaries([
+      {
+        candidate: {
+          ...base,
+          url: 'https://ticket.yes24.com/Perf/60590',
+          artists: [{ name: 'Band A' }],
+        },
+      },
+      {
+        candidate: {
+          ...base,
+          url: 'https://nol.yanolja.com/ticket/products/26013406',
+          artists: [
+            {
+              name: 'Band A',
+              sourceUrl: 'https://ticketimage.interpark.com/artists/a.jpg',
+            },
+          ],
+        },
+      },
+    ]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].artists).toEqual([
+      {
+        name: 'Band A',
+        sourceUrl: 'https://ticketimage.interpark.com/artists/a.jpg',
+      },
+    ]);
+  });
+
+  it('keeps the artist cap while enriching an existing artist after an extra name', () => {
+    const base = {
+      name: 'FESTIVAL 2026',
+      venue: '킨텍스',
+      date: '2026.11.07 - 2026.11.08',
+    };
+    const entries = discoverySummaries([
+      {
+        candidate: {
+          ...base,
+          url: 'https://ticket.yes24.com/Perf/60590',
+          artists: Array.from({ length: 80 }, (_, index) => ({
+            name: `Band ${index}`,
+          })),
+        },
+      },
+      {
+        candidate: {
+          ...base,
+          url: 'https://nol.yanolja.com/ticket/products/26013406',
+          artists: [
+            { name: 'Extra' },
+            {
+              name: 'Band 79',
+              sourceUrl: 'https://ticketimage.interpark.com/artists/79.jpg',
+            },
+          ],
+        },
+      },
+    ]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].artists).toHaveLength(80);
+    expect(entries[0].artists).not.toContainEqual({ name: 'Extra' });
+    expect(entries[0].artists).toContainEqual({
+      name: 'Band 79',
+      sourceUrl: 'https://ticketimage.interpark.com/artists/79.jpg',
+    });
+  });
+
   it('keeps a verified NOL product poster and rejects unrelated images', () => {
     const candidate = {
       name: 'NOL FESTIVAL 2026',
