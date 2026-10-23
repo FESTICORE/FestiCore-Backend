@@ -14,15 +14,15 @@ Google·Apple 계정 로그인, JWT 토큰 회전, 기기 토큰, 축제 팩 갱
 
 ## 기술 스택
 
-| 영역 | 사용 기술 |
-| --- | --- |
-| API | Node.js 22, NestJS 11, TypeScript 5 |
-| 데이터 | PostgreSQL, TypeORM 마이그레이션 |
-| 인증 | Google·Apple 로그인, JWT access/refresh, 관리자 역할 |
-| 실시간·캐시 | WebSocket(`ws`), 선택적 Redis 캐시 |
-| 이미지 | Railway 비공개 S3 호환 버킷, Sharp/WebP |
-| 문서·검증 | Swagger/OpenAPI, Jest, ESLint, Docker·Postgres CI |
-| 배포 | Railway `develop` / `production` 환경 |
+| 영역        | 사용 기술                                            |
+| ----------- | ---------------------------------------------------- |
+| API         | Node.js 22, NestJS 11, TypeScript 5                  |
+| 데이터      | PostgreSQL, TypeORM 마이그레이션                     |
+| 인증        | Google·Apple 로그인, JWT access/refresh, 관리자 역할 |
+| 실시간·캐시 | WebSocket(`ws`), 선택적 Redis 캐시                   |
+| 이미지      | Railway 비공개 S3 호환 버킷, Sharp/WebP              |
+| 문서·검증   | Swagger/OpenAPI, Jest, ESLint, Docker·Postgres CI    |
+| 배포        | Railway `develop` / `production` 환경                |
 
 ## 구조
 
@@ -38,6 +38,7 @@ src/
 └── modules/
     ├── admin/              # 축제 초안·발행, 크롤링, 감사·권한
     ├── auth/               # Google·Apple 로그인과 토큰
+    ├── legal/              # 공개 홈페이지·개인정보처리방침·이용약관
     ├── public/             # 공개 축제·오프라인 팩·WebSocket
     ├── device/             # 기기 등록·핀·Live Activity
     ├── notification/       # 리마인더·축제 시작 알림
@@ -79,11 +80,13 @@ npm run start:dev
 
 ## API 문서
 
-| 대상 | 로컬 주소 | 개발 환경 |
-| --- | --- | --- |
-| 공개 API | `http://localhost:3000/api-docs` | [공개 Swagger](https://festicore-dev.up.railway.app/api-docs) |
+| 대상       | 로컬 주소                              | 개발 환경                                                             |
+| ---------- | -------------------------------------- | --------------------------------------------------------------------- |
+| 공개 API   | `http://localhost:3000/api-docs`       | [공개 Swagger](https://festicore-dev.up.railway.app/api-docs)         |
 | 관리자 API | `http://localhost:3000/admin/api-docs` | [관리자 Swagger](https://festicore-dev.up.railway.app/admin/api-docs) |
-| 헬스체크 | `http://localhost:3000/api/v1/health` | [개발 헬스체크](https://festicore-dev.up.railway.app/api/v1/health) |
+| 헬스체크   | `http://localhost:3000/api/v1/health`  | [개발 헬스체크](https://festicore-dev.up.railway.app/api/v1/health)   |
+
+공개 법적 문서는 `/api/v1/legal/home`, `/api/v1/legal/privacy`, `/api/v1/legal/terms`에서 HTML로 제공한다. 환경별 전체 URL과 운영 확인 사항은 [Railway 배포 가이드](docs/deployment/RAILWAY.md), 응답 계약은 [.spec/legal.md](.spec/legal.md)를 참고한다.
 
 운영 문서는 `https://festicore.up.railway.app`에서 같은 경로를 사용합니다. Swagger UI의 정의 선택 메뉴에서 영역별 문서를 열 수 있습니다. 배포된 문서가 최신 코드인지 여부는 해당 Railway 배포 커밋으로 확인해야 합니다.
 
@@ -101,9 +104,9 @@ npm run test:e2e -- --runInBand         # HTTP E2E
 
 ## 배포
 
-| 환경 | Git 브랜치 | API 주소 | 태그 |
-| --- | --- | --- | --- |
-| 개발 | `develop` | `https://festicore-dev.up.railway.app` | `dev-v*` |
-| 운영 | `main` | `https://festicore.up.railway.app` | `v*` |
+| 환경 | Git 브랜치 | API 주소                               | 태그     |
+| ---- | ---------- | -------------------------------------- | -------- |
+| 개발 | `develop`  | `https://festicore-dev.up.railway.app` | `dev-v*` |
+| 운영 | `main`     | `https://festicore.up.railway.app`     | `v*`     |
 
 Railway의 GitHub 브랜치 연결이 Dockerfile로 빌드·배포합니다. 기능 PR은 `develop`에 스쿼시 머지하고 개발 배포를 확인한 뒤 `main`으로 승격합니다. 태그 워크플로는 릴리스 기록을 남기며 태그 자체가 재배포를 실행하지는 않습니다. 환경별 Postgres·Redis·이미지 버킷 및 마이그레이션 절차는 [Railway 배포 가이드](docs/deployment/RAILWAY.md)에 있습니다.

@@ -97,6 +97,15 @@ AWS_S3_URL_STYLE=virtual                    # 엔드포인트가 경로 방식�
 Google 웹은 Google Identity Services에서 받은 ID 토큰을 모바일 앱과 동일한
 `POST /api/v1/auth/login`에 `{ "provider": "google", "token": "<idToken>" }`으로 보낸다.
 웹 클라이언트의 승인된 JavaScript 원본에는 실제 웹사이트의 HTTPS origin을 등록한다.
+Google OAuth 브랜딩에 등록할 공개 페이지 URL은 환경별로 다음과 같다.
+
+| 환경       | 홈페이지                                                 | 개인정보처리방침                                            | 이용약관                                                  |
+| ---------- | -------------------------------------------------------- | ----------------------------------------------------------- | --------------------------------------------------------- |
+| develop    | `https://festicore-dev.up.railway.app/api/v1/legal/home` | `https://festicore-dev.up.railway.app/api/v1/legal/privacy` | `https://festicore-dev.up.railway.app/api/v1/legal/terms` |
+| production | `https://festicore.up.railway.app/api/v1/legal/home`     | `https://festicore.up.railway.app/api/v1/legal/privacy`     | `https://festicore.up.railway.app/api/v1/legal/terms`     |
+
+브랜딩 등록 전에 해당 환경에서 세 URL의 공개 HTTPS 응답과 페이지 간 링크를 확인한다.
+운영 주체·문의처·보유기간·위탁 현황·효력일은 실제 운영 사실과 대조해 확정한다.
 백엔드의 Google 리디렉션 URI는 사용하지 않는다. `GOOGLE_CLIENT_ID`는 웹 클라이언트 ID,
 `GOOGLE_MOBILE_CLIENT_IDS`는 iOS/Android 클라이언트 ID 목록이며,
 백엔드는 이 목록으로 ID 토큰의 audience를 검증한다.
