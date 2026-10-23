@@ -488,7 +488,7 @@ describe('CrewService authorization and invitations', () => {
     };
     Object.assign(crewRepository, {
       manager: {
-        transaction: (work: (manager: typeof manager) => Promise<unknown>) =>
+        transaction: (work: (transactionManager: typeof manager) => Promise<unknown>) =>
           work(manager),
       },
     });
