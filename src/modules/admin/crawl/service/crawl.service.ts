@@ -209,6 +209,14 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     actor: string | null,
   ) {
     const source = await this.getSource(id);
+    if (
+      source.kind === 'artist-image' &&
+      (dto.parserConfig !== undefined ||
+        (dto.url !== undefined && dto.url !== source.url))
+    )
+      throw new UnprocessableEntityException(
+        '아티스트 사진 소스의 원본 URL과 연결 정보는 변경할 수 없습니다. 새 소스를 등록하세요.',
+      );
     const parserConfig =
       dto.parserConfig && source.kind === 'artist-image'
         ? artistImageConfig(dto.parserConfig)
@@ -890,6 +898,11 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
           response.body,
           response.contentType,
         );
+        if (source.kind === 'artist-image')
+          run.contentHash = createHash('sha256')
+            .update(run.contentHash ?? '')
+            .update(prepared.hash)
+            .digest('hex');
         validated = true;
         const urlHash = createHash('sha256')
           .update(url.toString())

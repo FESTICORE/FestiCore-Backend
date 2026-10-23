@@ -9,6 +9,7 @@ import { DataSource, Repository } from 'typeorm';
 import { AdminFestival } from '../admin/festival/festival.entity';
 import { festivalSetId } from '../admin/festival/festival-set-id';
 import { PUBLIC_CRAWL_IMAGE_SQL } from './crawl-image-policy';
+import { officialWonderlivetArtistImage } from './wonderlivet-artist-images';
 import { Flag } from '../flags/flag.entity';
 import { CacheService } from '../redis/service/cache.service';
 import {
@@ -283,9 +284,16 @@ export class PublicFestivalService {
       ...new Set(
         entries.flatMap((entry) => [
           ...(entry.posterUrl ? [entry.posterUrl] : []),
-          ...(entry.artists?.flatMap((artist) =>
-            artist.sourceUrl ? [artist.sourceUrl] : [],
-          ) ?? []),
+          ...(entry.artists?.flatMap((artist) => {
+            const official = officialWonderlivetArtistImage(
+              entry.sourceUrl,
+              artist.name,
+            );
+            return [
+              ...(artist.sourceUrl ? [artist.sourceUrl] : []),
+              ...(official ? [official] : []),
+            ];
+          }) ?? []),
         ]),
       ),
     ];
@@ -381,6 +389,9 @@ export class PublicFestivalService {
       entry.artists = entry.artists?.map((artist) => {
         const imageId =
           profileImageByArtist.get(`${entry.sourceUrl}\u0000${artist.name}`) ??
+          imageByUrl.get(
+            officialWonderlivetArtistImage(entry.sourceUrl, artist.name) ?? '',
+          ) ??
           (artist.sourceUrl && imageByUrl.get(artist.sourceUrl));
         return {
           ...artist,
