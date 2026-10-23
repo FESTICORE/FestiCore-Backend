@@ -867,7 +867,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       await this.runsRepo.save(run);
       // 실행 중 관리자가 URL/설정을 바꿨더라도 오래된 source 객체로 덮지 않는다.
       const updated = await this.dataSource.query<
-        { consecutiveFailures: number }[]
+        [{ consecutiveFailures: number }[], number]
       >(
         `UPDATE crawl_sources SET
         "lastRunAt" = $1, "lastChangedAt" = COALESCE($2, "lastChangedAt"),
@@ -884,7 +884,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       );
       if (
         run.result === 'failed' &&
-        Number(updated[0]?.consecutiveFailures) === 3
+        Number(updated[0]?.[0]?.consecutiveFailures) === 3
       ) {
         await this.alerts.recordThresholdFailure(
           source.id,

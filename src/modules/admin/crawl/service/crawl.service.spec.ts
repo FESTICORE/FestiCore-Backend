@@ -893,7 +893,7 @@ describe('CrawlService manual runs and snapshots', () => {
         'checkRobots',
       )
       .mockRejectedValue(new Error('수집 실패: oauth-refresh-token-raw'));
-    dataSource.query.mockResolvedValueOnce([{ consecutiveFailures: 3 }]);
+    dataSource.query.mockResolvedValueOnce([[{ consecutiveFailures: 3 }], 1]);
 
     await service.execute(run, source);
 
