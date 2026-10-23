@@ -8,6 +8,7 @@ import { createHash } from 'crypto';
 import { DataSource, Repository } from 'typeorm';
 import { AdminFestival } from '../admin/festival/festival.entity';
 import { festivalSetId } from '../admin/festival/festival-set-id';
+import { CrawlTimetableSet } from '../admin/crawl/entity/crawl-timetable-revision.entity';
 import { PUBLIC_CRAWL_IMAGE_SQL } from './crawl-image-policy';
 import { Flag } from '../flags/flag.entity';
 import { CacheService } from '../redis/service/cache.service';
@@ -44,6 +45,13 @@ function publicImageUrl(value: unknown): string | null {
     (value.startsWith('https://') ||
       value.startsWith('/api/v1/flags/') ||
       value.startsWith('/api/v1/festivals/images/'))
+    ? value
+    : null;
+}
+
+function storedArtistImageUrl(value: unknown): string | null {
+  return typeof value === 'string' &&
+    /^\/api\/v1\/festivals\/images\/[0-9a-f-]{36}\.webp$/.test(value)
     ? value
     : null;
 }
@@ -100,7 +108,27 @@ function projectPack(pack: Document): Document {
     'startsAt',
     'endsAt',
     'note',
-  ]).map((set) => ({ ...set, id: festivalSetId(set) }));
+    'imageUrl',
+  ]).map((set) => ({
+    ...set,
+    id: festivalSetId(set),
+    imageUrl: storedArtistImageUrl(set.imageUrl),
+  }));
+  const stageNames = new Map(
+    requiredArray(result.stages)
+      .filter((stage) => typeof stage.id === 'string')
+      .map((stage) => [stage.id, stage.name]),
+  );
+  result.timetable = requiredArray(result.sets)
+    .sort((a, b) => String(a.startsAt).localeCompare(String(b.startsAt)))
+    .map((set) => ({
+      ...set,
+      date:
+        typeof set.startsAt === 'string'
+          ? dateInSeoul(new Date(set.startsAt))
+          : null,
+      stageName: stageNames.get(set.stageId) ?? null,
+    }));
   result.zones = projectedArray(pack.zones, [
     'id',
     'name',
@@ -276,6 +304,36 @@ export class PublicFestivalService {
     const imageByUrl = new Map(
       images.map((image) => [image.originUrl, image.id]),
     );
+    const festivalSourceUrls = [
+      ...new Set(
+        entries
+          .filter((entry) => entry.artists?.length)
+          .map((entry) => entry.sourceUrl),
+      ),
+    ];
+    const profileImages = festivalSourceUrls.length
+      ? await this.dataSource.query<
+          { festivalSourceUrl: string; artistName: string; id: string }[]
+        >(
+          `SELECT DISTINCT ON (source."parserConfig"->>'festivalSourceUrl', source."parserConfig"->>'artistName')
+             source."parserConfig"->>'festivalSourceUrl' AS "festivalSourceUrl",
+             source."parserConfig"->>'artistName' AS "artistName", image.id
+           FROM crawl_images image
+           JOIN crawl_sources source ON source.id = image."sourceId"
+           WHERE source.kind = 'artist-image'
+             AND source."parserConfig"->>'festivalSourceUrl' = ANY($1::text[])
+             AND ${PUBLIC_CRAWL_IMAGE_SQL}
+           ORDER BY source."parserConfig"->>'festivalSourceUrl',
+             source."parserConfig"->>'artistName', image."lastSeenAt" DESC`,
+          [festivalSourceUrls],
+        )
+      : [];
+    const profileImageByArtist = new Map(
+      profileImages.map((image) => [
+        `${image.festivalSourceUrl}\u0000${image.artistName}`,
+        image.id,
+      ]),
+    );
     const englishProductIds = [
       ...new Set(
         entries.flatMap((entry) => {
@@ -322,7 +380,9 @@ export class PublicFestivalService {
       if (posterId)
         entry.thumbUrl = `/api/v1/festivals/images/${posterId}.webp`;
       entry.artists = entry.artists?.map((artist) => {
-        const imageId = artist.sourceUrl && imageByUrl.get(artist.sourceUrl);
+        const imageId =
+          profileImageByArtist.get(`${entry.sourceUrl}\u0000${artist.name}`) ??
+          (artist.sourceUrl && imageByUrl.get(artist.sourceUrl));
         return {
           ...artist,
           imageUrl: imageId ? `/api/v1/festivals/images/${imageId}.webp` : null,
@@ -349,6 +409,54 @@ export class PublicFestivalService {
         message: '축제를 찾을 수 없습니다.',
       });
     await this.attachStoredImages([entry]);
+    const revisions = await this.dataSource.query<
+      {
+        id: string;
+        sourceUrl: string;
+        sourceImageId: string | null;
+        verifiedAt: Date;
+        sets: CrawlTimetableSet[];
+      }[]
+    >(
+      `SELECT DISTINCT ON (revision."sourceId")
+         revision.id, revision."sourceUrl", revision."verifiedAt", revision."sets",
+         CASE WHEN image.id IS NOT NULL AND ${PUBLIC_CRAWL_IMAGE_SQL}
+           THEN image.id ELSE NULL END AS "sourceImageId"
+       FROM crawl_timetable_revisions revision
+       LEFT JOIN crawl_images image ON image.id = revision."imageId"
+       LEFT JOIN crawl_sources source ON source.id = image."sourceId"
+       WHERE revision."festivalSourceUrl" = $1 AND revision.status = 'verified'
+       ORDER BY revision."sourceId", revision."verifiedAt" DESC,
+         revision."createdAt" DESC, revision.id DESC`,
+      [entry.sourceUrl],
+    );
+    const artistImages = new Map(
+      entry.artists?.map((artist) => [artist.name, artist.imageUrl ?? null]) ??
+        [],
+    );
+    const timetable = (revisions ?? []).flatMap((revision) =>
+      revision.sets.map((set, index) => ({
+        id: `${revision.id}-${index}`,
+        artist: set.artist,
+        date: set.date,
+        stageName: set.stageName,
+        startsAt: set.startsAt,
+        endsAt: set.endsAt,
+        imageUrl: artistImages.get(set.artist) ?? null,
+        sourceUrl: revision.sourceUrl,
+        sourceImageUrl: revision.sourceImageId
+          ? `/api/v1/festivals/images/${revision.sourceImageId}.webp`
+          : null,
+        verifiedAt: revision.verifiedAt,
+      })),
+    );
+    timetable.sort(
+      (a, b) =>
+        Date.parse(a.startsAt) - Date.parse(b.startsAt) ||
+        a.stageName.localeCompare(b.stageName) ||
+        a.artist.localeCompare(b.artist) ||
+        a.id.localeCompare(b.id),
+    );
     return {
       id: entry.id,
       name: entry.name,
@@ -367,7 +475,7 @@ export class PublicFestivalService {
           name: artist.name,
           imageUrl: artist.imageUrl ?? null,
         })) ?? [],
-      timetable: [],
+      timetable,
     };
   }
 

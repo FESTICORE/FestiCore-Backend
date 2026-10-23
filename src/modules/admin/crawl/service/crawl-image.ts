@@ -79,6 +79,33 @@ function melonDetailImages(html: string, pageUrl: string): URL[] | null {
   return urls;
 }
 
+export function artistProfileImageUrl(
+  html: string,
+  pageUrl: string,
+  imageHint: string,
+): URL | null {
+  const page = html.slice(0, 2_000_000);
+  const tags: string[] = page.match(/<(?:img|meta)\b[^>]*>/gi) ?? [];
+  const candidates = [
+    ...tags.map((tag) => /\b(?:src|content)=["']([^"']+)["']/i.exec(tag)?.[1]),
+    ...[...page.matchAll(/url\(\s*["']?([^)'"\s]+)["']?\s*\)/gi)].map(
+      (match) => match[1],
+    ),
+  ];
+  for (const raw of candidates) {
+    if (!raw) continue;
+    try {
+      const url = checkedUrl(
+        new URL(raw.replace(/&amp;/gi, '&'), pageUrl).toString(),
+      );
+      if (url.pathname.includes(imageHint)) return url;
+    } catch {
+      // Ignore unsafe or malformed image locations.
+    }
+  }
+  return null;
+}
+
 function melonSearchImages(html: string, pageUrl: string): URL[] | null {
   const candidates = melonSearchCandidates(html, pageUrl);
   if (candidates === null) return null;

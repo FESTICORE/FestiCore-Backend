@@ -1,5 +1,6 @@
 import sharp from 'sharp';
 import {
+  artistProfileImageUrl,
   discoverImageUrls,
   prepareCrawlImage,
   selectRunImages,
@@ -178,6 +179,29 @@ describe('crawl image safety', () => {
         '2026-10-21',
       ),
     ).toHaveLength(81);
+  });
+
+  it('finds a configured profile image on the current official page', () => {
+    const page = 'https://artist.example.com/profile';
+    const html = `<img src="https://artist.example.com/logo.png">
+      <img src="/photos/main-profile.jpg"><img src="http://unsafe.example/bad.jpg">`;
+    expect(artistProfileImageUrl(html, page, 'main-profile')?.toString()).toBe(
+      'https://artist.example.com/photos/main-profile.jpg',
+    );
+    expect(artistProfileImageUrl(html, page, 'missing')).toBeNull();
+    expect(artistProfileImageUrl(html, page, 'bad.jpg')).toBeNull();
+  });
+
+  it('finds an official profile image in a CSS background', () => {
+    const html = `<section style="background: url('/photos/group-profile.jpg')">
+      <div style="background: url('http://unsafe.example/group-profile.jpg')"></div>`;
+    expect(
+      artistProfileImageUrl(
+        html,
+        'https://artist.example.com/profile',
+        'group-profile.jpg',
+      )?.toString(),
+    ).toBe('https://artist.example.com/photos/group-profile.jpg');
   });
 
   it('normalizes a valid image to content-addressed WebP without trusting its extension', async () => {

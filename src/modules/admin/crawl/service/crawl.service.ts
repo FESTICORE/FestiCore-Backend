@@ -24,12 +24,16 @@ import { CrawlSource } from '../entity/crawl-source.entity';
 import { Proposal, ProposalItem } from '../entity/proposal.entity';
 import { checkedUrl, robotsAllows, safeGet, safeGetImage } from './crawl-fetch';
 import {
+  artistProfileImageUrl,
   discoverImageUrls,
   prepareCrawlImage,
   selectRunImages,
 } from './crawl-image';
 import { parseCrawl, plainText } from './crawl-parser';
 import { CrawlAlertService } from './crawl-alert.service';
+import { CrawlTimetableRevisionService } from './crawl-timetable-revision.service';
+import { extractTimetableImageCandidates } from './timetable-image-ocr';
+import { timetableSourceConfig } from './timetable-source-config';
 
 const kstDay = (date = new Date()) =>
   new Intl.DateTimeFormat('en-CA', {
@@ -40,6 +44,41 @@ const kstDay = (date = new Date()) =>
   }).format(date);
 
 const YES24_PAGE_LIMIT = 4;
+
+function artistImageConfig(config: Record<string, string>) {
+  const { artistName, festivalSourceUrl, imageHint } = config;
+  let festival: URL;
+  try {
+    festival = checkedUrl(festivalSourceUrl ?? '');
+  } catch {
+    throw new UnprocessableEntityException(
+      '유효한 festivalSourceUrl이 필요합니다.',
+    );
+  }
+  if (
+    ![
+      'ticket.melon.com',
+      'ticket.yes24.com',
+      'nol.yanolja.com',
+      'mintpaper.co.kr',
+    ].includes(festival.hostname) ||
+    !artistName?.trim() ||
+    artistName.length > 160 ||
+    !imageHint?.trim() ||
+    imageHint.length < 8 ||
+    imageHint.length > 120 ||
+    /[\s<>"']/.test(imageHint)
+  )
+    throw new UnprocessableEntityException(
+      'artistName, festivalSourceUrl, imageHint가 필요합니다.',
+    );
+  return {
+    ...config,
+    artistName: artistName.trim(),
+    festivalSourceUrl: festival.toString(),
+    imageHint,
+  };
+}
 
 function yes24PageCount(sourceUrl: string, body: string): number {
   const url = new URL(sourceUrl);
@@ -80,6 +119,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     private readonly imageStorage: ImageStorageService,
     private readonly alerts: CrawlAlertService,
     private readonly audit: AdminAuditService,
+    private readonly timetableRevisions: CrawlTimetableRevisionService,
   ) {}
 
   onModuleInit() {
@@ -112,23 +152,44 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
   async createSource(dto: CreateCrawlSourceDto, actor: string | null) {
     const parsers: Record<CrawlSource['kind'], CrawlSource['parser']> = {
       discovery: 'ticket-list',
+      'artist-image': 'html-text',
       timetable: 'html-table',
       notice: 'html-text',
       directions: 'html-text',
       days: 'regex-days',
     };
-    if (dto.parser !== parsers[dto.kind]) {
+    const imageTimetable =
+      dto.kind === 'timetable' && dto.parser === 'image-ocr';
+    if (!imageTimetable && dto.parser !== parsers[dto.kind]) {
       throw new UnprocessableEntityException(
         '소스 종류와 파서가 맞지 않습니다.',
       );
     }
-    if (dto.kind !== 'discovery' && !dto.festivalId) {
+    if (
+      !['discovery', 'artist-image'].includes(dto.kind) &&
+      !imageTimetable &&
+      !dto.festivalId
+    ) {
       throw new UnprocessableEntityException('festivalId가 필요합니다.');
     }
-    if (dto.kind === 'discovery' && dto.festivalId) {
+    if (
+      (['discovery', 'artist-image'].includes(dto.kind) || imageTimetable) &&
+      dto.festivalId
+    ) {
       throw new UnprocessableEntityException(
-        '발견 소스에는 festivalId를 지정할 수 없습니다.',
+        '발견·아티스트 사진·이미지 시간표 소스에는 festivalId를 지정할 수 없습니다.',
       );
+    }
+    const parserConfig =
+      dto.kind === 'artist-image'
+        ? artistImageConfig(dto.parserConfig)
+        : dto.parserConfig;
+    if (imageTimetable) {
+      try {
+        timetableSourceConfig(parserConfig);
+      } catch (error) {
+        throw new UnprocessableEntityException(String(error));
+      }
     }
     if (
       dto.festivalId &&
@@ -146,7 +207,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
           kind: dto.kind,
           url: dto.url,
           parser: dto.parser,
-          parserConfig: dto.parserConfig,
+          parserConfig,
           enabled: true,
           status: 'ok',
         }),
@@ -168,6 +229,18 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     actor: string | null,
   ) {
     const source = await this.getSource(id);
+    if (
+      (source.kind === 'artist-image' || source.parser === 'image-ocr') &&
+      (dto.parserConfig !== undefined ||
+        (dto.url !== undefined && dto.url !== source.url))
+    )
+      throw new UnprocessableEntityException(
+        '이미지 수집 소스의 원본 URL과 연결 정보는 변경할 수 없습니다. 새 소스를 등록하세요.',
+      );
+    const parserConfig =
+      dto.parserConfig && source.kind === 'artist-image'
+        ? artistImageConfig(dto.parserConfig)
+        : dto.parserConfig;
     if (dto.url && dto.url !== source.url) await this.checkRobots(dto.url);
     return this.dataSource.transaction(async (manager) => {
       const repo = manager.getRepository(CrawlSource);
@@ -178,6 +251,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       if (!locked) throw new NotFoundException('크롤 소스를 찾을 수 없습니다.');
       const before = this.sourceAuditSnapshot(locked);
       Object.assign(locked, dto);
+      if (parserConfig) locked.parserConfig = parserConfig;
       if (dto.enabled !== undefined)
         locked.status = dto.enabled ? 'ok' : 'disabled';
       const saved = await repo.save(locked);
@@ -244,6 +318,20 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
   async testSource(id: string) {
     const source = await this.getSource(id);
     await this.checkRobots(source.url);
+    if (source.parser === 'image-ocr') {
+      const config = timetableSourceConfig(source.parserConfig);
+      const response = await this.limitedGetImage(checkedUrl(source.url));
+      if (response.status !== 200)
+        throw new UnprocessableEntityException(`HTTP ${response.status}`);
+      const parsed = await extractTimetableImageCandidates(response.body, {
+        date: config.date,
+        columns: config.columns,
+      });
+      return {
+        parsed,
+        excerpt: `${config.date}: ${parsed.length}/${config.expectedRows}개 공연 후보`,
+      };
+    }
     const response = await this.getListing(source);
     if (response.status !== 200)
       throw new UnprocessableEntityException(`HTTP ${response.status}`);
@@ -405,10 +493,81 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       await this.checkRobots(source.url);
       phase = 'FETCH';
       if (source.parser === 'image-ocr') {
-        await this.captureImages(source, run, [checkedUrl(source.url)]);
-        throw new Error(
-          '이미지는 보관했지만 OCR 파서는 아직 연동되지 않았습니다.',
+        const config = timetableSourceConfig(source.parserConfig);
+        const imageUrl = checkedUrl(source.url);
+        const response = await this.limitedGetImage(imageUrl);
+        run.httpStatus = response.status;
+        if (response.status !== 200) throw new Error(`HTTP ${response.status}`);
+        const parserHash = createHash('sha256')
+          .update('timetable-image-ocr:v1')
+          .update(JSON.stringify(config))
+          .digest('hex');
+        const imageHash = createHash('sha256')
+          .update(response.body)
+          .digest('hex');
+        run.contentHash = createHash('sha256')
+          .update(imageHash)
+          .update(parserHash)
+          .digest('hex');
+        const previous = await this.runsRepo
+          .createQueryBuilder('run')
+          .where(
+            'run.sourceId = :sourceId AND run.id != :id AND run.result != :failed',
+            { sourceId: source.id, id: run.id, failed: 'failed' },
+          )
+          .orderBy('run.startedAt', 'DESC')
+          .getOne();
+        if (previous?.contentHash === run.contentHash) {
+          run.result = 'unchanged';
+          source.status = 'ok';
+          return;
+        }
+        phase = 'IMAGE';
+        const saved = await this.captureImages(
+          source,
+          run,
+          [imageUrl],
+          new Map([[imageUrl.toString(), response]]),
         );
+        const imageId = /\/images\/([0-9a-f-]+)$/.exec(saved[0] ?? '')?.[1];
+        if (!imageId)
+          throw new Error('시간표 원본 이미지를 저장하지 못했습니다.');
+        phase = 'OCR';
+        const candidates = await extractTimetableImageCandidates(
+          response.body,
+          {
+            date: config.date,
+            columns: config.columns,
+          },
+        );
+        if (candidates.length !== config.expectedRows)
+          throw new Error(
+            '공식 시간표의 예상 공연 수와 OCR 후보 수가 다릅니다.',
+          );
+        const stageNames = new Map(
+          config.columns.map((column) => [column.stageId, column.stageName]),
+        );
+        const sets = candidates.map((candidate) => ({
+          artist: candidate.artistText ?? '',
+          date: config.date,
+          stageName: stageNames.get(candidate.stageId) ?? '',
+          startsAt: candidate.startsAt,
+          endsAt: candidate.endsAt,
+        }));
+        const revision = await this.timetableRevisions.stageCandidate({
+          sourceId: source.id,
+          runId: run.id,
+          festivalSourceUrl: config.festivalSourceUrl,
+          sourceUrl: config.sourcePageUrl,
+          imageId,
+          contentHash: imageHash,
+          parserHash,
+          sets,
+        });
+        run.result = revision.runId === run.id ? 'proposed' : 'nochange-parsed';
+        source.lastChangedAt = new Date();
+        source.status = 'ok';
+        return;
       }
       const response = await this.getListing(source);
       run.httpStatus = response.status;
@@ -449,11 +608,25 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         }),
       );
       run.snapshotUrl = `/api/v1/admin/crawl/snapshots/${snapshot.id}`;
+      const profileImage =
+        source.kind === 'artist-image'
+          ? artistProfileImageUrl(
+              response.body,
+              source.url,
+              source.parserConfig.imageHint,
+            )
+          : null;
+      if (source.kind === 'artist-image' && !profileImage)
+        throw new Error('프로필 이미지가 공식 페이지에서 확인되지 않았습니다.');
       const imageUrls = await this.captureImages(
         source,
         run,
-        discoverImageUrls(response.body, source.url),
+        profileImage
+          ? [profileImage]
+          : discoverImageUrls(response.body, source.url),
       );
+      if (source.kind === 'artist-image' && !imageUrls.length)
+        throw new Error('프로필 이미지를 저장하지 못했습니다.');
       const previous = await this.runsRepo
         .createQueryBuilder('run')
         .where(
@@ -462,7 +635,13 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         )
         .orderBy('run.startedAt', 'DESC')
         .getOne();
-      if (previous?.contentHash === run.contentHash) {
+      if (source.kind === 'artist-image') {
+        run.result =
+          previous?.contentHash === run.contentHash
+            ? 'unchanged'
+            : 'nochange-parsed';
+        if (run.result !== 'unchanged') source.lastChangedAt = new Date();
+      } else if (previous?.contentHash === run.contentHash) {
         run.result = 'unchanged';
       } else {
         phase = 'PARSE';
@@ -807,6 +986,10 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     source: CrawlSource,
     run: CrawlRun,
     urls: URL[],
+    preloaded?: Map<
+      string,
+      { status: number; body: Buffer; contentType: string }
+    >,
   ): Promise<string[]> {
     const stored: string[] = [];
     for (const url of selectRunImages(
@@ -818,12 +1001,18 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       let validated = false;
       try {
         await this.checkRobots(url.toString());
-        const response = await this.limitedGetImage(url);
+        const response =
+          preloaded?.get(url.toString()) ?? (await this.limitedGetImage(url));
         if (response.status !== 200) throw new Error(`HTTP ${response.status}`);
         const prepared = await prepareCrawlImage(
           response.body,
           response.contentType,
         );
+        if (source.kind === 'artist-image')
+          run.contentHash = createHash('sha256')
+            .update(run.contentHash ?? '')
+            .update(prepared.hash)
+            .digest('hex');
         validated = true;
         const urlHash = createHash('sha256')
           .update(url.toString())
