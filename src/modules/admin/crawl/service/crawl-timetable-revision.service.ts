@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 import { AdminAuditService } from '../../audit/admin-audit.service';
 import {
   CrawlTimetableRevision,
@@ -163,69 +163,111 @@ export class CrawlTimetableRevisionService {
   ): Promise<CrawlTimetableRevision> {
     if (correctedSets !== undefined && !validSets(correctedSets))
       throw new BadRequestException('수정한 공연 시간표가 올바르지 않습니다.');
+    return this.dataSource.transaction((manager) =>
+      this.verifyInTransaction(manager, id, adminId, adminId, correctedSets),
+    );
+  }
+
+  async verifyReviewedBatch(
+    items: { id: string; sets: CrawlTimetableSet[] }[],
+    imageSha256: string,
+  ): Promise<CrawlTimetableRevision[]> {
+    if (
+      !Array.isArray(items) ||
+      !items.length ||
+      items.length > 3 ||
+      new Set(items.map((item) => item.id)).size !== items.length ||
+      items.some((item) => !validSets(item.sets)) ||
+      !/^[0-9a-f]{64}$/i.test(imageSha256)
+    )
+      throw new BadRequestException(
+        '검토 데이터나 원본 이미지 해시가 올바르지 않습니다.',
+      );
     return this.dataSource.transaction(async (manager) => {
-      const repository = manager.getRepository(CrawlTimetableRevision);
-      const revision = await repository.findOne({
-        where: { id },
-        lock: { mode: 'pessimistic_write' },
-      });
-      if (!revision)
-        throw new NotFoundException('시간표 검토본을 찾을 수 없습니다.');
-      if (revision.status !== 'pending')
-        throw new BadRequestException('대기 중인 시간표만 검증할 수 있습니다.');
-      const before = { status: revision.status, sets: revision.sets };
-      if (correctedSets !== undefined) revision.sets = correctedSets;
-      if (revision.sourceId) {
-        const sources = await manager.query<
-          { parser: string; parserConfig: Record<string, unknown> }[]
-        >(`SELECT parser, "parserConfig" FROM crawl_sources WHERE id = $1`, [
-          revision.sourceId,
-        ]);
-        const source = sources[0];
-        if (source?.parser === 'image-ocr') {
-          const expectedRows = Number(source.parserConfig.expectedRows);
-          if (
-            !Number.isInteger(expectedRows) ||
-            revision.sets.length !== expectedRows
-          )
-            throw new BadRequestException(
-              `공식 원본의 공연 ${expectedRows}개를 모두 확인한 뒤 승인해 주세요.`,
-            );
-          if (
-            revision.sets.some(
-              (set) => set.stageName.trim() === '무대 확인 필요',
-            )
-          )
-            throw new BadRequestException(
-              '각 공연의 무대를 공식 원본과 대조한 뒤 승인해 주세요.',
-            );
-          const allowedStageNames = source.parserConfig.allowedStageNames;
-          if (
-            allowedStageNames !== undefined &&
-            (!Array.isArray(allowedStageNames) ||
-              !allowedStageNames.length ||
-              !revision.sets.every((set) =>
-                allowedStageNames.includes(set.stageName),
-              ))
-          )
-            throw new BadRequestException(
-              '공식 원본에 표시된 무대 이름만 사용할 수 있습니다.',
-            );
-        }
+      const verified: CrawlTimetableRevision[] = [];
+      for (const item of items) {
+        verified.push(
+          await this.verifyInTransaction(
+            manager,
+            item.id,
+            null,
+            'system:reviewed-timetable-import',
+            item.sets,
+            imageSha256,
+          ),
+        );
       }
-      revision.status = 'verified';
-      revision.verifiedAt = new Date();
-      revision.verifiedBy = adminId;
-      const saved = await repository.save(revision);
-      await this.audit.record(manager, {
-        actor: adminId,
-        action: 'crawl.timetable.verified',
-        target: `crawl-timetable-revision:${id}`,
-        before,
-        after: { status: saved.status, sets: saved.sets },
-      });
-      return saved;
+      return verified;
     });
+  }
+
+  private async verifyInTransaction(
+    manager: EntityManager,
+    id: string,
+    verifiedBy: string | null,
+    auditActor: string,
+    correctedSets?: CrawlTimetableSet[],
+    imageSha256?: string,
+  ): Promise<CrawlTimetableRevision> {
+    const repository = manager.getRepository(CrawlTimetableRevision);
+    const revision = await repository.findOne({
+      where: { id },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!revision)
+      throw new NotFoundException('시간표 검토본을 찾을 수 없습니다.');
+    if (revision.status !== 'pending')
+      throw new BadRequestException('대기 중인 시간표만 검증할 수 있습니다.');
+    const before = { status: revision.status, sets: revision.sets };
+    if (correctedSets !== undefined) revision.sets = correctedSets;
+    if (revision.sourceId) {
+      const sources = await manager.query<
+        { parser: string; parserConfig: Record<string, unknown> }[]
+      >(`SELECT parser, "parserConfig" FROM crawl_sources WHERE id = $1`, [
+        revision.sourceId,
+      ]);
+      const source = sources[0];
+      if (source?.parser === 'image-ocr') {
+        const expectedRows = Number(source.parserConfig.expectedRows);
+        if (
+          !Number.isInteger(expectedRows) ||
+          revision.sets.length !== expectedRows
+        )
+          throw new BadRequestException(
+            `공식 원본의 공연 ${expectedRows}개를 모두 확인한 뒤 승인해 주세요.`,
+          );
+        if (
+          revision.sets.some((set) => set.stageName.trim() === '무대 확인 필요')
+        )
+          throw new BadRequestException(
+            '각 공연의 무대를 공식 원본과 대조한 뒤 승인해 주세요.',
+          );
+        const allowedStageNames = source.parserConfig.allowedStageNames;
+        if (
+          allowedStageNames !== undefined &&
+          (!Array.isArray(allowedStageNames) ||
+            !allowedStageNames.length ||
+            !revision.sets.every((set) =>
+              allowedStageNames.includes(set.stageName),
+            ))
+        )
+          throw new BadRequestException(
+            '공식 원본에 표시된 무대 이름만 사용할 수 있습니다.',
+          );
+      }
+    }
+    revision.status = 'verified';
+    revision.verifiedAt = new Date();
+    revision.verifiedBy = verifiedBy;
+    const saved = await repository.save(revision);
+    await this.audit.record(manager, {
+      actor: auditActor,
+      action: 'crawl.timetable.verified',
+      target: `crawl-timetable-revision:${id}`,
+      before,
+      after: { status: saved.status, sets: saved.sets, imageSha256 },
+    });
+    return saved;
   }
 
   async reject(id: string, adminId: string): Promise<CrawlTimetableRevision> {

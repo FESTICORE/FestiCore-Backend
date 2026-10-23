@@ -214,6 +214,46 @@ describe('CrawlTimetableRevisionService', () => {
     expect(save).not.toHaveBeenCalled();
   });
 
+  it('verifies a reviewed batch in one transaction with a system audit actor', async () => {
+    findOne.mockImplementation(({ where }: { where: { id: string } }) =>
+      Promise.resolve({
+        id: where.id,
+        sourceId: candidate.sourceId,
+        status: 'pending',
+        sets: candidate.sets,
+      }),
+    );
+    sourceQuery.mockResolvedValue([
+      { parser: 'image-ocr', parserConfig: { expectedRows: '1' } },
+    ]);
+    const items = [
+      { id: 'day-1', sets: candidate.sets },
+      { id: 'day-2', sets: candidate.sets },
+    ];
+    await expect(
+      service.verifyReviewedBatch(items, 'a'.repeat(64)),
+    ).resolves.toHaveLength(2);
+    expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+    expect(audit.record).toHaveBeenCalledTimes(2);
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        actor: 'system:reviewed-timetable-import',
+      }),
+    );
+    const recordedCalls = audit.record.mock.calls as unknown as [
+      unknown,
+      { after: { imageSha256: string } },
+    ][];
+    expect(recordedCalls[0][1].after.imageSha256).toBe('a'.repeat(64));
+    const savedRevisions = save.mock.calls as unknown as [
+      { verifiedBy: string | null },
+    ][];
+    expect(
+      savedRevisions.every(([revision]) => revision.verifiedBy === null),
+    ).toBe(true);
+  });
+
   it('includes the expected OCR row count in review items', async () => {
     const revision = { id: 'pending', sourceId: candidate.sourceId };
     const orderBy = jest.fn().mockReturnThis();
