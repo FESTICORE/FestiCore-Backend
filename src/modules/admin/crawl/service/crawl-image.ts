@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import sharp from 'sharp';
 import { checkedUrl } from './crawl-fetch';
 import {
+  eventPerformers,
   melonSearchCandidates,
   nolPosterUrl,
   ticketCandidates,
@@ -22,6 +23,15 @@ export function selectRunImages(
   if (
     page.hostname === 'ticket.melon.com' &&
     page.pathname === '/performance/index.htm'
+  )
+    return urls.slice(0, MAX_MELON_DETAIL_IMAGES);
+  if (
+    (page.hostname === 'ticket.yes24.com' &&
+      /^\/Perf\/\d+$/.test(page.pathname)) ||
+    (page.hostname === 'nol.yanolja.com' &&
+      /^\/ticket\/(?:products\/\d+|meta\/performance\/[\w%.-]+)$/.test(
+        page.pathname,
+      ))
   )
     return urls.slice(0, MAX_MELON_DETAIL_IMAGES);
   if (urls.length <= MAX_IMAGES_PER_RUN) return urls;
@@ -142,16 +152,42 @@ function yes24DetailImages(html: string, pageUrl: string): URL[] | null {
     return null;
   const event = yes24EventJson(html);
   if (!event) return [];
+  const urls = eventPerformers(event, pageUrl).flatMap((artist) =>
+    artist.sourceUrl ? [checkedUrl(artist.sourceUrl)] : [],
+  );
   try {
-    if (typeof event.image !== 'string') return [];
+    if (typeof event.image !== 'string') return urls;
     const image = checkedUrl(new URL(event.image, page).toString());
     return image.hostname === 'tkfile.yes24.com' &&
       image.pathname.startsWith('/upload2/PerfBlog/')
-      ? [image]
-      : [];
+      ? [image, ...urls]
+      : urls;
   } catch {
-    return [];
+    return urls;
   }
+}
+
+function nolDetailImages(html: string, pageUrl: string): URL[] | null {
+  const page = new URL(pageUrl);
+  if (
+    page.hostname !== 'nol.yanolja.com' ||
+    !/^\/ticket\/(?:products\/\d+|meta\/performance\/[\w%.-]+)$/.test(
+      page.pathname,
+    )
+  )
+    return null;
+  const event = yes24EventJson(html);
+  const poster = nolPosterUrl(html, page);
+  return [
+    ...new Map(
+      [
+        ...(poster ? [checkedUrl(poster)] : []),
+        ...eventPerformers(event, pageUrl).flatMap((artist) =>
+          artist.sourceUrl ? [checkedUrl(artist.sourceUrl)] : [],
+        ),
+      ].map((url) => [url.toString(), url]),
+    ).values(),
+  ];
 }
 
 function yes24EnglishFestivalImages(
@@ -261,6 +297,8 @@ export function discoverImageUrls(html: string, pageUrl: string): URL[] {
   if (yes24EnglishPosters) return yes24EnglishPosters;
   const yes24Images = yes24DetailImages(html, pageUrl);
   if (yes24Images) return yes24Images;
+  const nolImages = nolDetailImages(html, pageUrl);
+  if (nolImages) return nolImages;
   const page = new URL(pageUrl);
   if (page.hostname === 'nol.yanolja.com' && page.pathname === '/ticket') {
     return ticketCandidates(html, pageUrl).flatMap((candidate) =>

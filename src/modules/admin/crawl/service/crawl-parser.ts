@@ -744,12 +744,13 @@ export function yes24EventJson(body: string): Record<string, unknown> | null {
   return null;
 }
 
-function eventPerformers(
+export function eventPerformers(
   event: Record<string, unknown> | null,
-): { name: string }[] {
+  pageUrl: string,
+): { name: string; sourceUrl?: string }[] {
   const value = event?.performer;
   const entries = Array.isArray(value) ? value : value ? [value] : [];
-  const names = new Set<string>();
+  const artists = new Map<string, { name: string; sourceUrl?: string }>();
   for (const entry of entries.slice(0, 160)) {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
     const performer = entry as Record<string, unknown>;
@@ -771,9 +772,37 @@ function eventPerformers(
       })
     )
       continue;
-    names.add(name);
+    const artist: { name: string; sourceUrl?: string } = { name };
+    if (typeof performer.image === 'string') {
+      try {
+        const image = new URL(performer.image, pageUrl);
+        const page = new URL(pageUrl);
+        const trusted =
+          (page.hostname === 'ticket.yes24.com' &&
+            ['tkfile.yes24.com', 'stkfile.yes24.com'].includes(
+              image.hostname,
+            )) ||
+          (page.hostname === 'nol.yanolja.com' &&
+            image.hostname === 'ticketimage.interpark.com');
+        if (
+          image.protocol === 'https:' &&
+          !image.username &&
+          !image.password &&
+          !image.port &&
+          trusted
+        )
+          artist.sourceUrl = image.toString();
+      } catch {
+        /* Ignore malformed performer image URLs. */
+      }
+    }
+    if (
+      !artists.has(name) ||
+      (!artists.get(name)?.sourceUrl && artist.sourceUrl)
+    )
+      artists.set(name, artist);
   }
-  return [...names].map((name) => ({ name }));
+  return [...artists.values()];
 }
 
 function yes24DetailCandidates(
@@ -814,7 +843,7 @@ function yes24DetailCandidates(
     date: `${start} ~ ${end}`,
     venue: venue.trim(),
   };
-  const artists = eventPerformers(event);
+  const artists = eventPerformers(event, base);
   if (artists.length) candidate.artists = artists;
   if (typeof event.image === 'string') {
     try {
@@ -892,7 +921,7 @@ function nolDetailCandidates(
     date,
     venue,
   };
-  const artists = eventPerformers(event);
+  const artists = eventPerformers(event, base);
   if (artists.length) candidate.artists = artists;
   const poster = nolPosterUrl(body, source);
   if (poster) candidate.posterUrl = poster;

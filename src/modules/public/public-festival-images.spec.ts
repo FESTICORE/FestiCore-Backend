@@ -1,6 +1,51 @@
 import { discoverySummaries } from './crawl-catalog';
 import { PublicFestivalService } from './public-festival.service';
 describe('discovered festival artist profile images', () => {
+  it('serves a YES24 performer image only when its exact origin URL was stored', async () => {
+    const imageUrl = 'https://tkfile.yes24.com/artists/band-a.jpg';
+    const candidate = {
+      name: 'COUNTDOWN FANTASY 2026-2027',
+      venue: '킨텍스',
+      date: '2026.12.31 - 2026.12.31',
+      url: 'https://ticket.yes24.com/Perf/60590',
+      artists: [
+        { name: 'Band A', sourceUrl: imageUrl },
+        {
+          name: 'Band B',
+          sourceUrl: 'https://tkfile.yes24.com/artists/band-b.jpg',
+        },
+      ],
+    };
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([{ candidate }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ originUrl: imageUrl, id: 'image-a' }])
+      .mockResolvedValueOnce([]);
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    const id = discoverySummaries([{ candidate }])[0].id;
+    await expect(service.detail(id)).resolves.toMatchObject({
+      artists: [
+        { name: 'Band A', imageUrl: '/api/v1/festivals/images/image-a.webp' },
+        { name: 'Band B', imageUrl: null },
+      ],
+    });
+    const imageQuery = (
+      query.mock.calls as unknown as [string, [string[]]][]
+    )[2];
+    expect(imageQuery[0]).toContain(
+      'image."originUrl" LIKE \'https://tkfile.yes24.com/%\'',
+    );
+    expect(imageQuery[1]).toEqual([
+      [imageUrl, 'https://tkfile.yes24.com/artists/band-b.jpg'],
+    ]);
+  });
+
   it('does not infer a profile image without a stored source', async () => {
     const sourceUrl =
       'https://ticket.melon.com/performance/index.htm?prodId=213793';

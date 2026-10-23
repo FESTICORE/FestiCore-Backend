@@ -29,10 +29,13 @@ export const PUBLIC_CRAWL_IMAGE_SQL = `(
         AND revision.status = 'verified'
     ))
   OR (source.url ~ '^https://ticket[.]yes24[.]com/Perf/[0-9]+$'
-    AND image."originUrl" LIKE 'https://tkfile.yes24.com/upload2/PerfBlog/%')
+    AND (image."originUrl" LIKE 'https://tkfile.yes24.com/%'
+      OR image."originUrl" LIKE 'https://stkfile.yes24.com/%'))
   OR (source.url = 'https://ticket.yes24.com/English/Genre/Concert'
     AND image."originUrl" LIKE 'https://stkfile.yes24.com/upload2/PerfBlog/%')
   OR ((source.url = 'https://nol.yanolja.com/ticket'
       OR source.url ~ '^https://nol[.]yanolja[.]com/ticket/products/[0-9]+$')
     AND image."originUrl" ~* '^https://ticketimage[.]interpark[.]com/Play/image/large/[0-9]+/[0-9]+_p[.](gif|jpe?g|png|webp)$')
+  OR (source.url ~ '^https://nol[.]yanolja[.]com/ticket/(products/[0-9]+|meta/performance/[A-Za-z0-9_.%-]+)$'
+    AND image."originUrl" LIKE 'https://ticketimage.interpark.com/%')
 )`;

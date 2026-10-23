@@ -523,7 +523,11 @@ describe('crawl parsers', () => {
       location: { name: '킨텍스' },
       performer: [
         { '@type': 'MusicGroup', name: '밴드 A' },
-        { '@type': 'MusicGroup', name: '밴드 A' },
+        {
+          '@type': 'MusicGroup',
+          name: '밴드 A',
+          image: 'https://tkfile.yes24.com/artists/band-a.jpg',
+        },
         { '@type': 'Person', name: '가수 B' },
         { '@type': 'MusicGroup', name: '<img onerror=bad>' },
         { '@type': 'Organization', name: '예매처' },
@@ -531,6 +535,7 @@ describe('crawl parsers', () => {
           '@type': 'MusicGroup',
           name: '외부 링크가 있는 가수',
           url: 'https://evil.example',
+          image: 'https://evil.example/not-artist.jpg',
         },
       ],
     })}</script>`;
@@ -538,7 +543,10 @@ describe('crawl parsers', () => {
       artists?: { name: string }[];
     }[];
     expect(result[0].artists).toEqual([
-      { name: '밴드 A' },
+      {
+        name: '밴드 A',
+        sourceUrl: 'https://tkfile.yes24.com/artists/band-a.jpg',
+      },
       { name: '가수 B' },
       { name: '외부 링크가 있는 가수' },
     ]);
@@ -553,7 +561,11 @@ describe('crawl parsers', () => {
       startDate: '2026-12-31',
       endDate: '2026-12-31',
       location: { name: '킨텍스' },
-      performer: { '@type': 'Person', name: '가수 C' },
+      performer: {
+        '@type': 'Person',
+        name: '가수 C',
+        image: 'https://ticketimage.interpark.com/artist/c.jpg',
+      },
     })}</script>`;
     expect(await parseCrawl(nol, html)).toEqual([
       {
@@ -561,7 +573,12 @@ describe('crawl parsers', () => {
         url: nol.url,
         date: '2026.12.31 - 2026.12.31',
         venue: '킨텍스',
-        artists: [{ name: '가수 C' }],
+        artists: [
+          {
+            name: '가수 C',
+            sourceUrl: 'https://ticketimage.interpark.com/artist/c.jpg',
+          },
+        ],
       },
     ]);
   });
