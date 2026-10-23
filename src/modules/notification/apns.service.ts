@@ -114,6 +114,32 @@ export class ApnsService {
     );
   }
 
+  async sendLiveActivityUpdate(
+    token: string,
+    environment: 'sandbox' | 'production',
+    state: Record<string, unknown>,
+    priority: '5' | '10' = '5',
+  ): Promise<ApnsSendResult> {
+    const timestamp = Math.floor(Date.now() / 1000);
+    return this.send(
+      token,
+      environment,
+      {
+        aps: {
+          timestamp,
+          event: 'update',
+          'content-state': state,
+          'stale-date': timestamp + 60 * 60,
+        },
+      },
+      {
+        pushType: 'liveactivity',
+        priority,
+        expirationSeconds: 10 * 60,
+      },
+    );
+  }
+
   async sendSocialNotification(
     token: string,
     environment: 'sandbox' | 'production',
@@ -215,9 +241,9 @@ export class ApnsService {
     environment: 'sandbox' | 'production',
     body: object,
     options: {
-      pushType: 'alert' | 'background';
+      pushType: 'alert' | 'background' | 'liveactivity';
       priority: '5' | '10';
-      collapseKey: string;
+      collapseKey?: string;
       expirationSeconds?: number;
     },
   ): Promise<ApnsSendResult> {
@@ -254,10 +280,6 @@ export class ApnsService {
       environment === 'sandbox'
         ? 'https://api.sandbox.push.apple.com'
         : 'https://api.push.apple.com';
-    const collapseId = createHash('sha256')
-      .update(options.collapseKey)
-      .digest('hex');
-
     try {
       return await this.post(
         host,
@@ -265,10 +287,19 @@ export class ApnsService {
           ':method': 'POST',
           ':path': `/3/device/${token}`,
           authorization: `bearer ${authorization}`,
-          'apns-topic': bundleId,
+          'apns-topic':
+            options.pushType === 'liveactivity'
+              ? `${bundleId}.push-type.liveactivity`
+              : bundleId,
           'apns-push-type': options.pushType,
           'apns-priority': options.priority,
-          'apns-collapse-id': collapseId,
+          ...(options.collapseKey
+            ? {
+                'apns-collapse-id': createHash('sha256')
+                  .update(options.collapseKey)
+                  .digest('hex'),
+              }
+            : {}),
           ...(options.expirationSeconds
             ? {
                 'apns-expiration': String(
