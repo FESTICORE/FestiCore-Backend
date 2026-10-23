@@ -4,6 +4,11 @@ const SOURCES = [
   {
     url: 'https://www.mintpaper.co.kr/posts/4819',
     festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
+    festivalSourceUrls: [
+      'https://mintpaper.co.kr/festivals/178',
+      'https://ticket.yes24.com/Perf/60590',
+      'https://ticket.yes24.com/English/Perf/60590',
+    ],
   },
   {
     url: 'https://ticket.melon.com/csoon/detail.htm?csoonId=12728',
@@ -26,6 +31,9 @@ export class OfficialLineupSources1792500045000 implements MigrationInterface {
           JSON.stringify({
             seed: 'official-lineup',
             festivalSourceUrl: source.festivalSourceUrl,
+            ...('festivalSourceUrls' in source
+              ? { festivalSourceUrls: source.festivalSourceUrls }
+              : {}),
           }),
         ],
       );

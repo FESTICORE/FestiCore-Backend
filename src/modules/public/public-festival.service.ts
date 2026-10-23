@@ -231,8 +231,7 @@ export class PublicFestivalService {
       `WITH candidates AS (
          SELECT item->'after' AS candidate,
            item->'after'->>'url' AS url,
-           COALESCE(NULLIF(source."parserConfig"->>'festivalSourceUrl', ''),
-             item->'after'->>'url') AS "catalogUrl",
+           catalog.url AS "catalogUrl",
            item->>'decision' AS decision,
            p.status AS "proposalStatus",
            p."createdAt" AS created_at,
@@ -240,6 +239,13 @@ export class PublicFestivalService {
          FROM crawl_proposals p
          LEFT JOIN crawl_sources source ON source.id = p."sourceId"
          CROSS JOIN LATERAL jsonb_array_elements(p.items) item
+         CROSS JOIN LATERAL jsonb_array_elements_text(
+           CASE WHEN jsonb_typeof(source."parserConfig"->'festivalSourceUrls') = 'array'
+             THEN source."parserConfig"->'festivalSourceUrls'
+             ELSE jsonb_build_array(COALESCE(
+               NULLIF(source."parserConfig"->>'festivalSourceUrl', ''),
+               item->'after'->>'url')) END
+         ) catalog(url)
          WHERE p.kind = 'festival.new'
            AND item->'after'->>'url' IS NOT NULL
        ), latest AS (
