@@ -9,6 +9,7 @@ import { DataSource, Repository } from 'typeorm';
 import { AdminFestival } from '../admin/festival/festival.entity';
 import { festivalSetId } from '../admin/festival/festival-set-id';
 import { PUBLIC_CRAWL_IMAGE_SQL } from './crawl-image-policy';
+import { officialWonderlivetArtistImage } from './wonderlivet-artist-images';
 import { Flag } from '../flags/flag.entity';
 import { CacheService } from '../redis/service/cache.service';
 import {
@@ -283,9 +284,12 @@ export class PublicFestivalService {
       ...new Set(
         entries.flatMap((entry) => [
           ...(entry.posterUrl ? [entry.posterUrl] : []),
-          ...(entry.artists?.flatMap((artist) =>
-            artist.sourceUrl ? [artist.sourceUrl] : [],
-          ) ?? []),
+          ...(entry.artists?.flatMap((artist) => {
+            const sourceUrl =
+              officialWonderlivetArtistImage(entry.sourceUrl, artist.name) ??
+              artist.sourceUrl;
+            return sourceUrl ? [sourceUrl] : [];
+          }) ?? []),
         ]),
       ),
     ];
@@ -349,7 +353,10 @@ export class PublicFestivalService {
       if (posterId)
         entry.thumbUrl = `/api/v1/festivals/images/${posterId}.webp`;
       entry.artists = entry.artists?.map((artist) => {
-        const imageId = artist.sourceUrl && imageByUrl.get(artist.sourceUrl);
+        const sourceUrl =
+          officialWonderlivetArtistImage(entry.sourceUrl, artist.name) ??
+          artist.sourceUrl;
+        const imageId = sourceUrl && imageByUrl.get(sourceUrl);
         return {
           ...artist,
           imageUrl: imageId ? `/api/v1/festivals/images/${imageId}.webp` : null,

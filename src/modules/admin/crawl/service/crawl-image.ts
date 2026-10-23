@@ -1,5 +1,9 @@
 import { createHash } from 'node:crypto';
 import sharp from 'sharp';
+import {
+  WONDERLIVET_ARTIST_IMAGES,
+  WONDERLIVET_MELON_DETAIL_URL,
+} from '../../../public/wonderlivet-artist-images';
 import { checkedUrl } from './crawl-fetch';
 import {
   melonSearchCandidates,
@@ -75,6 +79,11 @@ function melonDetailImages(html: string, pageUrl: string): URL[] | null {
     const image = /\bsrc=["']([^"']+)["']/i.exec(tag)?.[1];
     if (image) add(image, 'cdnimg.melon.co.kr');
     if (urls.length >= 81) break;
+  }
+  if (pageUrl === WONDERLIVET_MELON_DETAIL_URL) {
+    for (const image of Object.values(WONDERLIVET_ARTIST_IMAGES)) {
+      add(image, new URL(image).hostname);
+    }
   }
   return urls;
 }
