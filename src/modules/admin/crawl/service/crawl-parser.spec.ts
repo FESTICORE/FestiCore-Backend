@@ -671,6 +671,20 @@ describe('crawl parsers', () => {
         ].map((name) => ({ name })),
       },
     ]);
+    city.url =
+      'https://festival.seoul.go.kr/festival/main/festivalView.do?festacode=848';
+    const funSeoul = (await parseCrawl(city, html)) as {
+      name: string;
+      url: string;
+      date: string;
+      artists: { name: string }[];
+    }[];
+    expect(funSeoul[0]).toMatchObject({
+      name: '2026 서울뮤직페스티벌',
+      url: city.url,
+      date: '2026.10.24',
+    });
+    expect(funSeoul[0].artists).toHaveLength(6);
     await expect(
       parseCrawl(city, html.replace('2026년', '2025년')),
     ).rejects.toThrow('공개 예매 링크');

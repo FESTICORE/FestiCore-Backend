@@ -421,12 +421,15 @@ function seoulCultureLineupCandidates(
   config: Record<string, string>,
 ): FestivalCandidate[] | null {
   const source = new URL(base);
-  if (
-    source.hostname !== 'culture.seoul.go.kr' ||
-    source.pathname !== '/culture/culture/cultureEvent/view.do' ||
-    source.searchParams.get('cultcode') !== '159493'
-  )
-    return null;
+  const isCulturePortal =
+    source.hostname === 'culture.seoul.go.kr' &&
+    source.pathname === '/culture/culture/cultureEvent/view.do' &&
+    source.searchParams.get('cultcode') === '159493';
+  const isFunSeoul =
+    source.hostname === 'festival.seoul.go.kr' &&
+    source.pathname === '/festival/main/festivalView.do' &&
+    source.searchParams.get('festacode') === '848';
+  if (!isCulturePortal && !isFunSeoul) return null;
   if (body.length > 2_000_000) return [];
 
   const text = plainText(body);

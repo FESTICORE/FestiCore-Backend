@@ -12,7 +12,7 @@
 | 공연 | 공식 자료 | 확인된 범위 |
 | --- | --- | --- |
 | Grand Mint Festival 2026 | https://www.mintpaper.co.kr/festivals/172/notice/4806 | 10/17·18 세 무대 48개 음악 공연의 개별 시간이 이미지에 있음. 6개 헤드라이너의 종료 시간은 원본에 없음. RADAR 프로그램은 음악 공연과 별개. |
-| 서울뮤직페스티벌 2026 | https://culture.seoul.go.kr/culture/culture/cultureEvent/view.do?cultcode=159493&menuNo=200011 | 서울시 문화포털의 공식 이미지 설명에서 메인 출연진 6팀을 매일 수집한다. https://seoulmusicfestival.co.kr/asset/img_2026/sub/about/schedule_2026.png 에 버스킹 쓰다(13:30–14:00)·올디 벗 구디(15:00–15:30)의 시간이 있으나 메인 출연진별 시각은 미확인. 버스킹 이미지 OCR·검토 소스는 아직 미등록. |
+| 서울뮤직페스티벌 2026 | https://festival.seoul.go.kr/festival/main/festivalView.do?festacode=848 | 서울시 펀서울의 공식 이미지 설명에서 메인 출연진 6팀을 매일 수집한다. 문화포털 원본은 개발 Railway에서 타임아웃이 발생해 동일한 서울시 공식 행사 페이지로 교체했다. https://seoulmusicfestival.co.kr/asset/img_2026/sub/about/schedule_2026.png 에 버스킹 쓰다(13:30–14:00)·올디 벗 구디(15:00–15:30)의 시간이 있으나 메인 출연진별 시각은 미확인. 버스킹 이미지 OCR·검토 소스는 아직 미등록. |
 | WONDERLIVET 2026 | https://www.wonderli.vet/home | 주최 측 공개 3일·2개 무대 시간표 이미지를 보도 출처에서 수집한다. 날짜별 14개 공연은 OCR 검토 대기로 보관하고, 모든 공연의 무대를 `WONDER STAGE` 또는 `LIVET STAGE`로 확인하기 전에는 공개하지 않는다. |
 | XMF 2026 | https://xmfestival.com/notice | 공식 최종 라인업에서 양일 22팀과 오프닝 DJ 2팀 확인. Day 1·2 공식 시간표 이미지를 확보해 OCR 소스를 등록한다. 이미지에 적히지 않은 종료 시각은 추정하지 않는다. OCR 결과는 관리자 승인 전 공개하지 않는다. |
 | COUNTDOWN FANTASY 2026-2027 | https://www.mintpaper.co.kr/posts/4819 | 공식 1차 라인업 12팀 확인. 개별 공연 시각은 아직 미공개. |
