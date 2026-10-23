@@ -24,6 +24,7 @@ import { CrawlSource } from '../entity/crawl-source.entity';
 import { Proposal, ProposalItem } from '../entity/proposal.entity';
 import { checkedUrl, robotsAllows, safeGet, safeGetImage } from './crawl-fetch';
 import {
+  artistProfileImageUrl,
   discoverImageUrls,
   prepareCrawlImage,
   selectRunImages,
@@ -40,6 +41,41 @@ const kstDay = (date = new Date()) =>
   }).format(date);
 
 const YES24_PAGE_LIMIT = 4;
+
+function artistImageConfig(config: Record<string, string>) {
+  const { artistName, festivalSourceUrl, imageHint } = config;
+  let festival: URL;
+  try {
+    festival = checkedUrl(festivalSourceUrl ?? '');
+  } catch {
+    throw new UnprocessableEntityException(
+      '유효한 festivalSourceUrl이 필요합니다.',
+    );
+  }
+  if (
+    ![
+      'ticket.melon.com',
+      'ticket.yes24.com',
+      'nol.yanolja.com',
+      'mintpaper.co.kr',
+    ].includes(festival.hostname) ||
+    !artistName?.trim() ||
+    artistName.length > 160 ||
+    !imageHint?.trim() ||
+    imageHint.length < 8 ||
+    imageHint.length > 120 ||
+    /[\s<>"']/.test(imageHint)
+  )
+    throw new UnprocessableEntityException(
+      'artistName, festivalSourceUrl, imageHint가 필요합니다.',
+    );
+  return {
+    ...config,
+    artistName: artistName.trim(),
+    festivalSourceUrl: festival.toString(),
+    imageHint,
+  };
+}
 
 function yes24PageCount(sourceUrl: string, body: string): number {
   const url = new URL(sourceUrl);
@@ -112,6 +148,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
   async createSource(dto: CreateCrawlSourceDto, actor: string | null) {
     const parsers: Record<CrawlSource['kind'], CrawlSource['parser']> = {
       discovery: 'ticket-list',
+      'artist-image': 'html-text',
       timetable: 'html-table',
       notice: 'html-text',
       directions: 'html-text',
@@ -122,14 +159,18 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         '소스 종류와 파서가 맞지 않습니다.',
       );
     }
-    if (dto.kind !== 'discovery' && !dto.festivalId) {
+    if (!['discovery', 'artist-image'].includes(dto.kind) && !dto.festivalId) {
       throw new UnprocessableEntityException('festivalId가 필요합니다.');
     }
-    if (dto.kind === 'discovery' && dto.festivalId) {
+    if (['discovery', 'artist-image'].includes(dto.kind) && dto.festivalId) {
       throw new UnprocessableEntityException(
-        '발견 소스에는 festivalId를 지정할 수 없습니다.',
+        '발견 및 아티스트 사진 소스에는 festivalId를 지정할 수 없습니다.',
       );
     }
+    const parserConfig =
+      dto.kind === 'artist-image'
+        ? artistImageConfig(dto.parserConfig)
+        : dto.parserConfig;
     if (
       dto.festivalId &&
       !(await this.dataSource
@@ -146,7 +187,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
           kind: dto.kind,
           url: dto.url,
           parser: dto.parser,
-          parserConfig: dto.parserConfig,
+          parserConfig,
           enabled: true,
           status: 'ok',
         }),
@@ -168,6 +209,18 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     actor: string | null,
   ) {
     const source = await this.getSource(id);
+    if (
+      source.kind === 'artist-image' &&
+      (dto.parserConfig !== undefined ||
+        (dto.url !== undefined && dto.url !== source.url))
+    )
+      throw new UnprocessableEntityException(
+        '아티스트 사진 소스의 원본 URL과 연결 정보는 변경할 수 없습니다. 새 소스를 등록하세요.',
+      );
+    const parserConfig =
+      dto.parserConfig && source.kind === 'artist-image'
+        ? artistImageConfig(dto.parserConfig)
+        : dto.parserConfig;
     if (dto.url && dto.url !== source.url) await this.checkRobots(dto.url);
     return this.dataSource.transaction(async (manager) => {
       const repo = manager.getRepository(CrawlSource);
@@ -178,6 +231,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       if (!locked) throw new NotFoundException('크롤 소스를 찾을 수 없습니다.');
       const before = this.sourceAuditSnapshot(locked);
       Object.assign(locked, dto);
+      if (parserConfig) locked.parserConfig = parserConfig;
       if (dto.enabled !== undefined)
         locked.status = dto.enabled ? 'ok' : 'disabled';
       const saved = await repo.save(locked);
@@ -449,11 +503,25 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         }),
       );
       run.snapshotUrl = `/api/v1/admin/crawl/snapshots/${snapshot.id}`;
+      const profileImage =
+        source.kind === 'artist-image'
+          ? artistProfileImageUrl(
+              response.body,
+              source.url,
+              source.parserConfig.imageHint,
+            )
+          : null;
+      if (source.kind === 'artist-image' && !profileImage)
+        throw new Error('프로필 이미지가 공식 페이지에서 확인되지 않았습니다.');
       const imageUrls = await this.captureImages(
         source,
         run,
-        discoverImageUrls(response.body, source.url),
+        profileImage
+          ? [profileImage]
+          : discoverImageUrls(response.body, source.url),
       );
+      if (source.kind === 'artist-image' && !imageUrls.length)
+        throw new Error('프로필 이미지를 저장하지 못했습니다.');
       const previous = await this.runsRepo
         .createQueryBuilder('run')
         .where(
@@ -462,7 +530,13 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         )
         .orderBy('run.startedAt', 'DESC')
         .getOne();
-      if (previous?.contentHash === run.contentHash) {
+      if (source.kind === 'artist-image') {
+        run.result =
+          previous?.contentHash === run.contentHash
+            ? 'unchanged'
+            : 'nochange-parsed';
+        if (run.result !== 'unchanged') source.lastChangedAt = new Date();
+      } else if (previous?.contentHash === run.contentHash) {
         run.result = 'unchanged';
       } else {
         phase = 'PARSE';
@@ -824,6 +898,11 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
           response.body,
           response.contentType,
         );
+        if (source.kind === 'artist-image')
+          run.contentHash = createHash('sha256')
+            .update(run.contentHash ?? '')
+            .update(prepared.hash)
+            .digest('hex');
         validated = true;
         const urlHash = createHash('sha256')
           .update(url.toString())

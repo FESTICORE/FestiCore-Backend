@@ -285,10 +285,14 @@ export class PublicFestivalService {
         entries.flatMap((entry) => [
           ...(entry.posterUrl ? [entry.posterUrl] : []),
           ...(entry.artists?.flatMap((artist) => {
-            const sourceUrl =
-              officialWonderlivetArtistImage(entry.sourceUrl, artist.name) ??
-              artist.sourceUrl;
-            return sourceUrl ? [sourceUrl] : [];
+            const official = officialWonderlivetArtistImage(
+              entry.sourceUrl,
+              artist.name,
+            );
+            return [
+              ...(artist.sourceUrl ? [artist.sourceUrl] : []),
+              ...(official ? [official] : []),
+            ];
           }) ?? []),
         ]),
       ),
@@ -306,6 +310,36 @@ export class PublicFestivalService {
       : [];
     const imageByUrl = new Map(
       images.map((image) => [image.originUrl, image.id]),
+    );
+    const festivalSourceUrls = [
+      ...new Set(
+        entries
+          .filter((entry) => entry.artists?.length)
+          .map((entry) => entry.sourceUrl),
+      ),
+    ];
+    const profileImages = festivalSourceUrls.length
+      ? await this.dataSource.query<
+          { festivalSourceUrl: string; artistName: string; id: string }[]
+        >(
+          `SELECT DISTINCT ON (source."parserConfig"->>'festivalSourceUrl', source."parserConfig"->>'artistName')
+             source."parserConfig"->>'festivalSourceUrl' AS "festivalSourceUrl",
+             source."parserConfig"->>'artistName' AS "artistName", image.id
+           FROM crawl_images image
+           JOIN crawl_sources source ON source.id = image."sourceId"
+           WHERE source.kind = 'artist-image'
+             AND source."parserConfig"->>'festivalSourceUrl' = ANY($1::text[])
+             AND ${PUBLIC_CRAWL_IMAGE_SQL}
+           ORDER BY source."parserConfig"->>'festivalSourceUrl',
+             source."parserConfig"->>'artistName', image."lastSeenAt" DESC`,
+          [festivalSourceUrls],
+        )
+      : [];
+    const profileImageByArtist = new Map(
+      profileImages.map((image) => [
+        `${image.festivalSourceUrl}\u0000${image.artistName}`,
+        image.id,
+      ]),
     );
     const englishProductIds = [
       ...new Set(
@@ -353,10 +387,12 @@ export class PublicFestivalService {
       if (posterId)
         entry.thumbUrl = `/api/v1/festivals/images/${posterId}.webp`;
       entry.artists = entry.artists?.map((artist) => {
-        const sourceUrl =
-          officialWonderlivetArtistImage(entry.sourceUrl, artist.name) ??
-          artist.sourceUrl;
-        const imageId = sourceUrl && imageByUrl.get(sourceUrl);
+        const imageId =
+          profileImageByArtist.get(`${entry.sourceUrl}\u0000${artist.name}`) ??
+          imageByUrl.get(
+            officialWonderlivetArtistImage(entry.sourceUrl, artist.name) ?? '',
+          ) ??
+          (artist.sourceUrl && imageByUrl.get(artist.sourceUrl));
         return {
           ...artist,
           imageUrl: imageId ? `/api/v1/festivals/images/${imageId}.webp` : null,
