@@ -689,6 +689,9 @@ describe('CrawlService manual runs and snapshots', () => {
       unknown[],
     ][];
     const insert = calls.find(([sql]) => sql.includes("SELECT 'artist-image'"));
+    expect(insert?.[0]).toContain("SELECT 'artist-image', $1::text");
+    expect(insert?.[0]).toContain("'festivalSourceUrl', $2::text");
+    expect(insert?.[0]).toContain("'artistName', $3::text");
     expect(insert?.[1]).toEqual([
       'https://xmfestival.com/lineup',
       source.parserConfig.festivalSourceUrl,
@@ -700,7 +703,7 @@ describe('CrawlService manual runs and snapshots', () => {
   });
 
   it('reparses an unchanged English YES24 listing after the parser update', async () => {
-    const { service, source, run, runsRepo, execute } = harness();
+    const { service, source, run, runsRepo, dataSource, execute } = harness();
     execute.mockRestore();
     source.url = 'https://ticket.yes24.com/English/Genre/Concert';
     const body = `<ul class="list_wrap">
@@ -743,6 +746,11 @@ describe('CrawlService manual runs and snapshots', () => {
     expect(proposalItems).toHaveBeenCalledTimes(1);
     expect(run.result).toBe('nochange-parsed');
     expect(run.contentHash).not.toBe(oldHash);
+    expect(
+      dataSource.query.mock.calls
+        .filter(([sql]: [string]) => sql.includes('INSERT INTO crawl_sources'))
+        .map(([, parameters]: [string, string[]]) => parameters[0]),
+    ).toContain('https://ticket.yes24.com/English/Perf/60590');
   });
 
   it('registers only NOL product pages discovered from a festival listing', async () => {

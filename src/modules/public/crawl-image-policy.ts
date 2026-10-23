@@ -28,7 +28,7 @@ export const PUBLIC_CRAWL_IMAGE_SQL = `(
         AND revision."imageId" = image.id
         AND revision.status = 'verified'
     ))
-  OR (source.url ~ '^https://ticket[.]yes24[.]com/Perf/[0-9]+$'
+  OR (source.url ~ '^https://ticket[.]yes24[.]com/(English/)?Perf/[0-9]+$'
     AND (image."originUrl" LIKE 'https://tkfile.yes24.com/%'
       OR image."originUrl" LIKE 'https://stkfile.yes24.com/%'))
   OR (source.url = 'https://ticket.yes24.com/English/Genre/Concert'

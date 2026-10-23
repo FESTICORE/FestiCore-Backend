@@ -142,6 +142,37 @@ describe('crawl image safety', () => {
     ]);
   });
 
+  it('collects paired performer images from an English YES24 detail', () => {
+    const html = `<script type="application/ld+json">${JSON.stringify({
+      '@type': 'Event',
+      performer: {
+        '@type': 'Person',
+        name: 'Singer',
+        image: 'https://stkfile.yes24.com/artists/singer.jpg',
+      },
+    })}</script>`;
+    expect(
+      discoverImageUrls(
+        html,
+        'https://ticket.yes24.com/English/Perf/60590',
+      ).map(String),
+    ).toEqual(['https://stkfile.yes24.com/artists/singer.jpg']);
+  });
+
+  it('keeps all verified English YES24 detail images within the detail limit', () => {
+    const urls = Array.from(
+      { length: 13 },
+      (_, index) => new URL(`https://tkfile.yes24.com/artists/${index}.jpg`),
+    );
+    expect(
+      selectRunImages(
+        urls,
+        'https://ticket.yes24.com/English/Perf/60590',
+        '2026-10-24',
+      ),
+    ).toHaveLength(13);
+  });
+
   it('collects NOL performer images only from the structured performer entry', () => {
     const html = `<script type="application/ld+json">${JSON.stringify({
       '@type': 'Event',

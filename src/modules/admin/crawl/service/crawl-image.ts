@@ -27,7 +27,7 @@ export function selectRunImages(
     return urls.slice(0, MAX_MELON_DETAIL_IMAGES);
   if (
     (page.hostname === 'ticket.yes24.com' &&
-      /^\/Perf\/\d+$/.test(page.pathname)) ||
+      /^\/(?:English\/)?Perf\/\d+$/.test(page.pathname)) ||
     (page.hostname === 'nol.yanolja.com' &&
       /^\/ticket\/(?:products\/\d+|meta\/performance\/[\w%.-]+)$/.test(
         page.pathname,
@@ -147,7 +147,7 @@ function yes24DetailImages(html: string, pageUrl: string): URL[] | null {
   const page = new URL(pageUrl);
   if (
     page.hostname !== 'ticket.yes24.com' ||
-    !/^\/Perf\/\d+$/.test(page.pathname)
+    !/^\/(?:English\/)?Perf\/\d+$/.test(page.pathname)
   )
     return null;
   const event = yes24EventJson(html);
