@@ -288,7 +288,9 @@ export class PublicFestivalService {
     return discoverySummaries(discoveryRows, publishedRows);
   }
 
-  private async attachStoredImages(entries: DiscoverySummary[]): Promise<void> {
+  private async attachStoredImages(
+    entries: DiscoverySummary[],
+  ): Promise<Map<string, string>> {
     const imageUrls = [
       ...new Set(
         entries.flatMap((entry) => [
@@ -322,11 +324,17 @@ export class PublicFestivalService {
     ];
     const profileImages = festivalSourceUrls.length
       ? await this.dataSource.query<
-          { festivalSourceUrl: string; artistName: string; id: string }[]
+          {
+            festivalSourceUrl: string;
+            artistName: string;
+            artistAlias: string | null;
+            id: string;
+          }[]
         >(
           `SELECT DISTINCT ON (source."parserConfig"->>'festivalSourceUrl', source."parserConfig"->>'artistName')
              source."parserConfig"->>'festivalSourceUrl' AS "festivalSourceUrl",
-             source."parserConfig"->>'artistName' AS "artistName", image.id
+             source."parserConfig"->>'artistName' AS "artistName",
+             source."parserConfig"->>'artistAlias' AS "artistAlias", image.id
            FROM crawl_images image
            JOIN crawl_sources source ON source.id = image."sourceId"
            WHERE source.kind = 'artist-image'
@@ -343,6 +351,12 @@ export class PublicFestivalService {
         image.id,
       ]),
     );
+    for (const image of profileImages) {
+      if (!image.artistAlias) continue;
+      const key = `${image.festivalSourceUrl}\u0000${image.artistAlias}`;
+      if (!profileImageByArtist.has(key))
+        profileImageByArtist.set(key, image.id);
+    }
     const englishProductIds = [
       ...new Set(
         entries.flatMap((entry) => {
@@ -398,6 +412,7 @@ export class PublicFestivalService {
         };
       });
     }
+    return profileImageByArtist;
   }
 
   async detail(id: string) {
@@ -417,7 +432,7 @@ export class PublicFestivalService {
         code: 'FESTIVAL_NOT_FOUND',
         message: '축제를 찾을 수 없습니다.',
       });
-    await this.attachStoredImages([entry]);
+    const profileImageByArtist = await this.attachStoredImages([entry]);
     const revisions = await this.dataSource.query<
       {
         id: string;
@@ -444,20 +459,27 @@ export class PublicFestivalService {
         [],
     );
     const timetable = (revisions ?? []).flatMap((revision) =>
-      revision.sets.map((set, index) => ({
-        id: `${revision.id}-${index}`,
-        artist: set.artist,
-        date: set.date,
-        stageName: set.stageName,
-        startsAt: set.startsAt,
-        endsAt: set.endsAt,
-        imageUrl: artistImages.get(set.artist) ?? null,
-        sourceUrl: revision.sourceUrl,
-        sourceImageUrl: revision.sourceImageId
-          ? `/api/v1/festivals/images/${revision.sourceImageId}.webp`
-          : null,
-        verifiedAt: revision.verifiedAt,
-      })),
+      revision.sets.map((set, index) => {
+        const profileId = profileImageByArtist.get(
+          `${entry.sourceUrl}\u0000${set.artist}`,
+        );
+        return {
+          id: `${revision.id}-${index}`,
+          artist: set.artist,
+          date: set.date,
+          stageName: set.stageName,
+          startsAt: set.startsAt,
+          endsAt: set.endsAt,
+          imageUrl:
+            artistImages.get(set.artist) ??
+            (profileId ? `/api/v1/festivals/images/${profileId}.webp` : null),
+          sourceUrl: revision.sourceUrl,
+          sourceImageUrl: revision.sourceImageId
+            ? `/api/v1/festivals/images/${revision.sourceImageId}.webp`
+            : null,
+          verifiedAt: revision.verifiedAt,
+        };
+      }),
     );
     timetable.sort(
       (a, b) =>

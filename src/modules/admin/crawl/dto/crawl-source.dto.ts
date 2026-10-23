@@ -16,6 +16,7 @@ const KINDS: CrawlKind[] = [
   'directions',
   'days',
   'discovery',
+  'artist-gallery',
   'artist-image',
 ];
 const PARSERS: CrawlParser[] = [
@@ -29,7 +30,7 @@ const PARSERS: CrawlParser[] = [
 export class CreateCrawlSourceDto {
   @ApiPropertyOptional({
     description:
-      '관리자 초안 축제 ID. discovery·artist-image·이미지 시간표 소스는 생략합니다.',
+      '관리자 초안 축제 ID. discovery·artist-gallery·artist-image·이미지 시간표 소스는 생략합니다.',
     example: 'fst_demo2026',
   })
   @IsOptional()
@@ -58,10 +59,11 @@ export class CreateCrawlSourceDto {
       festivalSourceUrl:
         'https://ticket.melon.com/performance/index.htm?prodId=213793',
       artistName: '아티스트 이름',
+      artistAlias: '공식 시간표와 다른 표기의 아티스트 이름(선택)',
       imageHint: 'profile-photo',
     },
     description:
-      '파서별 설정. artist-image는 festivalSourceUrl·artistName·imageHint를 지정합니다. timetable/image-ocr은 festivalSourceUrl·sourcePageUrl·date·expectedRows 및 무대 영역(columns)을 JSON 문자열로 지정합니다.',
+      '파서별 설정. artist-image는 festivalSourceUrl·artistName·imageHint와 선택적 artistAlias를 지정합니다. timetable/image-ocr은 festivalSourceUrl·sourcePageUrl·date·expectedRows 및 무대 영역(columns)을 JSON 문자열로 지정합니다.',
   })
   @IsObject()
   parserConfig!: Record<string, string>;

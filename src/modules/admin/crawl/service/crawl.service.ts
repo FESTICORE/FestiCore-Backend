@@ -33,6 +33,7 @@ import { parseCrawl, plainText } from './crawl-parser';
 import { CrawlAlertService } from './crawl-alert.service';
 import { CrawlTimetableRevisionService } from './crawl-timetable-revision.service';
 import { extractTimetableImageCandidates } from './timetable-image-ocr';
+import { crawlArtistGallery } from './artist-gallery';
 import { timetableSourceConfig } from './timetable-source-config';
 
 const kstDay = (date = new Date()) =>
@@ -46,7 +47,7 @@ const kstDay = (date = new Date()) =>
 const YES24_PAGE_LIMIT = 4;
 
 function artistImageConfig(config: Record<string, string>) {
-  const { artistName, festivalSourceUrl, imageHint } = config;
+  const { artistName, artistAlias, festivalSourceUrl, imageHint } = config;
   let festival: URL;
   try {
     festival = checkedUrl(festivalSourceUrl ?? '');
@@ -67,7 +68,11 @@ function artistImageConfig(config: Record<string, string>) {
     !imageHint?.trim() ||
     imageHint.length < 8 ||
     imageHint.length > 120 ||
-    /[\s<>"']/.test(imageHint)
+    /[\s<>"']/.test(imageHint) ||
+    (artistAlias !== undefined &&
+      (typeof artistAlias !== 'string' ||
+        !artistAlias.trim() ||
+        artistAlias.length > 160))
   )
     throw new UnprocessableEntityException(
       'artistName, festivalSourceUrl, imageHint가 필요합니다.',
@@ -75,9 +80,33 @@ function artistImageConfig(config: Record<string, string>) {
   return {
     ...config,
     artistName: artistName.trim(),
+    ...(artistAlias === undefined ? {} : { artistAlias: artistAlias.trim() }),
     festivalSourceUrl: festival.toString(),
     imageHint,
   };
+}
+
+function artistGalleryConfig(url: string, config: Record<string, string>) {
+  let source: URL;
+  let festival: URL;
+  try {
+    source = checkedUrl(url);
+    festival = checkedUrl(config.festivalSourceUrl ?? '');
+  } catch {
+    throw new UnprocessableEntityException(
+      '유효한 공식 갤러리 URL과 festivalSourceUrl이 필요합니다.',
+    );
+  }
+  if (
+    source.hostname !== 'xmfestival.com' ||
+    source.pathname !== '/lineup' ||
+    festival.toString() !==
+      'https://ticket.melon.com/performance/index.htm?prodId=213766'
+  )
+    throw new UnprocessableEntityException(
+      '지원되는 공식 갤러리와 축제 연결 주소가 필요합니다.',
+    );
+  return { ...config, festivalSourceUrl: festival.toString() };
 }
 
 function yes24PageCount(sourceUrl: string, body: string): number {
@@ -152,6 +181,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
   async createSource(dto: CreateCrawlSourceDto, actor: string | null) {
     const parsers: Record<CrawlSource['kind'], CrawlSource['parser']> = {
       discovery: 'ticket-list',
+      'artist-gallery': 'html-text',
       'artist-image': 'html-text',
       timetable: 'html-table',
       notice: 'html-text',
@@ -166,14 +196,15 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       );
     }
     if (
-      !['discovery', 'artist-image'].includes(dto.kind) &&
+      !['discovery', 'artist-gallery', 'artist-image'].includes(dto.kind) &&
       !imageTimetable &&
       !dto.festivalId
     ) {
       throw new UnprocessableEntityException('festivalId가 필요합니다.');
     }
     if (
-      (['discovery', 'artist-image'].includes(dto.kind) || imageTimetable) &&
+      (['discovery', 'artist-gallery', 'artist-image'].includes(dto.kind) ||
+        imageTimetable) &&
       dto.festivalId
     ) {
       throw new UnprocessableEntityException(
@@ -183,7 +214,9 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     const parserConfig =
       dto.kind === 'artist-image'
         ? artistImageConfig(dto.parserConfig)
-        : dto.parserConfig;
+        : dto.kind === 'artist-gallery'
+          ? artistGalleryConfig(dto.url, dto.parserConfig)
+          : dto.parserConfig;
     if (imageTimetable) {
       try {
         timetableSourceConfig(parserConfig);
@@ -229,18 +262,25 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     actor: string | null,
   ) {
     const source = await this.getSource(id);
+    const aliasOnly =
+      source.kind === 'artist-image' &&
+      dto.parserConfig !== undefined &&
+      Object.keys(dto.parserConfig).length === 1 &&
+      Object.hasOwn(dto.parserConfig, 'artistAlias');
     if (
-      (source.kind === 'artist-image' || source.parser === 'image-ocr') &&
-      (dto.parserConfig !== undefined ||
-        (dto.url !== undefined && dto.url !== source.url))
+      ((['artist-gallery', 'artist-image'].includes(source.kind) ||
+        source.parser === 'image-ocr') &&
+        dto.url !== undefined &&
+        dto.url !== source.url) ||
+      ((source.kind === 'artist-gallery' || source.parser === 'image-ocr') &&
+        dto.parserConfig !== undefined) ||
+      (source.kind === 'artist-image' &&
+        dto.parserConfig !== undefined &&
+        !aliasOnly)
     )
       throw new UnprocessableEntityException(
         '이미지 수집 소스의 원본 URL과 연결 정보는 변경할 수 없습니다. 새 소스를 등록하세요.',
       );
-    const parserConfig =
-      dto.parserConfig && source.kind === 'artist-image'
-        ? artistImageConfig(dto.parserConfig)
-        : dto.parserConfig;
     if (dto.url && dto.url !== source.url) await this.checkRobots(dto.url);
     return this.dataSource.transaction(async (manager) => {
       const repo = manager.getRepository(CrawlSource);
@@ -251,6 +291,10 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       if (!locked) throw new NotFoundException('크롤 소스를 찾을 수 없습니다.');
       const before = this.sourceAuditSnapshot(locked);
       Object.assign(locked, dto);
+      const parserConfig =
+        dto.parserConfig && locked.kind === 'artist-image'
+          ? artistImageConfig({ ...before.parserConfig, ...dto.parserConfig })
+          : dto.parserConfig;
       if (parserConfig) locked.parserConfig = parserConfig;
       if (dto.enabled !== undefined)
         locked.status = dto.enabled ? 'ok' : 'disabled';
@@ -336,7 +380,10 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     if (response.status !== 200)
       throw new UnprocessableEntityException(`HTTP ${response.status}`);
     return {
-      parsed: await parseCrawl(source, response.body),
+      parsed:
+        source.kind === 'artist-gallery'
+          ? await crawlArtistGallery(response.body, source.url)
+          : await parseCrawl(source, response.body),
       excerpt: plainText(response.body).slice(0, 500),
     };
   }
@@ -608,6 +655,80 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         }),
       );
       run.snapshotUrl = `/api/v1/admin/crawl/snapshots/${snapshot.id}`;
+      if (source.kind === 'artist-gallery') {
+        phase = 'PARSE';
+        const config = artistGalleryConfig(source.url, source.parserConfig);
+        const officialTicketLink = [
+          ...response.body.matchAll(/<a\b[^>]*\bhref=["']([^"']+)["']/gi),
+        ].some((link) => {
+          try {
+            return (
+              checkedUrl(link[1].replace(/&amp;/gi, '&')).toString() ===
+              config.festivalSourceUrl
+            );
+          } catch {
+            return false;
+          }
+        });
+        if (!officialTicketLink)
+          throw new Error('공식 갤러리에서 연결된 공연을 확인하지 못했습니다.');
+        await this.checkRobots('https://xmfestival.com/ajax/get_modal_menu.cm');
+        const entries = await crawlArtistGallery(response.body, source.url);
+        if (!entries.length)
+          throw new Error('공식 출연진을 확인하지 못했습니다.');
+        const names = new Set(entries.map((entry) => entry.artistName));
+        if (names.size !== entries.length)
+          throw new Error('공식 갤러리에 중복 출연진 이름이 있습니다.');
+        run.contentHash = createHash('sha256')
+          .update(JSON.stringify(entries))
+          .digest('hex');
+        for (const entry of entries) {
+          const imageHint = entry.imageUrl.pathname.replace(
+            /^\/thumbnail\//,
+            '',
+          );
+          if (imageHint === entry.imageUrl.pathname)
+            throw new Error('공식 이미지 경로가 올바르지 않습니다.');
+          const updated = await this.dataSource.query<{ id: string }[]>(
+            `UPDATE crawl_sources SET
+               "parserConfig" = "parserConfig" || jsonb_build_object('imageHint', $4::text),
+               enabled = true, status = 'ok', "updatedAt" = now()
+             WHERE kind = 'artist-image' AND url = $1
+               AND "parserConfig"->>'festivalSourceUrl' = $2
+               AND "parserConfig"->>'artistName' = $3
+               AND "parserConfig"->>'seed' = 'official-artist-gallery'
+             RETURNING id`,
+            [source.url, config.festivalSourceUrl, entry.artistName, imageHint],
+          );
+          if (updated.length) continue;
+          await this.dataSource.query(
+            `INSERT INTO crawl_sources (kind, url, parser, "parserConfig", "createdAt")
+             SELECT 'artist-image', $1, 'html-text',
+               jsonb_build_object('seed', 'official-artist-gallery',
+                 'festivalSourceUrl', $2::text, 'artistName', $3::text,
+                 'imageHint', $4::text), now() - interval '1 day'
+             WHERE NOT EXISTS (
+               SELECT 1 FROM crawl_sources WHERE kind = 'artist-image' AND url = $1
+                 AND "parserConfig"->>'festivalSourceUrl' = $2
+                 AND "parserConfig"->>'artistName' = $3
+             )`,
+            [source.url, config.festivalSourceUrl, entry.artistName, imageHint],
+          );
+        }
+        await this.dataSource.query(
+          `UPDATE crawl_sources SET enabled = false, status = 'disabled',
+             "updatedAt" = now()
+           WHERE kind = 'artist-image' AND url = $1
+             AND "parserConfig"->>'festivalSourceUrl' = $2
+             AND "parserConfig"->>'seed' = 'official-artist-gallery'
+             AND NOT ("parserConfig"->>'artistName' = ANY($3::text[]))`,
+          [source.url, config.festivalSourceUrl, [...names]],
+        );
+        run.result = 'nochange-parsed';
+        source.lastChangedAt = new Date();
+        source.status = 'ok';
+        return;
+      }
       const profileImage =
         source.kind === 'artist-image'
           ? artistProfileImageUrl(
