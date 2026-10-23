@@ -191,6 +191,26 @@ export class CrawlTimetableRevisionService {
             throw new BadRequestException(
               `공식 원본의 공연 ${expectedRows}개를 모두 확인한 뒤 승인해 주세요.`,
             );
+          if (
+            revision.sets.some(
+              (set) => set.stageName.trim() === '무대 확인 필요',
+            )
+          )
+            throw new BadRequestException(
+              '각 공연의 무대를 공식 원본과 대조한 뒤 승인해 주세요.',
+            );
+          const allowedStageNames = source.parserConfig.allowedStageNames;
+          if (
+            allowedStageNames !== undefined &&
+            (!Array.isArray(allowedStageNames) ||
+              !allowedStageNames.length ||
+              !revision.sets.every((set) =>
+                allowedStageNames.includes(set.stageName),
+              ))
+          )
+            throw new BadRequestException(
+              '공식 원본에 표시된 무대 이름만 사용할 수 있습니다.',
+            );
         }
       }
       revision.status = 'verified';

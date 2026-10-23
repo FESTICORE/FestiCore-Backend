@@ -176,6 +176,44 @@ describe('CrawlTimetableRevisionService', () => {
     });
   });
 
+  it('requires a real stage for each OCR row before publication', async () => {
+    findOne.mockResolvedValue({
+      id: 'pending',
+      sourceId: candidate.sourceId,
+      status: 'pending',
+      sets: [{ ...candidate.sets[0], stageName: '무대 확인 필요 ' }],
+    });
+    sourceQuery.mockResolvedValueOnce([
+      { parser: 'image-ocr', parserConfig: { expectedRows: '1' } },
+    ]);
+    await expect(service.verify('pending', 'admin')).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('limits manually corrected OCR stages to the official stage names', async () => {
+    findOne.mockResolvedValue({
+      id: 'pending',
+      sourceId: candidate.sourceId,
+      status: 'pending',
+      sets: [{ ...candidate.sets[0], stageName: 'Other Stage' }],
+    });
+    sourceQuery.mockResolvedValueOnce([
+      {
+        parser: 'image-ocr',
+        parserConfig: {
+          expectedRows: '1',
+          allowedStageNames: ['WONDER STAGE', 'LIVET STAGE'],
+        },
+      },
+    ]);
+    await expect(service.verify('pending', 'admin')).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(save).not.toHaveBeenCalled();
+  });
+
   it('includes the expected OCR row count in review items', async () => {
     const revision = { id: 'pending', sourceId: candidate.sourceId };
     const orderBy = jest.fn().mockReturnThis();
