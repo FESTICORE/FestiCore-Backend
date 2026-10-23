@@ -14,6 +14,7 @@ import {
   CrewStatusIdempotency,
 } from './crew.entity';
 import { CrewService } from './crew.service';
+import { SocialNotificationService } from '../notification/social-notification.service';
 
 const ownerId = '00000000-0000-4000-8000-000000000001';
 const otherId = '00000000-0000-4000-8000-000000000002';
@@ -57,6 +58,10 @@ function setup() {
     gatherRepository as unknown as Repository<CrewGather>,
     festivalRepository as unknown as Repository<AdminFestival>,
     {} as Repository<User>,
+    {
+      enqueueCrewStatus: jest.fn().mockResolvedValue(undefined),
+      enqueueCrewGather: jest.fn().mockResolvedValue(undefined),
+    } as unknown as SocialNotificationService,
   );
   return { service, crewRepository, memberRepository };
 }

@@ -105,6 +105,38 @@ describe('ApnsService', () => {
     expect(importPKCS8).toHaveBeenCalledWith('line1\nline2', 'ES256');
   });
 
+  it('sends gather as an audible alert with route and location', async () => {
+    const { session, stream } = mockResponse(200);
+    const service = new ApnsService(config(credentials));
+    await service.sendSocialNotification(DEVICE_TOKEN, 'sandbox', {
+      type: 'crew.gather',
+      eventKey: 'crew.gather:gather_123',
+      payload: {
+        crewId: 'crew_123',
+        gatherId: 'gather_123',
+        actorUserId: 'actor_123',
+        nickname: '요청자',
+        zoneId: 'zone_123',
+      },
+    });
+    expect(session.request).toHaveBeenCalledWith(
+      expect.objectContaining({ 'apns-priority': '10' }),
+    );
+    const sentArgs: unknown = stream.end.mock.calls[0];
+    const payload = JSON.parse((sentArgs as [string])[0]) as Record<
+      string,
+      unknown
+    >;
+    expect(payload).toMatchObject({
+      aps: { sound: 'default' },
+      type: 'crew.gather',
+      route: '/crews/crew_123',
+      crewId: 'crew_123',
+      zoneId: 'zone_123',
+      actorUserId: 'actor_123',
+    });
+  });
+
   it('reuses its provider JWT across sends and selects the production host', async () => {
     mockResponse(200);
     const service = new ApnsService(config(credentials));

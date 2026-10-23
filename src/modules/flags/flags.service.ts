@@ -47,6 +47,7 @@ import {
   FlagClaimThrottleService,
 } from './flag-claim-throttle.service';
 import { FlagPackSyncService } from './flag-pack-sync.service';
+import { SocialNotificationService } from '../notification/social-notification.service';
 
 const codeAlphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 function newCode(): string {
@@ -88,6 +89,7 @@ export class FlagsService {
     private readonly images: ImageStorageService,
     private readonly packSync: FlagPackSyncService,
     private readonly adminAudit: AdminAuditService,
+    private readonly socialNotifications: SocialNotificationService,
   ) {}
 
   private codeKey(): Buffer {
@@ -807,6 +809,7 @@ export class FlagsService {
         zoneId: flag.zoneId,
         activity: flag.activity,
       });
+      await this.socialNotifications.enqueueFlagStatus(manager, flag, userId);
       const response = statusView(flag);
       await this.remember(
         manager,

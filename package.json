@@ -97,6 +97,9 @@
     "transform": {
       "^.+\\.(t|j)s$": "ts-jest"
     },
+    "transformIgnorePatterns": [
+      "/node_modules/(?!jose)/"
+    ],
     "collectCoverageFrom": [
       "**/*.(t|j)s"
     ],

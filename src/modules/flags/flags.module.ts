@@ -27,10 +27,12 @@ import { FlagsService } from './flags.service';
 import { FlagClaimThrottleService } from './flag-claim-throttle.service';
 import { ImageStorageService } from '../storage/image-storage.service';
 import { FlagPackSyncService } from './flag-pack-sync.service';
+import { NotificationModule } from '../notification/notification.module';
 
 @Module({
   imports: [
     AdminAuditModule,
+    NotificationModule,
     TypeOrmModule.forFeature([
       Flag,
       FlagFollow,
