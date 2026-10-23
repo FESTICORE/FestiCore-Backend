@@ -231,19 +231,28 @@ export class PublicFestivalService {
       `WITH candidates AS (
          SELECT item->'after' AS candidate,
            item->'after'->>'url' AS url,
+           catalog.url AS "catalogUrl",
            item->>'decision' AS decision,
            p.status AS "proposalStatus",
            p."createdAt" AS created_at,
            p.id AS proposal_id
          FROM crawl_proposals p
+         LEFT JOIN crawl_sources source ON source.id = p."sourceId"
          CROSS JOIN LATERAL jsonb_array_elements(p.items) item
+         CROSS JOIN LATERAL jsonb_array_elements_text(
+           CASE WHEN jsonb_typeof(source."parserConfig"->'festivalSourceUrls') = 'array'
+             THEN source."parserConfig"->'festivalSourceUrls'
+             ELSE jsonb_build_array(COALESCE(
+               NULLIF(source."parserConfig"->>'festivalSourceUrl', ''),
+               item->'after'->>'url')) END
+         ) catalog(url)
          WHERE p.kind = 'festival.new'
            AND item->'after'->>'url' IS NOT NULL
        ), latest AS (
          SELECT DISTINCT ON (url) * FROM candidates
          ORDER BY url, created_at DESC, proposal_id DESC
        ), details AS (
-         SELECT url,
+         SELECT "catalogUrl" AS url,
            (array_agg(candidate->>'officialInstagramUrl' ORDER BY created_at DESC, proposal_id DESC)
              FILTER (WHERE decision IS DISTINCT FROM 'rejected'
                AND "proposalStatus" IS DISTINCT FROM 'rejected'
@@ -257,7 +266,7 @@ export class PublicFestivalService {
                AND "proposalStatus" IS DISTINCT FROM 'rejected'
                AND jsonb_array_length(CASE WHEN jsonb_typeof(candidate->'artists') = 'array'
                  THEN candidate->'artists' ELSE '[]'::jsonb END) > 0))[1] AS artists
-         FROM candidates GROUP BY url
+         FROM candidates GROUP BY "catalogUrl"
        )
        SELECT latest.candidate || jsonb_strip_nulls(jsonb_build_object(
            'officialInstagramUrl', details.account, 'posterUrl', details.poster,
@@ -457,6 +466,15 @@ export class PublicFestivalService {
         a.artist.localeCompare(b.artist) ||
         a.id.localeCompare(b.id),
     );
+    const artists = new Map(
+      (entry.artists ?? []).map((artist) => [
+        artist.name,
+        artist.imageUrl ?? null,
+      ]),
+    );
+    for (const set of timetable) {
+      if (!artists.has(set.artist)) artists.set(set.artist, set.imageUrl);
+    }
     return {
       id: entry.id,
       name: entry.name,
@@ -470,11 +488,7 @@ export class PublicFestivalService {
       ticketLinks: entry.ticketLinks,
       sourceUrl: entry.sourceUrl,
       officialInstagramUrl: entry.officialInstagramUrl ?? null,
-      artists:
-        entry.artists?.map((artist) => ({
-          name: artist.name,
-          imageUrl: artist.imageUrl ?? null,
-        })) ?? [],
+      artists: [...artists].map(([name, imageUrl]) => ({ name, imageUrl })),
       timetable,
     };
   }
