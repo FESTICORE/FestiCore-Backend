@@ -59,6 +59,26 @@ describe('CrawlTimetableRevisionService', () => {
     expect(save).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps unreadable OCR artist text pending for correction', async () => {
+    findOne.mockResolvedValue(null);
+    const unreadable = {
+      ...candidate,
+      sets: [{ ...candidate.sets[0], artist: '' }],
+    };
+    await expect(service.stageCandidate(unreadable)).resolves.toMatchObject({
+      status: 'pending',
+      sets: [{ artist: '' }],
+    });
+    findOne.mockResolvedValue({
+      id: 'pending',
+      status: 'pending',
+      ...unreadable,
+    });
+    await expect(service.verify('pending', 'admin')).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+  });
+
   it('returns the existing revision for an unchanged source/parser/content', async () => {
     const existing = { id: 'existing', status: 'verified' };
     findOne.mockResolvedValue(existing);
@@ -88,7 +108,11 @@ describe('CrawlTimetableRevisionService', () => {
   });
 
   it('verifies only a pending revision', async () => {
-    findOne.mockResolvedValue({ id: 'pending', status: 'pending' });
+    findOne.mockResolvedValue({
+      id: 'pending',
+      status: 'pending',
+      sets: candidate.sets,
+    });
     await expect(service.verify('pending', 'admin')).resolves.toMatchObject({
       status: 'verified',
       verifiedBy: 'admin',
