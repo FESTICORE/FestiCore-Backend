@@ -14,7 +14,11 @@ export const PUBLIC_CRAWL_IMAGE_SQL = `(
     AND (image."originUrl" LIKE 'https://cdnticket.melon.co.kr/resource/image/upload/product/%'
       OR image."originUrl" LIKE 'https://cdnimg.melon.co.kr/%'))
   OR (source.kind = 'artist-image'
+    AND source.enabled = true
     AND source."parserConfig"->>'festivalSourceUrl' ~ '^https://(ticket[.]melon[.]com|ticket[.]yes24[.]com|nol[.]yanolja[.]com|mintpaper[.]co[.]kr)/'
+    AND (source."parserConfig"->>'seed' IS DISTINCT FROM 'official-artist-gallery'
+      OR split_part(image."originUrl", '?', 1) =
+        'https://cdn.imweb.me/thumbnail/' || source."parserConfig"->>'imageHint')
     AND image."originUrl" LIKE 'https://%')
   OR (source.kind = 'timetable'
     AND image."originUrl" LIKE 'https://%'

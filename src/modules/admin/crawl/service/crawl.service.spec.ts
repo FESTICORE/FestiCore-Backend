@@ -6,6 +6,7 @@ import { In } from 'typeorm';
 import { createHash } from 'crypto';
 import sharp from 'sharp';
 import * as imageOcr from './timetable-image-ocr';
+import * as artistGallery from './artist-gallery';
 import {
   CreateCrawlSourceDto,
   UpdateCrawlSourceDto,
@@ -382,6 +383,45 @@ describe('CrawlService source audit', () => {
     expect(dataSource.transaction).not.toHaveBeenCalled();
   });
 
+  it('rejects a non-string artist alias as invalid source config', async () => {
+    const { service, dataSource } = harness();
+    const dto = {
+      kind: 'artist-image',
+      url: 'https://xmfestival.com/lineup',
+      parser: 'html-text',
+      parserConfig: {
+        artistName: 'DAY6',
+        artistAlias: null,
+        festivalSourceUrl:
+          'https://ticket.melon.com/performance/index.htm?prodId=213766',
+        imageHint: '20260811/9e91f35508e81.jpg',
+      },
+    } as unknown as CreateCrawlSourceDto;
+    await expect(service.createSource(dto, 'admin-1')).rejects.toMatchObject({
+      status: 422,
+    });
+    expect(dataSource.transaction).not.toHaveBeenCalled();
+  });
+
+  it('does not connect the XMF gallery to another ticket on the same site', async () => {
+    const { service, dataSource } = harness();
+    await expect(
+      service.createSource(
+        {
+          kind: 'artist-gallery',
+          url: 'https://xmfestival.com/lineup',
+          parser: 'html-text',
+          parserConfig: {
+            festivalSourceUrl:
+              'https://ticket.melon.com/performance/index.htm?prodId=213793',
+          },
+        },
+        'admin-1',
+      ),
+    ).rejects.toMatchObject({ status: 422 });
+    expect(dataSource.transaction).not.toHaveBeenCalled();
+  });
+
   it('prevents reassigning stored artist photos to another profile or event', async () => {
     const { service, source, dataSource } = harness();
     source.kind = 'artist-image';
@@ -401,6 +441,51 @@ describe('CrawlService source audit', () => {
       ),
     ).rejects.toThrow('변경할 수 없습니다');
     expect(dataSource.transaction).not.toHaveBeenCalled();
+  });
+
+  it('allows a reviewed display alias without changing the image owner', async () => {
+    const { service, source, dataSource } = harness();
+    source.kind = 'artist-image';
+    source.url = 'https://xmfestival.com/lineup';
+    source.parserConfig = {
+      artistName: 'DAY6',
+      imageHint: '20260811/9e91f35508e81.jpg',
+      festivalSourceUrl:
+        'https://ticket.melon.com/performance/index.htm?prodId=213766',
+      seed: 'official-artist-gallery',
+    };
+    const repo = {
+      findOne: jest.fn().mockResolvedValue({
+        ...source,
+        parserConfig: {
+          ...source.parserConfig,
+          imageHint: '20261023/recent-gallery.jpg',
+        },
+      }),
+      save: jest.fn((value: CrawlSource) => Promise.resolve(value)),
+    };
+    dataSource.transaction.mockImplementation(
+      (
+        callback: (manager: {
+          getRepository: () => typeof repo;
+        }) => Promise<unknown>,
+      ) => callback({ getRepository: () => repo }),
+    );
+
+    await expect(
+      service.updateSource(
+        source.id,
+        { parserConfig: { artistAlias: '데이식스' } },
+        'admin-1',
+      ),
+    ).resolves.toMatchObject({
+      parserConfig: {
+        artistName: 'DAY6',
+        artistAlias: '데이식스',
+        imageHint: '20261023/recent-gallery.jpg',
+        seed: 'official-artist-gallery',
+      },
+    });
   });
 
   it('records the previous and new source settings', async () => {
@@ -572,6 +657,46 @@ describe('CrawlService manual runs and snapshots', () => {
     expect(run.result).toBe('nochange-parsed');
     expect(source.lastChangedAt).toBeInstanceOf(Date);
     expect(proposalItems).not.toHaveBeenCalled();
+  });
+
+  it('registers official gallery artists from the current page rather than a fixed lineup', async () => {
+    const { service, source, run, execute, dataSource } = harness();
+    execute.mockRestore();
+    source.kind = 'artist-gallery';
+    source.url = 'https://xmfestival.com/lineup';
+    source.parser = 'html-text';
+    source.parserConfig = {
+      festivalSourceUrl:
+        'https://ticket.melon.com/performance/index.htm?prodId=213766',
+    };
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({
+      status: 200,
+      body: `<a href="${source.parserConfig.festivalSourceUrl}">예매</a>`,
+    });
+    const gallery = jest.spyOn(artistGallery, 'crawlArtistGallery');
+    gallery.mockResolvedValue([
+      {
+        artistName: 'New Artist From Page',
+        imageUrl: new URL('https://cdn.imweb.me/thumbnail/20261023/new.jpg'),
+      },
+    ]);
+
+    await service.execute(run, source);
+
+    const calls = dataSource.query.mock.calls as unknown as [
+      string,
+      unknown[],
+    ][];
+    const insert = calls.find(([sql]) => sql.includes("SELECT 'artist-image'"));
+    expect(insert?.[1]).toEqual([
+      'https://xmfestival.com/lineup',
+      source.parserConfig.festivalSourceUrl,
+      'New Artist From Page',
+      '20261023/new.jpg',
+    ]);
+    expect(run.result).toBe('nochange-parsed');
+    gallery.mockRestore();
   });
 
   it('reparses an unchanged English YES24 listing after the parser update', async () => {

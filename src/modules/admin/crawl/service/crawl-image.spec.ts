@@ -204,6 +204,19 @@ describe('crawl image safety', () => {
     ).toBe('https://artist.example.com/photos/group-profile.jpg');
   });
 
+  it('finds the configured artist card in a lazy-loaded gallery div', () => {
+    const html = `<img src="https://other.example.com/thumbnail/20260811/354f5ae07ab1d.jpg">
+      <a><div class="img_wrap" data-src="https://cdn.imweb.me/thumbnail/20260811/other.jpg"></div></a>
+      <a><div class="img_wrap" data-src="https://cdn.imweb.me/thumbnail/20260811/354f5ae07ab1d.jpg"></div></a>`;
+    expect(
+      artistProfileImageUrl(
+        html,
+        'https://xmfestival.com/lineup',
+        '20260811/354f5ae07ab1d.jpg',
+      )?.toString(),
+    ).toBe('https://cdn.imweb.me/thumbnail/20260811/354f5ae07ab1d.jpg');
+  });
+
   it('normalizes a valid image to content-addressed WebP without trusting its extension', async () => {
     const png = await sharp({
       create: { width: 16, height: 16, channels: 3, background: '#ff0000' },

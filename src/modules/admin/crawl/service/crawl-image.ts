@@ -85,9 +85,11 @@ export function artistProfileImageUrl(
   imageHint: string,
 ): URL | null {
   const page = html.slice(0, 2_000_000);
-  const tags: string[] = page.match(/<(?:img|meta)\b[^>]*>/gi) ?? [];
+  const tags: string[] = page.match(/<(?:img|meta|a|div)\b[^>]*>/gi) ?? [];
   const candidates = [
-    ...tags.map((tag) => /\b(?:src|content)=["']([^"']+)["']/i.exec(tag)?.[1]),
+    ...tags.map(
+      (tag) => /\b(?:data-src|src|content)=["']([^"']+)["']/i.exec(tag)?.[1],
+    ),
     ...[...page.matchAll(/url\(\s*["']?([^)'"\s]+)["']?\s*\)/gi)].map(
       (match) => match[1],
     ),
@@ -98,6 +100,12 @@ export function artistProfileImageUrl(
       const url = checkedUrl(
         new URL(raw.replace(/&amp;/gi, '&'), pageUrl).toString(),
       );
+      if (
+        new URL(pageUrl).hostname === 'xmfestival.com' &&
+        (url.hostname !== 'cdn.imweb.me' ||
+          url.pathname !== `/thumbnail/${imageHint}`)
+      )
+        continue;
       if (url.pathname.includes(imageHint)) return url;
     } catch {
       // Ignore unsafe or malformed image locations.

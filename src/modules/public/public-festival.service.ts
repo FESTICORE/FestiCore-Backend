@@ -350,11 +350,17 @@ export class PublicFestivalService {
     ];
     const profileImages = festivalSourceUrls.length
       ? await this.dataSource.query<
-          { festivalSourceUrl: string; artistName: string; id: string }[]
+          {
+            festivalSourceUrl: string;
+            artistName: string;
+            artistAlias: string | null;
+            id: string;
+          }[]
         >(
           `SELECT DISTINCT ON (source."parserConfig"->>'festivalSourceUrl', source."parserConfig"->>'artistName')
              source."parserConfig"->>'festivalSourceUrl' AS "festivalSourceUrl",
-             source."parserConfig"->>'artistName' AS "artistName", image.id
+             source."parserConfig"->>'artistName' AS "artistName",
+             source."parserConfig"->>'artistAlias' AS "artistAlias", image.id
            FROM crawl_images image
            JOIN crawl_sources source ON source.id = image."sourceId"
            WHERE source.kind = 'artist-image'
@@ -371,6 +377,12 @@ export class PublicFestivalService {
         image.id,
       ]),
     );
+    for (const image of profileImages) {
+      if (!image.artistAlias) continue;
+      const key = `${image.festivalSourceUrl}\u0000${image.artistAlias}`;
+      if (!profileImageByArtist.has(key))
+        profileImageByArtist.set(key, image.id);
+    }
     const englishProductIds = [
       ...new Set(
         entries.flatMap((entry) => {
