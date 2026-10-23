@@ -1,4 +1,7 @@
-import { crawlArtistGallery } from './artist-gallery';
+import {
+  crawlArtistGallery,
+  isOfficialModalContentType,
+} from './artist-gallery';
 
 const pageUrl = 'https://xmfestival.com/lineup';
 
@@ -14,6 +17,15 @@ function modal(name: string): string {
 }
 
 describe('crawlArtistGallery', () => {
+  it('accepts the official JSON envelope served as text/html while rejecting unrelated types', () => {
+    expect(isOfficialModalContentType('text/html; charset=utf-8')).toBe(true);
+    expect(isOfficialModalContentType('application/json; charset=utf-8')).toBe(
+      true,
+    );
+    expect(isOfficialModalContentType('image/png')).toBe(false);
+    expect(isOfficialModalContentType(undefined)).toBe(false);
+  });
+
   it('pairs each official gallery image with its modal title without fixed artist data', async () => {
     const html = [
       card(
