@@ -540,9 +540,9 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
             columns: config.columns,
           },
         );
-        if (candidates.length !== config.expectedRows)
+        if (!candidates.length || candidates.length > config.expectedRows)
           throw new Error(
-            '공식 시간표의 예상 공연 수와 OCR 후보 수가 다릅니다.',
+            '공식 시간표의 OCR 후보 수가 허용 범위를 벗어났습니다.',
           );
         const stageNames = new Map(
           config.columns.map((column) => [column.stageId, column.stageName]),

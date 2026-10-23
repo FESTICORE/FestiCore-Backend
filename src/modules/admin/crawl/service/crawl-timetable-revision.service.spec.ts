@@ -26,9 +26,11 @@ describe('CrawlTimetableRevisionService', () => {
   const create = jest.fn((value: unknown) => value);
   const save = jest.fn((value: unknown) => Promise.resolve(value));
   const repository = { findOne, create, save };
+  const sourceQuery = jest.fn().mockResolvedValue([]);
   const dataSource = {
+    query: sourceQuery,
     transaction: jest.fn((callback: (manager: unknown) => Promise<unknown>) =>
-      callback({ getRepository: () => repository }),
+      callback({ getRepository: () => repository, query: sourceQuery }),
     ),
   };
   const audit = { record: jest.fn().mockResolvedValue(undefined) };
@@ -137,5 +139,56 @@ describe('CrawlTimetableRevisionService', () => {
         { ...candidate.sets[0], artist: '', endsAt: null },
       ]),
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('requires every expected OCR row before publishing a partial candidate', async () => {
+    const pending = {
+      id: 'pending',
+      sourceId: candidate.sourceId,
+      status: 'pending',
+      sets: candidate.sets,
+    };
+    findOne.mockResolvedValue(pending);
+    sourceQuery.mockResolvedValueOnce([
+      { parser: 'image-ocr', parserConfig: { expectedRows: '2' } },
+    ]);
+    await expect(service.verify('pending', 'admin')).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(save).not.toHaveBeenCalled();
+
+    sourceQuery.mockResolvedValueOnce([
+      { parser: 'image-ocr', parserConfig: { expectedRows: '2' } },
+    ]);
+    const completed = [
+      candidate.sets[0],
+      {
+        ...candidate.sets[0],
+        artist: 'Second Artist',
+        startsAt: '2026-10-17T13:20:00+09:00',
+      },
+    ];
+    await expect(
+      service.verify('pending', 'admin', completed),
+    ).resolves.toMatchObject({
+      status: 'verified',
+      sets: completed,
+    });
+  });
+
+  it('includes the expected OCR row count in review items', async () => {
+    const revision = { id: 'pending', sourceId: candidate.sourceId };
+    const orderBy = jest.fn().mockReturnThis();
+    const limit = jest.fn().mockReturnThis();
+    const getMany = jest.fn().mockResolvedValue([revision]);
+    (
+      repository as typeof repository & { createQueryBuilder?: jest.Mock }
+    ).createQueryBuilder = jest.fn(() => ({ orderBy, limit, getMany }));
+    sourceQuery.mockResolvedValueOnce([
+      { id: candidate.sourceId, expectedRows: '12' },
+    ]);
+    await expect(service.list()).resolves.toEqual({
+      items: [{ ...revision, expectedRows: 12 }],
+    });
   });
 });
