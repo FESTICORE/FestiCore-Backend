@@ -13,7 +13,7 @@
 | --- | --- | --- |
 | Grand Mint Festival 2026 | https://www.mintpaper.co.kr/festivals/172/notice/4806 | 10/17·18 세 무대 48개 음악 공연의 개별 시간이 이미지에 있음. 6개 헤드라이너의 종료 시간은 원본에 없음. RADAR 프로그램은 음악 공연과 별개. |
 | 서울뮤직페스티벌 2026 | https://festival.seoul.go.kr/festival/main/festivalView.do?festacode=848 | 서울시 펀서울의 공식 이미지 설명에서 메인 출연진 6팀을 매일 수집한다. 문화포털 원본은 개발 Railway에서 타임아웃이 발생해 동일한 서울시 공식 행사 페이지로 교체했다. https://seoulmusicfestival.co.kr/asset/img_2026/sub/about/schedule_2026.png 에 버스킹 쓰다(13:30–14:00)·올디 벗 구디(15:00–15:30)의 시간이 있으나 메인 출연진별 시각은 미확인. 버스킹 이미지 OCR·검토 소스는 아직 미등록. |
-| WONDERLIVET 2026 | https://www.wonderli.vet/home | 주최 측 공개 3일·2개 무대 시간표 이미지를 [iMBC 보도 원본](https://enews.imbc.com/News/RetrieveNewsInfo/519624)의 1360×1700 이미지로 수집한다. 기존 580×725 이미지에서는 첫날 14건 중 1건만 OCR 후보로 남았다. 날짜별 14개 공연을 원본과 대조하고, 모든 공연의 무대를 `WONDER STAGE` 또는 `LIVET STAGE`로 확인하기 전에는 공개하지 않는다. |
+| WONDERLIVET 2026 | https://www.wonderli.vet/home | 주최 측 공개 3일·2개 무대 시간표 이미지를 [iMBC 보도 원본](https://enews.imbc.com/News/RetrieveNewsInfo/519624)의 1360×1700 이미지로 수집한다. 기존 이미지 OCR은 1·3·7건, 고해상도 OCR은 9·10·10건으로 모두 부분 인식이었다. 포스터의 42개 공연을 카드별로 대조한 검토 데이터는 [wonderlivet-2026-timetable.tsv](data/wonderlivet-2026-timetable.tsv)에 있다. 각 날짜 14건의 무대·이름·시간을 관리자 검증 절차로 발행한다. |
 | XMF 2026 | https://xmfestival.com/notice | 공식 최종 라인업에서 양일 22팀과 오프닝 DJ 2팀 확인. Day 1·2 공식 시간표 이미지를 확보해 OCR 소스를 등록한다. 이미지에 적히지 않은 종료 시각은 추정하지 않는다. OCR 결과는 관리자 승인 전 공개하지 않는다. |
 | COUNTDOWN FANTASY 2026-2027 | https://www.mintpaper.co.kr/posts/4819 | 공식 1차 라인업 12팀 확인. 개별 공연 시각은 아직 미공개. |
 | 원웨이 페스티벌 2026 | https://ticket.melon.com/csoon/detail.htm?csoonId=12728 | 공식 1차 라인업 11팀 확인. 개별 공연 시각은 아직 미확보. |
@@ -28,6 +28,8 @@
 공식 Instagram은 게시물 URL·계정 소유·이미지 원본을 검증한 경우에만 사용한다. 직접 조회가 HTTP 429를 두 번 반환해 같은 접근을 더 시도하지 않았다. 게시물이 있다고 추정해 시간을 생성하지 않는다.
 
 GMF 공식 이미지 두 장은 2026-10-23 macOS Vision의 무대별 영역 OCR로 48개 시작 시간과 42개 종료 시간을 추출했다. 날짜·무대별 아티스트 48팀은 [주최사 최종 라인업](https://www.mintpaper.co.kr/posts/4802)과 대조했다. 검증 데이터는 `/private/tmp/gmf2026-verified-sets.json`, 출처는 `/private/tmp/gmf2026-verified-sets-sources.json`에 있다. 이 검증은 현재 GMF 이미지 레이아웃에 한정되며, Linux 서버의 Tesseract 수집 또는 자동 공개 성공을 뜻하지 않는다. 미공개 종료 시각 6개는 `null`이다. XMF 이미지는 공식 원본을 확인했지만 Linux OCR 결과와 공개 API 반영은 별도 검증이 필요하다.
+
+원더리벳 검토 데이터는 주최사 공개 시간표 [이미지 원본](https://talkimg.imbc.com/TVianUpload/tvian/TViews/image/2026/09/30/32bdd8f0-e012-4dd7-bbe9-00e7116dd218.jpg)을 3개 날짜 열과 개별 공연 카드로 대조했다. 원본 SHA-256은 `3fec77b6a6b49dbf5475e1f18af48b3e2d876322ed0e5b8c747969759452dffb`이다. 검은 카드가 `LIVET STAGE`, 주황 카드가 `WONDER STAGE`이며, 카드별 명시 시각만 기록했다. 마지막 공연 3건의 종료 표기는 TSV에 `22:00+`로 보존하고, 정확한 종료 시각이 아니므로 API에는 `null`로 반영한다. TSV는 감사 가능한 원본 대조 자료이며 런타임 파서에 고정 데이터를 넣지 않는다. 관리자 사칭 없이 운영 스크립트가 원본 해시·날짜별 14건·무대 설정을 확인한 뒤 검토 서비스를 호출한다. 서비스는 3일을 단일 트랜잭션으로 승인하고 감사 actor를 `system:reviewed-timetable-import`로 기록한다.
 
 ## 수집 계약
 
