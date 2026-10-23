@@ -180,6 +180,26 @@ describe('crawl image safety', () => {
     ).toHaveLength(81);
   });
 
+  it('includes curated official images only for the WONDERLIVET detail', () => {
+    const html =
+      '<ul class="list_artist"><li><img src="https://cdnimg.melon.co.kr/artist.jpg"></li></ul>';
+    const wonderlivet = discoverImageUrls(
+      html,
+      'https://ticket.melon.com/performance/index.htm?prodId=213793',
+    ).map(String);
+    expect(wonderlivet).toContain('https://cdnimg.melon.co.kr/artist.jpg');
+    expect(wonderlivet).toContain(
+      'https://brandysenki.com/common/images/artist_image004_r0qfkaf9zvuqt1wzijefbv5sl5vbg0yb.jpg',
+    );
+    expect(wonderlivet).toHaveLength(8);
+    expect(
+      discoverImageUrls(
+        html,
+        'https://ticket.melon.com/performance/index.htm?prodId=1',
+      ),
+    ).toHaveLength(1);
+  });
+
   it('normalizes a valid image to content-addressed WebP without trusting its extension', async () => {
     const png = await sharp({
       create: { width: 16, height: 16, channels: 3, background: '#ff0000' },
