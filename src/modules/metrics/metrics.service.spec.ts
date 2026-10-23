@@ -91,7 +91,7 @@ describe('MetricsService', () => {
     await expect(service.ingest('invalid', { events: [] })).rejects.toThrow(
       BadRequestException,
     );
-    query.mockResolvedValueOnce([]);
+    query.mockResolvedValueOnce([{ id: 1 }]);
     await service.ingest(deviceId, {
       events: [
         {
@@ -103,7 +103,25 @@ describe('MetricsService', () => {
     });
     expect(query).toHaveBeenCalledTimes(1);
     expect(query.mock.calls[0][0]).toContain('jsonb_to_recordset($2::jsonb)');
+    expect(query.mock.calls[0][0]).toContain('FROM "devices"');
+    expect(query.mock.calls[0][0]).toContain('FOR KEY SHARE');
     expect(query.mock.calls[0][1][0]).toBe(deviceId);
+  });
+
+  it('rejects events for a device that is no longer registered', async () => {
+    query.mockResolvedValueOnce([]);
+    await expect(
+      service.ingest(deviceId, {
+        events: [
+          {
+            name: 'offline.open',
+            at: new Date().toISOString(),
+            props: { screen: 'S01' },
+          },
+        ],
+      }),
+    ).rejects.toThrow(NotFoundException);
+    expect(query).toHaveBeenCalledTimes(1);
   });
 
   it('reports follow and crew counts with cold-start P95', async () => {
