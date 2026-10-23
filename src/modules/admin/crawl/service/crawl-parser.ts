@@ -415,6 +415,59 @@ function officialLineupCandidates(
   ];
 }
 
+function seoulCultureLineupCandidates(
+  body: string,
+  base: string,
+  config: Record<string, string>,
+): FestivalCandidate[] | null {
+  const source = new URL(base);
+  if (
+    source.hostname !== 'culture.seoul.go.kr' ||
+    source.pathname !== '/culture/culture/cultureEvent/view.do' ||
+    source.searchParams.get('cultcode') !== '159493'
+  )
+    return null;
+  if (body.length > 2_000_000) return [];
+
+  const text = plainText(body);
+  const name = /(20\d{2} 서울뮤직페스티벌)/.exec(text)?.[1];
+  if (!name) return [];
+  const alt = [...body.matchAll(/<img\b[^>]*\balt="([^"]{1,500})"[^>]*>/gi)]
+    .map((match) => match[1])
+    .find((value) => value.includes('LINE UP IN '));
+  const lineup = /LINE UP IN\s+([^"<>]+)/.exec(alt ?? '')?.[1];
+  if (!lineup) return [];
+  const dateParts = /(20\d{2})년\s*(\d{1,2})월\s*(\d{1,2})일/.exec(alt ?? '');
+  if (!dateParts || !name.startsWith(dateParts[1])) return [];
+  const [, year, month, day] = dateParts;
+  const parsedDate = new Date(Date.UTC(+year, +month - 1, +day));
+  if (
+    parsedDate.getUTCFullYear() !== +year ||
+    parsedDate.getUTCMonth() + 1 !== +month ||
+    parsedDate.getUTCDate() !== +day
+  )
+    return [];
+  const names = lineup.split('|').map((name) => name.trim());
+  const expectedArtists = Number(config.expectedArtists);
+  if (
+    !Number.isInteger(expectedArtists) ||
+    expectedArtists < 1 ||
+    expectedArtists > 80 ||
+    names.length !== expectedArtists ||
+    new Set(names).size !== expectedArtists ||
+    names.some((name) => !name || name.length > 80)
+  )
+    return [];
+  return [
+    {
+      name,
+      url: source.toString(),
+      date: `${year}.${month.padStart(2, '0')}.${day.padStart(2, '0')}`,
+      artists: names.map((name) => ({ name })),
+    },
+  ];
+}
+
 function taggedText(html: string, tagOrClass: string): string | undefined {
   const match = new RegExp(
     `<(?:${tagOrClass})\\b[^>]*>([\\s\\S]*?)<\\/(?:${tagOrClass})>`,
@@ -921,6 +974,8 @@ export function ticketCandidates(
   base: string,
   config: Record<string, string> = {},
 ): FestivalCandidate[] {
+  const seoulCultureLineup = seoulCultureLineupCandidates(body, base, config);
+  if (seoulCultureLineup) return seoulCultureLineup;
   const officialLineup = officialLineupCandidates(body, base, config);
   if (officialLineup) return officialLineup;
   const xmfNotice = xmfNoticeCandidates(body, base);
