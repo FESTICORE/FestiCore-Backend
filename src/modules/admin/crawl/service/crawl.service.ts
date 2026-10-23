@@ -693,7 +693,9 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
           );
           if (imageHint === entry.imageUrl.pathname)
             throw new Error('공식 이미지 경로가 올바르지 않습니다.');
-          const updated = await this.dataSource.query<{ id: string }[]>(
+          const updated = await this.dataSource.query<
+            [{ id: string }[], number]
+          >(
             `UPDATE crawl_sources SET
                "parserConfig" = "parserConfig" || jsonb_build_object('imageHint', $4::text),
                enabled = true, status = 'ok', "updatedAt" = now()
@@ -704,7 +706,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
              RETURNING id`,
             [source.url, config.festivalSourceUrl, entry.artistName, imageHint],
           );
-          if (updated.length) continue;
+          if (updated[1] > 0) continue;
           await this.dataSource.query(
             `INSERT INTO crawl_sources (kind, url, parser, "parserConfig", "createdAt")
              SELECT 'artist-image', $1::text, 'html-text',
@@ -865,7 +867,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       await this.runsRepo.save(run);
       // 실행 중 관리자가 URL/설정을 바꿨더라도 오래된 source 객체로 덮지 않는다.
       const updated = await this.dataSource.query<
-        { consecutiveFailures: number }[]
+        [{ consecutiveFailures: number }[], number]
       >(
         `UPDATE crawl_sources SET
         "lastRunAt" = $1, "lastChangedAt" = COALESCE($2, "lastChangedAt"),
@@ -882,7 +884,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       );
       if (
         run.result === 'failed' &&
-        Number(updated[0]?.consecutiveFailures) === 3
+        Number(updated[0]?.[0]?.consecutiveFailures) === 3
       ) {
         await this.alerts.recordThresholdFailure(
           source.id,

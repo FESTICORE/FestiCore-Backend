@@ -662,6 +662,9 @@ describe('CrawlService manual runs and snapshots', () => {
   it('registers official gallery artists from the current page rather than a fixed lineup', async () => {
     const { service, source, run, execute, dataSource } = harness();
     execute.mockRestore();
+    dataSource.query.mockImplementation((sql: string) =>
+      Promise.resolve(sql.includes('RETURNING id') ? [[], 0] : []),
+    );
     source.kind = 'artist-gallery';
     source.url = 'https://xmfestival.com/lineup';
     source.parser = 'html-text';
@@ -890,7 +893,7 @@ describe('CrawlService manual runs and snapshots', () => {
         'checkRobots',
       )
       .mockRejectedValue(new Error('수집 실패: oauth-refresh-token-raw'));
-    dataSource.query.mockResolvedValueOnce([{ consecutiveFailures: 3 }]);
+    dataSource.query.mockResolvedValueOnce([[{ consecutiveFailures: 3 }], 1]);
 
     await service.execute(run, source);
 
