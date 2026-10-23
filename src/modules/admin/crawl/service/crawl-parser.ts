@@ -744,6 +744,38 @@ export function yes24EventJson(body: string): Record<string, unknown> | null {
   return null;
 }
 
+function eventPerformers(
+  event: Record<string, unknown> | null,
+): { name: string }[] {
+  const value = event?.performer;
+  const entries = Array.isArray(value) ? value : value ? [value] : [];
+  const names = new Set<string>();
+  for (const entry of entries.slice(0, 160)) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    const performer = entry as Record<string, unknown>;
+    if (
+      !['Person', 'MusicGroup', 'PerformingGroup'].includes(
+        String(performer['@type']),
+      ) ||
+      typeof performer.name !== 'string'
+    )
+      continue;
+    const name = performer.name.trim();
+    if (
+      !name ||
+      name.length > 160 ||
+      /[<>\\]/.test(name) ||
+      [...name].some((character) => {
+        const code = character.charCodeAt(0);
+        return code < 32 || code === 127;
+      })
+    )
+      continue;
+    names.add(name);
+  }
+  return [...names].map((name) => ({ name }));
+}
+
 function yes24DetailCandidates(
   body: string,
   base: string,
@@ -782,6 +814,8 @@ function yes24DetailCandidates(
     date: `${start} ~ ${end}`,
     venue: venue.trim(),
   };
+  const artists = eventPerformers(event);
+  if (artists.length) candidate.artists = artists;
   if (typeof event.image === 'string') {
     try {
       const image = new URL(event.image, source);
@@ -858,6 +892,8 @@ function nolDetailCandidates(
     date,
     venue,
   };
+  const artists = eventPerformers(event);
+  if (artists.length) candidate.artists = artists;
   const poster = nolPosterUrl(body, source);
   if (poster) candidate.posterUrl = poster;
   return [candidate];

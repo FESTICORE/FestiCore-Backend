@@ -512,6 +512,60 @@ describe('crawl parsers', () => {
     ]);
   });
 
+  it('reads only valid, unique Event performers from a YES24 detail', async () => {
+    const yes24 = source('ticket-list', 'discovery');
+    yes24.url = 'https://ticket.yes24.com/Perf/60590';
+    const html = `<script type="application/ld+json">${JSON.stringify({
+      '@type': 'Event',
+      name: 'COUNTDOWN FANTASY 2026-2027',
+      startDate: '2026-12-31',
+      endDate: '2026-12-31',
+      location: { name: '킨텍스' },
+      performer: [
+        { '@type': 'MusicGroup', name: '밴드 A' },
+        { '@type': 'MusicGroup', name: '밴드 A' },
+        { '@type': 'Person', name: '가수 B' },
+        { '@type': 'MusicGroup', name: '<img onerror=bad>' },
+        { '@type': 'Organization', name: '예매처' },
+        {
+          '@type': 'MusicGroup',
+          name: '외부 링크가 있는 가수',
+          url: 'https://evil.example',
+        },
+      ],
+    })}</script>`;
+    const result = (await parseCrawl(yes24, html)) as {
+      artists?: { name: string }[];
+    }[];
+    expect(result[0].artists).toEqual([
+      { name: '밴드 A' },
+      { name: '가수 B' },
+      { name: '외부 링크가 있는 가수' },
+    ]);
+  });
+
+  it('reads a single structured performer from a NOL event without creating set times', async () => {
+    const nol = source('ticket-list', 'discovery');
+    nol.url = 'https://nol.yanolja.com/ticket/products/26014568';
+    const html = `<script type="application/ld+json">${JSON.stringify({
+      '@type': 'Event',
+      name: 'COUNTDOWN FANTASY 2026-2027',
+      startDate: '2026-12-31',
+      endDate: '2026-12-31',
+      location: { name: '킨텍스' },
+      performer: { '@type': 'Person', name: '가수 C' },
+    })}</script>`;
+    expect(await parseCrawl(nol, html)).toEqual([
+      {
+        name: 'COUNTDOWN FANTASY 2026-2027',
+        url: nol.url,
+        date: '2026.12.31 - 2026.12.31',
+        venue: '킨텍스',
+        artists: [{ name: '가수 C' }],
+      },
+    ]);
+  });
+
   it('reads Mint Paper festival records and their official cover images from SSR data', async () => {
     const mint = source('ticket-list', 'discovery');
     mint.url = 'https://mintpaper.co.kr/festivals';
