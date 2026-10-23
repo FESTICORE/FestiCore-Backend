@@ -34,15 +34,16 @@ export class MetricsController {
   @ApiOperation({
     summary: '클라이언트 관측 이벤트 일괄 수집',
     description:
-      '최대 100건. 인증 선택, X-Device-Id(UUID v4) 필수. 서버는 IP와 토큰을 저장하지 않습니다.',
+      '최대 100건. 등록된 X-Device-Id(UUID v4) 필수. 서버는 IP와 토큰을 저장하지 않습니다.',
   })
   @ApiHeader({
     name: 'X-Device-Id',
     required: true,
-    description: 'UUID v4 기기 ID',
+    description: 'PUT /api/v1/devices로 등록한 UUID v4 기기 ID',
   })
   @ApiResponse({ status: 202, description: '수집됨. 응답 본문 없음.' })
   @ApiResponse({ status: 400, description: '이벤트 형식 또는 범위 오류' })
+  @ApiResponse({ status: 404, description: '등록된 기기 없음' })
   @ApiResponse({ status: 429, description: '분당 요청 제한 초과' })
   async ingest(
     @Req() request: Request,
