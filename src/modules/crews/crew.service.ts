@@ -12,6 +12,7 @@ import { createHash, randomBytes, randomUUID } from 'crypto';
 import { EntityManager, Repository } from 'typeorm';
 import { AdminFestival } from '../admin/festival/festival.entity';
 import { User } from '../auth/entity/user.entity';
+import { SocialNotificationService } from '../notification/social-notification.service';
 import {
   Crew,
   CrewGather,
@@ -73,6 +74,7 @@ export class CrewService {
     @InjectRepository(AdminFestival)
     private readonly festivals: Repository<AdminFestival>,
     @InjectRepository(User) private readonly users: Repository<User>,
+    private readonly socialNotifications: SocialNotificationService,
   ) {}
 
   private async festival(id: string): Promise<AdminFestival> {
@@ -584,6 +586,7 @@ export class CrewService {
         state: member.state,
         updatedAt: member.statusUpdatedAt,
       };
+      await this.socialNotifications.enqueueCrewStatus(manager, crew, userId);
       return remember(response);
     });
   }
@@ -614,6 +617,12 @@ export class CrewService {
         .getRepository(CrewGather)
         .create({ id: randomUUID(), crewId: id, byUserId: userId, zoneId });
       const saved = await manager.getRepository(CrewGather).save(gather);
+      await this.socialNotifications.enqueueCrewGather(
+        manager,
+        crew,
+        userId,
+        saved,
+      );
       return {
         zoneId: saved.zoneId,
         byUserId: saved.byUserId,

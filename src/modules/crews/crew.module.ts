@@ -12,9 +12,11 @@ import {
   CrewStatusIdempotency,
 } from './crew.entity';
 import { CrewService } from './crew.service';
+import { NotificationModule } from '../notification/notification.module';
 
 @Module({
   imports: [
+    NotificationModule,
     TypeOrmModule.forFeature([
       Crew,
       CrewMember,

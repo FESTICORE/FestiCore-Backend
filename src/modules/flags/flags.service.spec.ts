@@ -6,6 +6,7 @@ import { AdminAuditService } from '../admin/audit/admin-audit.service';
 import { User } from '../auth/entity/user.entity';
 import { ImageStorageService } from '../storage/image-storage.service';
 import { FlagPackSyncService } from './flag-pack-sync.service';
+import { SocialNotificationService } from '../notification/social-notification.service';
 import {
   Flag,
   FlagBearer,
@@ -94,6 +95,9 @@ describe('FlagsService security boundaries', () => {
     {} as ImageStorageService,
     { sync, invalidatePacks } as unknown as FlagPackSyncService,
     audit as unknown as AdminAuditService,
+    {
+      enqueueFlagStatus: jest.fn().mockResolvedValue(undefined),
+    } as unknown as SocialNotificationService,
   );
 
   beforeEach(() => {
@@ -305,6 +309,9 @@ describe('FlagsService security boundaries', () => {
       {} as ImageStorageService,
       { sync } as unknown as FlagPackSyncService,
       {} as AdminAuditService,
+      {
+        enqueueFlagStatus: jest.fn().mockResolvedValue(undefined),
+      } as unknown as SocialNotificationService,
     );
     await expect(
       guarded.follow('flg_1', 'departed', 'key-1'),

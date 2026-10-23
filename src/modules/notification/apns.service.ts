@@ -114,6 +114,62 @@ export class ApnsService {
     );
   }
 
+  async sendSocialNotification(
+    token: string,
+    environment: 'sandbox' | 'production',
+    input: {
+      type: 'flag.status' | 'crew.status' | 'crew.gather';
+      payload: Record<string, unknown>;
+      eventKey: string;
+    },
+  ): Promise<ApnsSendResult> {
+    const gather = input.type === 'crew.gather';
+    const flag = input.type === 'flag.status';
+    const name =
+      typeof input.payload.nickname === 'string'
+        ? input.payload.nickname
+        : '크루원';
+    const zone =
+      typeof input.payload.zoneId === 'string' ? input.payload.zoneId : null;
+    const rawState = flag ? input.payload.status : input.payload.state;
+    const state = typeof rawState === 'string' ? rawState : '';
+    const title = gather
+      ? '크루 집결 요청'
+      : flag
+        ? '깃발 상태 변경'
+        : '크루원 상태 변경';
+    const body = gather
+      ? `${name}님이 ${zone ?? '현재 위치'}에서 집결을 요청했어요.`
+      : flag
+        ? `깃발 상태가 ${state}(으)로 변경됐어요.`
+        : `${name}님의 상태가 ${state}(으)로 변경됐어요.`;
+    const subjectId = flag ? input.payload.flagId : input.payload.crewId;
+    const safeSubjectId = typeof subjectId === 'string' ? subjectId : '';
+    const route = flag ? `/flags/${safeSubjectId}` : `/crews/${safeSubjectId}`;
+    return this.send(
+      token,
+      environment,
+      {
+        aps: {
+          alert: { title, body },
+          ...(gather
+            ? { sound: 'default' }
+            : { 'interruption-level': 'passive' }),
+        },
+        type: input.type,
+        route,
+        ...input.payload,
+        eventKey: input.eventKey,
+      },
+      {
+        pushType: 'alert',
+        priority: gather ? '10' : '5',
+        collapseKey: input.eventKey,
+        expirationSeconds: gather ? 15 * 60 : 30 * 60,
+      },
+    );
+  }
+
   async sendTestNotification(
     token: string,
     environment: 'sandbox' | 'production',
