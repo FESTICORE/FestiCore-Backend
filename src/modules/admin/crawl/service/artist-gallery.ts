@@ -20,6 +20,11 @@ interface GalleryCard {
   imageUrl: URL;
 }
 
+export function isOfficialModalContentType(value: string | undefined): boolean {
+  const type = value?.split(';', 1)[0]?.trim().toLowerCase();
+  return type === 'application/json' || type === 'text/html';
+}
+
 function decodeHtml(value: string): string {
   return value.replace(
     /&(#(?:x[0-9a-f]+|\d+)|amp|quot|apos|lt|gt|nbsp|middot);/gi,
@@ -144,9 +149,7 @@ async function fetchOfficialModal(
       (response) => {
         if (
           response.statusCode !== 200 ||
-          !String(response.headers['content-type'] ?? '')
-            .toLowerCase()
-            .includes('application/json')
+          !isOfficialModalContentType(response.headers['content-type'])
         ) {
           response.resume();
           reject(new Error('공식 모달 응답이 유효하지 않습니다.'));
@@ -244,8 +247,10 @@ export async function crawlArtistGallery(
       if (!name)
         throw new Error('공식 모달에서 출연진 이름을 확인하지 못했습니다.');
       results.push({ artistName: name, imageUrl: card.imageUrl });
-    } catch {
-      throw new Error('공식 출연진 모달 일부를 확인하지 못했습니다.');
+    } catch (error) {
+      throw new Error('공식 출연진 모달 일부를 확인하지 못했습니다.', {
+        cause: error,
+      });
     }
   }
   return results;
