@@ -12,10 +12,14 @@
 | 공연 | 공식 자료 | 확인된 범위 |
 | --- | --- | --- |
 | Grand Mint Festival 2026 | https://www.mintpaper.co.kr/festivals/172/notice/4806 | 10/17·18 세 무대 48개 음악 공연의 개별 시간이 이미지에 있음. 6개 헤드라이너의 종료 시간은 원본에 없음. RADAR 프로그램은 음악 공연과 별개. |
-| 서울뮤직페스티벌 2026 | https://festival.seoul.go.kr/festival/main/festivalView.do?festacode=848 | 전체 행사 시간만 있으며 아티스트별 시각은 미확인. |
+| 서울뮤직페스티벌 2026 | https://seoulmusicfestival.co.kr/asset/img_2026/sub/program/lineup_img.png | 메인 공연 출연진은 공식 이미지에 공개. https://seoulmusicfestival.co.kr/asset/img_2026/sub/about/schedule_2026.png 에 버스킹 두 팀의 시각이 있으나 메인 출연진별 시각은 미확인. 이미지 OCR·검토 소스는 아직 미등록. |
 | WONDERLIVET 2026 | https://www.wonderli.vet/home | 시간표 공개 안내는 있으나 개별 시각 원본은 미확보. |
-| XMF 2026 | https://xmfestival.com/notice | Day 1·2 시간표 공개 검색 결과가 있으나 원본 접근 제한으로 미확보. |
-| 히어로 락·대구힙합·COUNTDOWN 등 | 각 공식 판매·주최사 페이지 | 이번 조사에서 검증 가능한 개별 시각 미확보. |
+| XMF 2026 | https://xmfestival.com/notice | 공식 최종 라인업에서 양일 22팀과 오프닝 DJ 2팀 확인. Day 1·2 공식 시간표 이미지를 확보해 OCR 소스를 등록한다. 이미지에 적히지 않은 종료 시각은 추정하지 않는다. OCR 결과는 관리자 승인 전 공개하지 않는다. |
+| COUNTDOWN FANTASY 2026-2027 | https://www.mintpaper.co.kr/posts/4819 | 공식 1차 라인업 12팀 확인. 개별 공연 시각은 아직 미공개. |
+| 원웨이 페스티벌 2026 | https://ticket.melon.com/csoon/detail.htm?csoonId=12728 | 공식 1차 라인업 11팀 확인. 개별 공연 시각은 아직 미확보. |
+| 히어로 락·대구힙합·THE BRIDGE | 각 공식 판매·주최사 페이지 | 발견 목록에 출연진이 있으나 개별 시각은 미확보. |
+| Anime X Game Festival | https://agfkorea.com/stage?idx=1 | 공식 무대 페이지가 Coming soon이므로 출연진·시각을 생성하지 않는다. |
+| 푸르지오아트홀·썸띵 뉴·FISM BUSAN 2028 | 각 공식 판매·주최사 페이지 | 확인 가능한 개별 공연 시각 미확보. |
 
 개발 카탈로그에는 2026-10-23 현재 18개 항목이 있다. 한 공연의 판매권종이나 판매처가 여러 항목으로 등록될 수 있으므로, 시간표는 판매처 URL마다 중복 입력하지 않고 확인된 공식 행사와 연결한다. 예를 들어 Anime X Game Festival은 3일권과 요일권으로 네 항목, COUNTDOWN FANTASY는 Mint Paper와 YES24 국문·영문으로 세 항목이다. 각 항목의 출처 URL에 동일한 검증 시간표를 매핑하되 날짜가 다른 권종은 해당 날짜만 보여준다.
 
@@ -23,7 +27,7 @@
 
 공식 Instagram은 게시물 URL·계정 소유·이미지 원본을 검증한 경우에만 사용한다. 직접 조회가 HTTP 429를 두 번 반환해 같은 접근을 더 시도하지 않았다. 게시물이 있다고 추정해 시간을 생성하지 않는다.
 
-GMF 공식 이미지 두 장은 2026-10-23 macOS Vision의 무대별 영역 OCR로 48개 시작 시간과 42개 종료 시간을 추출했다. 날짜·무대별 아티스트 48팀은 [주최사 최종 라인업](https://www.mintpaper.co.kr/posts/4802)과 대조했다. 검증 데이터는 `/private/tmp/gmf2026-verified-sets.json`, 출처는 `/private/tmp/gmf2026-verified-sets-sources.json`에 있다. 이 검증은 현재 GMF 이미지 레이아웃에 한정되며, Linux 서버의 Tesseract 수집 또는 자동 공개 성공을 뜻하지 않는다. 미공개 종료 시각 6개는 `null`이다.
+GMF 공식 이미지 두 장은 2026-10-23 macOS Vision의 무대별 영역 OCR로 48개 시작 시간과 42개 종료 시간을 추출했다. 날짜·무대별 아티스트 48팀은 [주최사 최종 라인업](https://www.mintpaper.co.kr/posts/4802)과 대조했다. 검증 데이터는 `/private/tmp/gmf2026-verified-sets.json`, 출처는 `/private/tmp/gmf2026-verified-sets-sources.json`에 있다. 이 검증은 현재 GMF 이미지 레이아웃에 한정되며, Linux 서버의 Tesseract 수집 또는 자동 공개 성공을 뜻하지 않는다. 미공개 종료 시각 6개는 `null`이다. XMF 이미지는 공식 원본을 확인했지만 Linux OCR 결과와 공개 API 반영은 별도 검증이 필요하다.
 
 ## 수집 계약
 

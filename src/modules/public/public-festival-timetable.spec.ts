@@ -60,6 +60,10 @@ describe('discovered festival timetable', () => {
       {} as never,
     );
     await expect(service.detail(id)).resolves.toMatchObject({
+      artists: [
+        { name: 'Artist A', imageUrl: null },
+        { name: 'Artist B', imageUrl: null },
+      ],
       timetable: [
         {
           artist: 'Artist A',
