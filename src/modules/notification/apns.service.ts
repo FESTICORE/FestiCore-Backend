@@ -125,6 +125,8 @@ export class ApnsService {
   ): Promise<ApnsSendResult> {
     const gather = input.type === 'crew.gather';
     const flag = input.type === 'flag.status';
+    const dissolved =
+      input.type === 'crew.status' && input.payload.dissolved === true;
     const name =
       typeof input.payload.nickname === 'string'
         ? input.payload.nickname
@@ -137,15 +139,23 @@ export class ApnsService {
       ? '크루 집결 요청'
       : flag
         ? '깃발 상태 변경'
-        : '크루원 상태 변경';
+        : dissolved
+          ? '크루 해산'
+          : '크루원 상태 변경';
     const body = gather
       ? `${name}님이 ${zone ?? '현재 위치'}에서 집결을 요청했어요.`
       : flag
         ? `깃발 상태가 ${state}(으)로 변경됐어요.`
-        : `${name}님의 상태가 ${state}(으)로 변경됐어요.`;
+        : dissolved
+          ? '크루가 해산됐어요'
+          : `${name}님의 상태가 ${state}(으)로 변경됐어요.`;
     const subjectId = flag ? input.payload.flagId : input.payload.crewId;
     const safeSubjectId = typeof subjectId === 'string' ? subjectId : '';
-    const route = flag ? `/flags/${safeSubjectId}` : `/crews/${safeSubjectId}`;
+    const route = flag
+      ? `/flags/${safeSubjectId}`
+      : dissolved
+        ? '/crews'
+        : `/crews/${safeSubjectId}`;
     return this.send(
       token,
       environment,

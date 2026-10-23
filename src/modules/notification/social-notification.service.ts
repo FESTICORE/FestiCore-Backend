@@ -159,6 +159,37 @@ export class SocialNotificationService
     );
   }
 
+  async enqueueCrewDissolved(
+    manager: EntityManager,
+    crew: Crew,
+    actorUserId: string,
+  ): Promise<void> {
+    await manager.query(
+      `UPDATE "social_notification_deliveries"
+       SET "status" = 'cancelled', "lastErrorCode" = 'CREW_DISSOLVED'
+       WHERE "subjectId" = $1 AND "type" IN ('crew.status', 'crew.gather')
+         AND "status" = 'pending'`,
+      [crew.id],
+    );
+    await manager.query(
+      `INSERT INTO "social_notification_deliveries"
+       ("deviceId", "recipientUserId", "type", "subjectId", "actorUserId", "eventKey", "payload", "nextAttemptAt")
+       SELECT d."id", d."userId", 'crew.status', $1, $2, $3, $4::jsonb, now()
+       FROM "crew_members" r
+       JOIN "users" u ON u."id" = r."userId" AND u."pushOptIn" = true
+       JOIN "devices" d ON d."userId" = r."userId"
+         AND d."apnsToken" IS NOT NULL AND d."apnsEnvironment" IS NOT NULL
+       WHERE r."crewId" = $1
+       ON CONFLICT ("deviceId", "eventKey") DO NOTHING`,
+      [
+        crew.id,
+        actorUserId,
+        `crew.status:dissolved:${crew.id}`,
+        JSON.stringify({ crewId: crew.id, dissolved: true }),
+      ],
+    );
+  }
+
   private async enqueueStatus(
     manager: EntityManager,
     type: 'flag.status' | 'crew.status',
@@ -278,6 +309,9 @@ export class SocialNotificationService
           WHERE f."flagId" = n."subjectId" AND f."userId" = n."recipientUserId"
             AND flag."visibility" = 'public' AND flag."hidden" = false
             AND flag."status" <> 'resting'))
+          OR (n."type" = 'crew.status'
+              AND n."eventKey" = 'crew.status:dissolved:' || n."subjectId"
+              AND n."payload"->>'dissolved' = 'true')
           OR (n."type" IN ('crew.status', 'crew.gather') AND EXISTS (
             SELECT 1 FROM "crew_members" m JOIN "crews" c ON c."id" = m."crewId"
             WHERE m."crewId" = n."subjectId" AND m."userId" = n."recipientUserId"

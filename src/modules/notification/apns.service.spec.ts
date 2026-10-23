@@ -137,6 +137,28 @@ describe('ApnsService', () => {
     });
   });
 
+  it('sends the crew dissolution message without linking to a deleted crew', async () => {
+    const { stream } = mockResponse(200);
+    const service = new ApnsService(config(credentials));
+    await service.sendSocialNotification(DEVICE_TOKEN, 'sandbox', {
+      type: 'crew.status',
+      eventKey: 'crew.status:dissolved:crew_123',
+      payload: { crewId: 'crew_123', dissolved: true },
+    });
+    const sentArgs: unknown = stream.end.mock.calls[0];
+    const payload = JSON.parse((sentArgs as [string])[0]) as Record<
+      string,
+      unknown
+    >;
+    expect(payload).toMatchObject({
+      aps: { alert: { title: '크루 해산', body: '크루가 해산됐어요' } },
+      type: 'crew.status',
+      route: '/crews',
+      crewId: 'crew_123',
+      dissolved: true,
+    });
+  });
+
   it('reuses its provider JWT across sends and selects the production host', async () => {
     mockResponse(200);
     const service = new ApnsService(config(credentials));
