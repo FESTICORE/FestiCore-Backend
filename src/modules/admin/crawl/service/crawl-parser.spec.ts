@@ -649,6 +649,35 @@ describe('crawl parsers', () => {
     ]);
   });
 
+  it('reads Seoul festival performers from the city portal image description', async () => {
+    const city = source('ticket-list', 'discovery', {
+      expectedArtists: '6',
+    });
+    city.url =
+      'https://culture.seoul.go.kr/culture/culture/cultureEvent/view.do?cultcode=159493&menuNo=200011';
+    const html = `<h2>2026 서울뮤직페스티벌</h2><img alt="2026 서울뮤직페스티벌 2026년 10월 24일 노들섬 부대행사 | 12:00 PM~ 본 공연 | 05:00 PM~ LINE UP IN 폴킴 | 권진아 | 옥상달빛 | 너드커넥션 | 추다해차지스 | 김창완밴드">`;
+    expect(await parseCrawl(city, html)).toEqual([
+      {
+        name: '2026 서울뮤직페스티벌',
+        url: city.url,
+        date: '2026.10.24',
+        artists: [
+          '폴킴',
+          '권진아',
+          '옥상달빛',
+          '너드커넥션',
+          '추다해차지스',
+          '김창완밴드',
+        ].map((name) => ({ name })),
+      },
+    ]);
+    await expect(
+      parseCrawl(city, html.replace('2026년', '2025년')),
+    ).rejects.toThrow('공개 예매 링크');
+    city.parserConfig.expectedArtists = '7';
+    await expect(parseCrawl(city, html)).rejects.toThrow('공개 예매 링크');
+  });
+
   it('extracts 12 CDF performers from the official Mint Paper post HTML', async () => {
     const mint = source('ticket-list', 'discovery', {
       festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',

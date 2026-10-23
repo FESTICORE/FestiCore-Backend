@@ -12,12 +12,12 @@
 | 공연 | 공식 자료 | 확인된 범위 |
 | --- | --- | --- |
 | Grand Mint Festival 2026 | https://www.mintpaper.co.kr/festivals/172/notice/4806 | 10/17·18 세 무대 48개 음악 공연의 개별 시간이 이미지에 있음. 6개 헤드라이너의 종료 시간은 원본에 없음. RADAR 프로그램은 음악 공연과 별개. |
-| 서울뮤직페스티벌 2026 | https://seoulmusicfestival.co.kr/asset/img_2026/sub/program/lineup_img.png | 메인 공연 출연진은 공식 이미지에 공개. https://seoulmusicfestival.co.kr/asset/img_2026/sub/about/schedule_2026.png 에 버스킹 두 팀의 시각이 있으나 메인 출연진별 시각은 미확인. 이미지 OCR·검토 소스는 아직 미등록. |
+| 서울뮤직페스티벌 2026 | https://culture.seoul.go.kr/culture/culture/cultureEvent/view.do?cultcode=159493&menuNo=200011 | 서울시 문화포털의 공식 이미지 설명에서 메인 출연진 6팀을 매일 수집한다. https://seoulmusicfestival.co.kr/asset/img_2026/sub/about/schedule_2026.png 에 버스킹 쓰다(13:30–14:00)·올디 벗 구디(15:00–15:30)의 시간이 있으나 메인 출연진별 시각은 미확인. 버스킹 이미지 OCR·검토 소스는 아직 미등록. |
 | WONDERLIVET 2026 | https://www.wonderli.vet/home | 시간표 공개 안내는 있으나 개별 시각 원본은 미확보. |
 | XMF 2026 | https://xmfestival.com/notice | 공식 최종 라인업에서 양일 22팀과 오프닝 DJ 2팀 확인. Day 1·2 공식 시간표 이미지를 확보해 OCR 소스를 등록한다. 이미지에 적히지 않은 종료 시각은 추정하지 않는다. OCR 결과는 관리자 승인 전 공개하지 않는다. |
 | COUNTDOWN FANTASY 2026-2027 | https://www.mintpaper.co.kr/posts/4819 | 공식 1차 라인업 12팀 확인. 개별 공연 시각은 아직 미공개. |
 | 원웨이 페스티벌 2026 | https://ticket.melon.com/csoon/detail.htm?csoonId=12728 | 공식 1차 라인업 11팀 확인. 개별 공연 시각은 아직 미확보. |
-| 히어로 락·대구힙합·THE BRIDGE | 각 공식 판매·주최사 페이지 | 발견 목록에 출연진이 있으나 개별 시각은 미확보. |
+| 히어로 락·대구힙합·THE BRIDGE | 각 공식 판매·주최사 페이지 | 발견 목록에 출연진이 있으나 개별 시각은 미확보. THE BRIDGE의 공식 예매처 상세 이미지에는 추가 출연진이 있으나 텍스트 목록은 없어 이미지 검토 수집이 필요하다. |
 | Anime X Game Festival | https://agfkorea.com/stage?idx=1 | 공식 무대 페이지가 Coming soon이므로 출연진·시각을 생성하지 않는다. |
 | 푸르지오아트홀·썸띵 뉴·FISM BUSAN 2028 | 각 공식 판매·주최사 페이지 | 확인 가능한 개별 공연 시각 미확보. |
 
