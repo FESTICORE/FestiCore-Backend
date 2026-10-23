@@ -20,6 +20,7 @@ import { TokenService } from '../src/modules/auth/service/token.service';
 import { FlagPackSyncService } from '../src/modules/flags/flag-pack-sync.service';
 import { HealthController } from '../src/modules/health/controller/health.controller';
 import { HealthService } from '../src/modules/health/service/health.service';
+import { LegalController } from '../src/modules/legal/legal.controller';
 import { CacheService } from '../src/modules/redis/service/cache.service';
 import { FakeRepository } from './fake-repository';
 
@@ -109,7 +110,12 @@ export async function createTestApp(): Promise<TestContext> {
 
   const moduleRef = await Test.createTestingModule({
     imports: [JwtModule.register({})],
-    controllers: [AuthController, MeController, HealthController],
+    controllers: [
+      AuthController,
+      MeController,
+      HealthController,
+      LegalController,
+    ],
     providers: [
       AuthService,
       TokenService,

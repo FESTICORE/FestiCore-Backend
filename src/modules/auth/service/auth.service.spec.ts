@@ -530,6 +530,10 @@ describe('AuthService 회원 탈퇴의 크루 소유권', () => {
       expect.stringContaining('DELETE FROM "devices" WHERE "userId" = $1'),
       [userId],
     );
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining('DELETE FROM "metric_events"'),
+      [userId],
+    );
   });
 
   it('다른 멤버가 없으면 크루를 지우고 계정을 삭제한다', async () => {

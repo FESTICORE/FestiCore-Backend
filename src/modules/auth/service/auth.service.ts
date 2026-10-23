@@ -388,6 +388,12 @@ export class AuthService {
         )`,
           [userId],
         );
+        await manager.query(
+          `DELETE FROM "metric_events" WHERE "deviceId" IN (
+          SELECT "id" FROM "devices" WHERE "userId" = $1
+        )`,
+          [userId],
+        );
         await manager.query(`DELETE FROM "devices" WHERE "userId" = $1`, [
           userId,
         ]);
