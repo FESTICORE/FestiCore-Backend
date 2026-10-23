@@ -15,6 +15,7 @@ describe('discovered festival artist profile images', () => {
       .fn()
       .mockResolvedValueOnce([{ candidate }])
       .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([]);
     const service = new PublicFestivalService(
       { findOne: jest.fn().mockResolvedValue(null) } as never,
@@ -31,7 +32,7 @@ describe('discovered festival artist profile images', () => {
         },
       ],
     });
-    expect(query).toHaveBeenCalledTimes(3);
+    expect(query).toHaveBeenCalledTimes(4);
     expect(
       (query.mock.calls as unknown as [string, [string[]]][])[2][1][0],
     ).toEqual([sourceUrl]);
@@ -65,7 +66,8 @@ describe('discovered festival artist profile images', () => {
           artistName: 'Brandy Senki',
           id: imageId,
         },
-      ]);
+      ])
+      .mockResolvedValueOnce([]);
     const service = new PublicFestivalService(
       { findOne: jest.fn().mockResolvedValue(null) } as never,
       {} as never,

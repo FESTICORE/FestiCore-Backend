@@ -5,6 +5,7 @@ import { NotFoundException } from '@nestjs/common';
 import { In } from 'typeorm';
 import { createHash } from 'crypto';
 import sharp from 'sharp';
+import * as imageOcr from './timetable-image-ocr';
 import {
   CreateCrawlSourceDto,
   UpdateCrawlSourceDto,
@@ -104,6 +105,13 @@ function harness() {
     recordThresholdFailure: jest.fn().mockResolvedValue(undefined),
   };
   const audit = { record: jest.fn().mockResolvedValue(undefined) };
+  const timetableRevisions = {
+    stageCandidate: jest
+      .fn()
+      .mockImplementation((candidate) =>
+        Promise.resolve({ ...candidate, id: 'revision-1' }),
+      ),
+  };
   const service = new CrawlService(
     sourcesRepo as never,
     runsRepo as never,
@@ -114,6 +122,7 @@ function harness() {
     imageStorage as never,
     alerts as never,
     audit as never,
+    timetableRevisions as never,
   ) as unknown as PrivateCrawl;
   const execute = jest.spyOn(service, 'execute').mockResolvedValue(undefined);
   return {
@@ -127,6 +136,7 @@ function harness() {
     imageStorage,
     alerts,
     audit,
+    timetableRevisions,
     insertQb,
     insertResult,
     updateQb,
@@ -210,6 +220,85 @@ describe('CrawlService scheduled runs', () => {
     await service.scheduleDue();
 
     expect(execute).not.toHaveBeenCalled();
+  });
+});
+
+describe('CrawlService official timetable image', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it('stores only a pending candidate from one official day image', async () => {
+    const { service, source, run, runsRepo, timetableRevisions } = harness();
+    jest.spyOn(service, 'execute').mockRestore();
+    source.kind = 'timetable';
+    source.parser = 'image-ocr';
+    source.url = 'https://official.example/timetable-day1.jpg';
+    source.parserConfig = {
+      festivalSourceUrl:
+        'https://ticket.melon.com/performance/index.htm?prodId=123',
+      sourcePageUrl: 'https://official.example/notice/1',
+      date: '2026-10-17',
+      expectedRows: '1',
+      columns: JSON.stringify([
+        {
+          stageId: 'stg_main',
+          stageName: 'Main Stage',
+          left: 0,
+          top: 0,
+          width: 1,
+          height: 1,
+        },
+      ]),
+    };
+    const privateService = service as unknown as {
+      limitedGetImage: (url: URL) => Promise<unknown>;
+      captureImages: () => Promise<string[]>;
+    };
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(privateService, 'limitedGetImage').mockResolvedValue({
+      status: 200,
+      body: Buffer.from('official-image'),
+      contentType: 'image/jpeg',
+    });
+    jest
+      .spyOn(privateService, 'captureImages')
+      .mockResolvedValue([
+        '/api/v1/admin/crawl/images/00000000-0000-4000-8000-000000000010',
+      ]);
+    jest.spyOn(imageOcr, 'extractTimetableImageCandidates').mockResolvedValue([
+      {
+        stageId: 'stg_main',
+        startsAt: '2026-10-17T12:20:00+09:00',
+        endsAt: null,
+        artistText: 'Artist A',
+        rawText: '12:20 -',
+      },
+    ]);
+    runsRepo.createQueryBuilder.mockReset().mockReturnValue({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(null),
+    });
+
+    await service.execute(run, source);
+
+    expect(run.result).toBe('proposed');
+    expect(timetableRevisions.stageCandidate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceId: source.id,
+        festivalSourceUrl: source.parserConfig.festivalSourceUrl,
+        sourceUrl: source.parserConfig.sourcePageUrl,
+        imageId: '00000000-0000-4000-8000-000000000010',
+        sets: [
+          {
+            artist: 'Artist A',
+            date: '2026-10-17',
+            stageName: 'Main Stage',
+            startsAt: '2026-10-17T12:20:00+09:00',
+            endsAt: null,
+          },
+        ],
+      }),
+    );
   });
 });
 

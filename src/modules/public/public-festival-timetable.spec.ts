@@ -1,0 +1,140 @@
+import { discoverySummaries } from './crawl-catalog';
+import { PublicFestivalService } from './public-festival.service';
+
+describe('discovered festival timetable', () => {
+  const sourceUrl =
+    'https://ticket.melon.com/performance/index.htm?prodId=123456';
+  const candidate = {
+    name: 'Test Festival',
+    venue: 'Test Venue',
+    date: '2026.10.17 - 2026.10.18',
+    url: sourceUrl,
+    artists: [{ name: 'Artist A' }],
+  };
+  const id = discoverySummaries([{ candidate }])[0].id;
+
+  it('combines the latest verified revision per source across two days', async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([{ candidate }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          id: 'revision-day-2',
+          sourceId: 'source-day-2',
+          sourceUrl: 'https://official.example/day-2',
+          sourceImageId: null,
+          verifiedAt: new Date('2026-10-11T00:00:00Z'),
+          sets: [
+            {
+              artist: 'Artist B',
+              date: '2026-10-18',
+              stageName: 'Main Stage',
+              startsAt: '2026-10-18T18:00:00+09:00',
+              endsAt: '2026-10-18T19:00:00+09:00',
+            },
+          ],
+        },
+        {
+          id: 'revision-day-1',
+          sourceId: 'source-day-1',
+          sourceUrl: 'https://official.example/day-1',
+          sourceImageId: '00000000-0000-4000-8000-000000000010',
+          verifiedAt: new Date('2026-10-10T00:00:00Z'),
+          sets: [
+            {
+              artist: 'Artist A',
+              date: '2026-10-17',
+              stageName: 'Main Stage',
+              startsAt: '2026-10-17T20:00:00+09:00',
+              endsAt: null,
+            },
+          ],
+        },
+      ]);
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    await expect(service.detail(id)).resolves.toMatchObject({
+      timetable: [
+        {
+          artist: 'Artist A',
+          stageName: 'Main Stage',
+          endsAt: null,
+          sourceUrl: 'https://official.example/day-1',
+          sourceImageUrl:
+            '/api/v1/festivals/images/00000000-0000-4000-8000-000000000010.webp',
+        },
+        {
+          artist: 'Artist B',
+          date: '2026-10-18',
+          sourceUrl: 'https://official.example/day-2',
+          sourceImageUrl: null,
+        },
+      ],
+    });
+    const [sql, parameters] = query.mock.calls[3] as [string, string[]];
+    expect(sql).toContain('DISTINCT ON (revision."sourceId")');
+    expect(sql).toContain("revision.status = 'verified'");
+    expect(sql).toContain('revision."imageId" = image.id');
+    expect(parameters).toEqual([sourceUrl]);
+  });
+
+  it('retains the prior verified source revision when a newer collection is pending', async () => {
+    const priorVerified = {
+      id: 'verified-day-1',
+      sourceId: 'source-day-1',
+      sourceUrl: 'https://official.example/day-1',
+      sourceImageId: null,
+      verifiedAt: new Date('2026-10-10T00:00:00Z'),
+      sets: [
+        {
+          artist: 'Artist A',
+          date: '2026-10-17',
+          stageName: 'Main Stage',
+          startsAt: '2026-10-17T20:00:00+09:00',
+          endsAt: null,
+        },
+      ],
+    };
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([{ candidate }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      // The DB query's verified predicate excludes the newer pending row.
+      .mockResolvedValueOnce([priorVerified]);
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    await expect(service.detail(id)).resolves.toMatchObject({
+      timetable: [{ id: 'verified-day-1-0', artist: 'Artist A' }],
+    });
+    expect((query.mock.calls[3] as [string])[0]).toContain(
+      "revision.status = 'verified'",
+    );
+  });
+
+  it('keeps the timetable empty while all collected revisions are pending', async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([{ candidate }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    await expect(service.detail(id)).resolves.toMatchObject({ timetable: [] });
+  });
+});
