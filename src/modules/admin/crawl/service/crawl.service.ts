@@ -693,7 +693,9 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
           );
           if (imageHint === entry.imageUrl.pathname)
             throw new Error('공식 이미지 경로가 올바르지 않습니다.');
-          const updated = await this.dataSource.query<{ id: string }[]>(
+          const updated = await this.dataSource.query<
+            [{ id: string }[], number]
+          >(
             `UPDATE crawl_sources SET
                "parserConfig" = "parserConfig" || jsonb_build_object('imageHint', $4::text),
                enabled = true, status = 'ok', "updatedAt" = now()
@@ -704,7 +706,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
              RETURNING id`,
             [source.url, config.festivalSourceUrl, entry.artistName, imageHint],
           );
-          if (updated.length) continue;
+          if (updated[1] > 0) continue;
           await this.dataSource.query(
             `INSERT INTO crawl_sources (kind, url, parser, "parserConfig", "createdAt")
              SELECT 'artist-image', $1::text, 'html-text',

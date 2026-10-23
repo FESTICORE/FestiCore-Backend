@@ -662,6 +662,9 @@ describe('CrawlService manual runs and snapshots', () => {
   it('registers official gallery artists from the current page rather than a fixed lineup', async () => {
     const { service, source, run, execute, dataSource } = harness();
     execute.mockRestore();
+    dataSource.query.mockImplementation((sql: string) =>
+      Promise.resolve(sql.includes('RETURNING id') ? [[], 0] : []),
+    );
     source.kind = 'artist-gallery';
     source.url = 'https://xmfestival.com/lineup';
     source.parser = 'html-text';
