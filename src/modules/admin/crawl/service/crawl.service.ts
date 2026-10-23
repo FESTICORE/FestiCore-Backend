@@ -632,13 +632,17 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
               ? 'ticket-list:v4'
               : source.url === 'https://ticket.yes24.com/English/Genre/Concert'
                 ? 'ticket-list:v4'
-                : source.url.startsWith(
-                      'https://ticket.melon.com/search/index.htm?',
+                : /^https:\/\/ticket\.yes24\.com\/(?:English\/)?Perf\/\d+$/.test(
+                      source.url,
                     )
                   ? 'ticket-list:v4'
-                  : source.url.startsWith('https://nol.yanolja.com/ticket')
-                    ? 'ticket-list:v5'
-                    : 'ticket-list:v3'
+                  : source.url.startsWith(
+                        'https://ticket.melon.com/search/index.htm?',
+                      )
+                    ? 'ticket-list:v4'
+                    : source.url.startsWith('https://nol.yanolja.com/ticket')
+                      ? 'ticket-list:v5'
+                      : 'ticket-list:v3'
             : '',
         )
         .digest('hex');
@@ -693,9 +697,9 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
             `UPDATE crawl_sources SET
                "parserConfig" = "parserConfig" || jsonb_build_object('imageHint', $4::text),
                enabled = true, status = 'ok', "updatedAt" = now()
-             WHERE kind = 'artist-image' AND url = $1
-               AND "parserConfig"->>'festivalSourceUrl' = $2
-               AND "parserConfig"->>'artistName' = $3
+             WHERE kind = 'artist-image' AND url = $1::text
+               AND "parserConfig"->>'festivalSourceUrl' = $2::text
+               AND "parserConfig"->>'artistName' = $3::text
                AND "parserConfig"->>'seed' = 'official-artist-gallery'
              RETURNING id`,
             [source.url, config.festivalSourceUrl, entry.artistName, imageHint],
@@ -703,14 +707,14 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
           if (updated.length) continue;
           await this.dataSource.query(
             `INSERT INTO crawl_sources (kind, url, parser, "parserConfig", "createdAt")
-             SELECT 'artist-image', $1, 'html-text',
+             SELECT 'artist-image', $1::text, 'html-text',
                jsonb_build_object('seed', 'official-artist-gallery',
                  'festivalSourceUrl', $2::text, 'artistName', $3::text,
                  'imageHint', $4::text), now() - interval '1 day'
              WHERE NOT EXISTS (
-               SELECT 1 FROM crawl_sources WHERE kind = 'artist-image' AND url = $1
-                 AND "parserConfig"->>'festivalSourceUrl' = $2
-                 AND "parserConfig"->>'artistName' = $3
+               SELECT 1 FROM crawl_sources WHERE kind = 'artist-image' AND url = $1::text
+                 AND "parserConfig"->>'festivalSourceUrl' = $2::text
+                 AND "parserConfig"->>'artistName' = $3::text
              )`,
             [source.url, config.festivalSourceUrl, entry.artistName, imageHint],
           );
@@ -718,8 +722,8 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         await this.dataSource.query(
           `UPDATE crawl_sources SET enabled = false, status = 'disabled',
              "updatedAt" = now()
-           WHERE kind = 'artist-image' AND url = $1
-             AND "parserConfig"->>'festivalSourceUrl' = $2
+           WHERE kind = 'artist-image' AND url = $1::text
+             AND "parserConfig"->>'festivalSourceUrl' = $2::text
              AND "parserConfig"->>'seed' = 'official-artist-gallery'
              AND NOT ("parserConfig"->>'artistName' = ANY($3::text[]))`,
           [source.url, config.festivalSourceUrl, [...names]],
@@ -798,7 +802,9 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
               (!/^https:\/\/ticket\.melon\.com\/performance\/index\.htm\?prodId=\d+$/.test(
                 url,
               ) &&
-                !/^https:\/\/ticket\.yes24\.com\/Perf\/\d+$/.test(url) &&
+                !/^https:\/\/ticket\.yes24\.com\/(?:English\/)?Perf\/\d+$/.test(
+                  url,
+                ) &&
                 !/^https:\/\/nol\.yanolja\.com\/ticket\/products\/\d+$/.test(
                   url,
                 ))

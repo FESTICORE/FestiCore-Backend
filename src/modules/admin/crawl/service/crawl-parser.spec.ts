@@ -552,6 +552,34 @@ describe('crawl parsers', () => {
     ]);
   });
 
+  it('reads paired performers from the English YES24 detail route', async () => {
+    const yes24 = source('ticket-list', 'discovery');
+    yes24.url = 'https://ticket.yes24.com/English/Perf/60590';
+    const html = `<script type="application/ld+json">${JSON.stringify({
+      '@type': 'Event',
+      name: 'COUNTDOWN FANTASY 2026-2027',
+      startDate: '2026-12-31',
+      endDate: '2026-12-31',
+      location: { name: '킨텍스' },
+      performer: [
+        {
+          '@type': 'MusicGroup',
+          name: '밴드 A',
+          image: 'https://tkfile.yes24.com/artists/band-a.jpg',
+        },
+      ],
+    })}</script>`;
+    const result = (await parseCrawl(yes24, html)) as {
+      artists?: { name: string; sourceUrl?: string }[];
+    }[];
+    expect(result[0].artists).toEqual([
+      {
+        name: '밴드 A',
+        sourceUrl: 'https://tkfile.yes24.com/artists/band-a.jpg',
+      },
+    ]);
+  });
+
   it('reads a single structured performer from a NOL event without creating set times', async () => {
     const nol = source('ticket-list', 'discovery');
     nol.url = 'https://nol.yanolja.com/ticket/products/26014568';

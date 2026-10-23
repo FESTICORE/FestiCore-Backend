@@ -812,7 +812,7 @@ function yes24DetailCandidates(
   const source = new URL(base);
   if (
     source.hostname !== 'ticket.yes24.com' ||
-    !/^\/Perf\/\d+$/.test(source.pathname)
+    !/^\/(?:English\/)?Perf\/\d+$/.test(source.pathname)
   )
     return null;
   const event = yes24EventJson(body);
