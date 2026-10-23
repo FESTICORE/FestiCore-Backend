@@ -240,7 +240,7 @@ export class PublicFestivalController {
   @ApiOperation({
     summary: '축제 상세 정보',
     description:
-      '목록의 축제 ID로 상세를 조회합니다. 발견된 축제는 확인된 일정·장소·보관 포스터·출연진·ticketLinks와 빈 timetable을 반환합니다. 발행 축제의 timetable에는 공연별 날짜·무대명·시작/종료 시각·보관된 출연진 imageUrl(없으면 null)이 포함됩니다. 공연별 공식 시각이 없으면 빈 배열입니다. 요청 본문은 없습니다.',
+      '목록의 축제 ID로 상세를 조회합니다. 발견된 축제는 검증된 공식 시간표가 있으면 날짜·무대·아티스트·시작 시각·종료 시각(미공개 시 null)·출처 URL·원본 이미지 URL을 timetable에 반환합니다. 검증된 공연별 시각이 없으면 빈 배열입니다. 발행 축제는 공개된 팩의 시간표를 반환합니다. 요청 본문은 없습니다.',
   })
   @ApiParam({
     name: 'id',

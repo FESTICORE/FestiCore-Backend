@@ -31,6 +31,9 @@ import {
 } from './crawl-image';
 import { parseCrawl, plainText } from './crawl-parser';
 import { CrawlAlertService } from './crawl-alert.service';
+import { CrawlTimetableRevisionService } from './crawl-timetable-revision.service';
+import { extractTimetableImageCandidates } from './timetable-image-ocr';
+import { timetableSourceConfig } from './timetable-source-config';
 
 const kstDay = (date = new Date()) =>
   new Intl.DateTimeFormat('en-CA', {
@@ -116,6 +119,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     private readonly imageStorage: ImageStorageService,
     private readonly alerts: CrawlAlertService,
     private readonly audit: AdminAuditService,
+    private readonly timetableRevisions: CrawlTimetableRevisionService,
   ) {}
 
   onModuleInit() {
@@ -154,23 +158,39 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       directions: 'html-text',
       days: 'regex-days',
     };
-    if (dto.parser !== parsers[dto.kind]) {
+    const imageTimetable =
+      dto.kind === 'timetable' && dto.parser === 'image-ocr';
+    if (!imageTimetable && dto.parser !== parsers[dto.kind]) {
       throw new UnprocessableEntityException(
         '소스 종류와 파서가 맞지 않습니다.',
       );
     }
-    if (!['discovery', 'artist-image'].includes(dto.kind) && !dto.festivalId) {
+    if (
+      !['discovery', 'artist-image'].includes(dto.kind) &&
+      !imageTimetable &&
+      !dto.festivalId
+    ) {
       throw new UnprocessableEntityException('festivalId가 필요합니다.');
     }
-    if (['discovery', 'artist-image'].includes(dto.kind) && dto.festivalId) {
+    if (
+      (['discovery', 'artist-image'].includes(dto.kind) || imageTimetable) &&
+      dto.festivalId
+    ) {
       throw new UnprocessableEntityException(
-        '발견 및 아티스트 사진 소스에는 festivalId를 지정할 수 없습니다.',
+        '발견·아티스트 사진·이미지 시간표 소스에는 festivalId를 지정할 수 없습니다.',
       );
     }
     const parserConfig =
       dto.kind === 'artist-image'
         ? artistImageConfig(dto.parserConfig)
         : dto.parserConfig;
+    if (imageTimetable) {
+      try {
+        timetableSourceConfig(parserConfig);
+      } catch (error) {
+        throw new UnprocessableEntityException(String(error));
+      }
+    }
     if (
       dto.festivalId &&
       !(await this.dataSource
@@ -210,12 +230,12 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
   ) {
     const source = await this.getSource(id);
     if (
-      source.kind === 'artist-image' &&
+      (source.kind === 'artist-image' || source.parser === 'image-ocr') &&
       (dto.parserConfig !== undefined ||
         (dto.url !== undefined && dto.url !== source.url))
     )
       throw new UnprocessableEntityException(
-        '아티스트 사진 소스의 원본 URL과 연결 정보는 변경할 수 없습니다. 새 소스를 등록하세요.',
+        '이미지 수집 소스의 원본 URL과 연결 정보는 변경할 수 없습니다. 새 소스를 등록하세요.',
       );
     const parserConfig =
       dto.parserConfig && source.kind === 'artist-image'
@@ -298,6 +318,20 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
   async testSource(id: string) {
     const source = await this.getSource(id);
     await this.checkRobots(source.url);
+    if (source.parser === 'image-ocr') {
+      const config = timetableSourceConfig(source.parserConfig);
+      const response = await this.limitedGetImage(checkedUrl(source.url));
+      if (response.status !== 200)
+        throw new UnprocessableEntityException(`HTTP ${response.status}`);
+      const parsed = await extractTimetableImageCandidates(response.body, {
+        date: config.date,
+        columns: config.columns,
+      });
+      return {
+        parsed,
+        excerpt: `${config.date}: ${parsed.length}/${config.expectedRows}개 공연 후보`,
+      };
+    }
     const response = await this.getListing(source);
     if (response.status !== 200)
       throw new UnprocessableEntityException(`HTTP ${response.status}`);
@@ -459,10 +493,81 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       await this.checkRobots(source.url);
       phase = 'FETCH';
       if (source.parser === 'image-ocr') {
-        await this.captureImages(source, run, [checkedUrl(source.url)]);
-        throw new Error(
-          '이미지는 보관했지만 OCR 파서는 아직 연동되지 않았습니다.',
+        const config = timetableSourceConfig(source.parserConfig);
+        const imageUrl = checkedUrl(source.url);
+        const response = await this.limitedGetImage(imageUrl);
+        run.httpStatus = response.status;
+        if (response.status !== 200) throw new Error(`HTTP ${response.status}`);
+        const parserHash = createHash('sha256')
+          .update('timetable-image-ocr:v1')
+          .update(JSON.stringify(config))
+          .digest('hex');
+        const imageHash = createHash('sha256')
+          .update(response.body)
+          .digest('hex');
+        run.contentHash = createHash('sha256')
+          .update(imageHash)
+          .update(parserHash)
+          .digest('hex');
+        const previous = await this.runsRepo
+          .createQueryBuilder('run')
+          .where(
+            'run.sourceId = :sourceId AND run.id != :id AND run.result != :failed',
+            { sourceId: source.id, id: run.id, failed: 'failed' },
+          )
+          .orderBy('run.startedAt', 'DESC')
+          .getOne();
+        if (previous?.contentHash === run.contentHash) {
+          run.result = 'unchanged';
+          source.status = 'ok';
+          return;
+        }
+        phase = 'IMAGE';
+        const saved = await this.captureImages(
+          source,
+          run,
+          [imageUrl],
+          new Map([[imageUrl.toString(), response]]),
         );
+        const imageId = /\/images\/([0-9a-f-]+)$/.exec(saved[0] ?? '')?.[1];
+        if (!imageId)
+          throw new Error('시간표 원본 이미지를 저장하지 못했습니다.');
+        phase = 'OCR';
+        const candidates = await extractTimetableImageCandidates(
+          response.body,
+          {
+            date: config.date,
+            columns: config.columns,
+          },
+        );
+        if (candidates.length !== config.expectedRows)
+          throw new Error(
+            '공식 시간표의 예상 공연 수와 OCR 후보 수가 다릅니다.',
+          );
+        const stageNames = new Map(
+          config.columns.map((column) => [column.stageId, column.stageName]),
+        );
+        const sets = candidates.map((candidate) => ({
+          artist: candidate.artistText ?? '',
+          date: config.date,
+          stageName: stageNames.get(candidate.stageId) ?? '',
+          startsAt: candidate.startsAt,
+          endsAt: candidate.endsAt,
+        }));
+        const revision = await this.timetableRevisions.stageCandidate({
+          sourceId: source.id,
+          runId: run.id,
+          festivalSourceUrl: config.festivalSourceUrl,
+          sourceUrl: config.sourcePageUrl,
+          imageId,
+          contentHash: imageHash,
+          parserHash,
+          sets,
+        });
+        run.result = revision.runId === run.id ? 'proposed' : 'nochange-parsed';
+        source.lastChangedAt = new Date();
+        source.status = 'ok';
+        return;
       }
       const response = await this.getListing(source);
       run.httpStatus = response.status;
@@ -881,6 +986,10 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     source: CrawlSource,
     run: CrawlRun,
     urls: URL[],
+    preloaded?: Map<
+      string,
+      { status: number; body: Buffer; contentType: string }
+    >,
   ): Promise<string[]> {
     const stored: string[] = [];
     for (const url of selectRunImages(
@@ -892,7 +1001,8 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       let validated = false;
       try {
         await this.checkRobots(url.toString());
-        const response = await this.limitedGetImage(url);
+        const response =
+          preloaded?.get(url.toString()) ?? (await this.limitedGetImage(url));
         if (response.status !== 200) throw new Error(`HTTP ${response.status}`);
         const prepared = await prepareCrawlImage(
           response.body,

@@ -379,7 +379,9 @@ describe('Public festival API', () => {
           originUrl: candidate.candidate.artists[0].sourceUrl,
           id: '00000000-0000-4000-8000-000000000002',
         },
-      ]);
+      ])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
     const id = discoverySummaries([candidate])[0].id;
     const response = await request(server)
       .get(`/api/v1/festivals/${id}`)

@@ -21,13 +21,15 @@ const KINDS: CrawlKind[] = [
 const PARSERS: CrawlParser[] = [
   'html-table',
   'html-text',
+  'image-ocr',
   'regex-days',
   'ticket-list',
 ];
 
 export class CreateCrawlSourceDto {
   @ApiPropertyOptional({
-    description: '대상 축제 ID. discovery 소스는 생략할 수 있습니다.',
+    description:
+      '관리자 초안 축제 ID. discovery·artist-image·이미지 시간표 소스는 생략합니다.',
     example: 'fst_demo2026',
   })
   @IsOptional()
@@ -44,7 +46,8 @@ export class CreateCrawlSourceDto {
   url!: string;
   @ApiProperty({
     enum: PARSERS,
-    description: '소스 형식에 맞는 파서. image-ocr은 OCR 연동 후 제공됩니다.',
+    description:
+      '소스 형식에 맞는 파서. timetable의 image-ocr은 공식 이미지에서 검토용 후보를 만듭니다.',
   })
   @IsEnum(PARSERS)
   parser!: CrawlParser;
@@ -58,7 +61,7 @@ export class CreateCrawlSourceDto {
       imageHint: 'profile-photo',
     },
     description:
-      '파서별 설정. artist-image는 축제 예매 상세 URL, 출연진 이름, 공식 프로필 이미지 경로의 고유 부분을 지정합니다.',
+      '파서별 설정. artist-image는 festivalSourceUrl·artistName·imageHint를 지정합니다. timetable/image-ocr은 festivalSourceUrl·sourcePageUrl·date·expectedRows 및 무대 영역(columns)을 JSON 문자열로 지정합니다.',
   })
   @IsObject()
   parserConfig!: Record<string, string>;
