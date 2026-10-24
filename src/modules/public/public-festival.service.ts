@@ -403,6 +403,15 @@ export class PublicFestivalService {
     return summaries;
   }
 
+  async discovered(id: string): Promise<DiscoverySummary | null> {
+    const entry = (await this.discoveryCatalog()).find(
+      (item) => item.id === id,
+    );
+    if (!entry) return null;
+    await this.attachStoredImages([entry]);
+    return entry;
+  }
+
   private async attachStoredImages(
     entries: DiscoverySummary[],
     includeTimetableArtists = false,

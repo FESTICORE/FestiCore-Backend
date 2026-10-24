@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   HttpException,
   Injectable,
   NotFoundException,
@@ -16,6 +17,8 @@ import {
 import { mergeDraft, validateDraft } from './festival-validation';
 import { AdminAuditService } from '../audit/admin-audit.service';
 import { CacheService } from '../../redis/service/cache.service';
+import { PublicFestivalService } from '../../public/public-festival.service';
+import { DiscoverySummary } from '../../public/crawl-catalog';
 
 const alphabet = '0123456789abcdefghjkmnpqrstvwxyz';
 const SOURCE_STALE_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
@@ -36,6 +39,54 @@ function sourceWarnings(draft: FestivalDocument): string[] {
 function newId(): string {
   const bytes = randomBytes(8);
   return 'fst_' + [...bytes].map((b) => alphabet[b % alphabet.length]).join('');
+}
+
+function draftFor(
+  id: string,
+  input: { name: string; venue: string; days: unknown[] },
+  source: { name: string; url: string | null; verifiedAt: string },
+  thumbUrl: string | null = null,
+  ticketLinks: { label: string; url: string }[] = [],
+): FestivalDocument {
+  return {
+    id,
+    name: input?.name,
+    venue: input?.venue,
+    timezone: 'Asia/Seoul',
+    days: input?.days,
+    thumbUrl,
+    ticketLinks,
+    flagsEnabled: false,
+    stages: [],
+    sets: [],
+    zones: [],
+    flags: [],
+    directions: {
+      shuttle: null,
+      transit: null,
+      parking: null,
+      memo: null,
+      lastShuttleAt: null,
+      lastTrainAt: null,
+      mapLinks: { naver: null, kakao: null },
+      source,
+    },
+    checklist: [],
+    rules: [],
+    mapImageUrl: null,
+    mapAspect: null,
+    source,
+  };
+}
+
+function draftErrors(draft: FestivalDocument): void {
+  const errors = validateDraft(draft);
+  if (errors.length)
+    throw new BadRequestException({
+      code: 'VALIDATION',
+      message: errors.join('; '),
+      errors,
+    });
 }
 
 function conflict(current: AdminFestival): never {
@@ -60,6 +111,7 @@ export class AdminFestivalService {
     private readonly dataSource: DataSource,
     private readonly audit: AdminAuditService,
     private readonly cache: CacheService,
+    private readonly publicFestivals: PublicFestivalService,
   ) {}
 
   async list() {
@@ -93,50 +145,12 @@ export class AdminFestivalService {
     input: { name: string; venue: string; days: unknown[] },
     actor: string | null,
   ) {
-    const draft: FestivalDocument = {
-      id: newId(),
-      name: input?.name,
-      venue: input?.venue,
-      timezone: 'Asia/Seoul',
-      days: input?.days,
-      thumbUrl: null,
-      ticketLinks: [],
-      flagsEnabled: false,
-      stages: [],
-      sets: [],
-      zones: [],
-      flags: [],
-      directions: {
-        shuttle: null,
-        transit: null,
-        parking: null,
-        memo: null,
-        lastShuttleAt: null,
-        lastTrainAt: null,
-        mapLinks: { naver: null, kakao: null },
-        source: {
-          name: '관리자 입력',
-          url: null,
-          verifiedAt: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
-        },
-      },
-      checklist: [],
-      rules: [],
-      mapImageUrl: null,
-      mapAspect: null,
-      source: {
-        name: '관리자 입력',
-        url: null,
-        verifiedAt: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
-      },
-    };
-    const errors = validateDraft(draft);
-    if (errors.length)
-      throw new BadRequestException({
-        code: 'VALIDATION',
-        message: errors.join('; '),
-        errors,
-      });
+    const draft = draftFor(newId(), input, {
+      name: '관리자 입력',
+      url: null,
+      verifiedAt: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+    });
+    draftErrors(draft);
     const row = this.festivals.create({
       id: draft.id as string,
       draft,
@@ -155,6 +169,83 @@ export class AdminFestivalService {
         after: { draftVersion: row.draftVersion, draft: row.draft },
       });
     });
+    return this.draftResponse(row);
+  }
+
+  async importDiscovered(
+    id: string,
+    input: { days: unknown[] },
+    actor: string | null,
+  ) {
+    if (!/^fst_[0-9a-f]{16}$/.test(id))
+      throw new NotFoundException('발견된 축제를 찾을 수 없습니다.');
+    if (await this.festivals.exist({ where: { id } }))
+      throw new ConflictException('이미 관리 중인 축제입니다.');
+    const entry: DiscoverySummary | null =
+      await this.publicFestivals.discovered(id);
+    if (!entry) throw new NotFoundException('발견된 축제를 찾을 수 없습니다.');
+    const days = input?.days;
+    if (
+      !Array.isArray(days) ||
+      (days[0] as { date?: unknown } | undefined)?.date !== entry.firstDate ||
+      (days[days.length - 1] as { date?: unknown } | undefined)?.date !==
+        entry.lastDate
+    )
+      throw new BadRequestException({
+        code: 'VALIDATION',
+        message:
+          'days의 첫날과 마지막 날은 발견된 축제 날짜 범위와 같아야 합니다.',
+      });
+    const draft = draftFor(
+      id,
+      { name: entry.name, venue: entry.venue, days },
+      {
+        name: '공개 수집 카탈로그',
+        url: entry.sourceUrl,
+        verifiedAt: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+      },
+      entry.thumbUrl ?? entry.posterUrl ?? null,
+      entry.ticketLinks,
+    );
+    draftErrors(draft);
+    const row = this.festivals.create({
+      id,
+      draft,
+      draftVersion: 1,
+      draftUpdatedBy: actor,
+      published: null,
+      publishedVersion: 0,
+    });
+    try {
+      await this.dataSource.transaction(async (manager) => {
+        const inserted = await manager.query<{ draftUpdatedAt: Date }[]>(
+          `INSERT INTO admin_festivals
+             ("id", "draft", "draftVersion", "draftUpdatedBy", "published", "publishedVersion")
+           VALUES ($1, $2::jsonb, 1, $3, NULL, 0)
+           RETURNING "draftUpdatedAt"`,
+          [id, JSON.stringify(draft), actor],
+        );
+        row.draftUpdatedAt = inserted[0].draftUpdatedAt;
+        await this.audit.record(manager, {
+          actor,
+          action: 'festival.discovered.imported',
+          target: `festival:${id}`,
+          before: null,
+          after: { draftVersion: 1, draft },
+        });
+      });
+    } catch (error) {
+      const databaseError = error as {
+        code?: string;
+        driverError?: { code?: string };
+      };
+      if (
+        databaseError.code === '23505' ||
+        databaseError.driverError?.code === '23505'
+      )
+        throw new ConflictException('이미 관리 중인 축제입니다.');
+      throw error;
+    }
     return this.draftResponse(row);
   }
 
