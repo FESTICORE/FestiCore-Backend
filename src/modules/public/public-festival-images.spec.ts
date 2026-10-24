@@ -234,7 +234,7 @@ describe('discovered festival artist profile images', () => {
     });
   });
 
-  it('does not choose a profile when normalized names collide', async () => {
+  it('does not choose a profile when reviewed aliases collide', async () => {
     const sourceUrl =
       'https://ticket.melon.com/performance/index.htm?prodId=213766';
     const candidate = {
@@ -251,14 +251,14 @@ describe('discovered festival artist profile images', () => {
       .mockResolvedValueOnce([
         {
           festivalSourceUrl: sourceUrl,
-          artistName: 'DAY6',
-          artistAlias: null,
+          artistName: 'Band A',
+          artistAlias: 'DAY6',
           id: 'image-a',
         },
         {
           festivalSourceUrl: sourceUrl,
-          artistName: 'Day6',
-          artistAlias: null,
+          artistName: 'Band B',
+          artistAlias: 'Day6',
           id: 'image-b',
         },
       ])

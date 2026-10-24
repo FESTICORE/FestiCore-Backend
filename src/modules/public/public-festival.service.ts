@@ -384,14 +384,16 @@ export class PublicFestivalService {
         profileImageByArtist.set(key, image.id);
     }
     const profileImageByName = new Map<string, Set<string>>();
-    for (const [key, imageId] of profileImageByArtist) {
-      const [festivalSourceUrl, artistName] = key.split('\u0000');
-      for (const nameKey of artistNameKeys(artistName)) {
-        const normalizedKey = `${festivalSourceUrl}\u0000${nameKey}`;
-        const imageIds =
-          profileImageByName.get(normalizedKey) ?? new Set<string>();
-        imageIds.add(imageId);
-        profileImageByName.set(normalizedKey, imageIds);
+    for (const image of profileImages) {
+      for (const name of [image.artistName, image.artistAlias]) {
+        if (!name) continue;
+        for (const nameKey of artistNameKeys(name)) {
+          const normalizedKey = `${image.festivalSourceUrl}\u0000${nameKey}`;
+          const imageIds =
+            profileImageByName.get(normalizedKey) ?? new Set<string>();
+          imageIds.add(image.id);
+          profileImageByName.set(normalizedKey, imageIds);
+        }
       }
     }
     const englishProductIds = [
