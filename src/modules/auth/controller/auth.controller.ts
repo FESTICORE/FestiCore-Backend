@@ -14,11 +14,13 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { RefreshDto } from '../dto/refresh.dto';
+import { RevokeSessionDto } from '../dto/revoke-session.dto';
 import { SocialLoginDto } from '../dto/social-login.dto';
 import { CurrentUser } from '../decorator/current-user.decorator';
 import { Public } from '../decorator/public.decorator';
 import { AuthService } from '../service/auth.service';
 import type { AuthUser } from '../types/social-profile';
+import { Throttle } from '@nestjs/throttler';
 
 @ApiTags('Auth')
 @Controller('auth')
@@ -83,6 +85,26 @@ export class AuthController {
   })
   refresh(@Body() dto: RefreshDto) {
     return this.authService.refresh(dto.refreshToken);
+  }
+
+  @Public()
+  @Post('session/revoke')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
+  @ApiOperation({
+    summary: '제시된 refresh 세션 폐기',
+    description:
+      'access 토큰 없이 refreshToken으로 해당 세션만 폐기합니다. 이미 회전된 토큰도 같은 세션의 후속 토큰을 폐기합니다. 계정의 다른 웹·iOS 세션은 변경하지 않습니다. 웹과 iOS가 공용 로그인 경로를 사용하므로 토큰 자체에는 플랫폼 구분이 없습니다. 클라이언트는 자신이 보유한 세션 토큰만 전달하고 이후 도착한 재발급 결과를 저장하지 않아야 합니다. 이미 발급된 access 토큰은 만료까지 유효합니다.',
+  })
+  @ApiBody({ type: RevokeSessionDto })
+  @ApiResponse({
+    status: 204,
+    description: '세션 폐기 완료 또는 유효하지 않거나 이미 폐기된 토큰',
+  })
+  @ApiResponse({ status: 400, description: '본문 형식 오류' })
+  @ApiResponse({ status: 429, description: '요청 빈도 제한' })
+  async revokeSession(@Body() dto: RevokeSessionDto): Promise<void> {
+    await this.authService.revokeSession(dto.refreshToken);
   }
 
   @Post('logout')

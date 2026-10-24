@@ -124,12 +124,11 @@ export class AuthService {
   async refresh(
     refreshToken: string,
   ): Promise<{ accessToken: string; refreshToken: string }> {
-    const userId = await this.token.consume(refreshToken);
-    const user = await this.userRepo.findOne({ where: { id: userId } });
-    if (!user) {
-      throw new NotFoundException('사용자를 찾을 수 없습니다.');
-    }
-    return this.token.issue(user);
+    return this.token.rotate(refreshToken);
+  }
+
+  async revokeSession(refreshToken: string): Promise<void> {
+    await this.token.revokeSession(refreshToken);
   }
 
   /** 로그아웃: 계정 토큰과 계정 소유 기기 전체의 푸시 수신을 해제한다. */
@@ -148,6 +147,12 @@ export class AuthService {
         `UPDATE "device_subscriptions"
          SET "packUpdates" = false, "festivalStarts" = false, "reminders" = false
          WHERE "deviceId" IN (SELECT "id" FROM "devices" WHERE "userId" = $1)`,
+        [userId],
+      );
+      await manager.query(
+        `UPDATE "refresh_token_sessions" SET "revokedAt" = now()
+         WHERE "id" IN (SELECT "sessionId" FROM "refresh_tokens" WHERE "userId" = $1)
+           AND "revokedAt" IS NULL`,
         [userId],
       );
       await manager.query(
@@ -381,7 +386,24 @@ export class AuthService {
          WHERE "usedBy" = $1`,
           [userId],
         );
+        // 발급/회전과 같은 잠금 순서로 세션부터 막고, 탈퇴 시 고아 세션도 지운다.
+        await manager.query(
+          `UPDATE "refresh_token_sessions" SET "revokedAt" = now()
+           WHERE "id" IN (SELECT "sessionId" FROM "refresh_tokens" WHERE "userId" = $1)
+             AND "revokedAt" IS NULL`,
+          [userId],
+        );
+        const sessions = await manager.query<{ sessionId: string }[]>(
+          `SELECT DISTINCT "sessionId" FROM "refresh_tokens" WHERE "userId" = $1`,
+          [userId],
+        );
         await manager.delete(RefreshToken, { userId });
+        if (sessions.length > 0) {
+          await manager.query(
+            `DELETE FROM "refresh_token_sessions" WHERE "id" = ANY($1::uuid[])`,
+            [sessions.map((session) => session.sessionId)],
+          );
+        }
         await manager.query(
           `DELETE FROM "device_subscriptions" WHERE "deviceId" IN (
           SELECT "id" FROM "devices" WHERE "userId" = $1

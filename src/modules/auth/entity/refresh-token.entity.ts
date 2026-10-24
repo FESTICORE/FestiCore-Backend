@@ -15,6 +15,10 @@ export class RefreshToken {
   @Column({ type: 'uuid' })
   userId!: string;
 
+  @Index('IDX_refresh_tokens_session_id')
+  @Column({ type: 'uuid' })
+  sessionId!: string;
+
   // refresh 토큰 원문은 저장하지 않고 sha256 해시만 보관.
   // consume() 조회의 핫패스라 unique 인덱스로 O(log n) 조회를 보장한다.
   @Index('IDX_refresh_tokens_token_hash', { unique: true })
