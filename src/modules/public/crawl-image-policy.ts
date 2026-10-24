@@ -16,11 +16,32 @@ export const PUBLIC_CRAWL_IMAGE_SQL = `(
   OR (source.kind = 'artist-image'
     AND source.enabled = true
     AND source."parserConfig"->>'seed' IS DISTINCT FROM 'official-wonderlivet-lineup'
+    AND source."parserConfig"->>'seed' IS DISTINCT FROM 'official-gmf-lineup'
     AND source."parserConfig"->>'festivalSourceUrl' ~ '^https://(ticket[.]melon[.]com|ticket[.]yes24[.]com|nol[.]yanolja[.]com|mintpaper[.]co[.]kr)/'
     AND (source."parserConfig"->>'seed' IS DISTINCT FROM 'official-artist-gallery'
       OR split_part(image."originUrl", '?', 1) =
         'https://cdn.imweb.me/thumbnail/' || (source."parserConfig"->>'imageHint'))
     AND image."originUrl" LIKE 'https://%')
+  OR (source.kind = 'artist-image'
+    AND source.enabled = true
+    AND source.url = 'https://www.mintpaper.co.kr/festivals/172/lineup'
+    AND source."parserConfig"->>'seed' = 'official-gmf-lineup'
+    AND source."parserConfig"->>'festivalSourceUrl' = 'https://mintpaper.co.kr/festivals/172'
+    AND EXISTS (
+      SELECT 1 FROM crawl_sources gallery
+      WHERE gallery.kind = 'artist-gallery'
+        AND gallery.enabled = true
+        AND gallery.url = source.url
+        AND gallery."parserConfig"->>'seed' = 'gmf-official-lineup'
+        AND gallery."parserConfig"->>'festivalSourceUrl' =
+          source."parserConfig"->>'festivalSourceUrl'
+    )
+    AND source."parserConfig"->>'imageHint' ~ '^/GMF_2026_[A-Za-z0-9_]+[.]jpe?g$'
+    AND (image."originUrl" = 'https://mintpaper.s3.ap-northeast-2.amazonaws.com' ||
+        (source."parserConfig"->>'imageHint')
+      OR (source."parserConfig"->>'previousImageHint' ~ '^/GMF_2026_[A-Za-z0-9_]+[.]jpe?g$'
+        AND image."originUrl" = 'https://mintpaper.s3.ap-northeast-2.amazonaws.com' ||
+          (source."parserConfig"->>'previousImageHint'))))
   OR (source.kind = 'artist-image'
     AND source.enabled = true
     AND source.url = 'https://www.wonderli.vet/api/trpc/lineup.list'

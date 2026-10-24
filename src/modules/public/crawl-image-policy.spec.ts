@@ -24,4 +24,22 @@ describe('public crawl image policy', () => {
       /gallery\.kind = 'artist-gallery'[\s\S]*gallery\.enabled = true[\s\S]*gallery\.url = source\.url/,
     );
   });
+
+  it('limits GMF artist photos to its active official gallery and exact S3 image path', () => {
+    expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(
+      "source.\"parserConfig\"->>'seed' IS DISTINCT FROM 'official-gmf-lineup'",
+    );
+    expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(
+      "source.url = 'https://www.mintpaper.co.kr/festivals/172/lineup'",
+    );
+    expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(
+      "source.\"parserConfig\"->>'festivalSourceUrl' = 'https://mintpaper.co.kr/festivals/172'",
+    );
+    expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(
+      "gallery.\"parserConfig\"->>'seed' = 'gmf-official-lineup'",
+    );
+    expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(
+      "'https://mintpaper.s3.ap-northeast-2.amazonaws.com' ||",
+    );
+  });
 });

@@ -481,6 +481,7 @@ export class PublicFestivalService {
             artistName: string;
             artistAlias: string | null;
             artistOfficialName: string | null;
+            seed: string | null;
             id: string;
           }[]
         >(
@@ -488,6 +489,7 @@ export class PublicFestivalService {
              source."parserConfig"->>'festivalSourceUrl' AS "festivalSourceUrl",
              source."parserConfig"->>'artistName' AS "artistName",
              source."parserConfig"->>'artistAlias' AS "artistAlias",
+             source."parserConfig"->>'seed' AS seed,
              CASE WHEN source."parserConfig"->>'seed' = 'official-artist-gallery'
                AND source."parserConfig"->>'artistOfficialNameSource' =
                  'official-notice-and-modal-site'
@@ -499,7 +501,9 @@ export class PublicFestivalService {
              AND source."parserConfig"->>'festivalSourceUrl' = ANY($1::text[])
              AND ${PUBLIC_CRAWL_IMAGE_SQL}
            ORDER BY source."parserConfig"->>'festivalSourceUrl',
-             source."parserConfig"->>'artistName', image."lastSeenAt" DESC`,
+             source."parserConfig"->>'artistName',
+             CASE WHEN source."parserConfig"->>'seed' = 'official-gmf-lineup'
+               THEN 0 ELSE 1 END, image."lastSeenAt" DESC`,
           [festivalSourceUrls],
         )
       : [];
@@ -570,6 +574,31 @@ export class PublicFestivalService {
       }
     }
     for (const entry of entries) {
+      if (
+        includeTimetableArtists &&
+        entry.sourceUrl === 'https://mintpaper.co.kr/festivals/172' &&
+        !entry.artists?.length
+      ) {
+        const names = new Set(
+          (entry.artists ?? []).flatMap((artist) =>
+            artistNameKeys(artist.name),
+          ),
+        );
+        for (const image of profileImages) {
+          if (
+            image.seed !== 'official-gmf-lineup' ||
+            image.festivalSourceUrl !== entry.sourceUrl
+          )
+            continue;
+          const keys = artistNameKeys(image.artistName);
+          if (keys.some((key) => names.has(key))) continue;
+          entry.artists = [
+            ...(entry.artists ?? []),
+            { name: image.artistName },
+          ];
+          keys.forEach((key) => names.add(key));
+        }
+      }
       const englishProductId =
         /^https:\/\/ticket\.yes24\.com\/English\/Perf\/(\d+)$/.exec(
           entry.sourceUrl,

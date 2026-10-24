@@ -8,6 +8,12 @@ import sharp from 'sharp';
 import * as imageOcr from './timetable-image-ocr';
 import * as artistGallery from './artist-gallery';
 import {
+  GMF_FESTIVAL_URL,
+  GMF_IMAGE_ORIGIN,
+  GMF_LINEUP_URL,
+  GMF_NOTICE_URL,
+} from './gmf-lineup';
+import {
   WONDERLIVET_FESTIVAL_URL,
   WONDERLIVET_IMAGE_ORIGIN,
   WONDERLIVET_LINEUP_URL,
@@ -55,6 +61,33 @@ const XMF_NOTICE_HTML = `<div class="acd_row"><h4>[XMF 2026 최종 라인업 공
   <p>10월 3일부터 4일까지 이틀간 인천 파라다이스시티에서 열리는 XMF 2026.</p>
   <p>첫날인 10월 3일에는 아도(Ado), 루시(LUCY) 등 2팀이 공연한다.</p>
   <p>둘째 날인 4일 무대는 데이식스(DAY6) 등 1팀이 공연한다.</p></div>`;
+
+function gmfPages() {
+  const data: Record<string, unknown> = {};
+  const banners = Array.from({ length: 48 }, (_, index) => {
+    data[`UploadFile:${index}`] = {
+      url: `${GMF_IMAGE_ORIGIN}/GMF_2026_${index}_aabbccdd00.jpg`,
+      formats: {
+        thumbnail: {
+          name: `thumbnail_GMF2026_아티개별_토_Artist ${index}.jpg`,
+        },
+      },
+    };
+    return {
+      image: { __ref: `UploadFile:${index}` },
+      link: `https://www.instagram.com/gmf_${index}/`,
+    };
+  });
+  data['Festival:172'] = { lineup: [{ banners }] };
+  const content = Array.from(
+    { length: 48 },
+    (_, index) =>
+      `<span>Artist ${index}</span><a href="https://www.instagram.com/gmf_${index}/">@gmf_${index}</a>`,
+  ).join('<br>');
+  const wrap = (apollo: Record<string, unknown>) =>
+    `<script id="__NEXT_DATA__" type="application/json">${JSON.stringify({ props: { apolloState: { data: apollo } } })}</script>`;
+  return { lineup: wrap(data), notice: wrap({ 'Post:4802': { content } }) };
+}
 
 function harness() {
   const source = {
@@ -202,6 +235,111 @@ describe('CrawlService scheduled runs', () => {
 
     expect(schedule).toHaveBeenCalledTimes(1);
     expect(reconcile).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs a backdated enabled GMF gallery immediately through the daily reservation', async () => {
+    const { service, source, insertQb, execute } = harness();
+    source.kind = 'artist-gallery';
+    source.url = GMF_LINEUP_URL;
+    source.parserConfig = {
+      seed: 'gmf-official-lineup',
+      festivalSourceUrl: GMF_FESTIVAL_URL,
+    };
+    source.createdAt = new Date('2026-10-20T14:59:00Z');
+
+    await service.scheduleDue();
+
+    expect(insertQb.values).toHaveBeenCalledWith({
+      sourceId: source.id,
+      scheduledDate: '2026-10-21',
+    });
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs the GMF gallery before children and reloads their current image hints', async () => {
+    const {
+      service,
+      source,
+      sourcesRepo,
+      runsRepo,
+      updateQb,
+      insertQb,
+      execute,
+    } = harness();
+    const child = {
+      ...source,
+      kind: 'artist-image',
+      url: GMF_LINEUP_URL,
+      parserConfig: {
+        seed: 'official-gmf-lineup',
+        imageHint: '/GMF_2026_old.jpg',
+      },
+    } as CrawlSource;
+    const gallery = {
+      ...source,
+      id: 'gallery-1',
+      kind: 'artist-gallery',
+      url: GMF_LINEUP_URL,
+      parserConfig: {
+        seed: 'gmf-official-lineup',
+        festivalSourceUrl: GMF_FESTIVAL_URL,
+      },
+    } as CrawlSource;
+    const freshChild = {
+      ...child,
+      parserConfig: { ...child.parserConfig, imageHint: '/GMF_2026_new.jpg' },
+    } as CrawlSource;
+    sourcesRepo.findBy.mockResolvedValue([child, gallery]);
+    sourcesRepo.findOneBy.mockResolvedValue(freshChild);
+    runsRepo.createQueryBuilder
+      .mockImplementationOnce(() => updateQb)
+      .mockImplementationOnce(() => insertQb);
+
+    await service.scheduleDue();
+
+    expect(execute.mock.calls[0][1]).toBe(gallery);
+    expect(execute.mock.calls[1][1]).toBe(freshChild);
+  });
+
+  it('runs new GMF image sources on the day the gallery creates them', async () => {
+    const {
+      service,
+      source,
+      sourcesRepo,
+      runsRepo,
+      updateQb,
+      insertQb,
+      execute,
+    } = harness();
+    source.kind = 'artist-gallery';
+    source.url = GMF_LINEUP_URL;
+    source.parserConfig = {
+      seed: 'gmf-official-lineup',
+      festivalSourceUrl: GMF_FESTIVAL_URL,
+    };
+    const child = {
+      ...source,
+      id: 'new-image-source',
+      kind: 'artist-image',
+      parserConfig: {
+        seed: 'official-gmf-lineup',
+        imageHint: '/GMF_2026_new.jpg',
+      },
+    } as CrawlSource;
+    sourcesRepo.findBy
+      .mockResolvedValueOnce([source])
+      .mockResolvedValueOnce([child]);
+    sourcesRepo.findOneBy.mockResolvedValue(child);
+    runsRepo.createQueryBuilder
+      .mockImplementationOnce(() => updateQb)
+      .mockImplementationOnce(() => insertQb);
+
+    await service.scheduleDue();
+
+    expect(execute.mock.calls.map((call) => call[1].id)).toEqual([
+      source.id,
+      child.id,
+    ]);
   });
 
   it('skips a duplicate daily run that is still active', async () => {
@@ -1465,6 +1603,174 @@ describe('CrawlService manual runs and snapshots', () => {
     );
     gallery.mockRestore();
     warning.mockRestore();
+  });
+
+  it('reconciles 48 GMF image sources from both official pages without duplicating a normalized owner', async () => {
+    const { service, source, run, execute, dataSource } = harness();
+    execute.mockRestore();
+    source.kind = 'artist-gallery';
+    source.url = GMF_LINEUP_URL;
+    source.parser = 'html-text';
+    source.parserConfig = {
+      seed: 'gmf-official-lineup',
+      festivalSourceUrl: GMF_FESTIVAL_URL,
+    };
+    const pages = gmfPages();
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    const getListing = jest.spyOn(service, 'getListing');
+    getListing
+      .mockResolvedValueOnce({ status: 200, body: pages.lineup })
+      .mockResolvedValueOnce({ status: 200, body: pages.notice });
+    dataSource.query.mockImplementation((sql: string) =>
+      Promise.resolve(
+        sql.includes('SELECT id, "parserConfig"')
+          ? [
+              {
+                id: '00000000-0000-4000-8000-000000000001',
+                artistName: 'Ａｒｔｉｓｔ ０',
+              },
+            ]
+          : [],
+      ),
+    );
+
+    await service.execute(run, source);
+
+    const calls = dataSource.query.mock.calls as unknown as [
+      string,
+      unknown[],
+    ][];
+    expect(getListing).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ url: GMF_NOTICE_URL }),
+    );
+    expect(
+      calls.filter(([sql]) => sql.includes("SELECT 'artist-image'")),
+    ).toHaveLength(47);
+    expect(
+      calls.find(([sql]) => sql.includes('previousImageHint'))?.[1],
+    ).toEqual([
+      '00000000-0000-4000-8000-000000000001',
+      'Artist 0',
+      '/GMF_2026_0_aabbccdd00.jpg',
+      GMF_LINEUP_URL,
+    ]);
+    expect(run.result).toBe('nochange-parsed');
+  });
+
+  it('preserves existing GMF images when the official notice fails', async () => {
+    const { service, source, run, execute, dataSource } = harness();
+    execute.mockRestore();
+    source.kind = 'artist-gallery';
+    source.url = GMF_LINEUP_URL;
+    source.parser = 'html-text';
+    source.parserConfig = {
+      seed: 'gmf-official-lineup',
+      festivalSourceUrl: GMF_FESTIVAL_URL,
+    };
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    const getListing = jest.spyOn(service, 'getListing');
+    getListing
+      .mockResolvedValueOnce({ status: 200, body: gmfPages().lineup })
+      .mockResolvedValueOnce({ status: 503, body: '' });
+
+    await service.execute(run, source);
+
+    expect(run.result).toBe('failed');
+    expect(
+      dataSource.query.mock.calls.some(
+        ([sql]) =>
+          String(sql).includes("kind = 'artist-image'") ||
+          String(sql).includes("SELECT 'artist-image'"),
+      ),
+    ).toBe(false);
+  });
+
+  it('captures a GMF child image from the completed daily gallery without refetching HTML', async () => {
+    const { service, source, run, execute, runsRepo, dataSource } = harness();
+    execute.mockRestore();
+    source.kind = 'artist-image';
+    source.url = GMF_LINEUP_URL;
+    source.parser = 'html-text';
+    source.parserConfig = {
+      seed: 'official-gmf-lineup',
+      festivalSourceUrl: GMF_FESTIVAL_URL,
+      artistName: 'Artist 0',
+      imageHint: '/GMF_2026_0_aabbccdd00.jpg',
+    };
+    const checkRobots = jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    const getListing = jest.spyOn(service, 'getListing');
+    dataSource.query.mockImplementation((sql: string) =>
+      Promise.resolve(
+        sql.includes('SELECT gallery."parserConfig"')
+          ? [
+              {
+                verifiedEntries: JSON.stringify(
+                  Array.from({ length: 48 }, (_, index) => ({
+                    artistName: `Artist ${index}`,
+                    imageUrl: `${GMF_IMAGE_ORIGIN}/GMF_2026_${index}_aabbccdd00.jpg`,
+                  })),
+                ),
+              },
+            ]
+          : [],
+      ),
+    );
+    const capture = jest
+      .spyOn(
+        service as unknown as {
+          captureImages: (...args: unknown[]) => Promise<string[]>;
+        },
+        'captureImages',
+      )
+      .mockResolvedValue(['/api/v1/admin/crawl/images/image-1']);
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(null),
+    }));
+
+    await service.execute(run, source);
+
+    expect(capture.mock.calls[0][2]).toEqual([
+      new URL(`${GMF_IMAGE_ORIGIN}/GMF_2026_0_aabbccdd00.jpg`),
+    ]);
+    expect(getListing).not.toHaveBeenCalled();
+    expect(checkRobots).not.toHaveBeenCalled();
+    expect(
+      dataSource.query.mock.calls.some(([sql]) =>
+        String(sql).includes("- 'previousImageHint'"),
+      ),
+    ).toBe(true);
+    expect(run.result).toBe('nochange-parsed');
+  });
+
+  it('keeps a GMF child image unchanged when today has no completed gallery proof', async () => {
+    const { service, source, run, execute, dataSource } = harness();
+    execute.mockRestore();
+    source.kind = 'artist-image';
+    source.url = GMF_LINEUP_URL;
+    source.parser = 'html-text';
+    source.parserConfig = {
+      seed: 'official-gmf-lineup',
+      festivalSourceUrl: GMF_FESTIVAL_URL,
+      artistName: 'Artist 0',
+      imageHint: '/GMF_2026_0_aabbccdd00.jpg',
+    };
+    const capture = jest.spyOn(
+      service as unknown as {
+        captureImages: (...args: unknown[]) => Promise<string[]>;
+      },
+      'captureImages',
+    );
+    await service.execute(run, source);
+    expect(run.result).toBe('failed');
+    expect(capture).not.toHaveBeenCalled();
+    expect(
+      dataSource.query.mock.calls.some(([sql]) =>
+        String(sql).includes("- 'previousImageHint'"),
+      ),
+    ).toBe(false);
   });
 
   it('reconciles official Wonderlivet artist sources from a complete JSON response', async () => {

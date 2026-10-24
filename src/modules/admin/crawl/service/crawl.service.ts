@@ -41,6 +41,12 @@ import {
   WONDERLIVET_FESTIVAL_URL,
   WONDERLIVET_LINEUP_URL,
 } from './wonderlivet-lineup';
+import {
+  GMF_FESTIVAL_URL,
+  GMF_LINEUP_URL,
+  GMF_NOTICE_URL,
+  parseGmfLineup,
+} from './gmf-lineup';
 
 const kstDay = (date = new Date()) =>
   new Intl.DateTimeFormat('en-CA', {
@@ -68,7 +74,12 @@ function artistImageConfig(config: Record<string, string>) {
     /^\/lineup\/artists\/production\/live\/day[123]\/[a-z0-9-]{1,110}\.webp$/.test(
       imageHint ?? '',
     );
+  const officialGmf =
+    config.seed === 'official-gmf-lineup' &&
+    festival.toString() === GMF_FESTIVAL_URL &&
+    /^\/GMF_2026_[a-zA-Z0-9_]+\.jpe?g$/.test(imageHint ?? '');
   if (
+    (config.seed === 'official-gmf-lineup' && !officialGmf) ||
     (!officialWonderlivet &&
       ![
         'ticket.melon.com',
@@ -80,7 +91,7 @@ function artistImageConfig(config: Record<string, string>) {
     artistName.length > 160 ||
     !imageHint?.trim() ||
     imageHint.length < 8 ||
-    imageHint.length > (officialWonderlivet ? 180 : 120) ||
+    imageHint.length > (officialWonderlivet || officialGmf ? 180 : 120) ||
     /[\s<>"']/.test(imageHint) ||
     (artistAlias !== undefined &&
       (typeof artistAlias !== 'string' ||
@@ -118,7 +129,9 @@ function artistGalleryConfig(url: string, config: Record<string, string>) {
       festival.toString() ===
         'https://ticket.melon.com/performance/index.htm?prodId=213766') ||
     (source.toString() === WONDERLIVET_LINEUP_URL &&
-      festival.toString() === WONDERLIVET_FESTIVAL_URL)
+      festival.toString() === WONDERLIVET_FESTIVAL_URL) ||
+    (source.toString() === GMF_LINEUP_URL &&
+      festival.toString() === GMF_FESTIVAL_URL)
   ))
     throw new UnprocessableEntityException(
       '지원되는 공식 갤러리와 축제 연결 주소가 필요합니다.',
@@ -318,7 +331,9 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       if (parserConfig) locked.parserConfig = parserConfig;
       if (
         dto.enabled !== undefined &&
-        locked.parserConfig.seed === 'official-wonderlivet-lineup'
+        ['official-wonderlivet-lineup', 'official-gmf-lineup'].includes(
+          locked.parserConfig.seed,
+        )
       ) {
         locked.parserConfig = { ...locked.parserConfig };
         delete locked.parserConfig.disabledBy;
@@ -411,7 +426,9 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         source.kind === 'artist-gallery'
           ? source.url === WONDERLIVET_LINEUP_URL
             ? parseWonderlivetLineup(response.body)
-            : await crawlArtistGallery(response.body, source.url)
+            : source.url === GMF_LINEUP_URL
+              ? parseGmfLineup(response.body, await this.gmfNotice(source))
+              : await crawlArtistGallery(response.body, source.url)
           : await parseCrawl(source, response.body),
       excerpt: plainText(response.body).slice(0, 500),
     };
@@ -496,7 +513,30 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       enabled: true,
       status: In(['ok', 'broken']),
     });
-    for (const source of sources) {
+    // The GMF gallery refreshes child image hints before the daily child runs.
+    sources.sort(
+      (left, right) =>
+        Number(
+          right.kind === 'artist-gallery' && right.url === GMF_LINEUP_URL,
+        ) -
+        Number(left.kind === 'artist-gallery' && left.url === GMF_LINEUP_URL),
+    );
+    const listedIds = new Set(sources.map((source) => source.id));
+    let gmfGalleryFailed = false;
+    for (const listedSource of sources) {
+      if (
+        gmfGalleryFailed &&
+        listedSource.kind === 'artist-image' &&
+        listedSource.url === GMF_LINEUP_URL
+      )
+        continue;
+      const source =
+        listedSource.kind === 'artist-image' &&
+        listedSource.url === GMF_LINEUP_URL
+          ? await this.sourcesRepo.findOneBy({ id: listedSource.id })
+          : listedSource;
+      if (!source?.enabled || !['ok', 'broken'].includes(source.status))
+        continue;
       // 자정 이후 새로 추가된 소스는 다음 자정부터 예약 실행한다.
       if (kstDay(source.createdAt) >= date) continue;
       // 실패한 소스도 다음 날 재시도한다. 당일 수동 실행 직후에는 중복 시도하지 않는다.
@@ -538,9 +578,30 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       }
       if (!runId) continue;
       const run = await this.runsRepo.findOneByOrFail({ id: runId });
-      void this.execute(run, source).catch(() =>
-        this.logger.error('예약 크롤 실패'),
-      );
+      const execution = this.execute(run, source);
+      if (source.kind === 'artist-gallery' && source.url === GMF_LINEUP_URL) {
+        try {
+          await execution;
+        } catch {
+          this.logger.error('GMF 공식 갤러리 예약 크롤 실패');
+        }
+        gmfGalleryFailed = run.result === 'failed';
+        if (!gmfGalleryFailed) {
+          const newChildren = await this.sourcesRepo.findBy({
+            kind: 'artist-image',
+            url: GMF_LINEUP_URL,
+            enabled: true,
+            status: In(['ok', 'broken']),
+          });
+          for (const child of newChildren) {
+            if (listedIds.has(child.id)) continue;
+            sources.push(child);
+            listedIds.add(child.id);
+          }
+        }
+      } else {
+        void execution.catch(() => this.logger.error('예약 크롤 실패'));
+      }
     }
   }
 
@@ -566,7 +627,13 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
   private async execute(run: CrawlRun, source: CrawlSource) {
     let phase = 'ROBOTS';
     try {
-      await this.checkRobots(source.url);
+      const verifiedGmfImage =
+        source.kind === 'artist-image' &&
+        source.url === GMF_LINEUP_URL &&
+        source.parserConfig.seed === 'official-gmf-lineup'
+          ? await this.gmfVerifiedImage(source)
+          : null;
+      if (!verifiedGmfImage) await this.checkRobots(source.url);
       phase = 'FETCH';
       if (source.parser === 'image-ocr') {
         const config = timetableSourceConfig(source.parserConfig);
@@ -645,8 +712,16 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         source.status = 'ok';
         return;
       }
-      const response = await this.getListing(source);
-      run.httpStatus = response.status;
+      const response = verifiedGmfImage
+        ? {
+            status: 200,
+            body: JSON.stringify({
+              artistName: source.parserConfig.artistName,
+              imageUrl: verifiedGmfImage.href,
+            }),
+          }
+        : await this.getListing(source);
+      run.httpStatus = verifiedGmfImage ? null : response.status;
       if (response.status !== 200) throw new Error(`HTTP ${response.status}`);
       phase = 'PROCESS';
       run.contentHash = createHash('sha256')
@@ -697,6 +772,112 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       if (source.kind === 'artist-gallery') {
         phase = 'PARSE';
         const config = artistGalleryConfig(source.url, source.parserConfig);
+        if (source.url === GMF_LINEUP_URL) {
+          const entries = parseGmfLineup(
+            response.body,
+            await this.gmfNotice(source),
+          );
+          const rows = await this.dataSource.query<
+            { id: string; artistName: string }[]
+          >(
+            `SELECT id, "parserConfig"->>'artistName' AS "artistName"
+             FROM crawl_sources WHERE kind = 'artist-image' AND url = $1::text
+               AND "parserConfig"->>'festivalSourceUrl' = $2::text
+               AND "parserConfig"->>'seed' = 'official-gmf-lineup'`,
+            [source.url, config.festivalSourceUrl],
+          );
+          const owners = new Map<string, { id: string; artistName: string }>();
+          for (const row of rows) {
+            const key = normalizeArtistName(row.artistName);
+            if (owners.has(key))
+              throw new Error('GMF 기존 출연진 이미지 소스가 중복됩니다.');
+            owners.set(key, row);
+          }
+          const seenIds: string[] = [];
+          for (const entry of entries) {
+            const imageHint = entry.imageUrl.pathname;
+            const existing = owners.get(normalizeArtistName(entry.artistName));
+            if (existing) {
+              seenIds.push(existing.id);
+              await this.dataSource.query(
+                `UPDATE crawl_sources SET
+                   "parserConfig" = ("parserConfig" - 'disabledBy') ||
+                     jsonb_build_object('artistName', $2::text, 'imageHint', $3::text,
+                       'previousImageHint', COALESCE("parserConfig"->>'previousImageHint',
+                         "parserConfig"->>'imageHint')),
+                   enabled = CASE WHEN "parserConfig"->>'disabledBy' = 'official-lineup'
+                     THEN true ELSE enabled END,
+                   status = CASE WHEN "parserConfig"->>'disabledBy' = 'official-lineup'
+                     THEN 'ok' ELSE status END,
+                   "updatedAt" = now()
+                 WHERE id = $1::uuid AND kind = 'artist-image'
+                   AND url = $4::text
+                   AND "parserConfig"->>'seed' = 'official-gmf-lineup'`,
+                [existing.id, entry.artistName, imageHint, source.url],
+              );
+              continue;
+            }
+            await this.dataSource.query(
+              `INSERT INTO crawl_sources (kind, url, parser, "parserConfig", "createdAt")
+               SELECT 'artist-image', $1::text, 'html-text',
+                 jsonb_build_object('seed', 'official-gmf-lineup',
+                   'festivalSourceUrl', $2::text, 'artistName', $3::text,
+                   'imageHint', $4::text), now() - interval '1 day'
+               WHERE NOT EXISTS (
+                 SELECT 1 FROM crawl_sources WHERE kind = 'artist-image' AND url = $1::text
+                   AND "parserConfig"->>'festivalSourceUrl' = $2::text
+                   AND "parserConfig"->>'artistName' = $3::text
+               )`,
+              [
+                source.url,
+                config.festivalSourceUrl,
+                entry.artistName,
+                imageHint,
+              ],
+            );
+          }
+          await this.dataSource.query(
+            `UPDATE crawl_sources SET enabled = false, status = 'disabled',
+               "parserConfig" = "parserConfig" || jsonb_build_object('disabledBy', 'official-lineup'),
+               "updatedAt" = now()
+             WHERE kind = 'artist-image' AND url = $1::text
+               AND "parserConfig"->>'festivalSourceUrl' = $2::text
+               AND "parserConfig"->>'seed' = 'official-gmf-lineup'
+               AND enabled = true AND id = ANY($4::uuid[])
+               AND NOT (id = ANY($3::uuid[]))`,
+            [
+              source.url,
+              config.festivalSourceUrl,
+              seenIds,
+              rows.map((row) => row.id),
+            ],
+          );
+          await this.dataSource.query(
+            `UPDATE crawl_sources SET "parserConfig" = "parserConfig" ||
+               jsonb_build_object('verifiedDate', $2::text,
+                 'verifiedRunId', $3::text, 'verifiedEntries', $4::text),
+               "updatedAt" = now()
+             WHERE id = $1::uuid AND kind = 'artist-gallery'
+               AND url = $5::text
+               AND "parserConfig"->>'seed' = 'gmf-official-lineup'`,
+            [
+              source.id,
+              kstDay(),
+              run.id,
+              JSON.stringify(
+                entries.map((entry) => ({
+                  artistName: entry.artistName,
+                  imageUrl: entry.imageUrl.href,
+                })),
+              ),
+              source.url,
+            ],
+          );
+          run.result = 'nochange-parsed';
+          source.lastChangedAt = new Date();
+          source.status = 'ok';
+          return;
+        }
         if (source.url === WONDERLIVET_LINEUP_URL) {
           const entries = parseWonderlivetLineup(response.body);
           const rows = await this.dataSource.query<
@@ -875,18 +1056,21 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       }
       const profileImage =
         source.kind === 'artist-image'
-          ? source.parserConfig.seed === 'official-wonderlivet-lineup' &&
-            source.url === WONDERLIVET_LINEUP_URL
-            ? (parseWonderlivetLineup(response.body).find(
-                (entry) =>
-                  entry.artistName === source.parserConfig.artistName &&
-                  entry.imageUrl.pathname === source.parserConfig.imageHint,
-              )?.imageUrl ?? null)
-            : artistProfileImageUrl(
-                response.body,
-                source.url,
-                source.parserConfig.imageHint,
-              )
+          ? source.parserConfig.seed === 'official-gmf-lineup' &&
+            source.url === GMF_LINEUP_URL
+            ? verifiedGmfImage
+            : source.parserConfig.seed === 'official-wonderlivet-lineup' &&
+                source.url === WONDERLIVET_LINEUP_URL
+              ? (parseWonderlivetLineup(response.body).find(
+                  (entry) =>
+                    entry.artistName === source.parserConfig.artistName &&
+                    entry.imageUrl.pathname === source.parserConfig.imageHint,
+                )?.imageUrl ?? null)
+              : artistProfileImageUrl(
+                  response.body,
+                  source.url,
+                  source.parserConfig.imageHint,
+                )
           : null;
       if (source.kind === 'artist-image' && !profileImage)
         throw new Error('프로필 이미지가 공식 페이지에서 확인되지 않았습니다.');
@@ -901,14 +1085,18 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         throw new Error('프로필 이미지를 저장하지 못했습니다.');
       if (
         source.kind === 'artist-image' &&
-        source.parserConfig.seed === 'official-wonderlivet-lineup'
+        profileImage &&
+        ['official-wonderlivet-lineup', 'official-gmf-lineup'].includes(
+          source.parserConfig.seed,
+        )
       )
         await this.dataSource.query(
           `UPDATE crawl_sources SET "parserConfig" = "parserConfig" - 'previousImageHint',
              "updatedAt" = now()
            WHERE id = $1::uuid AND kind = 'artist-image'
-             AND "parserConfig"->>'seed' = 'official-wonderlivet-lineup'`,
-          [source.id],
+             AND "parserConfig"->>'seed' = $2::text
+             AND "parserConfig"->>'imageHint' = $3::text`,
+          [source.id, source.parserConfig.seed, profileImage.pathname],
         );
       const previous = await this.runsRepo
         .createQueryBuilder('run')
@@ -1577,6 +1765,89 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
 
   private async limitedGet(url: URL) {
     return this.withHostLock(url, () => safeGet(url));
+  }
+
+  private async gmfNotice(source: CrawlSource): Promise<string> {
+    await this.checkRobots(GMF_NOTICE_URL);
+    const response = await this.getListing({ ...source, url: GMF_NOTICE_URL });
+    if (response.status !== 200)
+      throw new Error(`GMF 공식 라인업 공지 HTTP ${response.status}`);
+    return response.body;
+  }
+
+  private async gmfVerifiedImage(source: CrawlSource): Promise<URL> {
+    if (source.parserConfig.festivalSourceUrl !== GMF_FESTIVAL_URL)
+      throw new Error('GMF 이미지 소스의 축제 연결이 잘못되었습니다.');
+    const rows = await this.dataSource.query<{ verifiedEntries: string }[]>(
+      `SELECT gallery."parserConfig"->>'verifiedEntries' AS "verifiedEntries"
+       FROM crawl_sources gallery
+       JOIN crawl_runs verified
+         ON verified.id::text = gallery."parserConfig"->>'verifiedRunId'
+       WHERE gallery.kind = 'artist-gallery' AND gallery.enabled = true
+         AND gallery.url = $1::text
+         AND gallery."parserConfig"->>'seed' = 'gmf-official-lineup'
+         AND gallery."parserConfig"->>'festivalSourceUrl' = $2::text
+         AND gallery."parserConfig"->>'verifiedDate' = $3::text
+         AND verified."sourceId" = gallery.id
+         AND verified.result = 'nochange-parsed'
+         AND verified."finishedAt" IS NOT NULL`,
+      [GMF_LINEUP_URL, GMF_FESTIVAL_URL, kstDay()],
+    );
+    const raw = rows[0]?.verifiedEntries;
+    if (!raw || raw.length > 30_000)
+      throw new Error('오늘 검증된 GMF 갤러리 결과가 없습니다.');
+    let entries: unknown;
+    try {
+      entries = JSON.parse(raw);
+    } catch {
+      throw new Error('GMF 검증 갤러리 결과가 잘못되었습니다.');
+    }
+    if (!Array.isArray(entries) || entries.length < 48 || entries.length > 100)
+      throw new Error('GMF 검증 갤러리의 출연진 수가 올바르지 않습니다.');
+    const names = new Set<string>();
+    const images = new Set<string>();
+    let selected: URL | null = null;
+    for (const value of entries as unknown[]) {
+      const item = value as Record<string, unknown> | null;
+      if (
+        !item ||
+        typeof item !== 'object' ||
+        typeof item.artistName !== 'string' ||
+        typeof item.imageUrl !== 'string'
+      )
+        throw new Error('GMF 검증 갤러리 항목이 잘못되었습니다.');
+      const name = normalizeArtistName(item.artistName);
+      let url: URL;
+      try {
+        url = checkedUrl(item.imageUrl);
+      } catch {
+        throw new Error('GMF 검증 이미지 URL이 잘못되었습니다.');
+      }
+      if (
+        !name ||
+        names.has(name) ||
+        images.has(url.href) ||
+        url.origin !== 'https://mintpaper.s3.ap-northeast-2.amazonaws.com' ||
+        !/^\/GMF_2026_[a-zA-Z0-9_]+\.jpe?g$/.test(url.pathname) ||
+        url.search ||
+        url.hash
+      )
+        throw new Error(
+          'GMF 검증 이미지 출처 또는 중복 항목이 잘못되었습니다.',
+        );
+      names.add(name);
+      images.add(url.href);
+      if (
+        item.artistName === source.parserConfig.artistName &&
+        url.pathname === source.parserConfig.imageHint
+      )
+        selected = url;
+    }
+    if (!selected)
+      throw new Error(
+        'GMF 출연진 이미지가 오늘의 공식 갤러리에서 확인되지 않았습니다.',
+      );
+    return selected;
   }
 
   private async getListing(source: CrawlSource) {
