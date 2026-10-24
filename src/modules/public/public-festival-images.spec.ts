@@ -464,6 +464,83 @@ describe('discovered festival artist profile images', () => {
     );
   });
 
+  it('shows an XMF official modal photo for a verified full name without leaking another festival photo', async () => {
+    const sourceUrl =
+      'https://ticket.melon.com/performance/index.htm?prodId=213766';
+    const unrelatedUrl =
+      'https://ticket.melon.com/performance/index.htm?prodId=999999';
+    const candidate = {
+      name: 'XMF 2026',
+      venue: '파라다이스시티',
+      date: '2026.10.03 - 2026.10.04',
+      url: sourceUrl,
+      artists: [{ name: 'MIKA NAKASHIMA' }, { name: '다른 가수' }],
+    };
+    const imageId = '00000000-0000-4000-8000-000000000051';
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([{ candidate }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          festivalSourceUrl: sourceUrl,
+          artistName: 'MIKA',
+          artistAlias: '나카시마 미카',
+          artistOfficialName: 'MIKA NAKASHIMA',
+          id: imageId,
+        },
+        {
+          festivalSourceUrl: unrelatedUrl,
+          artistName: '다른 가수',
+          artistAlias: null,
+          artistOfficialName: null,
+          id: '00000000-0000-4000-8000-000000000052',
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: 'xmf-official-revision',
+          sourceUrl: 'https://xmfestival.com/notice',
+          sourceImageId: null,
+          verifiedAt: new Date('2026-10-23T00:00:00Z'),
+          sets: [
+            {
+              artist: 'MIKA NAKASHIMA',
+              date: '2026-10-04',
+              stageName: 'STAGE A',
+              startsAt: '2026-10-04T21:00:00+09:00',
+              endsAt: null,
+            },
+          ],
+        },
+      ]);
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+
+    const result = await service.detail(
+      discoverySummaries([{ candidate }])[0].id,
+    );
+
+    const imageUrl = `/api/v1/festivals/images/${imageId}.webp`;
+    expect(result.artists).toContainEqual({ name: 'MIKA NAKASHIMA', imageUrl });
+    expect(result.artists).toContainEqual({
+      name: '다른 가수',
+      imageUrl: null,
+    });
+    expect(result.timetable).toEqual([
+      expect.objectContaining({ artist: 'MIKA NAKASHIMA', imageUrl }),
+    ]);
+    const profileQuery = (
+      query.mock.calls as unknown as [string, [string[]]][]
+    )[2];
+    expect(profileQuery[0]).toContain("'official-notice-and-modal-site'");
+    expect(profileQuery[1][0]).toEqual([sourceUrl]);
+  });
+
   it('matches harmless name formatting differences without guessing a different artist', async () => {
     const sourceUrl =
       'https://ticket.melon.com/performance/index.htm?prodId=213766';

@@ -706,14 +706,21 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
             [{ id: string }[], number]
           >(
             `UPDATE crawl_sources SET
-               "parserConfig" = "parserConfig" || jsonb_build_object('imageHint', $4::text),
+               "parserConfig" = "parserConfig" || jsonb_build_object(
+                 'imageHint', $4::text, 'officialSiteKeys', $5::jsonb),
                enabled = true, status = 'ok', "updatedAt" = now()
              WHERE kind = 'artist-image' AND url = $1::text
                AND "parserConfig"->>'festivalSourceUrl' = $2::text
                AND "parserConfig"->>'artistName' = $3::text
                AND "parserConfig"->>'seed' = 'official-artist-gallery'
              RETURNING id`,
-            [source.url, config.festivalSourceUrl, entry.artistName, imageHint],
+            [
+              source.url,
+              config.festivalSourceUrl,
+              entry.artistName,
+              imageHint,
+              JSON.stringify(entry.officialSiteKeys),
+            ],
           );
           if (updated[1] > 0) continue;
           await this.dataSource.query(
@@ -721,13 +728,20 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
              SELECT 'artist-image', $1::text, 'html-text',
                jsonb_build_object('seed', 'official-artist-gallery',
                  'festivalSourceUrl', $2::text, 'artistName', $3::text,
-                 'imageHint', $4::text), now() - interval '1 day'
+                 'imageHint', $4::text, 'officialSiteKeys', $5::jsonb),
+               now() - interval '1 day'
              WHERE NOT EXISTS (
                SELECT 1 FROM crawl_sources WHERE kind = 'artist-image' AND url = $1::text
                  AND "parserConfig"->>'festivalSourceUrl' = $2::text
                  AND "parserConfig"->>'artistName' = $3::text
              )`,
-            [source.url, config.festivalSourceUrl, entry.artistName, imageHint],
+            [
+              source.url,
+              config.festivalSourceUrl,
+              entry.artistName,
+              imageHint,
+              JSON.stringify(entry.officialSiteKeys),
+            ],
           );
         }
         await this.dataSource.query(
@@ -739,6 +753,13 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
              AND NOT ("parserConfig"->>'artistName' = ANY($3::text[]))`,
           [source.url, config.festivalSourceUrl, [...names]],
         );
+        try {
+          await this.syncXmfGalleryAliases(config.festivalSourceUrl);
+        } catch (error) {
+          this.logger.warn(
+            `XMF 갤러리 사진을 저장했지만 공식 공지 별칭을 확인하지 못했습니다: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
         run.result = 'nochange-parsed';
         source.lastChangedAt = new Date();
         source.status = 'ok';
@@ -1016,12 +1037,18 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         artistName: string;
         artistAlias: string | null;
         aliasSource: string | null;
+        officialSiteKeys: string[] | null;
+        artistOfficialName: string | null;
+        officialNameSource: string | null;
         seed: string | null;
       }[]
     >(
       `SELECT id, enabled, "parserConfig"->>'artistName' AS "artistName",
          "parserConfig"->>'artistAlias' AS "artistAlias",
          "parserConfig"->>'artistAliasSource' AS "aliasSource",
+         "parserConfig"->'officialSiteKeys' AS "officialSiteKeys",
+         "parserConfig"->>'artistOfficialName' AS "artistOfficialName",
+         "parserConfig"->>'artistOfficialNameSource' AS "officialNameSource",
          "parserConfig"->>'seed' AS seed
        FROM crawl_sources
        WHERE kind = 'artist-image'
@@ -1042,16 +1069,40 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       }
     }
     const targets = new Map<string, string>();
+    const officialNames = new Map<string, string>();
     const proposedAliases = new Map<string, Set<string>>();
     const proposedNamesByRow = new Map<string, Set<string>>();
     for (const pair of aliases) {
       const english = owners.get(normalizeArtistName(pair.alias));
-      if (english?.size !== 1) continue;
-      const row = rows.find((entry) => entry.id === [...english][0]);
+      const aliasKey = normalizeArtistName(pair.alias).replace(
+        /[^a-z0-9]/g,
+        '',
+      );
+      const siteMatches = rows.filter((entry) => {
+        const nameKey = normalizeArtistName(entry.artistName).replace(
+          /[^a-z0-9]/g,
+          '',
+        );
+        return (
+          nameKey.length >= 4 &&
+          aliasKey.startsWith(nameKey) &&
+          aliasKey !== nameKey &&
+          Array.isArray(entry.officialSiteKeys) &&
+          entry.officialSiteKeys.includes(aliasKey)
+        );
+      });
+      const row =
+        english?.size === 1
+          ? rows.find((entry) => entry.id === [...english][0])
+          : !english?.size && siteMatches.length === 1
+            ? siteMatches[0]
+            : null;
       if (
         !row?.enabled ||
         row.seed !== 'official-artist-gallery' ||
-        normalizeArtistName(row.artistName) !== normalizeArtistName(pair.alias)
+        (normalizeArtistName(row.artistName) !==
+          normalizeArtistName(pair.alias) &&
+          siteMatches[0]?.id !== row.id)
       )
         continue;
       const korean = owners.get(normalizeArtistName(pair.name));
@@ -1065,6 +1116,8 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       names.add(normalizeArtistName(pair.name));
       proposedNamesByRow.set(row.id, names);
       targets.set(row.id, pair.name);
+      if (siteMatches[0]?.id === row.id && !english?.size)
+        officialNames.set(row.id, pair.alias);
     }
     for (const row of rows) {
       const proposed = targets.get(row.id) ?? null;
@@ -1074,29 +1127,72 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         proposedNamesByRow.get(row.id)?.size === 1
           ? proposed
           : null;
+      const officialName = desired ? (officialNames.get(row.id) ?? null) : null;
+      const updateOfficial =
+        row.officialNameSource === 'official-notice-and-modal-site' ||
+        (!row.artistOfficialName && !!officialName);
+      const updateAlias =
+        row.aliasSource === 'official-notice' ||
+        (!row.artistAlias && !!desired);
       if (
-        row.aliasSource !== 'official-notice' &&
-        (row.artistAlias || !desired)
+        (!updateOfficial ||
+          (row.artistOfficialName === officialName &&
+            row.officialNameSource ===
+              (officialName ? 'official-notice-and-modal-site' : null))) &&
+        (!updateAlias ||
+          (row.artistAlias === desired &&
+            row.aliasSource === (desired ? 'official-notice' : null)))
       )
         continue;
       await this.dataSource.query(
         `UPDATE crawl_sources SET "parserConfig" =
-           CASE WHEN $2::text IS NULL
-             THEN "parserConfig" - 'artistAlias' - 'artistAliasSource'
-             ELSE jsonb_set("parserConfig", '{artistAlias}', to_jsonb($2::text), true)
-               || jsonb_build_object('artistAliasSource', 'official-notice')
-           END,
+           ("parserConfig"
+             - CASE WHEN $5::boolean THEN ARRAY['artistOfficialName', 'artistOfficialNameSource'] ELSE ARRAY[]::text[] END
+             - CASE WHEN $6::boolean THEN ARRAY['artistAlias', 'artistAliasSource'] ELSE ARRAY[]::text[] END)
+           || CASE WHEN $5::boolean AND $2::text IS NOT NULL
+             THEN jsonb_build_object('artistOfficialName', $2::text,
+               'artistOfficialNameSource', 'official-notice-and-modal-site')
+             ELSE '{}'::jsonb END
+           || CASE WHEN $6::boolean AND $3::text IS NOT NULL
+             THEN jsonb_build_object('artistAlias', $3::text,
+               'artistAliasSource', 'official-notice')
+             ELSE '{}'::jsonb END,
            "updatedAt" = now()
          WHERE id = $1::uuid AND kind = 'artist-image'
-           AND "parserConfig"->>'festivalSourceUrl' = $3::text
-           AND ("parserConfig"->>'artistAliasSource' = 'official-notice'
-             OR NOT ("parserConfig" ? 'artistAlias'))
-           AND ("parserConfig"->>'artistAlias' IS DISTINCT FROM $2::text
-             OR "parserConfig"->>'artistAliasSource' IS DISTINCT FROM
-               CASE WHEN $2::text IS NULL THEN NULL ELSE 'official-notice' END)`,
-        [row.id, desired, festivalSourceUrl],
+           AND "parserConfig"->>'festivalSourceUrl' = $4::text
+           AND (NOT $5::boolean OR "parserConfig"->>'artistOfficialNameSource' =
+             'official-notice-and-modal-site' OR NOT ("parserConfig" ? 'artistOfficialName'))
+           AND (NOT $6::boolean OR "parserConfig"->>'artistAliasSource' =
+             'official-notice' OR NOT ("parserConfig" ? 'artistAlias'))`,
+        [
+          row.id,
+          officialName,
+          desired,
+          festivalSourceUrl,
+          updateOfficial,
+          updateAlias,
+        ],
       );
     }
+  }
+
+  private async syncXmfGalleryAliases(festivalSourceUrl: string) {
+    const notice = await this.sourcesRepo.findOneBy({
+      kind: 'discovery',
+      url: 'https://xmfestival.com/notice',
+      enabled: true,
+    });
+    if (
+      notice?.parserConfig.seed !== 'official-lineup' ||
+      notice.parserConfig.festivalSourceUrl !== festivalSourceUrl ||
+      !/^20\d{2}$/.test(notice.parserConfig.expectedYear ?? '')
+    )
+      return;
+    await this.checkRobots(notice.url);
+    const response = await this.getListing(notice);
+    if (response.status !== 200)
+      throw new Error(`XMF 공식 라인업 공지 HTTP ${response.status}`);
+    await this.syncXmfArtistAliases(notice, response.body);
   }
 
   private async proposalItems(

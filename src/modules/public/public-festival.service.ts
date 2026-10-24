@@ -480,13 +480,19 @@ export class PublicFestivalService {
             festivalSourceUrl: string;
             artistName: string;
             artistAlias: string | null;
+            artistOfficialName: string | null;
             id: string;
           }[]
         >(
           `SELECT DISTINCT ON (source."parserConfig"->>'festivalSourceUrl', source."parserConfig"->>'artistName')
              source."parserConfig"->>'festivalSourceUrl' AS "festivalSourceUrl",
              source."parserConfig"->>'artistName' AS "artistName",
-             source."parserConfig"->>'artistAlias' AS "artistAlias", image.id
+             source."parserConfig"->>'artistAlias' AS "artistAlias",
+             CASE WHEN source."parserConfig"->>'seed' = 'official-artist-gallery'
+               AND source."parserConfig"->>'artistOfficialNameSource' =
+                 'official-notice-and-modal-site'
+               THEN source."parserConfig"->>'artistOfficialName'
+               ELSE NULL END AS "artistOfficialName", image.id
            FROM crawl_images image
            JOIN crawl_sources source ON source.id = image."sourceId"
            WHERE source.kind = 'artist-image'
@@ -504,14 +510,20 @@ export class PublicFestivalService {
       ]),
     );
     for (const image of profileImages) {
-      if (!image.artistAlias) continue;
-      const key = `${image.festivalSourceUrl}\u0000${image.artistAlias}`;
-      if (!profileImageByArtist.has(key))
-        profileImageByArtist.set(key, image.id);
+      for (const name of [image.artistAlias, image.artistOfficialName]) {
+        if (!name) continue;
+        const key = `${image.festivalSourceUrl}\u0000${name}`;
+        if (!profileImageByArtist.has(key))
+          profileImageByArtist.set(key, image.id);
+      }
     }
     const profileImageByName = new Map<string, Set<string>>();
     for (const image of profileImages) {
-      for (const name of [image.artistName, image.artistAlias]) {
+      for (const name of [
+        image.artistName,
+        image.artistAlias,
+        image.artistOfficialName,
+      ]) {
         if (!name) continue;
         for (const nameKey of artistNameKeys(name)) {
           const normalizedKey = `${image.festivalSourceUrl}\u0000${nameKey}`;
