@@ -600,6 +600,7 @@ export class CrewService {
           },
         });
       }
+      const previousState = member.state;
       member.zoneId =
         body.state === 'leaving' ? null : (body.zoneId ?? member.zoneId);
       member.state = body.state ?? member.state;
@@ -612,7 +613,12 @@ export class CrewService {
         updatedAt: member.statusUpdatedAt,
       };
       await this.socialNotifications.enqueueCrewStatus(manager, crew, userId);
-      await this.liveActivity.enqueueCrewMembers(id, crew.festivalId, manager);
+      if (previousState !== member.state)
+        await this.liveActivity.enqueueCrewMembers(
+          id,
+          crew.festivalId,
+          manager,
+        );
       return remember(response);
     });
   }
@@ -713,8 +719,12 @@ export class CrewService {
           error('NOT_FOUND', '멤버를 찾을 수 없습니다.'),
         );
       await members.delete({ crewId: id, userId });
-      await this.liveActivity.enqueueCrewMembers(id, crew.festivalId, manager);
-      await this.liveActivity.enqueueUser(userId, crew.festivalId, manager);
+      await this.liveActivity.enqueueCrewRemoval(
+        id,
+        userId,
+        crew.festivalId,
+        manager,
+      );
     });
   }
 

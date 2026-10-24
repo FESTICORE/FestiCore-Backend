@@ -61,6 +61,7 @@ function setup() {
   const liveActivity = {
     enqueueCrewMembers: jest.fn().mockResolvedValue(undefined),
     enqueueUser: jest.fn().mockResolvedValue(undefined),
+    enqueueCrewRemoval: jest.fn().mockResolvedValue(undefined),
   };
   const service = new CrewService(
     crewRepository as unknown as Repository<Crew>,
@@ -480,6 +481,45 @@ describe('CrewService authorization and invitations', () => {
       where: { id: crew.id },
       lock: { mode: 'pessimistic_write' },
     });
+  });
+
+  it('removes a member and enqueues both affected sets in one ordered operation', async () => {
+    const { service, crewRepository, memberRepository, liveActivity } = setup();
+    memberRepository.findOne.mockResolvedValue({
+      crewId: crew.id,
+      userId: ownerId,
+    });
+    const members = {
+      findOne: jest
+        .fn()
+        .mockResolvedValue({ crewId: crew.id, userId: otherId }),
+      delete: jest.fn().mockResolvedValue({ affected: 1 }),
+    };
+    const manager = {
+      getRepository: (entity: unknown) =>
+        entity === Crew
+          ? { findOne: jest.fn().mockResolvedValue({ ...crew }) }
+          : members,
+    };
+    Object.assign(crewRepository, {
+      manager: {
+        transaction: (work: (value: typeof manager) => Promise<unknown>) =>
+          work(manager),
+      },
+    });
+    await service.removeMember(crew.id, ownerId, otherId);
+    expect(members.delete).toHaveBeenCalledWith({
+      crewId: crew.id,
+      userId: otherId,
+    });
+    expect(liveActivity.enqueueCrewRemoval).toHaveBeenCalledWith(
+      crew.id,
+      otherId,
+      crew.festivalId,
+      manager,
+    );
+    expect(liveActivity.enqueueCrewMembers).not.toHaveBeenCalled();
+    expect(liveActivity.enqueueUser).not.toHaveBeenCalled();
   });
 
   it('queues a dissolution notice before deleting the crew in one transaction', async () => {

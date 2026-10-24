@@ -73,6 +73,24 @@ describe('LiveActivityService durable queue', () => {
     expect(query.mock.calls[0][1]).toEqual([['crew-1'], ['fst_one']]);
   });
 
+  it('coalesces crew removal targets into one ordered enqueue', async () => {
+    await service.enqueueCrewRemoval(
+      'crew-1',
+      'removed-user',
+      'fst_one',
+      manager as never,
+    );
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(query.mock.calls[0][0]).toContain('ORDER BY d."id"');
+    expect(query.mock.calls[0][0]).toContain('d."userId" = $2');
+    expect(query.mock.calls[0][0]).toContain('m."crewId" = $1');
+    expect(query.mock.calls[0][1]).toEqual([
+      'crew-1',
+      'removed-user',
+      'fst_one',
+    ]);
+  });
+
   it('keeps the attempt clock when an activity stops', async () => {
     await service.stopDevice(deviceId);
     expect(query.mock.calls[0][0]).toContain('"active" = false');
