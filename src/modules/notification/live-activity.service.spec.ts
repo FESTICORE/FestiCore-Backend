@@ -46,6 +46,8 @@ describe('LiveActivityService durable queue', () => {
       expect(sql).not.toContain('"lastAttemptAt" =');
     }
     expect(query.mock.calls[1][1]).toEqual(['user-one', 'fst_one']);
+    expect(query.mock.calls[1][0]).toContain('ORDER BY "id"');
+    expect(query.mock.calls[2][0]).toContain('ORDER BY "id"');
   });
 
   it('enqueues only active festival devices belonging to crew members', async () => {
@@ -55,7 +57,20 @@ describe('LiveActivityService durable queue', () => {
     );
     expect(query.mock.calls[0][0]).toContain('d."liveActivityFestivalId" = $2');
     expect(query.mock.calls[0][0]).not.toContain('"lastAttemptAt" =');
+    expect(query.mock.calls[0][0]).toContain('ORDER BY d."id"');
     expect(query.mock.calls[0][1]).toEqual(['crew-1', 'fst_one']);
+  });
+
+  it('coalesces withdrawal impact into one ordered enqueue', async () => {
+    await service.enqueueWithdrawalImpact(
+      ['crew-1'],
+      ['fst_one'],
+      manager as never,
+    );
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(query.mock.calls[0][0]).toContain('ORDER BY d."id"');
+    expect(query.mock.calls[0][0]).toContain('m."crewId" = ANY($1::varchar[])');
+    expect(query.mock.calls[0][1]).toEqual([['crew-1'], ['fst_one']]);
   });
 
   it('keeps the attempt clock when an activity stops', async () => {

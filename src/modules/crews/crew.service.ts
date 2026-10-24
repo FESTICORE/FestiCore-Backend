@@ -9,7 +9,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash, randomBytes, randomUUID } from 'crypto';
-import { EntityManager, Repository } from 'typeorm';
+import { EntityManager, IsNull, Repository } from 'typeorm';
 import { AdminFestival } from '../admin/festival/festival.entity';
 import { User } from '../auth/entity/user.entity';
 import { SocialNotificationService } from '../notification/social-notification.service';
@@ -102,14 +102,20 @@ export class CrewService {
     const festival = await this.festival(crew.festivalId);
     if (!crew.archivedAt && Date.now() >= this.archiveTime(festival)) {
       await this.crews.manager.transaction(async (manager) => {
-        crew.archivedAt = new Date();
-        await manager.getRepository(Crew).save(crew);
-        await this.liveActivity.enqueueCrewMembers(
-          crew.id,
-          crew.festivalId,
-          manager,
-        );
+        const archived = await manager
+          .getRepository(Crew)
+          .update(
+            { id: crew.id, archivedAt: IsNull() },
+            { archivedAt: new Date() },
+          );
+        if (archived.affected)
+          await this.liveActivity.enqueueCrewMembers(
+            crew.id,
+            crew.festivalId,
+            manager,
+          );
       });
+      throw new GoneException(error('CREW_ARCHIVED', '보관된 크루입니다.'));
     }
     if (crew.archivedAt)
       throw new GoneException(error('CREW_ARCHIVED', '보관된 크루입니다.'));

@@ -137,6 +137,7 @@ export class LiveActivityService implements OnModuleInit, OnModuleDestroy {
       `INSERT INTO "live_activity_deliveries" ("deviceId")
       SELECT "id" FROM "devices" WHERE "liveActivityFestivalId" = $1
         AND "liveActivityPushToken" IS NOT NULL AND "liveActivityId" IS NOT NULL
+      ORDER BY "id"
       ON CONFLICT ("deviceId") DO UPDATE SET
         "revision" = "live_activity_deliveries"."revision" + 1,
         "active" = true, "status" = 'pending', "leaseId" = NULL,
@@ -157,6 +158,7 @@ export class LiveActivityService implements OnModuleInit, OnModuleDestroy {
         AND ($2::varchar IS NULL OR "liveActivityFestivalId" = $2)
         AND "liveActivityPushToken" IS NOT NULL
         AND "liveActivityFestivalId" IS NOT NULL AND "liveActivityId" IS NOT NULL
+      ORDER BY "id"
       ON CONFLICT ("deviceId") DO UPDATE SET
         "revision" = "live_activity_deliveries"."revision" + 1,
         "active" = true, "status" = 'pending', "leaseId" = NULL,
@@ -179,12 +181,44 @@ export class LiveActivityService implements OnModuleInit, OnModuleDestroy {
         AND d."liveActivityFestivalId" = $2
         AND d."liveActivityPushToken" IS NOT NULL
         AND d."liveActivityId" IS NOT NULL
+      ORDER BY d."id"
       ON CONFLICT ("deviceId") DO UPDATE SET
         "revision" = "live_activity_deliveries"."revision" + 1,
         "active" = true, "status" = 'pending', "leaseId" = NULL,
         "leaseUntil" = NULL, "nextAttemptAt" = now(), "attempts" = 0,
         "lastErrorCode" = NULL, "updatedAt" = now()`,
       [crewId, festivalId],
+    );
+  }
+
+  async enqueueWithdrawalImpact(
+    crewIds: string[],
+    festivalIds: string[],
+    manager: EntityManager,
+  ): Promise<void> {
+    if (!crewIds.length && !festivalIds.length) return;
+    await manager.query(
+      `INSERT INTO "live_activity_deliveries" ("deviceId")
+      SELECT d."id" FROM "devices" d
+      WHERE d."liveActivityPushToken" IS NOT NULL
+        AND d."liveActivityId" IS NOT NULL
+        AND d."liveActivityFestivalId" IS NOT NULL
+        AND (
+          d."liveActivityFestivalId" = ANY($2::varchar[])
+          OR EXISTS (
+            SELECT 1 FROM "crew_members" m
+            WHERE m."userId" = d."userId"
+              AND m."festivalId" = d."liveActivityFestivalId"
+              AND m."crewId" = ANY($1::varchar[])
+          )
+        )
+      ORDER BY d."id"
+      ON CONFLICT ("deviceId") DO UPDATE SET
+        "revision" = "live_activity_deliveries"."revision" + 1,
+        "active" = true, "status" = 'pending', "leaseId" = NULL,
+        "leaseUntil" = NULL, "nextAttemptAt" = now(), "attempts" = 0,
+        "lastErrorCode" = NULL, "updatedAt" = now()`,
+      [crewIds, festivalIds],
     );
   }
 

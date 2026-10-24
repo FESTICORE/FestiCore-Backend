@@ -38,6 +38,7 @@ describe('AuthService logout account devices', () => {
       {
         enqueueCrewMembers: jest.fn().mockResolvedValue(undefined),
         enqueueFestival: jest.fn().mockResolvedValue(undefined),
+        enqueueWithdrawalImpact: jest.fn().mockResolvedValue(undefined),
       } as never,
     );
     return { service, query, transaction };
@@ -121,6 +122,7 @@ describe('AuthService web grant replacement', () => {
       {
         enqueueCrewMembers: jest.fn().mockResolvedValue(undefined),
         enqueueFestival: jest.fn().mockResolvedValue(undefined),
+        enqueueWithdrawalImpact: jest.fn().mockResolvedValue(undefined),
       } as never,
     );
     verify.mockResolvedValueOnce({
@@ -182,6 +184,7 @@ describe('AuthService web grant replacement', () => {
       {
         enqueueCrewMembers: jest.fn().mockResolvedValue(undefined),
         enqueueFestival: jest.fn().mockResolvedValue(undefined),
+        enqueueWithdrawalImpact: jest.fn().mockResolvedValue(undefined),
       } as never,
     );
     await expect(service.me('user-id')).resolves.toMatchObject({
@@ -237,6 +240,7 @@ describe('AuthService web grant replacement', () => {
       {
         enqueueCrewMembers: jest.fn().mockResolvedValue(undefined),
         enqueueFestival: jest.fn().mockResolvedValue(undefined),
+        enqueueWithdrawalImpact: jest.fn().mockResolvedValue(undefined),
       } as never,
     );
 
@@ -296,6 +300,7 @@ describe('AuthService web grant replacement', () => {
         {
           enqueueCrewMembers: jest.fn().mockResolvedValue(undefined),
           enqueueFestival: jest.fn().mockResolvedValue(undefined),
+          enqueueWithdrawalImpact: jest.fn().mockResolvedValue(undefined),
         } as never,
       );
 
@@ -338,6 +343,7 @@ describe('AuthService web grant replacement', () => {
       {
         enqueueCrewMembers: jest.fn().mockResolvedValue(undefined),
         enqueueFestival: jest.fn().mockResolvedValue(undefined),
+        enqueueWithdrawalImpact: jest.fn().mockResolvedValue(undefined),
       } as never,
     );
 
@@ -389,6 +395,7 @@ describe('AuthService web grant replacement', () => {
         {
           enqueueCrewMembers: jest.fn().mockResolvedValue(undefined),
           enqueueFestival: jest.fn().mockResolvedValue(undefined),
+          enqueueWithdrawalImpact: jest.fn().mockResolvedValue(undefined),
         } as never,
       );
 
@@ -449,6 +456,7 @@ describe('AuthService web grant replacement', () => {
       {
         enqueueCrewMembers: jest.fn().mockResolvedValue(undefined),
         enqueueFestival: jest.fn().mockResolvedValue(undefined),
+        enqueueWithdrawalImpact: jest.fn().mockResolvedValue(undefined),
       } as never,
     );
     await expect(
@@ -495,6 +503,7 @@ describe('AuthService web grant replacement', () => {
       {
         enqueueCrewMembers: jest.fn().mockResolvedValue(undefined),
         enqueueFestival: jest.fn().mockResolvedValue(undefined),
+        enqueueWithdrawalImpact: jest.fn().mockResolvedValue(undefined),
       } as never,
     );
     await expect(
@@ -516,6 +525,7 @@ describe('AuthService 회원 탈퇴의 크루 소유권', () => {
     successor?: string,
     admin?: { id: string; role: string },
     hiddenFlag = false,
+    alreadyHidden = false,
   ) {
     const query = jest.fn().mockImplementation((sql: string) => {
       if (sql.includes('FROM "users"') && sql.includes('FOR UPDATE'))
@@ -532,7 +542,7 @@ describe('AuthService 회원 탈퇴의 크루 소유권', () => {
                 id: 'flg_1',
                 ownerId: userId,
                 festivalId: 'fst_test',
-                hidden: false,
+                hidden: alreadyHidden,
               },
             ]
           : [];
@@ -553,6 +563,7 @@ describe('AuthService 회원 탈퇴의 크루 소유권', () => {
     const liveActivity = {
       enqueueCrewMembers: jest.fn().mockResolvedValue(undefined),
       enqueueFestival: jest.fn().mockResolvedValue(undefined),
+      enqueueWithdrawalImpact: jest.fn().mockResolvedValue(undefined),
     };
     const syncMany = jest.fn().mockResolvedValue([]);
     const service = new AuthService(
@@ -622,20 +633,23 @@ describe('AuthService 회원 탈퇴의 크루 소유권', () => {
       sql.includes('DELETE FROM "devices" WHERE "userId" = $1'),
     );
     expect(deviceDelete).toBeGreaterThanOrEqual(0);
-    expect(liveActivity.enqueueCrewMembers).toHaveBeenCalledWith(
-      'crew-1',
-      'fst_test',
-      expect.objectContaining({ query }),
-    );
-    expect(liveActivity.enqueueFestival).toHaveBeenCalledWith(
-      'fst_test',
+    expect(liveActivity.enqueueWithdrawalImpact).toHaveBeenCalledWith(
+      ['crew-1'],
+      ['fst_test'],
       expect.objectContaining({ query }),
     );
     expect(query.mock.invocationCallOrder[deviceDelete]).toBeLessThan(
-      liveActivity.enqueueCrewMembers.mock.invocationCallOrder[0],
+      liveActivity.enqueueWithdrawalImpact.mock.invocationCallOrder[0],
     );
-    expect(query.mock.invocationCallOrder[deviceDelete]).toBeLessThan(
-      liveActivity.enqueueFestival.mock.invocationCallOrder[0],
+  });
+
+  it('이미 숨겨진 깃발은 탈퇴 때 축제 갱신을 다시 예약하지 않는다', async () => {
+    const { service, liveActivity } = setup('successor', undefined, true, true);
+    await service.withdraw(userId);
+    expect(liveActivity.enqueueWithdrawalImpact).toHaveBeenCalledWith(
+      ['crew-1'],
+      [],
+      expect.anything(),
     );
   });
 
@@ -750,6 +764,7 @@ describe('AuthService 회원 탈퇴의 깃발과 Apple 재시도', () => {
       {
         enqueueCrewMembers: jest.fn().mockResolvedValue(undefined),
         enqueueFestival: jest.fn().mockResolvedValue(undefined),
+        enqueueWithdrawalImpact: jest.fn().mockResolvedValue(undefined),
       } as never,
     );
     return {

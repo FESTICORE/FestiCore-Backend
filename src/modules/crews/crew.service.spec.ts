@@ -169,7 +169,7 @@ describe('CrewService authorization and invitations', () => {
   });
 
   it('returns the current member status for an identical clientAt retry', async () => {
-    const { service, crewRepository, memberRepository } = setup();
+    const { service, crewRepository, memberRepository, liveActivity } = setup();
     const clientAt = new Date();
     const member = {
       crewId: crew.id,
@@ -205,10 +205,11 @@ describe('CrewService authorization and invitations', () => {
       updatedAt: clientAt,
     });
     expect(locked.save).not.toHaveBeenCalled();
+    expect(liveActivity.enqueueCrewMembers).not.toHaveBeenCalled();
   });
 
   it('replays a keyed status once and rejects reusing the key with another body', async () => {
-    const { service, crewRepository, memberRepository } = setup();
+    const { service, crewRepository, memberRepository, liveActivity } = setup();
     const member = {
       crewId: crew.id,
       userId: ownerId,
@@ -261,6 +262,12 @@ describe('CrewService authorization and invitations', () => {
       ),
     ).resolves.toEqual(first);
     expect(memberRows.save).toHaveBeenCalledTimes(1);
+    expect(liveActivity.enqueueCrewMembers).toHaveBeenCalledTimes(1);
+    expect(liveActivity.enqueueCrewMembers).toHaveBeenCalledWith(
+      crew.id,
+      crew.festivalId,
+      testManager,
+    );
     expect(idempotency.save).toHaveBeenCalledTimes(1);
     await expect(
       service.status(

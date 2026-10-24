@@ -19,13 +19,17 @@ describe('CrewArchiveService', () => {
     } as Crew;
     const crews: {
       find: jest.Mock;
-      save: jest.Mock;
+      update: jest.Mock;
       manager?: { transaction: jest.Mock };
     } = {
       find: jest.fn().mockResolvedValue([crew]),
-      save: jest
+      update: jest
         .fn()
-        .mockImplementation((value: Crew) => Promise.resolve(value)),
+        .mockImplementation((_: unknown, changes: { archivedAt: Date }) => {
+          if (crew.archivedAt) return Promise.resolve({ affected: 0 });
+          crew.archivedAt = changes.archivedAt;
+          return Promise.resolve({ affected: 1 });
+        }),
     };
     crews.manager = {
       transaction: jest.fn((work: (manager: unknown) => Promise<unknown>) =>
@@ -51,8 +55,12 @@ describe('CrewArchiveService', () => {
       idempotency as unknown as Repository<CrewStatusIdempotency>,
       liveActivity as unknown as LiveActivityService,
     );
-    await service.run(new Date(end.getTime() + 24 * 60 * 60_000));
-    expect(crews.save).toHaveBeenCalledWith(crew);
+    const archiveAt = new Date(end.getTime() + 24 * 60 * 60_000);
+    await service.run(archiveAt);
+    expect(crews.update).toHaveBeenCalledWith(
+      expect.objectContaining({ id: crew.id }),
+      { archivedAt: archiveAt },
+    );
     expect(liveActivity.enqueueCrewMembers).toHaveBeenCalledWith(
       crew.id,
       crew.festivalId,

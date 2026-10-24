@@ -452,14 +452,11 @@ export class AuthService {
               manager,
             )
           : [];
-        for (const crew of memberCrews)
-          await this.liveActivity.enqueueCrewMembers(
-            crew.crewId,
-            crew.festivalId,
-            manager,
-          );
-        for (const festivalId of hiddenFestivals)
-          await this.liveActivity.enqueueFestival(festivalId, manager);
+        await this.liveActivity.enqueueWithdrawalImpact(
+          memberCrews.map((crew) => crew.crewId),
+          [...hiddenFestivals],
+          manager,
+        );
         return changedFestivals;
       },
     );
