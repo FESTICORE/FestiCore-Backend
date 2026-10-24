@@ -56,6 +56,69 @@ describe('discovered festival artist profile images', () => {
     expect(result.timetable).toEqual([]);
   });
 
+  it('uses an official CDF profile photo in detail and timetable with the ONEWE lineup alias', async () => {
+    const festivalUrl = 'https://mintpaper.co.kr/festivals/178';
+    const candidate = {
+      name: 'COUNTDOWN FANTASY 2026-2027',
+      venue: '킨텍스',
+      date: '2026.12.31 - 2026.12.31',
+      url: festivalUrl,
+      artists: [{ name: 'ONEWE' }],
+      officialProfileArtists: [
+        {
+          name: 'ONEWE(원위)',
+          profileUrl: 'https://www.instagram.com/official_onewe/',
+        },
+      ],
+    };
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([{ candidate }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          festivalSourceUrl: festivalUrl,
+          artistName: 'ONEWE(원위)',
+          artistAlias: null,
+          id: 'cdf-onewe-photo',
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: 'cdf-timetable',
+          sourceUrl: festivalUrl,
+          sourceImageId: null,
+          verifiedAt: new Date('2026-10-23T00:00:00Z'),
+          sets: [
+            {
+              artist: 'ONEWE',
+              date: '2026-12-31',
+              stageName: 'Main',
+              startsAt: '2026-12-31T18:00:00+09:00',
+              endsAt: null,
+            },
+          ],
+        },
+      ]);
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    const result = await service.detail(
+      discoverySummaries([{ candidate }])[0].id,
+    );
+    const imageUrl = '/api/v1/festivals/images/cdf-onewe-photo.webp';
+    expect(result.artists).toContainEqual(
+      expect.objectContaining({ name: 'ONEWE', imageUrl }),
+    );
+    expect(result.timetable).toContainEqual(
+      expect.objectContaining({ artist: 'ONEWE', imageUrl }),
+    );
+  });
+
   it('shows only the saved GMF artist image on its official festival detail', async () => {
     const gmfUrl = 'https://mintpaper.co.kr/festivals/172';
     const otherUrl = 'https://mintpaper.co.kr/festivals/178';

@@ -22,6 +22,7 @@ import {
   CreateCrawlSourceDto,
   UpdateCrawlSourceDto,
 } from '../dto/crawl-source.dto';
+import { CDF_FESTIVAL_URL, CDF_PROFILE_SEED } from './cdf-profile';
 
 type PrivateCrawl = {
   onModuleInit(): void;
@@ -55,6 +56,18 @@ type PrivateCrawl = {
     source: CrawlSource,
     parsed: unknown,
   ): Promise<void>;
+};
+
+const CDF_PAGE = 'https://www.bandkardi.com/profile';
+const CDF_PHOTO =
+  'https://www.bandkardi.com/_next/static/media/home_hero_pc.e0cb8389.webp';
+const CDF_HTML =
+  '<section aria-label="KARDI members"><img src="/_next/static/media/home_hero_pc.e0cb8389.webp" alt="KARDI members"></section><h1 id="profile-title">KARDI</h1>';
+const CDF_CONFIG = {
+  seed: CDF_PROFILE_SEED,
+  festivalSourceUrl: CDF_FESTIVAL_URL,
+  artistName: 'KARDI',
+  officialHandle: 'bandkardi_',
 };
 
 const XMF_NOTICE_HTML = `<div class="acd_row"><h4>[XMF 2026 최종 라인업 공개]</h4>
@@ -399,6 +412,117 @@ describe('CrawlService scheduled runs', () => {
     await service.scheduleDue();
 
     expect(execute).not.toHaveBeenCalled();
+  });
+});
+
+describe('CDF official profile sources', () => {
+  it('rejects a forged seed on an unlisted page', async () => {
+    const { service, dataSource } = harness();
+    await expect(
+      service.createSource(
+        {
+          kind: 'artist-image',
+          url: 'https://www.bandkardi.com/other',
+          parser: 'html-text',
+          parserConfig: CDF_CONFIG,
+        },
+        'admin-1',
+      ),
+    ).rejects.toMatchObject({ status: 422 });
+    expect(dataSource.transaction).not.toHaveBeenCalled();
+  });
+
+  it('permits an alias-only edit while preserving the verified owner', async () => {
+    const { service, source, dataSource } = harness();
+    source.kind = 'artist-image';
+    source.url = CDF_PAGE;
+    source.parserConfig = CDF_CONFIG;
+    const repo = {
+      findOne: jest.fn().mockResolvedValue({ ...source }),
+      save: jest.fn((value: CrawlSource) => Promise.resolve(value)),
+    };
+    dataSource.transaction.mockImplementation(
+      (
+        callback: (manager: {
+          getRepository: () => typeof repo;
+        }) => Promise<unknown>,
+      ) => callback({ getRepository: () => repo }),
+    );
+    await expect(
+      service.updateSource(
+        source.id,
+        { parserConfig: { artistAlias: '카디' } },
+        'admin-1',
+      ),
+    ).resolves.toMatchObject({
+      parserConfig: { ...CDF_CONFIG, artistAlias: '카디' },
+    });
+  });
+
+  it('tests a source with the same profile selector used by execution', async () => {
+    const { service, source } = harness();
+    source.kind = 'artist-image';
+    source.url = CDF_PAGE;
+    source.parser = 'html-text';
+    source.parserConfig = CDF_CONFIG;
+    const robots = jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({
+      status: 200,
+      body: CDF_HTML,
+    });
+    const result = await (
+      service as unknown as {
+        testSource(id: string): Promise<{ parsed: unknown }>;
+      }
+    ).testSource(source.id);
+    expect(result.parsed).toEqual({
+      artistName: 'KARDI',
+      imageUrl: CDF_PHOTO,
+    });
+    expect(robots).toHaveBeenCalledWith(CDF_PHOTO);
+  });
+
+  it('captures the verified image and rejects a volatile query on the next run', async () => {
+    const { service, source, run, execute, runsRepo } = harness();
+    execute.mockRestore();
+    source.kind = 'artist-image';
+    source.url = CDF_PAGE;
+    source.parser = 'html-text';
+    source.parserConfig = CDF_CONFIG;
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    const listing = jest.spyOn(service, 'getListing').mockResolvedValue({
+      status: 200,
+      body: CDF_HTML,
+    });
+    const capture = jest
+      .spyOn(
+        service as unknown as {
+          captureImages: (...args: unknown[]) => Promise<string[]>;
+        },
+        'captureImages',
+      )
+      .mockResolvedValue(['/api/v1/admin/crawl/images/image-1']);
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(null),
+    }));
+
+    await service.execute(run, source);
+    expect(capture.mock.calls[0][2]).toEqual([new URL(CDF_PHOTO)]);
+    expect(run.result).toBe('nochange-parsed');
+
+    listing.mockResolvedValue({
+      status: 200,
+      body: CDF_HTML.replace(
+        '/home_hero_pc.e0cb8389.webp',
+        '/home_hero_pc.e0cb8389.webp?v=2',
+      ),
+    });
+    const second = { id: 'run-2', sourceId: source.id } as CrawlRun;
+    await service.execute(second, source);
+    expect(second.result).toBe('failed');
+    expect(capture).toHaveBeenCalledTimes(1);
   });
 });
 

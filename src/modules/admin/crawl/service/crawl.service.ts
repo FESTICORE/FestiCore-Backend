@@ -47,6 +47,11 @@ import {
   GMF_NOTICE_URL,
   parseGmfLineup,
 } from './gmf-lineup';
+import {
+  CDF_PROFILE_SEED,
+  cdfProfileFor,
+  cdfProfileImageUrl,
+} from './cdf-profile';
 
 const kstDay = (date = new Date()) =>
   new Intl.DateTimeFormat('en-CA', {
@@ -58,8 +63,34 @@ const kstDay = (date = new Date()) =>
 
 const YES24_PAGE_LIMIT = 4;
 
-function artistImageConfig(config: Record<string, string>) {
+function artistImageConfig(url: string, config: Record<string, string>) {
   const { artistName, artistAlias, festivalSourceUrl, imageHint } = config;
+  if (config.seed === CDF_PROFILE_SEED) {
+    if (
+      !cdfProfileFor(url, config) ||
+      Object.keys(config).some(
+        (key) =>
+          ![
+            'seed',
+            'festivalSourceUrl',
+            'artistName',
+            'officialHandle',
+            'artistAlias',
+          ].includes(key),
+      ) ||
+      (artistAlias !== undefined &&
+        (typeof artistAlias !== 'string' ||
+          !artistAlias.trim() ||
+          artistAlias.length > 160))
+    )
+      throw new UnprocessableEntityException(
+        '검증된 CDF 공식 프로필 소스 설정이 필요합니다.',
+      );
+    return {
+      ...config,
+      ...(artistAlias === undefined ? {} : { artistAlias: artistAlias.trim() }),
+    };
+  }
   let festival: URL;
   try {
     festival = checkedUrl(festivalSourceUrl ?? '');
@@ -246,7 +277,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     }
     const parserConfig =
       dto.kind === 'artist-image'
-        ? artistImageConfig(dto.parserConfig)
+        ? artistImageConfig(dto.url, dto.parserConfig)
         : dto.kind === 'artist-gallery'
           ? artistGalleryConfig(dto.url, dto.parserConfig)
           : dto.parserConfig;
@@ -326,7 +357,10 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       Object.assign(locked, dto);
       const parserConfig: Record<string, string> | undefined =
         dto.parserConfig && locked.kind === 'artist-image'
-          ? artistImageConfig({ ...before.parserConfig, ...dto.parserConfig })
+          ? artistImageConfig(locked.url, {
+              ...before.parserConfig,
+              ...dto.parserConfig,
+            })
           : dto.parserConfig;
       if (parserConfig) locked.parserConfig = parserConfig;
       if (
@@ -421,6 +455,28 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     const response = await this.getListing(source);
     if (response.status !== 200)
       throw new UnprocessableEntityException(`HTTP ${response.status}`);
+    if (
+      source.kind === 'artist-image' &&
+      source.parserConfig.seed === CDF_PROFILE_SEED
+    ) {
+      const image = cdfProfileImageUrl(
+        response.body,
+        source.url,
+        source.parserConfig,
+      );
+      if (!image)
+        throw new UnprocessableEntityException(
+          'CDF 공식 프로필 이미지를 확인하지 못했습니다.',
+        );
+      await this.checkRobots(image.toString());
+      return {
+        parsed: {
+          artistName: source.parserConfig.artistName,
+          imageUrl: image.toString(),
+        },
+        excerpt: source.parserConfig.artistName,
+      };
+    }
     return {
       parsed:
         source.kind === 'artist-gallery'
@@ -1059,18 +1115,24 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
           ? source.parserConfig.seed === 'official-gmf-lineup' &&
             source.url === GMF_LINEUP_URL
             ? verifiedGmfImage
-            : source.parserConfig.seed === 'official-wonderlivet-lineup' &&
-                source.url === WONDERLIVET_LINEUP_URL
-              ? (parseWonderlivetLineup(response.body).find(
-                  (entry) =>
-                    entry.artistName === source.parserConfig.artistName &&
-                    entry.imageUrl.pathname === source.parserConfig.imageHint,
-                )?.imageUrl ?? null)
-              : artistProfileImageUrl(
+            : source.parserConfig.seed === CDF_PROFILE_SEED
+              ? cdfProfileImageUrl(
                   response.body,
                   source.url,
-                  source.parserConfig.imageHint,
+                  source.parserConfig,
                 )
+              : source.parserConfig.seed === 'official-wonderlivet-lineup' &&
+                  source.url === WONDERLIVET_LINEUP_URL
+                ? (parseWonderlivetLineup(response.body).find(
+                    (entry) =>
+                      entry.artistName === source.parserConfig.artistName &&
+                      entry.imageUrl.pathname === source.parserConfig.imageHint,
+                  )?.imageUrl ?? null)
+                : artistProfileImageUrl(
+                    response.body,
+                    source.url,
+                    source.parserConfig.imageHint,
+                  )
           : null;
       if (source.kind === 'artist-image' && !profileImage)
         throw new Error('프로필 이미지가 공식 페이지에서 확인되지 않았습니다.');
