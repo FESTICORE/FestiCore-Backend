@@ -31,6 +31,7 @@ describe('AdminFestivalService optimistic edits', () => {
       { query } as never,
       {} as never,
       {} as never,
+      {} as never,
     );
 
     await expect(service.list()).resolves.toEqual({
@@ -77,6 +78,7 @@ describe('AdminFestivalService optimistic edits', () => {
     } as never,
     {} as never,
     {} as never,
+    {} as never,
   );
 
   beforeEach(() => save.mockClear());
@@ -108,6 +110,137 @@ describe('AdminFestivalService optimistic edits', () => {
   });
 });
 
+describe('discovered festival import', () => {
+  const id = 'fst_0123456789abcdef';
+  const days = [
+    {
+      date: '2026-11-20',
+      startsAt: '2026-11-20T12:00:00+09:00',
+      endsAt: '2026-11-20T22:00:00+09:00',
+    },
+    {
+      date: '2026-11-21',
+      startsAt: '2026-11-21T12:00:00+09:00',
+      endsAt: '2026-11-21T22:00:00+09:00',
+    },
+  ];
+  const discovered = {
+    id,
+    name: '발견된 축제',
+    venue: '올림픽공원',
+    firstDate: '2026-11-20',
+    lastDate: '2026-11-21',
+    thumbUrl:
+      '/api/v1/festivals/images/3fa85f64-5717-4562-b3fc-2c963f66afa6.webp',
+    ticketLinks: [
+      {
+        label: '멜론티켓',
+        url: 'https://ticket.melon.com/performance/index.htm?prodId=1',
+      },
+    ],
+    sourceUrl: 'https://ticket.melon.com/performance/index.htm?prodId=1',
+  };
+
+  function fixture(
+    options: {
+      existing?: boolean;
+      insertError?: Error;
+      auditError?: Error;
+    } = {},
+  ) {
+    const query = options.insertError
+      ? jest.fn().mockRejectedValue(options.insertError)
+      : jest
+          .fn()
+          .mockResolvedValue([
+            { draftUpdatedAt: new Date('2026-11-19T00:00:00Z') },
+          ]);
+    const record = options.auditError
+      ? jest.fn().mockRejectedValue(options.auditError)
+      : jest.fn().mockResolvedValue(undefined);
+    const discoveredLookup = jest.fn().mockResolvedValue(discovered);
+    const manager = { query };
+    const service = new AdminFestivalService(
+      {
+        exist: jest.fn().mockResolvedValue(options.existing ?? false),
+        create: jest.fn((row: unknown) => row),
+      } as never,
+      {} as never,
+      {
+        transaction: (callback: (manager: unknown) => Promise<unknown>) =>
+          callback(manager),
+      } as never,
+      { record } as never,
+      {} as never,
+      { discovered: discoveredLookup } as never,
+    );
+    return { service, query, record, discoveredLookup, manager };
+  }
+
+  it('preserves the public ID and source in an unpublished audited draft', async () => {
+    const { service, query, record, manager } = fixture();
+    await expect(
+      service.importDiscovered(id, { days }, 'adm_1'),
+    ).resolves.toMatchObject({
+      id,
+      draftVersion: 1,
+      name: discovered.name,
+      venue: discovered.venue,
+      days,
+      thumbUrl: discovered.thumbUrl,
+      ticketLinks: discovered.ticketLinks,
+      source: { url: discovered.sourceUrl },
+    });
+    const [sql, values] = query.mock.calls[0] as unknown as [string, string[]];
+    expect(sql).toContain('INSERT INTO admin_festivals');
+    expect(values[0]).toBe(id);
+    expect(values[2]).toBe('adm_1');
+    const draft = JSON.parse(values[1]) as unknown;
+    expect(draft).toMatchObject({ id, name: discovered.name, days });
+    expect(record).toHaveBeenCalledWith(manager, {
+      actor: 'adm_1',
+      action: 'festival.discovered.imported',
+      target: `festival:${id}`,
+      before: null,
+      after: { draftVersion: 1, draft },
+    });
+  });
+
+  it('rejects a duplicate before fetching the discovery catalog', async () => {
+    const { service, discoveredLookup, query } = fixture({ existing: true });
+    await expect(
+      service.importDiscovered(id, { days }, null),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(discoveredLookup).not.toHaveBeenCalled();
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('rejects dates that do not match the discovered range', async () => {
+    const { service, query } = fixture();
+    await expect(
+      service.importDiscovered(id, { days: days.slice(0, 1) }, null),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('maps a concurrent insert collision to 409', async () => {
+    const error = Object.assign(new Error('duplicate key'), {
+      driverError: { code: '23505' },
+    });
+    const { service } = fixture({ insertError: error });
+    await expect(
+      service.importDiscovered(id, { days }, null),
+    ).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('does not report success when the audit write fails', async () => {
+    const { service } = fixture({ auditError: new Error('audit unavailable') });
+    await expect(service.importDiscovered(id, { days }, null)).rejects.toThrow(
+      'audit unavailable',
+    );
+  });
+});
+
 describe('festival edit audit', () => {
   const days = [
     {
@@ -133,6 +266,7 @@ describe('festival edit audit', () => {
           callback(manager),
       } as never,
       { record } as never,
+      {} as never,
       {} as never,
     );
 
@@ -196,6 +330,7 @@ describe('festival edit audit', () => {
       } as never,
       { record } as never,
       {} as never,
+      {} as never,
     );
 
     await expect(
@@ -231,6 +366,7 @@ describe('festival source freshness warnings', () => {
       };
       const service = new AdminFestivalService(
         { findOneBy: jest.fn().mockResolvedValue(row) } as never,
+        {} as never,
         {} as never,
         {} as never,
         {} as never,
@@ -312,6 +448,7 @@ describe('pack update delivery queue', () => {
       } as never,
       { record } as never,
       { invalidatePack } as never,
+      {} as never,
     );
 
     await expect(

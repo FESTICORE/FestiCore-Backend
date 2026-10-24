@@ -34,5 +34,6 @@ import { DeviceModule } from '../device/device.module';
     PublicFestivalUpdatesGateway,
     ImageStorageService,
   ],
+  exports: [PublicFestivalService],
 })
 export class PublicFestivalModule {}
