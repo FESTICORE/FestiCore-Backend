@@ -146,6 +146,57 @@ describe('NOL festival poster', () => {
     expect(profileQueries[0][1][0]).not.toContain(stale);
   });
 
+  it('checks the official notice when Mint Paper is beyond the visible link cap', async () => {
+    const festivalUrl = 'https://mintpaper.co.kr/festivals/178';
+    const stale = 'https://nol.yanolja.com/ticket/products/111';
+    const urls = [
+      ...Array.from(
+        { length: 5 },
+        (_, index) => `https://ticket.yes24.com/Perf/${60000 + index}`,
+      ),
+      stale,
+      festivalUrl,
+    ];
+    const query = jest.fn().mockImplementation((sql: string) => {
+      if (sql.includes('WITH candidates'))
+        return urls.map((url) => ({
+          candidate: {
+            name: 'COUNTDOWN FANTASY 2026-2027',
+            url,
+            date: '2026.12.31 - 2027.01.01',
+            venue: 'KINTEX',
+            artists: [{ name: 'Band A' }],
+          },
+        }));
+      return [];
+    });
+    const builder = {
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      getMany: jest.fn().mockResolvedValue([]),
+    };
+    const service = new PublicFestivalService(
+      { createQueryBuilder: () => builder } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    await service.list(undefined, '50', new Date('2026-10-22T00:00:00Z'));
+    const profileQuery = (query.mock.calls as [string, [string[]]][]).find(
+      ([sql]) => sql.includes('SELECT DISTINCT ON (source."parserConfig"'),
+    );
+    expect(profileQuery?.[1][0]).toContain(festivalUrl);
+    expect(profileQuery?.[1][0]).not.toContain(stale);
+    expect(
+      query.mock.calls.some(([sql]: [string]) =>
+        sql.includes('SELECT child.url'),
+      ),
+    ).toBe(true);
+  });
+
   it('keeps the official Mint Paper catalog fields ahead of linked NOL details', async () => {
     const cover =
       'https://mintpaper.s3.ap-northeast-2.amazonaws.com/cdf-cover.jpg';

@@ -31,10 +31,10 @@ describe('discovered festival timetable', () => {
           verifiedAt: new Date('2026-10-10T00:00:00Z'),
           sets: [
             {
-              artist: 'Artist A',
+              artist: 'artist a',
               date: '2026-10-17',
-              stageName: 'Main',
-              startsAt: '2026-10-17T20:00:00+09:00',
+              stageName: 'main',
+              startsAt: '2026-10-17T11:00:00Z',
               endsAt: null,
             },
           ],
@@ -46,7 +46,7 @@ describe('discovered festival timetable', () => {
           verifiedAt: new Date('2026-10-11T00:00:00Z'),
           sets: [
             {
-              artist: 'artist a',
+              artist: 'Artist A',
               date: '2026-10-17',
               stageName: 'Main',
               startsAt: '2026-10-17T20:00:00+09:00',

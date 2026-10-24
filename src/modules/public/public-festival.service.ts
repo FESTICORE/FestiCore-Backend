@@ -323,7 +323,7 @@ export class PublicFestivalService {
     const related = summaries.filter(
       (summary) =>
         summary.sourceUrl === festivalSourceUrl ||
-        summary.ticketLinks.some((link) => link.url === festivalSourceUrl),
+        summary.sourceUrls.includes(festivalSourceUrl),
     );
     if (!related.length) return summaries;
 
@@ -667,8 +667,14 @@ export class PublicFestivalService {
     timetable.sort(
       (a, b) =>
         Date.parse(a.startsAt) - Date.parse(b.startsAt) ||
-        a.stageName.localeCompare(b.stageName) ||
-        a.artist.localeCompare(b.artist) ||
+        a.date.localeCompare(b.date) ||
+        a.stageName
+          .trim()
+          .toLocaleLowerCase()
+          .localeCompare(b.stageName.trim().toLocaleLowerCase()) ||
+        artistNameKeys(a.artist)[0].localeCompare(
+          artistNameKeys(b.artist)[0],
+        ) ||
         new Date(b.verifiedAt).getTime() - new Date(a.verifiedAt).getTime() ||
         a.id.localeCompare(b.id),
     );
@@ -676,8 +682,8 @@ export class PublicFestivalService {
     const uniqueTimetable = timetable.filter((set) => {
       const key = JSON.stringify([
         set.date,
-        set.stageName,
-        set.startsAt,
+        set.stageName.trim().toLocaleLowerCase(),
+        Date.parse(set.startsAt),
         artistNameKeys(set.artist)[0],
       ]);
       if (seenSets.has(key)) return false;
