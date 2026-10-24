@@ -23,6 +23,7 @@ import {
   UpdateCrawlSourceDto,
 } from '../dto/crawl-source.dto';
 import { CDF_FESTIVAL_URL, CDF_PROFILE_SEED } from './cdf-profile';
+import { DRDR_PROFILE_SEED } from './drdr-profile';
 
 type PrivateCrawl = {
   onModuleInit(): void;
@@ -70,6 +71,23 @@ const CDF_CONFIG = {
   artistName: 'KARDI',
   officialHandle: 'bandkardi_',
 };
+const DRDR_PAGE = 'https://drdr.ac/wordpress/wp-json/wp/v2/posts/1475';
+const DRDR_PHOTO =
+  'https://drdr.ac/wordpress/wp-content/uploads/2025/05/portrait-819x1024.jpg';
+const DRDR_CONFIG = {
+  seed: DRDR_PROFILE_SEED,
+  festivalSourceUrl: CDF_FESTIVAL_URL,
+  artistName: 'OYSTERS',
+};
+const DRDR_POST = JSON.stringify({
+  id: 1475,
+  status: 'publish',
+  categories: [11],
+  title: { rendered: 'OYSTERS///오이스터즈' },
+  content: {
+    rendered: `<p><strong>MUSICIAN</strong></p><p><img src="${DRDR_PHOTO}"></p><p><strong>ALBUMS</strong></p><p><img src="https://drdr.ac/wordpress/wp-content/uploads/2026/08/album.jpg"></p>`,
+  },
+});
 
 const XMF_NOTICE_HTML = `<div class="acd_row"><h4>[XMF 2026 최종 라인업 공개]</h4>
   <p>10월 3일부터 4일까지 이틀간 인천 파라다이스시티에서 열리는 XMF 2026.</p>
@@ -588,6 +606,74 @@ describe('CrawlService scheduled runs', () => {
     await service.scheduleDue();
 
     expect(execute).not.toHaveBeenCalled();
+  });
+});
+
+describe('DRDR official profile sources', () => {
+  it('rejects a forged page and an unreviewed source setting', async () => {
+    const { service, dataSource } = harness();
+    for (const source of [
+      {
+        url: 'https://drdr.ac/wordpress/wp-json/wp/v2/posts/999',
+        parserConfig: DRDR_CONFIG,
+      },
+      {
+        url: DRDR_PAGE,
+        parserConfig: { ...DRDR_CONFIG, artistAlias: 'another artist' },
+      },
+    ]) {
+      await expect(
+        service.createSource(
+          {
+            kind: 'artist-image',
+            parser: 'html-text',
+            ...source,
+          },
+          'admin-1',
+        ),
+      ).rejects.toMatchObject({ status: 422 });
+    }
+    expect(dataSource.transaction).not.toHaveBeenCalled();
+  });
+
+  it('tests and captures only the verified MUSICIAN portrait', async () => {
+    const { service, source, run, execute, runsRepo } = harness();
+    execute.mockRestore();
+    source.kind = 'artist-image';
+    source.url = DRDR_PAGE;
+    source.parser = 'html-text';
+    source.parserConfig = DRDR_CONFIG;
+    const robots = jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({
+      status: 200,
+      body: DRDR_POST,
+    });
+    const test = await (
+      service as unknown as {
+        testSource(id: string): Promise<{ parsed: unknown }>;
+      }
+    ).testSource(source.id);
+    expect(test.parsed).toEqual({
+      artistName: 'OYSTERS',
+      imageUrl: DRDR_PHOTO,
+    });
+    expect(robots).toHaveBeenCalledWith(DRDR_PHOTO);
+    const capture = jest
+      .spyOn(
+        service as unknown as {
+          captureImages: (...args: unknown[]) => Promise<string[]>;
+        },
+        'captureImages',
+      )
+      .mockResolvedValue(['/api/v1/admin/crawl/images/image-1']);
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(null),
+    }));
+    await service.execute(run, source);
+    expect(capture.mock.calls[0][2]).toEqual([new URL(DRDR_PHOTO)]);
+    expect(run.result).toBe('nochange-parsed');
   });
 });
 

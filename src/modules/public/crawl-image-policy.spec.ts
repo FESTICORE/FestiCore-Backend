@@ -3,6 +3,10 @@ import {
   CDF_PROFILES,
   CDF_PUBLIC_IMAGE_SQL,
 } from '../admin/crawl/service/cdf-profile';
+import {
+  DRDR_PROFILES,
+  DRDR_PUBLIC_IMAGE_SQL,
+} from '../admin/crawl/service/drdr-profile';
 
 describe('public crawl image policy', () => {
   it('honors a timetable source image opt-out before the verified-image check', () => {
@@ -89,5 +93,24 @@ describe('public crawl image policy', () => {
       ).toBe(false);
       expect(allowed.test(example + '?volatile=1')).toBe(false);
     }
+  });
+
+  it('publishes DRDR portraits only for verified post, festival and artist bindings', () => {
+    expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(
+      "source.\"parserConfig\"->>'seed' IS DISTINCT FROM 'drdr-official-profile'",
+    );
+    expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(DRDR_PUBLIC_IMAGE_SQL);
+    for (const [page, profile] of Object.entries(DRDR_PROFILES)) {
+      expect(DRDR_PUBLIC_IMAGE_SQL).toContain(`source.url = '${page}'`);
+      expect(DRDR_PUBLIC_IMAGE_SQL).toContain(
+        `source."parserConfig"->>'festivalSourceUrl' = '${profile.festivalSourceUrl}'`,
+      );
+      expect(DRDR_PUBLIC_IMAGE_SQL).toContain(
+        `source."parserConfig"->>'artistName' = '${profile.artistName}'`,
+      );
+    }
+    expect(DRDR_PUBLIC_IMAGE_SQL).toContain(
+      'image."originUrl" ~* \'^https://drdr[.]ac/wordpress/wp-content/uploads/',
+    );
   });
 });
