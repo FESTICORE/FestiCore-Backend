@@ -1197,6 +1197,128 @@ describe('CrawlService manual runs and snapshots', () => {
     expect(statements[0][1][2]).toBe('https://mintpaper.co.kr/festivals/178');
   });
 
+  it('reconciles an official NOL link even when the notice content is unchanged', async () => {
+    const { service, source, run, dataSource, runsRepo, execute } = harness();
+    execute.mockRestore();
+    source.url = 'https://www.mintpaper.co.kr/posts/4821';
+    source.parserConfig = {
+      seed: 'official-ticket-links',
+      festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
+    };
+    const body = `<script id="__NEXT_DATA__">${JSON.stringify({ props: { apolloState: { data: { 'Post:4821': { title: 'CDF2026-2027 TICKET | 예매 안내, 입장 안내, 관람 안내', content: '<p>COUNTDOWN FANTASY 2026-2027 일시 : 2026년 12월 31일</p><a href="https://nol.yanolja.com/ticket/products/26014568">NOL</a>' } } } } })}</script>`;
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({ status: 200, body });
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue({
+        contentHash: createHash('sha256')
+          .update(body)
+          .update('ticket-list:v3')
+          .digest('hex'),
+      }),
+    }));
+    dataSource.query.mockImplementation((sql: string) =>
+      sql.includes('SELECT "parserConfig"')
+        ? [
+            {
+              parserConfig: {
+                seed: 'official-ticket-link-detail',
+                festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
+              },
+            },
+          ]
+        : [],
+    );
+    const proposals = jest.spyOn(service, 'proposalItems');
+
+    await service.execute(run, source);
+
+    expect(run.result).toBe('unchanged');
+    expect(proposals).not.toHaveBeenCalled();
+    expect(
+      dataSource.query.mock.calls.filter(([sql]: [string]) =>
+        sql.includes('INSERT INTO crawl_sources'),
+      ),
+    ).toHaveLength(1);
+    for (const fragment of [
+      'UPDATE crawl_sources SET "parserConfig"',
+      'SELECT "parserConfig" FROM crawl_sources',
+    ]) {
+      expect(dataSource.query).toHaveBeenCalledWith(
+        expect.stringContaining(fragment),
+        expect.arrayContaining([
+          'https://nol.yanolja.com/ticket/products/26014568',
+        ]),
+      );
+    }
+  });
+
+  it('fails an unchanged official notice when its NOL links disappear', async () => {
+    const { service, source, run, dataSource, runsRepo, execute } = harness();
+    execute.mockRestore();
+    source.url = 'https://www.mintpaper.co.kr/posts/4821';
+    source.parserConfig = {
+      seed: 'official-ticket-links',
+      festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
+    };
+    const body = '<html><body>공식 공지가 변경되었습니다.</body></html>';
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({ status: 200, body });
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue({
+        contentHash: createHash('sha256')
+          .update(body)
+          .update('ticket-list:v3')
+          .digest('hex'),
+      }),
+    }));
+
+    await service.execute(run, source);
+
+    expect(run.result).toBe('failed');
+    expect(run.error).toBe('PARSE');
+    expect(
+      dataSource.query.mock.calls.some(([sql]: [string]) =>
+        sql.includes('INSERT INTO crawl_sources'),
+      ),
+    ).toBe(false);
+  });
+
+  it('rejects an unchanged official notice with a different seed before writing', async () => {
+    const { service, source, run, dataSource, runsRepo, execute } = harness();
+    execute.mockRestore();
+    source.url = 'https://www.mintpaper.co.kr/posts/4821';
+    source.parserConfig = { seed: 'manual' };
+    const body = `<script id="__NEXT_DATA__">${JSON.stringify({ props: { apolloState: { data: { 'Post:4821': { title: 'CDF2026-2027 TICKET | 예매 안내, 입장 안내, 관람 안내', content: '<p>COUNTDOWN FANTASY 2026-2027 일시 : 2026년 12월 31일</p><a href="https://nol.yanolja.com/ticket/products/26014568">NOL</a>' } } } } })}</script>`;
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({ status: 200, body });
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue({
+        contentHash: createHash('sha256')
+          .update(body)
+          .update('ticket-list:v3')
+          .digest('hex'),
+      }),
+    }));
+
+    await service.execute(run, source);
+
+    expect(run.result).toBe('failed');
+    expect(run.error).toBe('PARSE');
+    expect(
+      dataSource.query.mock.calls.some(
+        ([sql]: [string]) =>
+          sql.includes('INSERT INTO crawl_sources') ||
+          sql.includes('UPDATE crawl_sources SET "parserConfig"'),
+      ),
+    ).toBe(false);
+  });
+
   it('preserves an existing NOL source with a different configuration', async () => {
     const { service, source, run, dataSource, runsRepo, execute } = harness();
     execute.mockRestore();
@@ -1233,7 +1355,7 @@ describe('CrawlService manual runs and snapshots', () => {
 
     expect(run.result).toBe('nochange-parsed');
     expect(warning).toHaveBeenCalledWith(
-      '기존 NOL 크롤 소스 설정이 달라 자동 변경하지 않았습니다.',
+      '기존 NOL 크롤 소스 설정이 달라 자동 변경하지 않았습니다: https://nol.yanolja.com/ticket/products/26014568',
     );
     const update = (
       dataSource.query.mock.calls as unknown as [string, string[]][]
