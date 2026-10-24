@@ -342,6 +342,95 @@ describe('CrawlService scheduled runs', () => {
     ]);
   });
 
+  it('waits for one GMF image download before starting the next', async () => {
+    const {
+      service,
+      source,
+      sourcesRepo,
+      runsRepo,
+      updateQb,
+      insertQb,
+      execute,
+    } = harness();
+    const first = {
+      ...source,
+      kind: 'artist-image',
+      url: GMF_LINEUP_URL,
+      parserConfig: { seed: 'official-gmf-lineup' },
+    } as CrawlSource;
+    const second = { ...first, id: 'source-2' };
+    sourcesRepo.findBy.mockResolvedValue([first, second]);
+    sourcesRepo.findOneBy.mockImplementation(({ id }: { id: string }) =>
+      Promise.resolve(id === first.id ? first : second),
+    );
+    runsRepo.createQueryBuilder
+      .mockImplementationOnce(() => updateQb)
+      .mockImplementationOnce(() => insertQb)
+      .mockImplementationOnce(() => updateQb)
+      .mockImplementationOnce(() => insertQb);
+    let finishFirst: () => void = () => undefined;
+    const firstStarted = new Promise<void>((resolve) => {
+      execute.mockImplementationOnce(
+        () =>
+          new Promise<void>((finish) => {
+            finishFirst = finish;
+            resolve();
+          }),
+      );
+    });
+    const scheduled = service.scheduleDue();
+    await firstStarted;
+    await service.scheduleDue();
+    expect(execute).toHaveBeenCalledTimes(1);
+    finishFirst();
+    await scheduled;
+    expect(execute.mock.calls.map((call) => call[1].id)).toEqual([
+      first.id,
+      second.id,
+    ]);
+  });
+
+  it('retries one failed GMF image run after a minute', async () => {
+    const { service, source, insertResult, updateQb, execute } = harness();
+    source.kind = 'artist-image';
+    source.url = GMF_LINEUP_URL;
+    source.parserConfig = { seed: 'official-gmf-lineup' };
+    source.createdAt = new Date('2026-10-20T15:00:00Z');
+    source.consecutiveFailures = 1;
+    insertResult.identifiers = [];
+    updateQb.execute
+      .mockResolvedValueOnce({ raw: [] })
+      .mockResolvedValueOnce({ raw: [] })
+      .mockResolvedValueOnce({ raw: [{ id: 'run-1' }] });
+
+    await service.scheduleDue();
+
+    expect(updateQb.andWhere).toHaveBeenCalledWith('result = :failed', {
+      failed: 'failed',
+    });
+    expect(updateQb.andWhere).toHaveBeenCalledWith('error = :process', {
+      process: 'PROCESS',
+    });
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not keep retrying a GMF image after its second failure', async () => {
+    const { service, source, insertResult, updateQb, execute } = harness();
+    source.kind = 'artist-image';
+    source.url = GMF_LINEUP_URL;
+    source.parserConfig = { seed: 'official-gmf-lineup' };
+    source.consecutiveFailures = 2;
+    insertResult.identifiers = [];
+
+    await service.scheduleDue();
+
+    expect(updateQb.andWhere).not.toHaveBeenCalledWith(
+      'result = :failed',
+      expect.anything(),
+    );
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it('skips a duplicate daily run that is still active', async () => {
     const { service, insertResult, reclaimResult, execute } = harness();
     insertResult.identifiers = [];

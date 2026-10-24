@@ -163,6 +163,7 @@ function yes24PageCount(sourceUrl: string, body: string): number {
 export class CrawlService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(CrawlService.name);
   private timer?: NodeJS.Timeout;
+  private schedulerActive = false;
 
   constructor(
     @InjectRepository(CrawlSource)
@@ -496,6 +497,16 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async scheduleDue() {
+    if (this.schedulerActive) return;
+    this.schedulerActive = true;
+    try {
+      await this.scheduleDueUnlocked();
+    } finally {
+      this.schedulerActive = false;
+    }
+  }
+
+  private async scheduleDueUnlocked() {
     const date = kstDay();
     const expired = await this.snapshotsRepo.find({
       where: { expiresAt: LessThan(new Date()) },
@@ -537,8 +548,12 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
           : listedSource;
       if (!source?.enabled || !['ok', 'broken'].includes(source.status))
         continue;
-      // 자정 이후 새로 추가된 소스는 다음 자정부터 예약 실행한다.
-      if (kstDay(source.createdAt) >= date) continue;
+      const gmfImage =
+        source.kind === 'artist-image' &&
+        source.url === GMF_LINEUP_URL &&
+        source.parserConfig.seed === 'official-gmf-lineup';
+      // GMF 갤러리가 만든 사진 소스는 같은 날 이어서 수집한다.
+      if (!gmfImage && kstDay(source.createdAt) >= date) continue;
       // 실패한 소스도 다음 날 재시도한다. 당일 수동 실행 직후에는 중복 시도하지 않는다.
       if (
         source.status === 'broken' &&
@@ -576,6 +591,28 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
           .execute();
         runId = (reclaimed.raw as { id: string }[])[0]?.id;
       }
+      if (!runId && gmfImage && source.consecutiveFailures === 1) {
+        // 일시적인 다운로드 실패만 한 번 더 시도한다. 당일 반복 실패는 다음 날로 넘긴다.
+        const retried = await this.runsRepo
+          .createQueryBuilder()
+          .update()
+          .set({
+            result: 'running',
+            startedAt: new Date(),
+            error: null,
+            finishedAt: null,
+          })
+          .where('"sourceId" = :sourceId', { sourceId: source.id })
+          .andWhere('"scheduledDate" = :date', { date })
+          .andWhere('result = :failed', { failed: 'failed' })
+          .andWhere('error = :process', { process: 'PROCESS' })
+          .andWhere('"finishedAt" < :retryAfter', {
+            retryAfter: new Date(Date.now() - 60_000),
+          })
+          .returning('id')
+          .execute();
+        runId = (retried.raw as { id: string }[])[0]?.id;
+      }
       if (!runId) continue;
       const run = await this.runsRepo.findOneByOrFail({ id: runId });
       const execution = this.execute(run, source);
@@ -598,6 +635,12 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
             sources.push(child);
             listedIds.add(child.id);
           }
+        }
+      } else if (gmfImage) {
+        try {
+          await execution;
+        } catch {
+          this.logger.error('GMF 공식 사진 예약 크롤 실패');
         }
       } else {
         void execution.catch(() => this.logger.error('예약 크롤 실패'));
