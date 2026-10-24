@@ -1,6 +1,216 @@
 import { discoverySummaries } from './crawl-catalog';
 import { PublicFestivalService } from './public-festival.service';
 describe('discovered festival artist profile images', () => {
+  it('prefers a stored primary performer image over a linked source profile', async () => {
+    const yes24Url = 'https://ticket.yes24.com/Perf/60590';
+    const melonUrl =
+      'https://ticket.melon.com/performance/index.htm?prodId=213793';
+    const performerUrl = 'https://tkfile.yes24.com/artists/band-a.jpg';
+    const candidates = [
+      {
+        candidate: {
+          name: 'Linked Festival',
+          venue: 'KINTEX',
+          date: '2026.11.20 - 2026.11.21',
+          url: yes24Url,
+          artists: [{ name: 'Band A', sourceUrl: performerUrl }],
+        },
+      },
+      {
+        candidate: {
+          name: 'Linked Festival',
+          venue: 'KINTEX',
+          date: '2026.11.20 - 2026.11.21',
+          url: melonUrl,
+          artists: [{ name: 'Band A' }],
+        },
+      },
+    ];
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce(candidates)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ originUrl: performerUrl, id: 'primary-image' }])
+      .mockResolvedValueOnce([
+        {
+          festivalSourceUrl: melonUrl,
+          artistName: 'Band A',
+          id: 'linked-image',
+        },
+      ])
+      .mockResolvedValueOnce([]);
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    const id = discoverySummaries(candidates)[0].id;
+    await expect(service.detail(id)).resolves.toMatchObject({
+      artists: [
+        {
+          name: 'Band A',
+          imageUrl: '/api/v1/festivals/images/primary-image.webp',
+        },
+      ],
+    });
+  });
+
+  it('keeps the primary image when two linked sources store different photos of one artist', async () => {
+    const yes24Url = 'https://ticket.yes24.com/Perf/60590';
+    const melonUrl =
+      'https://ticket.melon.com/performance/index.htm?prodId=213793';
+    const candidates = [yes24Url, melonUrl].map((url) => ({
+      candidate: {
+        name: 'Linked Festival',
+        venue: 'KINTEX',
+        date: '2026.11.20 - 2026.11.21',
+        url,
+        artists: [{ name: 'Band A' }],
+      },
+    }));
+    const primaryId = '00000000-0000-4000-8000-000000000041';
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce(candidates)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        { festivalSourceUrl: yes24Url, artistName: 'Band A', id: primaryId },
+        {
+          festivalSourceUrl: melonUrl,
+          artistName: 'Band A',
+          id: '00000000-0000-4000-8000-000000000042',
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: 'revision-1',
+          sourceUrl: 'https://official.example/timetable',
+          sourceImageId: null,
+          verifiedAt: new Date('2026-10-23T00:00:00Z'),
+          sets: [
+            {
+              artist: 'Band A',
+              date: '2026-11-20',
+              stageName: 'Main',
+              startsAt: '2026-11-20T18:00:00+09:00',
+              endsAt: null,
+            },
+          ],
+        },
+      ]);
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    const result = await service.detail(discoverySummaries(candidates)[0].id);
+    const imageUrl = `/api/v1/festivals/images/${primaryId}.webp`;
+    expect(result.artists).toContainEqual({ name: 'Band A', imageUrl });
+    expect(result.timetable).toEqual([
+      expect.objectContaining({ artist: 'Band A', imageUrl }),
+    ]);
+  });
+
+  it.each([
+    ['YES24 first', false],
+    ['Melon first', true],
+  ])(
+    'uses linked source images and timetable when %s',
+    async (_label, melonFirst) => {
+      const yes24Url = 'https://ticket.yes24.com/Perf/60590';
+      const melonUrl =
+        'https://ticket.melon.com/performance/index.htm?prodId=213793';
+      const imageId = '00000000-0000-4000-8000-000000000031';
+      const unrelatedUrl =
+        'https://ticket.melon.com/performance/index.htm?prodId=999999';
+      const candidates = [
+        {
+          candidate: {
+            name: 'Linked Festival',
+            venue: 'KINTEX',
+            date: '2026.11.20 - 2026.11.21',
+            url: yes24Url,
+            artists: [{ name: 'Band A' }],
+          },
+        },
+        {
+          candidate: {
+            name: 'Linked Festival',
+            venue: 'KINTEX',
+            date: '2026.11.20 - 2026.11.21',
+            url: melonUrl,
+            artists: [{ name: 'Band A' }],
+          },
+        },
+      ];
+      if (melonFirst) candidates.reverse();
+      const query = jest.fn().mockImplementation((sql: string) => {
+        if (sql.includes('WITH candidates AS')) return candidates;
+        if (sql.includes('FROM admin_festivals')) return [];
+        if (sql.includes('SELECT DISTINCT ON (revision."sourceId")'))
+          return [
+            {
+              id: 'linked-revision',
+              sourceUrl: 'https://official.example/linked-timetable',
+              sourceImageId: null,
+              verifiedAt: new Date('2026-10-23T00:00:00Z'),
+              sets: [
+                {
+                  artist: 'Band A',
+                  date: '2026-11-20',
+                  stageName: 'Main',
+                  startsAt: '2026-11-20T18:00:00+09:00',
+                  endsAt: null,
+                },
+              ],
+            },
+          ];
+        if (
+          sql.includes('FROM crawl_images image') &&
+          sql.includes("source.kind = 'artist-image'")
+        )
+          return [
+            { festivalSourceUrl: melonUrl, artistName: 'Band A', id: imageId },
+            {
+              festivalSourceUrl: unrelatedUrl,
+              artistName: 'Band A',
+              id: '00000000-0000-4000-8000-000000000032',
+            },
+          ];
+        return [];
+      });
+      const service = new PublicFestivalService(
+        { findOne: jest.fn().mockResolvedValue(null) } as never,
+        {} as never,
+        { query } as never,
+        {} as never,
+      );
+      const id = discoverySummaries(candidates)[0].id;
+      const result = await service.detail(id);
+      expect(discoverySummaries(candidates)[0].sourceUrls).toEqual(
+        expect.arrayContaining([yes24Url, melonUrl]),
+      );
+      const imageUrl = `/api/v1/festivals/images/${imageId}.webp`;
+      expect(result.artists).toContainEqual({ name: 'Band A', imageUrl });
+      expect(result.timetable).toEqual([
+        expect.objectContaining({ artist: 'Band A', imageUrl }),
+      ]);
+      const sourceQueries = (
+        query.mock.calls as unknown as [string, [string[]]][]
+      ).filter(
+        ([sql]) =>
+          sql.includes('SELECT DISTINCT ON (revision."sourceId")') ||
+          sql.includes('SELECT DISTINCT ON (source."parserConfig"'),
+      );
+      for (const [, [urls]] of sourceQueries) {
+        expect(urls).toEqual(expect.arrayContaining([yes24Url, melonUrl]));
+        expect(urls).not.toContain(unrelatedUrl);
+      }
+    },
+  );
+
   it('serves a YES24 performer image only when its exact origin URL was stored', async () => {
     const imageUrl = 'https://tkfile.yes24.com/artists/band-a.jpg';
     const candidate = {

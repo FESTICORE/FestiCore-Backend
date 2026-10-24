@@ -80,6 +80,7 @@ describe('NOL festival poster', () => {
   it('removes stale proposal NOL links even when a NOL row is the primary source', async () => {
     const festivalUrl = 'https://mintpaper.co.kr/festivals/178';
     const stale = 'https://nol.yanolja.com/ticket/products/111';
+    const stalePlace = 'https://nol.yanolja.com/ticket/places/111';
     const valid = 'https://nol.yanolja.com/ticket/products/222';
     let verifiedRows = [
       { url: valid, verifiedTicketUrls: JSON.stringify([valid]) },
@@ -90,11 +91,17 @@ describe('NOL festival poster', () => {
         url,
         date: '2026.12.31 - 2027.01.01',
         venue: 'KINTEX',
+        artists: [{ name: 'Band A' }],
       },
     });
     const query = jest.fn().mockImplementation((sql: string) => {
       if (sql.includes('WITH candidates'))
-        return [candidate(stale), candidate(festivalUrl), candidate(valid)];
+        return [
+          candidate(stale),
+          candidate(stalePlace),
+          candidate(festivalUrl),
+          candidate(valid),
+        ];
       if (sql.includes('SELECT child.url')) return verifiedRows;
       return [];
     });
@@ -136,6 +143,66 @@ describe('NOL festival poster', () => {
     expect(disabled.items[0].ticketLinks).toEqual([
       { label: '공식 사이트', url: festivalUrl },
     ]);
+    const profileQueries = (query.mock.calls as [string, [string[]]][]).filter(
+      ([sql]) => sql.includes('SELECT DISTINCT ON (source."parserConfig"'),
+    );
+    expect(profileQueries).toHaveLength(2);
+    expect(profileQueries[0][1][0]).toEqual([festivalUrl, valid]);
+    expect(profileQueries[1][1][0]).toEqual([festivalUrl]);
+    expect(profileQueries[0][1][0]).not.toContain(stale);
+    expect(profileQueries[0][1][0]).not.toContain(stalePlace);
+    expect(profileQueries[1][1][0]).not.toContain(stalePlace);
+  });
+
+  it('checks the official notice when Mint Paper is beyond the visible link cap', async () => {
+    const festivalUrl = 'https://mintpaper.co.kr/festivals/178';
+    const stale = 'https://nol.yanolja.com/ticket/products/111';
+    const urls = [
+      ...Array.from(
+        { length: 5 },
+        (_, index) => `https://ticket.yes24.com/Perf/${60000 + index}`,
+      ),
+      stale,
+      festivalUrl,
+    ];
+    const query = jest.fn().mockImplementation((sql: string) => {
+      if (sql.includes('WITH candidates'))
+        return urls.map((url) => ({
+          candidate: {
+            name: 'COUNTDOWN FANTASY 2026-2027',
+            url,
+            date: '2026.12.31 - 2027.01.01',
+            venue: 'KINTEX',
+            artists: [{ name: 'Band A' }],
+          },
+        }));
+      return [];
+    });
+    const builder = {
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      getMany: jest.fn().mockResolvedValue([]),
+    };
+    const service = new PublicFestivalService(
+      { createQueryBuilder: () => builder } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    await service.list(undefined, '50', new Date('2026-10-22T00:00:00Z'));
+    const profileQuery = (query.mock.calls as [string, [string[]]][]).find(
+      ([sql]) => sql.includes('SELECT DISTINCT ON (source."parserConfig"'),
+    );
+    expect(profileQuery?.[1][0]).toContain(festivalUrl);
+    expect(profileQuery?.[1][0]).not.toContain(stale);
+    expect(
+      query.mock.calls.some(([sql]: [string]) =>
+        sql.includes('SELECT child.url'),
+      ),
+    ).toBe(true);
   });
 
   it('keeps the official Mint Paper catalog fields ahead of linked NOL details', async () => {
