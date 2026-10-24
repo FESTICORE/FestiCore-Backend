@@ -11,7 +11,10 @@ import { festivalSetId } from '../admin/festival/festival-set-id';
 import { CrawlTimetableSet } from '../admin/crawl/entity/crawl-timetable-revision.entity';
 import { PUBLIC_CRAWL_IMAGE_SQL } from './crawl-image-policy';
 import { Flag } from '../flags/flag.entity';
-import { CacheService } from '../redis/service/cache.service';
+import {
+  CacheService,
+  PUBLIC_PACK_PROJECTION_VERSION,
+} from '../redis/service/cache.service';
 import {
   discoverySummaries,
   DiscoveryRow,
@@ -108,6 +111,10 @@ function projectDirections(value: unknown): Document {
   return direction;
 }
 
+export function publicPackEtag(packVersion: number): string {
+  return `"cdm${PUBLIC_PACK_PROJECTION_VERSION}-v${packVersion}"`;
+}
+
 function projectPack(pack: Document): Document {
   const result = fields(pack, [
     'id',
@@ -139,6 +146,17 @@ function projectPack(pack: Document): Document {
     id: festivalSetId(set),
     imageUrl: storedArtistImageUrl(set.imageUrl),
   }));
+  const artists = new Map<string, { name: string; imageUrl: string | null }>();
+  for (const set of requiredArray(result.sets)) {
+    if (typeof set.artist !== 'string' || !set.artist.trim()) continue;
+    const name = set.artist.trim();
+    const key = artistNameKeys(name)[0];
+    const imageUrl = set.imageUrl as string | null;
+    const existing = artists.get(key);
+    if (!existing) artists.set(key, { name, imageUrl });
+    else if (!existing.imageUrl && imageUrl) existing.imageUrl = imageUrl;
+  }
+  result.artists = [...artists.values()];
   const stageNames = new Map(
     requiredArray(result.stages)
       .filter((stage) => typeof stage.id === 'string')
@@ -732,7 +750,7 @@ export class PublicFestivalService {
     return {
       packVersion: pack.packVersion as number,
       packUpdatedAt: pack.packUpdatedAt as string,
-      etag: envelopeEtag(`"v${pack.packVersion as number}"`),
+      etag: publicPackEtag(pack.packVersion as number),
     };
   }
 

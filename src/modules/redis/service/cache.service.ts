@@ -4,6 +4,7 @@ import { randomBytes } from 'crypto';
 import Redis from 'ioredis';
 
 export type RedisStatus = 'up' | 'down' | 'disabled';
+export const PUBLIC_PACK_PROJECTION_VERSION = 2;
 
 @Injectable()
 export class CacheService implements OnModuleDestroy {
@@ -107,7 +108,9 @@ export class CacheService implements OnModuleDestroy {
   }
 
   getPack<T>(festivalId: string, generation: number): Promise<T | null> {
-    return this.getJson<T>(`pack:${festivalId}:g${generation}`);
+    return this.getJson<T>(
+      `pack:${festivalId}:g${generation}:p${PUBLIC_PACK_PROJECTION_VERSION}`,
+    );
   }
 
   async setPack(
@@ -115,7 +118,11 @@ export class CacheService implements OnModuleDestroy {
     generation: number,
     document: unknown,
   ): Promise<void> {
-    await this.setJson(`pack:${festivalId}:g${generation}`, document, 3600);
+    await this.setJson(
+      `pack:${festivalId}:g${generation}:p${PUBLIC_PACK_PROJECTION_VERSION}`,
+      document,
+      3600,
+    );
   }
 
   async invalidatePack(festivalId: string): Promise<void> {

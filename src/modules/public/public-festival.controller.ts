@@ -25,7 +25,11 @@ import { apiSuccess } from '../../common/interfaces/api-response.interface';
 import { Public } from '../auth/decorator/public.decorator';
 import { DeviceAuthGuard } from '../device/device-auth.guard';
 import { DeviceService } from '../device/device.service';
-import { envelopeEtag, PublicFestivalService } from './public-festival.service';
+import {
+  envelopeEtag,
+  publicPackEtag,
+  PublicFestivalService,
+} from './public-festival.service';
 import { PublicLiveService } from './public-live.service';
 
 function matchesEtag(header: string | undefined, etag: string): boolean {
@@ -271,6 +275,13 @@ export class PublicFestivalController {
             },
           ],
           stages: [{ id: 'stg_main', name: '메인 무대', order: 1 }],
+          artists: [
+            {
+              name: '샘플 밴드',
+              imageUrl:
+                '/api/v1/festivals/images/00000000-0000-4000-8000-000000000002.webp',
+            },
+          ],
           timetable: [
             {
               id: 'set_example',
@@ -322,7 +333,7 @@ export class PublicFestivalController {
         data: {
           packVersion: 1,
           packUpdatedAt: '2026-10-20T09:00:00Z',
-          etag: '"cdm1-v1"',
+          etag: '"cdm2-v1"',
         },
         message: '성공적으로 처리되었습니다.',
       },
@@ -374,6 +385,7 @@ export class PublicFestivalController {
           name: '가을 음악 축제',
           days: [{ date: '2026-10-24' }],
           packVersion: 1,
+          artists: [{ name: '샘플 밴드', imageUrl: null }],
         },
         message: '성공적으로 처리되었습니다.',
       },
@@ -395,7 +407,7 @@ export class PublicFestivalController {
     response.setHeader('Cache-Control', 'public, no-cache, must-revalidate');
     response.setHeader('Date', new Date().toUTCString());
     response.setHeader('Vary', 'Accept-Encoding');
-    const etag = envelopeEtag(`"v${body.packVersion as number}"`);
+    const etag = publicPackEtag(body.packVersion as number);
     response.setHeader('ETag', etag);
     if (matchesEtag(ifNoneMatch, etag)) {
       response.status(304).end();

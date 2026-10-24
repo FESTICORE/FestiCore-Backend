@@ -54,7 +54,7 @@ describe('PublicFestivalService published cache', () => {
     expect(cache.setPack).not.toHaveBeenCalled();
   });
 
-  it('includes the stored artist image, stage, and date in the published timetable', async () => {
+  it('includes each published set artist with a stored image in detail and pack', async () => {
     const { service, findOne } = setup();
     const imageUrl =
       '/api/v1/festivals/images/00000000-0000-4000-8000-000000000001.webp';
@@ -62,27 +62,56 @@ describe('PublicFestivalService published cache', () => {
       publishedVersion: 1,
       published: {
         id,
+        packVersion: 1,
         stages: [{ id: 'stg_main', name: '메인 무대', order: 1 }],
         sets: [
           {
             stageId: 'stg_main',
             artist: '밴드',
+            startsAt: '2026-11-19T13:00:00+09:00',
+            endsAt: '2026-11-19T14:00:00+09:00',
+          },
+          {
+            stageId: 'stg_main',
+            artist: '  밴드  ',
             startsAt: '2026-11-20T13:00:00+09:00',
             endsAt: '2026-11-20T14:00:00+09:00',
             imageUrl,
+          },
+          {
+            stageId: 'stg_main',
+            artist: '솔로',
+            startsAt: '2026-11-20T15:00:00+09:00',
+            endsAt: '2026-11-20T16:00:00+09:00',
+            imageUrl: 'https://external.example/artist.jpg',
           },
         ],
       },
     });
     await expect(service.detail(id)).resolves.toMatchObject({
+      artists: [
+        { name: '밴드', imageUrl },
+        { name: '솔로', imageUrl: null },
+      ],
       timetable: [
+        { artist: '밴드', imageUrl: null },
         {
-          artist: '밴드',
+          artist: '  밴드  ',
           stageName: '메인 무대',
           date: '2026-11-20',
           imageUrl,
         },
+        { artist: '솔로', imageUrl: null },
       ],
+    });
+    await expect(service.published(id)).resolves.toMatchObject({
+      artists: [
+        { name: '밴드', imageUrl },
+        { name: '솔로', imageUrl: null },
+      ],
+    });
+    await expect(service.version(id)).resolves.toMatchObject({
+      etag: '"cdm2-v1"',
     });
   });
 
