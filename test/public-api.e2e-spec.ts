@@ -374,6 +374,7 @@ describe('Public festival API', () => {
     dataSource.query
       .mockResolvedValueOnce([candidate])
       .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([
         {
           originUrl: candidate.candidate.posterUrl,
