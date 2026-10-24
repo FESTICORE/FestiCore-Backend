@@ -334,14 +334,18 @@ describe('Public festival API', () => {
         ticketLinks: pack.ticketLinks,
       }),
     );
-    expect(first.headers.etag).toBe('"cdm1-v7"');
+    expect(first.headers.etag).toBe('"cdm2-v7"');
     await request(server)
       .get(`/api/v1/festivals/${pack.id}/pack`)
       .set('If-None-Match', '"v7"')
       .expect(200);
-    const unchanged = await request(server)
+    await request(server)
       .get(`/api/v1/festivals/${pack.id}/pack`)
       .set('If-None-Match', '"cdm1-v7"')
+      .expect(200);
+    const unchanged = await request(server)
+      .get(`/api/v1/festivals/${pack.id}/pack`)
+      .set('If-None-Match', '"cdm2-v7"')
       .expect(304);
     expect(unchanged.text).toBe('');
     const missing = await request(server)
@@ -523,9 +527,9 @@ describe('Public festival API', () => {
     expect(successData(version.body)).toEqual({
       packVersion: 7,
       packUpdatedAt: pack.packUpdatedAt,
-      etag: '"cdm1-v7"',
+      etag: '"cdm2-v7"',
     });
-    expect(version.headers.etag).toBe('"cdm1-v7"');
+    expect(version.headers.etag).toBe('"cdm2-v7"');
     await request(server)
       .get(`/api/v1/festivals/${pack.id}/pack/version`)
       .set('If-None-Match', version.headers.etag)
@@ -731,7 +735,7 @@ describe('Public festival API', () => {
     await request(server).get(url).set('If-None-Match', '*').expect(304);
     await request(server)
       .get(url)
-      .set('If-None-Match', '"cdm1-v7"')
+      .set('If-None-Match', '"cdm2-v7"')
       .expect(304);
   });
 

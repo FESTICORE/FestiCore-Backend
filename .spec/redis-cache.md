@@ -11,9 +11,11 @@
 1. `pack:<festivalId>:gen`을 읽는다. 키가 없으면 무작위 양의 정수를 `SET ... NX`로
    시드한 뒤 다시 읽는다. 세대 키가 삭제되거나 Redis가 재시작돼도 과거 `g0` 팩을
    다시 읽지 않기 위한 절차다. 시드 또는 재조회가 실패하면 DB로 폴백한다.
-2. `pack:<festivalId>:g<generation>`의 JSON 문서를 읽는다.
+2. `pack:<festivalId>:g<generation>:p<projectionVersion>`의 JSON 문서를 읽는다.
 3. 캐시가 없으면 DB에서 공개 팩을 조회하고 `projectPack` 결과를 **처음 읽은 세대**의
-   키에 TTL 3600초로 저장한다. 미공개 팩의 404 응답은 저장하지 않는다.
+   `pack:<festivalId>:g<generation>:p<projectionVersion>` 키에 TTL 3600초로
+   저장한다. 미공개 팩의 404 응답은 저장하지 않는다. `projectPack`의 출력 형식이
+   바뀌면 투영 버전을 올려 이전 문서를 읽지 않고 TTL 만료까지 남겨 둔다.
 
 Redis 명령은 최대 500ms에 타임아웃되며 오프라인 큐를 사용하지 않는다.
 명령 실패는 캐시 미스로 처리한다. 연결 장애와 복구는 상태 전환 시 한 번씩만 기록한다.
