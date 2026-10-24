@@ -27,6 +27,7 @@ type PrivateCrawl = {
   onModuleInit(): void;
   onModuleDestroy(): void;
   scheduleDue(): Promise<void>;
+  gmfImageQueue: Promise<void>;
   reconcileRecentXmf403(): Promise<void>;
   runNow(id: string): Promise<{ runId: string }>;
   createSource(
@@ -296,6 +297,7 @@ describe('CrawlService scheduled runs', () => {
       .mockImplementationOnce(() => insertQb);
 
     await service.scheduleDue();
+    await service.gmfImageQueue;
 
     expect(execute.mock.calls[0][1]).toBe(gallery);
     expect(execute.mock.calls[1][1]).toBe(freshChild);
@@ -335,11 +337,185 @@ describe('CrawlService scheduled runs', () => {
       .mockImplementationOnce(() => insertQb);
 
     await service.scheduleDue();
+    await service.gmfImageQueue;
 
     expect(execute.mock.calls.map((call) => call[1].id)).toEqual([
       source.id,
       child.id,
     ]);
+  });
+
+  it('waits for one GMF image download before starting the next', async () => {
+    const {
+      service,
+      source,
+      sourcesRepo,
+      runsRepo,
+      updateQb,
+      insertQb,
+      execute,
+    } = harness();
+    const first = {
+      ...source,
+      kind: 'artist-image',
+      url: GMF_LINEUP_URL,
+      parserConfig: { seed: 'official-gmf-lineup' },
+    } as CrawlSource;
+    const second = { ...first, id: 'source-2' };
+    sourcesRepo.findBy.mockResolvedValue([first, second]);
+    sourcesRepo.findOneBy.mockImplementation(({ id }: { id: string }) =>
+      Promise.resolve(id === first.id ? first : second),
+    );
+    runsRepo.createQueryBuilder
+      .mockImplementationOnce(() => updateQb)
+      .mockImplementationOnce(() => insertQb)
+      .mockImplementationOnce(() => updateQb)
+      .mockImplementationOnce(() => insertQb);
+    let finishFirst: () => void = () => undefined;
+    const firstStarted = new Promise<void>((resolve) => {
+      execute.mockImplementationOnce(
+        () =>
+          new Promise<void>((finish) => {
+            finishFirst = finish;
+            resolve();
+          }),
+      );
+    });
+    const scheduled = service.scheduleDue();
+    await firstStarted;
+    expect(execute).toHaveBeenCalledTimes(1);
+    jest.setSystemTime(new Date('2026-10-20T15:16:00Z'));
+    await service.scheduleDue();
+    expect(insertQb.execute).toHaveBeenCalledTimes(1);
+    finishFirst();
+    await scheduled;
+    await service.gmfImageQueue;
+    expect(execute.mock.calls.map((call) => call[1].id)).toEqual([
+      first.id,
+      second.id,
+    ]);
+  });
+
+  it('reserves another festival while a GMF image is downloading', async () => {
+    const {
+      service,
+      source,
+      sourcesRepo,
+      runsRepo,
+      updateQb,
+      insertQb,
+      execute,
+    } = harness();
+    const image = {
+      ...source,
+      kind: 'artist-image',
+      url: GMF_LINEUP_URL,
+      parserConfig: { seed: 'official-gmf-lineup' },
+    } as CrawlSource;
+    const other = { ...source, id: 'other-source' };
+    sourcesRepo.findBy
+      .mockResolvedValueOnce([image])
+      .mockResolvedValueOnce([other]);
+    sourcesRepo.findOneBy.mockResolvedValue(image);
+    runsRepo.createQueryBuilder
+      .mockImplementationOnce(() => updateQb)
+      .mockImplementationOnce(() => insertQb)
+      .mockImplementationOnce(() => updateQb)
+      .mockImplementationOnce(() => insertQb);
+    let finishImage: () => void = () => undefined;
+    const imageStarted = new Promise<void>((resolve) => {
+      execute.mockImplementationOnce(
+        () =>
+          new Promise<void>((finish) => {
+            finishImage = finish;
+            resolve();
+          }),
+      );
+    });
+
+    await service.scheduleDue();
+    await imageStarted;
+    await service.scheduleDue();
+
+    expect(execute.mock.calls.map((call) => call[1].id)).toEqual([
+      image.id,
+      other.id,
+    ]);
+    finishImage();
+    await service.gmfImageQueue;
+  });
+
+  it('retries one failed GMF image run after a minute', async () => {
+    const {
+      service,
+      source,
+      run,
+      runsRepo,
+      insertResult,
+      insertQb,
+      updateQb,
+      execute,
+    } = harness();
+    source.kind = 'artist-image';
+    source.url = GMF_LINEUP_URL;
+    source.parserConfig = { seed: 'official-gmf-lineup' };
+    source.createdAt = new Date('2026-10-20T15:00:00Z');
+    source.consecutiveFailures = 1;
+    insertResult.identifiers = [];
+    run.finishedAt = new Date('2026-10-20T14:58:00Z');
+    runsRepo.createQueryBuilder
+      .mockImplementationOnce(() => updateQb)
+      .mockImplementationOnce(() => insertQb)
+      .mockImplementationOnce(() => updateQb)
+      .mockImplementationOnce(() => insertQb);
+    insertQb.execute
+      .mockResolvedValueOnce({ identifiers: [] })
+      .mockResolvedValueOnce({ identifiers: [{ id: 'retry-1' }] });
+    runsRepo.findOneByOrFail.mockResolvedValue({ ...run, id: 'retry-1' });
+
+    await service.scheduleDue();
+    await service.gmfImageQueue;
+
+    expect(runsRepo.findOneBy).toHaveBeenCalledWith({
+      sourceId: source.id,
+      scheduledDate: '2026-10-21',
+      result: 'failed',
+      error: In(['PROCESS', 'IMAGE_FETCH', 'IMAGE_STORE']),
+    });
+    expect(insertQb.values).toHaveBeenLastCalledWith({ sourceId: source.id });
+    expect(execute.mock.calls[0][0].id).toBe('retry-1');
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not keep retrying a GMF image after its second failure', async () => {
+    const { service, source, insertResult, updateQb, execute } = harness();
+    source.kind = 'artist-image';
+    source.url = GMF_LINEUP_URL;
+    source.parserConfig = { seed: 'official-gmf-lineup' };
+    source.consecutiveFailures = 2;
+    insertResult.identifiers = [];
+
+    await service.scheduleDue();
+    await service.gmfImageQueue;
+
+    expect(updateQb.andWhere).not.toHaveBeenCalledWith(
+      'result = :failed',
+      expect.anything(),
+    );
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('does not run a queued GMF image after the source is disabled', async () => {
+    const { service, source, sourcesRepo, execute } = harness();
+    source.kind = 'artist-image';
+    source.url = GMF_LINEUP_URL;
+    source.parserConfig = { seed: 'official-gmf-lineup' };
+    sourcesRepo.findOneBy.mockResolvedValue({ ...source, enabled: false });
+
+    await service.scheduleDue();
+    await service.gmfImageQueue;
+
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it('skips a duplicate daily run that is still active', async () => {
@@ -1743,6 +1919,55 @@ describe('CrawlService manual runs and snapshots', () => {
       ),
     ).toBe(true);
     expect(run.result).toBe('nochange-parsed');
+  });
+
+  it('classifies a refused GMF image as non-retryable HTTP failure', async () => {
+    const { service, source, run } = harness();
+    source.kind = 'artist-image';
+    source.url = GMF_LINEUP_URL;
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    const imageService = service as unknown as {
+      limitedGetImage: (url: URL) => Promise<unknown>;
+      captureImages: (
+        source: CrawlSource,
+        run: CrawlRun,
+        urls: URL[],
+      ) => Promise<string[]>;
+    };
+    jest.spyOn(imageService, 'limitedGetImage').mockResolvedValue({
+      status: 403,
+    });
+
+    const stored = await imageService.captureImages(source, run, [
+      new URL(`${GMF_IMAGE_ORIGIN}/GMF_2026_0_aabbccdd00.jpg`),
+    ]);
+
+    expect(stored).toEqual([]);
+    expect(run.error).toBe('IMAGE_HTTP');
+  });
+
+  it('classifies a GMF image connection failure for a bounded retry', async () => {
+    const { service, source, run } = harness();
+    source.kind = 'artist-image';
+    source.url = GMF_LINEUP_URL;
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    const imageService = service as unknown as {
+      limitedGetImage: (url: URL) => Promise<unknown>;
+      captureImages: (
+        source: CrawlSource,
+        run: CrawlRun,
+        urls: URL[],
+      ) => Promise<string[]>;
+    };
+    jest
+      .spyOn(imageService, 'limitedGetImage')
+      .mockRejectedValue(new Error('connection reset'));
+
+    await imageService.captureImages(source, run, [
+      new URL(`${GMF_IMAGE_ORIGIN}/GMF_2026_0_aabbccdd00.jpg`),
+    ]);
+
+    expect(run.error).toBe('IMAGE_FETCH');
   });
 
   it('keeps a GMF child image unchanged when today has no completed gallery proof', async () => {

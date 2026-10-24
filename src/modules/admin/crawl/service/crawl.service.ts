@@ -163,6 +163,8 @@ function yes24PageCount(sourceUrl: string, body: string): number {
 export class CrawlService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(CrawlService.name);
   private timer?: NodeJS.Timeout;
+  private gmfImageQueue: Promise<void> = Promise.resolve();
+  private readonly gmfQueuedSources = new Set<string>();
 
   constructor(
     @InjectRepository(CrawlSource)
@@ -514,13 +516,15 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       status: In(['ok', 'broken']),
     });
     // The GMF gallery refreshes child image hints before the daily child runs.
-    sources.sort(
-      (left, right) =>
-        Number(
-          right.kind === 'artist-gallery' && right.url === GMF_LINEUP_URL,
-        ) -
-        Number(left.kind === 'artist-gallery' && left.url === GMF_LINEUP_URL),
-    );
+    const order = (source: CrawlSource) =>
+      source.url !== GMF_LINEUP_URL
+        ? 1
+        : source.kind === 'artist-gallery'
+          ? 0
+          : source.kind === 'artist-image'
+            ? 2
+            : 1;
+    sources.sort((left, right) => order(left) - order(right));
     const listedIds = new Set(sources.map((source) => source.id));
     let gmfGalleryFailed = false;
     for (const listedSource of sources) {
@@ -537,8 +541,12 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
           : listedSource;
       if (!source?.enabled || !['ok', 'broken'].includes(source.status))
         continue;
-      // 자정 이후 새로 추가된 소스는 다음 자정부터 예약 실행한다.
-      if (kstDay(source.createdAt) >= date) continue;
+      const gmfImage =
+        source.kind === 'artist-image' &&
+        source.url === GMF_LINEUP_URL &&
+        source.parserConfig.seed === 'official-gmf-lineup';
+      // GMF 갤러리가 만든 사진 소스는 같은 날 이어서 수집한다.
+      if (!gmfImage && kstDay(source.createdAt) >= date) continue;
       // 실패한 소스도 다음 날 재시도한다. 당일 수동 실행 직후에는 중복 시도하지 않는다.
       if (
         source.status === 'broken' &&
@@ -546,6 +554,17 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         kstDay(source.lastRunAt) >= date
       )
         continue;
+      if (gmfImage) {
+        if (this.gmfQueuedSources.has(source.id)) continue;
+        this.gmfQueuedSources.add(source.id);
+        this.gmfImageQueue = this.gmfImageQueue
+          .then(() => this.executeDueGmfImage(source, date))
+          .catch(() => this.logger.error('GMF 공식 사진 예약 크롤 실패'))
+          .finally(() => {
+            this.gmfQueuedSources.delete(source.id);
+          });
+        continue;
+      }
       await this.failStaleManualRun(source.id);
       // 일별 유니크 키가 복수 프로세스에서 같은 소스의 중복 예약을 막는다.
       const insert = await this.runsRepo
@@ -578,10 +597,9 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       }
       if (!runId) continue;
       const run = await this.runsRepo.findOneByOrFail({ id: runId });
-      const execution = this.execute(run, source);
       if (source.kind === 'artist-gallery' && source.url === GMF_LINEUP_URL) {
         try {
-          await execution;
+          await this.execute(run, source);
         } catch {
           this.logger.error('GMF 공식 갤러리 예약 크롤 실패');
         }
@@ -600,9 +618,77 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
           }
         }
       } else {
-        void execution.catch(() => this.logger.error('예약 크롤 실패'));
+        void this.execute(run, source).catch(() =>
+          this.logger.error('예약 크롤 실패'),
+        );
       }
     }
+  }
+
+  private async executeDueGmfImage(source: CrawlSource, date: string) {
+    // 큐에서 기다리는 동안에는 실행 행을 만들지 않아 15분 중단 회수에 걸리지 않는다.
+    const current = await this.sourcesRepo.findOneBy({ id: source.id });
+    if (
+      !current?.enabled ||
+      !['ok', 'broken'].includes(current.status) ||
+      current.kind !== 'artist-image' ||
+      current.url !== GMF_LINEUP_URL ||
+      current.parserConfig.seed !== 'official-gmf-lineup' ||
+      (current.status === 'broken' &&
+        current.lastRunAt &&
+        kstDay(current.lastRunAt) >= date)
+    )
+      return;
+    source = current;
+    await this.failStaleManualRun(source.id);
+    const insert = await this.runsRepo
+      .createQueryBuilder()
+      .insert()
+      .values({ sourceId: source.id, scheduledDate: date })
+      .orIgnore()
+      .returning('*')
+      .execute();
+    let runId = insert.identifiers[0]?.id as string | undefined;
+    if (!runId) {
+      const reclaimed = await this.runsRepo
+        .createQueryBuilder()
+        .update()
+        .set({ startedAt: new Date(), error: null, finishedAt: null })
+        .where('"sourceId" = :sourceId', { sourceId: source.id })
+        .andWhere('"scheduledDate" = :date', { date })
+        .andWhere('result = :running', { running: 'running' })
+        .andWhere('"startedAt" < :staleBefore', {
+          staleBefore: new Date(Date.now() - 15 * 60_000),
+        })
+        .returning('id')
+        .execute();
+      runId = (reclaimed.raw as { id: string }[])[0]?.id;
+    }
+    if (!runId && source.consecutiveFailures === 1) {
+      // 첫 실패 기록을 보존하고 별도의 실행으로 한 번만 재시도한다.
+      const failed = await this.runsRepo.findOneBy({
+        sourceId: source.id,
+        scheduledDate: date,
+        result: 'failed',
+        error: In(['PROCESS', 'IMAGE_FETCH', 'IMAGE_STORE']),
+      });
+      if (
+        failed?.finishedAt &&
+        failed.finishedAt.getTime() < Date.now() - 60_000
+      ) {
+        const retried = await this.runsRepo
+          .createQueryBuilder()
+          .insert()
+          .values({ sourceId: source.id })
+          .orIgnore()
+          .returning('*')
+          .execute();
+        runId = retried.identifiers[0]?.id as string | undefined;
+      }
+    }
+    if (!runId) return;
+    const run = await this.runsRepo.findOneByOrFail({ id: runId });
+    await this.execute(run, source);
   }
 
   private async failStaleManualRun(sourceId: string) {
@@ -625,7 +711,10 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async execute(run: CrawlRun, source: CrawlSource) {
-    let phase = 'ROBOTS';
+    let phase =
+      source.kind === 'artist-image' && source.url === GMF_LINEUP_URL
+        ? 'GMF_VERIFY'
+        : 'ROBOTS';
     try {
       const verifiedGmfImage =
         source.kind === 'artist-image' &&
@@ -1074,6 +1163,8 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
           : null;
       if (source.kind === 'artist-image' && !profileImage)
         throw new Error('프로필 이미지가 공식 페이지에서 확인되지 않았습니다.');
+      if (source.kind === 'artist-image' && source.url === GMF_LINEUP_URL)
+        phase = 'IMAGE';
       const imageUrls = await this.captureImages(
         source,
         run,
@@ -1209,7 +1300,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       source.status = 'ok';
     } catch (error) {
       run.result = 'failed';
-      run.error =
+      run.error ??=
         run.httpStatus && run.httpStatus !== 200
           ? `HTTP_${run.httpStatus}`
           : error instanceof Error &&
@@ -1913,11 +2004,14 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     )) {
       if (url.toString().length > 2048) continue;
       let validated = false;
+      let imagePhase = 'ROBOTS';
       try {
         await this.checkRobots(url.toString());
+        imagePhase = 'FETCH';
         const response =
           preloaded?.get(url.toString()) ?? (await this.limitedGetImage(url));
         if (response.status !== 200) throw new Error(`HTTP ${response.status}`);
+        imagePhase = 'PREPARE';
         const prepared = await prepareCrawlImage(
           response.body,
           response.contentType,
@@ -1928,6 +2022,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
             .update(prepared.hash)
             .digest('hex');
         validated = true;
+        imagePhase = 'STORE';
         const urlHash = createHash('sha256')
           .update(url.toString())
           .digest('hex');
@@ -1967,6 +2062,17 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         }
         stored.push(`/api/v1/admin/crawl/images/${image.id}`);
       } catch (error) {
+        if (source.kind === 'artist-image' && source.url === GMF_LINEUP_URL)
+          run.error =
+            imagePhase === 'ROBOTS'
+              ? 'IMAGE_POLICY'
+              : imagePhase === 'FETCH'
+                ? error instanceof Error && /^HTTP \d{3}$/.test(error.message)
+                  ? 'IMAGE_HTTP'
+                  : 'IMAGE_FETCH'
+                : imagePhase === 'PREPARE'
+                  ? 'IMAGE_INVALID'
+                  : 'IMAGE_STORE';
         if (validated) throw error;
         this.logger.warn('크롤 이미지를 건너뛰었습니다.');
       }
