@@ -256,8 +256,8 @@ describe('NOL festival poster', () => {
     const sql = (query.mock.calls as unknown as [string][])[0][0];
     expect(
       sql.match(/"sourceSeed" IS DISTINCT FROM 'official-ticket-link-detail'/g),
-    ).toHaveLength(4);
-    expect(sql).toContain('AS "artistSourceUrl"');
+    ).toHaveLength(3);
+    expect(sql).toContain('AS "artistDetails"');
   });
 
   it('attaches a stored NOL poster through the public image policy', async () => {

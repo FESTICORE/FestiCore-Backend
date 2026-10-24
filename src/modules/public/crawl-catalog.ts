@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { artistNameKeys } from '../../common/artist-name';
 
 interface DateRange {
   firstDate: string;
@@ -355,14 +356,20 @@ export function discoverySummaries(
         ? value.artistSourceUrl
         : url.toString(),
     );
-    for (const official of verifiedArtists(
+    const officialArtists = verifiedArtists(
       value.officialProfileArtists,
       'https://www.mintpaper.co.kr/posts/4819',
-    )) {
-      const current = artists.find((artist) => artist.name === official.name);
-      if (current) {
-        if (official.profileUrl) current.profileUrl = official.profileUrl;
-      } else if (artists.length < 80) artists.push(official);
+    );
+    if (!artists.length) artists.push(...officialArtists);
+    else {
+      for (const official of officialArtists) {
+        const officialKeys = new Set(artistNameKeys(official.name));
+        const matches = artists.filter((artist) =>
+          artistNameKeys(artist.name).some((key) => officialKeys.has(key)),
+        );
+        if (matches.length === 1 && official.profileUrl)
+          matches[0].profileUrl = official.profileUrl;
+      }
     }
     const existing = found.get(key);
     if (existing) {

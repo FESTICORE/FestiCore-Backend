@@ -49,6 +49,11 @@ describe('discovered festival artist profile images', () => {
     const calls = query.mock.calls as unknown as [string, unknown[]][];
     expect(calls[0][0]).toContain('"officialProfileArtists"');
     expect(calls[0][0]).toContain("'https://www.mintpaper.co.kr/posts/4819'");
+    expect(calls[0][0]).toContain(
+      "jsonb_build_object(\n               'artists', candidate->'artists', 'url', candidate->>'url')",
+    );
+    expect(calls[0][0]).toContain('details."artistDetails"->\'artists\'');
+    expect(calls[0][0]).toContain('details."artistDetails"->>\'url\'');
   });
 
   it('prefers a stored primary performer image over a linked source profile', async () => {

@@ -118,6 +118,37 @@ describe('ticket discovery catalog', () => {
     );
   });
 
+  it('adds official profiles only to matching current performers', () => {
+    const entries = discoverySummaries([
+      {
+        candidate: {
+          name: 'COUNTDOWN FANTASY 2026-2027',
+          venue: '킨텍스',
+          date: '2026.12.31',
+          url: 'https://ticket.yes24.com/Perf/60590',
+          artists: [{ name: 'ONEWE' }, { name: '혁오' }],
+          officialProfileArtists: [
+            {
+              name: 'ONEWE(원위)',
+              profileUrl: 'https://www.instagram.com/official_onewe/',
+            },
+            {
+              name: '취소된 출연진',
+              profileUrl: 'https://www.instagram.com/cancelled_band/',
+            },
+          ],
+        },
+      },
+    ]);
+    expect(entries[0].artists).toEqual([
+      {
+        name: 'ONEWE',
+        profileUrl: 'https://www.instagram.com/official_onewe/',
+      },
+      { name: '혁오' },
+    ]);
+  });
+
   it('keeps every linked source for enrichment after the public link cap', () => {
     const urls = Array.from(
       { length: 6 },

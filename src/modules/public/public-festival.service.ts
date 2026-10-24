@@ -293,18 +293,14 @@ export class PublicFestivalService {
                AND decision IS DISTINCT FROM 'rejected'
                AND "proposalStatus" IS DISTINCT FROM 'rejected'
                AND candidate->>'posterUrl' IS NOT NULL))[1] AS poster,
-           (array_agg(candidate->'artists' ORDER BY created_at DESC, proposal_id DESC)
+           (array_agg(jsonb_build_object(
+               'artists', candidate->'artists', 'url', candidate->>'url')
+               ORDER BY created_at DESC, proposal_id DESC, candidates.url DESC)
              FILTER (WHERE "sourceSeed" IS DISTINCT FROM 'official-ticket-link-detail'
                AND decision IS DISTINCT FROM 'rejected'
                AND "proposalStatus" IS DISTINCT FROM 'rejected'
                AND jsonb_array_length(CASE WHEN jsonb_typeof(candidate->'artists') = 'array'
-                 THEN candidate->'artists' ELSE '[]'::jsonb END) > 0))[1] AS artists,
-           (array_agg(candidate->>'url' ORDER BY created_at DESC, proposal_id DESC)
-             FILTER (WHERE "sourceSeed" IS DISTINCT FROM 'official-ticket-link-detail'
-               AND decision IS DISTINCT FROM 'rejected'
-               AND "proposalStatus" IS DISTINCT FROM 'rejected'
-               AND jsonb_array_length(CASE WHEN jsonb_typeof(candidate->'artists') = 'array'
-                 THEN candidate->'artists' ELSE '[]'::jsonb END) > 0))[1] AS "artistSourceUrl",
+                 THEN candidate->'artists' ELSE '[]'::jsonb END) > 0))[1] AS "artistDetails",
            (array_agg(candidate->'artists' ORDER BY created_at DESC, proposal_id DESC)
              FILTER (WHERE decision IS DISTINCT FROM 'rejected'
                AND "proposalStatus" IS DISTINCT FROM 'rejected'
@@ -317,7 +313,8 @@ export class PublicFestivalService {
        )
        SELECT (latest.candidate - 'artistSourceUrl' - 'officialProfileArtists') || jsonb_strip_nulls(jsonb_build_object(
            'officialInstagramUrl', details.account, 'posterUrl', details.poster,
-           'artists', details.artists, 'artistSourceUrl', details."artistSourceUrl",
+           'artists', details."artistDetails"->'artists',
+           'artistSourceUrl', details."artistDetails"->>'url',
            'officialProfileArtists', details."officialProfileArtists"
          )) AS candidate,
          latest.decision,
