@@ -1,6 +1,63 @@
 import { discoverySummaries } from './crawl-catalog';
 import { PublicFestivalService } from './public-festival.service';
 describe('discovered festival artist profile images', () => {
+  it('keeps the primary image when two linked sources store different photos of one artist', async () => {
+    const yes24Url = 'https://ticket.yes24.com/Perf/60590';
+    const melonUrl =
+      'https://ticket.melon.com/performance/index.htm?prodId=213793';
+    const candidates = [yes24Url, melonUrl].map((url) => ({
+      candidate: {
+        name: 'Linked Festival',
+        venue: 'KINTEX',
+        date: '2026.11.20 - 2026.11.21',
+        url,
+        artists: [{ name: 'Band A' }],
+      },
+    }));
+    const primaryId = '00000000-0000-4000-8000-000000000041';
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce(candidates)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        { festivalSourceUrl: yes24Url, artistName: 'Band A', id: primaryId },
+        {
+          festivalSourceUrl: melonUrl,
+          artistName: 'Band A',
+          id: '00000000-0000-4000-8000-000000000042',
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: 'revision-1',
+          sourceUrl: 'https://official.example/timetable',
+          sourceImageId: null,
+          verifiedAt: new Date('2026-10-23T00:00:00Z'),
+          sets: [
+            {
+              artist: 'Band A',
+              date: '2026-11-20',
+              stageName: 'Main',
+              startsAt: '2026-11-20T18:00:00+09:00',
+              endsAt: null,
+            },
+          ],
+        },
+      ]);
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    const result = await service.detail(discoverySummaries(candidates)[0].id);
+    const imageUrl = `/api/v1/festivals/images/${primaryId}.webp`;
+    expect(result.artists).toContainEqual({ name: 'Band A', imageUrl });
+    expect(result.timetable).toEqual([
+      expect.objectContaining({ artist: 'Band A', imageUrl }),
+    ]);
+  });
+
   it.each([
     ['YES24 first', false],
     ['Melon first', true],

@@ -13,6 +13,63 @@ describe('discovered festival timetable', () => {
   };
   const id = discoverySummaries([{ candidate }])[0].id;
 
+  it('keeps the newest verified set when linked sources repeat the same performance', async () => {
+    const linked = {
+      ...candidate,
+      url: 'https://ticket.yes24.com/Perf/60590',
+    };
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([{ candidate }, { candidate: linked }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          id: 'older-revision',
+          sourceUrl: 'https://official.example/older',
+          sourceImageId: null,
+          verifiedAt: new Date('2026-10-10T00:00:00Z'),
+          sets: [
+            {
+              artist: 'Artist A',
+              date: '2026-10-17',
+              stageName: 'Main',
+              startsAt: '2026-10-17T20:00:00+09:00',
+              endsAt: null,
+            },
+          ],
+        },
+        {
+          id: 'newer-revision',
+          sourceUrl: 'https://official.example/newer',
+          sourceImageId: null,
+          verifiedAt: new Date('2026-10-11T00:00:00Z'),
+          sets: [
+            {
+              artist: 'artist a',
+              date: '2026-10-17',
+              stageName: 'Main',
+              startsAt: '2026-10-17T20:00:00+09:00',
+              endsAt: null,
+            },
+          ],
+        },
+      ]);
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    const result = await service.detail(id);
+    expect(result.timetable).toEqual([
+      expect.objectContaining({ id: 'newer-revision-0' }),
+    ]);
+    expect((query.mock.calls as [string, string[][]][])[3][1]).toEqual([
+      [sourceUrl, linked.url],
+    ]);
+  });
+
   it('combines the latest verified revision per source across two days', async () => {
     const query = jest
       .fn()

@@ -375,6 +375,16 @@ export class PublicFestivalService {
         )
       )
         summary.sourceUrl = festivalSourceUrl;
+      summary.sourceUrls = [
+        ...new Set([
+          ...summary.sourceUrls.filter(
+            (url) =>
+              !/^https:\/\/nol\.yanolja\.com\/ticket\/products\//.test(url) ||
+              verifiedUrls.includes(url),
+          ),
+          festivalSourceUrl,
+        ]),
+      ];
       const primary = summary.ticketLinks.find(
         (link) =>
           link.url === summary.sourceUrl &&
@@ -541,6 +551,12 @@ export class PublicFestivalService {
       if (posterId)
         entry.thumbUrl = `/api/v1/festivals/images/${posterId}.webp`;
       entry.artists = entry.artists?.map((artist) => {
+        const primaryProfileIds = new Set(
+          artistNameKeys(artist.name).flatMap((nameKey) => [
+            ...(profileImageByName.get(`${entry.sourceUrl}\u0000${nameKey}`) ??
+              []),
+          ]),
+        );
         const matchingProfileIds = new Set(
           entry.sourceUrls.flatMap((sourceUrl) =>
             artistNameKeys(artist.name).flatMap((nameKey) => [
@@ -549,7 +565,11 @@ export class PublicFestivalService {
           ),
         );
         const imageId =
-          (matchingProfileIds.size === 1 ? [...matchingProfileIds][0] : null) ??
+          (primaryProfileIds.size === 1
+            ? [...primaryProfileIds][0]
+            : primaryProfileIds.size === 0 && matchingProfileIds.size === 1
+              ? [...matchingProfileIds][0]
+              : null) ??
           (artist.sourceUrl && imageByUrl.get(artist.sourceUrl));
         return {
           ...artist,
@@ -601,21 +621,33 @@ export class PublicFestivalService {
       [entry.sourceUrls],
     );
     const artistImages = new Map<string, Set<string>>();
-    const addArtistImage = (name: string, imageUrl: string) => {
+    const primaryArtistImages = new Map<string, Set<string>>();
+    const addArtistImage = (
+      imagesByName: Map<string, Set<string>>,
+      name: string,
+      imageUrl: string,
+    ) => {
       for (const key of artistNameKeys(name)) {
-        const images = artistImages.get(key) ?? new Set<string>();
+        const images = imagesByName.get(key) ?? new Set<string>();
         images.add(imageUrl);
-        artistImages.set(key, images);
+        imagesByName.set(key, images);
       }
     };
     for (const artist of entry.artists ?? []) {
-      if (artist.imageUrl) addArtistImage(artist.name, artist.imageUrl);
+      if (artist.imageUrl)
+        addArtistImage(primaryArtistImages, artist.name, artist.imageUrl);
     }
     for (const [key, imageId] of profileImages) {
       const [festivalSourceUrl, artistName] = key.split('\u0000');
-      if (entry.sourceUrls.includes(festivalSourceUrl))
-        addArtistImage(artistName, `/api/v1/festivals/images/${imageId}.webp`);
+      if (!entry.sourceUrls.includes(festivalSourceUrl)) continue;
+      const imageUrl = `/api/v1/festivals/images/${imageId}.webp`;
+      addArtistImage(artistImages, artistName, imageUrl);
+      if (festivalSourceUrl === entry.sourceUrl)
+        addArtistImage(primaryArtistImages, artistName, imageUrl);
     }
+    const artistImage = (name: string) =>
+      artistImageForName(name, primaryArtistImages) ??
+      artistImageForName(name, artistImages);
     const timetable = (revisions ?? []).flatMap((revision) =>
       revision.sets.map((set, index) => ({
         id: `${revision.id}-${index}`,
@@ -624,7 +656,7 @@ export class PublicFestivalService {
         stageName: set.stageName,
         startsAt: set.startsAt,
         endsAt: set.endsAt,
-        imageUrl: artistImageForName(set.artist, artistImages),
+        imageUrl: artistImage(set.artist),
         sourceUrl: revision.sourceUrl,
         sourceImageUrl: revision.sourceImageId
           ? `/api/v1/festivals/images/${revision.sourceImageId}.webp`
@@ -637,15 +669,28 @@ export class PublicFestivalService {
         Date.parse(a.startsAt) - Date.parse(b.startsAt) ||
         a.stageName.localeCompare(b.stageName) ||
         a.artist.localeCompare(b.artist) ||
+        new Date(b.verifiedAt).getTime() - new Date(a.verifiedAt).getTime() ||
         a.id.localeCompare(b.id),
     );
+    const seenSets = new Set<string>();
+    const uniqueTimetable = timetable.filter((set) => {
+      const key = JSON.stringify([
+        set.date,
+        set.stageName,
+        set.startsAt,
+        artistNameKeys(set.artist)[0],
+      ]);
+      if (seenSets.has(key)) return false;
+      seenSets.add(key);
+      return true;
+    });
     const artists = new Map(
       (entry.artists ?? []).map((artist) => [
         artist.name,
-        artistImageForName(artist.name, artistImages),
+        artistImage(artist.name),
       ]),
     );
-    for (const set of timetable) {
+    for (const set of uniqueTimetable) {
       if (!artists.has(set.artist)) artists.set(set.artist, set.imageUrl);
     }
     return {
@@ -662,7 +707,7 @@ export class PublicFestivalService {
       sourceUrl: entry.sourceUrl,
       officialInstagramUrl: entry.officialInstagramUrl ?? null,
       artists: [...artists].map(([name, imageUrl]) => ({ name, imageUrl })),
-      timetable,
+      timetable: uniqueTimetable,
     };
   }
 

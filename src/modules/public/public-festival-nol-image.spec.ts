@@ -90,6 +90,7 @@ describe('NOL festival poster', () => {
         url,
         date: '2026.12.31 - 2027.01.01',
         venue: 'KINTEX',
+        artists: [{ name: 'Band A' }],
       },
     });
     const query = jest.fn().mockImplementation((sql: string) => {
@@ -136,6 +137,13 @@ describe('NOL festival poster', () => {
     expect(disabled.items[0].ticketLinks).toEqual([
       { label: '공식 사이트', url: festivalUrl },
     ]);
+    const profileQueries = (query.mock.calls as [string, [string[]]][]).filter(
+      ([sql]) => sql.includes('SELECT DISTINCT ON (source."parserConfig"'),
+    );
+    expect(profileQueries).toHaveLength(2);
+    expect(profileQueries[0][1][0]).toEqual([festivalUrl, valid]);
+    expect(profileQueries[1][1][0]).toEqual([festivalUrl]);
+    expect(profileQueries[0][1][0]).not.toContain(stale);
   });
 
   it('keeps the official Mint Paper catalog fields ahead of linked NOL details', async () => {
