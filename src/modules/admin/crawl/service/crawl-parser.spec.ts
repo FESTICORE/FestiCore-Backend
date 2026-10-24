@@ -904,6 +904,10 @@ describe('crawl parsers', () => {
       '<a data-href="https://ticket.yes24.com/Perf/60591">YES24</a>',
       '<a href="https://example.com" data-href="https://ticket.yes24.com/Perf/60591">Other</a>',
       '<a data-href="https://ticket.yes24.com/Perf/60591" href="https://example.com">Other</a>',
+      `<a data-note='please href="https://ticket.yes24.com/Perf/60591"'>Other</a>`,
+      `<a data-note="please href='https://ticket.yes24.com/Perf/60591'">Other</a>`,
+      `<a href="https://example.com" data-note='please href="https://ticket.yes24.com/Perf/60591"'>Other</a>`,
+      `<div data-note='<a href="https://ticket.yes24.com/Perf/60591">'>Other</div>`,
     ]) {
       expect(
         await parseCrawl(
@@ -920,7 +924,7 @@ describe('crawl parsers', () => {
         mint,
         html({
           ...post,
-          content: `<p>COUNTDOWN FANTASY 2026-2027 일시 : 2026년 12월 31일(목)</p>${nolAnchor}<a data-href="https://ticket.yes24.com/Perf/60591" href="https://ticket.yes24.com/Perf/60590?Gcode=009_207">YES24</a>`,
+          content: `<p>COUNTDOWN FANTASY 2026-2027 일시 : 2026년 12월 31일(목)</p>${nolAnchor}<a data-note='please href="https://ticket.yes24.com/Perf/60591"' data-href="https://ticket.yes24.com/Perf/60591" href="https://ticket.yes24.com/Perf/60590?Gcode=009_207">YES24</a>`,
         }),
       ),
     ).toEqual([

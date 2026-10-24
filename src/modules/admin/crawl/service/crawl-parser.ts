@@ -76,6 +76,70 @@ export function plainText(html: string): string {
     .trim();
 }
 
+function htmlAnchorHrefs(html: string): string[] {
+  const hrefs: string[] = [];
+  let cursor = 0;
+  while (cursor < html.length) {
+    const tagStart = html.indexOf('<', cursor);
+    if (tagStart < 0) break;
+    if (html.startsWith('<!--', tagStart)) {
+      const commentEnd = html.indexOf('-->', tagStart + 4);
+      if (commentEnd < 0) break;
+      cursor = commentEnd + 3;
+      continue;
+    }
+    let position = tagStart + 1;
+    const closing = html[position] === '/';
+    if (closing) position++;
+    const tag = /^[a-z][\w:-]*/i.exec(html.slice(position));
+    if (!tag) {
+      cursor = position;
+      continue;
+    }
+    position += tag[0].length;
+    while (position < html.length) {
+      while (/\s/.test(html[position] ?? '')) position++;
+      if (html[position] === '>') {
+        position++;
+        break;
+      }
+      if (html[position] === '/' && html[position + 1] === '>') {
+        position += 2;
+        break;
+      }
+      const nameStart = position;
+      while (position < html.length && !/[\s=/>]/.test(html[position]))
+        position++;
+      if (position === nameStart) {
+        position++;
+        continue;
+      }
+      const name = html.slice(nameStart, position).toLowerCase();
+      while (/\s/.test(html[position] ?? '')) position++;
+      if (html[position] !== '=') continue;
+      position++;
+      while (/\s/.test(html[position] ?? '')) position++;
+      let value: string;
+      if (html[position] === '"' || html[position] === "'") {
+        const quote = html[position++];
+        const end = html.indexOf(quote, position);
+        if (end < 0) return [];
+        value = html.slice(position, end);
+        position = end + 1;
+      } else {
+        const valueStart = position;
+        while (position < html.length && !/[\s>]/.test(html[position]))
+          position++;
+        value = html.slice(valueStart, position);
+      }
+      if (!closing && tag[0].toLowerCase() === 'a' && name === 'href')
+        hrefs.push(value);
+    }
+    cursor = position;
+  }
+  return hrefs;
+}
+
 type FestivalCandidate = {
   name: string;
   url: string;
@@ -157,12 +221,7 @@ function mintPaperOfficialTicketLinks(
       ) !== '2026.12.31'
     )
       return [];
-    const hrefs = [...post.content.matchAll(/<a\b([^>]*)>/gi)]
-      .map((anchor) =>
-        /(?:^|\s)href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(anchor[1]),
-      )
-      .filter((match): match is RegExpExecArray => match !== null)
-      .map((match) => match[1] ?? match[2] ?? match[3]);
+    const hrefs = htmlAnchorHrefs(post.content);
     const urls: string[] = [];
     for (const href of hrefs) {
       if (/nol\.yanolja\.com/i.test(href)) {
