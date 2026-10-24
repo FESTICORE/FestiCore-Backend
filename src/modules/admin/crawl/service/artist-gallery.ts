@@ -12,6 +12,7 @@ const MAX_MODAL_BYTES = 750_000;
 export interface ArtistGalleryEntry {
   artistName: string;
   imageUrl: URL;
+  officialSiteKeys: string[];
 }
 
 interface GalleryCard {
@@ -182,7 +183,9 @@ async function fetchOfficialModal(
   });
 }
 
-function modalArtistName(raw: string): string | null {
+function modalArtist(
+  raw: string,
+): Pick<ArtistGalleryEntry, 'artistName' | 'officialSiteKeys'> | null {
   if (Buffer.byteLength(raw, 'utf8') > MAX_MODAL_BYTES) return null;
   try {
     const payload = JSON.parse(raw) as { msg?: unknown; html?: unknown };
@@ -205,8 +208,30 @@ function modalArtistName(raw: string): string | null {
           const code = character.charCodeAt(0);
           return code < 32 || code === 127;
         })
-      )
-        return name;
+      ) {
+        const officialSiteKeys = new Set<string>();
+        for (const link of payload.html.matchAll(
+          /<a\b[^>]*\bhref\s*=\s*["'](https:\/\/[^"']+)["']/gi,
+        )) {
+          try {
+            const url = new URL(decodeHtml(link[1]));
+            const labels = url.hostname.replace(/^www\./, '').split('.');
+            if (
+              url.protocol !== 'https:' ||
+              url.username ||
+              url.password ||
+              url.port ||
+              labels.length !== 2
+            )
+              continue;
+            const key = labels[0].replace(/[^a-z0-9]/gi, '').toLowerCase();
+            if (key.length >= 4 && key.length <= 80) officialSiteKeys.add(key);
+          } catch {
+            // An invalid link cannot establish an artist identity.
+          }
+        }
+        return { artistName: name, officialSiteKeys: [...officialSiteKeys] };
+      }
     }
   } catch {
     // Invalid modal JSON cannot establish an artist identity.
@@ -241,12 +266,12 @@ export async function crawlArtistGallery(
   const results: ArtistGalleryEntry[] = [];
   for (const card of cards) {
     try {
-      const name = modalArtistName(
+      const artist = modalArtist(
         await fetchModal(card.menuCode, card.baseMenuCode),
       );
-      if (!name)
+      if (!artist)
         throw new Error('공식 모달에서 출연진 이름을 확인하지 못했습니다.');
-      results.push({ artistName: name, imageUrl: card.imageUrl });
+      results.push({ ...artist, imageUrl: card.imageUrl });
     } catch (error) {
       throw new Error('공식 출연진 모달 일부를 확인하지 못했습니다.', {
         cause: error,

@@ -564,6 +564,66 @@ describe('CrawlService source audit', () => {
     );
   });
 
+  it('links a shortened gallery title only when its official site proves the full notice name', async () => {
+    const { service, source, dataSource } = harness();
+    source.url = 'https://xmfestival.com/notice';
+    source.parserConfig = {
+      seed: 'official-lineup',
+      expectedYear: '2026',
+      festivalSourceUrl:
+        'https://ticket.melon.com/performance/index.htm?prodId=213766',
+    };
+    const rows = [
+      {
+        id: 'id-mika',
+        enabled: true,
+        artistName: 'MIKA',
+        artistAlias: null,
+        aliasSource: null,
+        officialSiteKeys: ['mikanakashima'],
+        artistOfficialName: null,
+        officialNameSource: null,
+        seed: 'official-artist-gallery',
+      },
+      {
+        id: 'id-other',
+        enabled: true,
+        artistName: 'MIKA BAND',
+        artistAlias: null,
+        aliasSource: null,
+        officialSiteKeys: [],
+        artistOfficialName: null,
+        officialNameSource: null,
+        seed: 'official-artist-gallery',
+      },
+    ];
+    dataSource.query.mockImplementation((sql: string) =>
+      Promise.resolve(sql.includes('SELECT id, enabled') ? rows : []),
+    );
+    const notice = XMF_NOTICE_HTML.replace(
+      '아도(Ado), 루시(LUCY) 등 2팀',
+      '아도(Ado), 루시(LUCY), 나카시마 미카(MIKA NAKASHIMA) 등 3팀',
+    );
+
+    await service.syncXmfArtistAliases(source, notice);
+
+    const updates = dataSource.query.mock.calls.filter(([sql]: [string]) =>
+      sql.includes('UPDATE crawl_sources'),
+    ) as [string, string[]][];
+    expect(updates.map(([, values]) => values.slice(0, 2))).toEqual([
+      ['id-mika', 'MIKA NAKASHIMA'],
+      ['id-mika', '나카시마 미카'],
+    ]);
+    rows[0].officialSiteKeys = [];
+    dataSource.query.mockClear();
+    await service.syncXmfArtistAliases(source, notice);
+    expect(
+      dataSource.query.mock.calls.some(([sql]: [string]) =>
+        sql.includes('UPDATE crawl_sources'),
+      ),
+    ).toBe(false);
+  });
+
   it('clears only obsolete automatic aliases and rejects same-festival conflicts', async () => {
     const { service, source, dataSource } = harness();
     source.url = 'https://xmfestival.com/notice';
@@ -1026,6 +1086,7 @@ describe('CrawlService manual runs and snapshots', () => {
       {
         artistName: 'New Artist From Page',
         imageUrl: new URL('https://cdn.imweb.me/thumbnail/20261023/new.jpg'),
+        officialSiteKeys: [],
       },
     ]);
 
@@ -1044,7 +1105,75 @@ describe('CrawlService manual runs and snapshots', () => {
       source.parserConfig.festivalSourceUrl,
       'New Artist From Page',
       '20261023/new.jpg',
+      '[]',
     ]);
+    expect(run.result).toBe('nochange-parsed');
+    gallery.mockRestore();
+  });
+
+  it('links official notice aliases in the same run that creates gallery image sources', async () => {
+    const { service, source, run, execute, dataSource, sourcesRepo } =
+      harness();
+    execute.mockRestore();
+    const festivalSourceUrl =
+      'https://ticket.melon.com/performance/index.htm?prodId=213766';
+    source.kind = 'artist-gallery';
+    source.url = 'https://xmfestival.com/lineup';
+    source.parser = 'html-text';
+    source.parserConfig = { festivalSourceUrl };
+    const notice = {
+      ...source,
+      kind: 'discovery',
+      url: 'https://xmfestival.com/notice',
+      parserConfig: {
+        seed: 'official-lineup',
+        expectedYear: '2026',
+        festivalSourceUrl,
+      },
+    } as CrawlSource;
+    sourcesRepo.findOneBy.mockResolvedValue(notice);
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    const getListing = jest.spyOn(service, 'getListing');
+    getListing
+      .mockResolvedValueOnce({
+        status: 200,
+        body: `<a href="${festivalSourceUrl}">예매</a>`,
+      })
+      .mockResolvedValueOnce({ status: 200, body: XMF_NOTICE_HTML });
+    const gallery = jest.spyOn(artistGallery, 'crawlArtistGallery');
+    gallery.mockResolvedValue([
+      {
+        artistName: 'Ado',
+        imageUrl: new URL('https://cdn.imweb.me/thumbnail/20261023/ado.jpg'),
+        officialSiteKeys: [],
+      },
+    ]);
+    dataSource.query.mockImplementation((sql: string) => {
+      if (sql.includes('SELECT id, enabled'))
+        return Promise.resolve([
+          {
+            id: 'ado-image-source',
+            enabled: true,
+            artistName: 'Ado',
+            artistAlias: null,
+            aliasSource: null,
+            seed: 'official-artist-gallery',
+          },
+        ]);
+      return Promise.resolve(sql.includes('RETURNING id') ? [[], 0] : []);
+    });
+
+    await service.execute(run, source);
+
+    expect(getListing).toHaveBeenNthCalledWith(2, notice);
+    expect(dataSource.query.mock.calls).toEqual(
+      expect.arrayContaining([
+        [
+          expect.stringContaining('UPDATE crawl_sources SET "parserConfig"'),
+          ['ado-image-source', '아도', festivalSourceUrl],
+        ],
+      ]),
+    );
     expect(run.result).toBe('nochange-parsed');
     gallery.mockRestore();
   });

@@ -56,6 +56,7 @@ describe('crawlArtistGallery', () => {
       ['Ado', 'https://cdn.imweb.me/thumbnail/20260811/354f5ae07ab1d.jpg'],
       ['B&B · Live', 'https://cdn.imweb.me/thumbnail/20260811/other.webp'],
     ]);
+    expect(entries.map((entry) => entry.officialSiteKeys)).toEqual([[], []]);
   });
 
   it('rejects non-CDN and insecure URLs before requesting a modal', async () => {
@@ -99,6 +100,22 @@ describe('crawlArtistGallery', () => {
     await expect(crawlArtistGallery(html, pageUrl, fetchModal)).rejects.toThrow(
       '일부를 확인하지 못했습니다',
     );
+  });
+
+  it('retains only HTTPS site identity keys from the same official artist modal', async () => {
+    const html = card('m1', 'b1', 'https://cdn.imweb.me/thumbnail/mika.jpg');
+    const payload = JSON.stringify({
+      msg: 'SUCCESS',
+      html: `<h4 class="modal-title">artist_MIKA</h4>
+        <a href="https://www.mikanakashima.com">Official Site</a>
+        <a href="http://mikanakashima.com">Insecure</a>
+        <a href="https://mikanakashima.evil.test">Unrelated</a>`,
+    });
+    await expect(
+      crawlArtistGallery(html, pageUrl, () => Promise.resolve(payload)),
+    ).resolves.toMatchObject([
+      { artistName: 'MIKA', officialSiteKeys: ['mikanakashima'] },
+    ]);
   });
 
   it('reads an official modal with its full page layout', async () => {
