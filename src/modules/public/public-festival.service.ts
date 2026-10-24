@@ -626,10 +626,28 @@ export class PublicFestivalService {
          CASE WHEN image.id IS NOT NULL AND ${PUBLIC_CRAWL_IMAGE_SQL}
            THEN image.id ELSE NULL END AS "sourceImageId"
        FROM crawl_timetable_revisions revision
+       LEFT JOIN crawl_sources timetable_source
+         ON timetable_source.id = revision."sourceId"
        LEFT JOIN crawl_images image ON image.id = revision."imageId"
        LEFT JOIN crawl_sources source ON source.id = image."sourceId"
-       WHERE revision."festivalSourceUrl" = ANY($1::text[])
-         AND revision.status = 'verified'
+       WHERE revision.status = 'verified'
+         AND (
+           revision."festivalSourceUrl" = ANY($1::text[])
+           OR (
+             timetable_source.kind = 'timetable'
+             AND timetable_source.enabled = true
+             AND timetable_source."parserConfig"->>'festivalSourceUrl' =
+               revision."festivalSourceUrl"
+             AND EXISTS (
+               SELECT 1 FROM crawl_sources official_source
+               WHERE official_source.kind = 'discovery'
+                 AND official_source.enabled = true
+                 AND official_source.url = revision."festivalSourceUrl"
+                 AND official_source."parserConfig"->>'festivalSourceUrl' =
+                   ANY($1::text[])
+             )
+           )
+         )
        ORDER BY revision."sourceId", revision."verifiedAt" DESC,
          revision."createdAt" DESC, revision.id DESC`,
       [entry.sourceUrls],
