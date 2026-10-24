@@ -236,21 +236,28 @@ function mintPaperCandidates(
   return [...candidates.values()];
 }
 
+type XmfNoticeResult = {
+  candidates: FestivalCandidate[];
+  year: number;
+  aliases: { name: string; alias: string }[];
+};
+
 function xmfNoticeCandidates(
   body: string,
   base: string,
-): FestivalCandidate[] | null {
+): XmfNoticeResult | null {
   const source = new URL(base);
   if (source.hostname !== 'xmfestival.com' || source.pathname !== '/notice')
     return null;
-  if (body.length > 2_000_000) return [];
+  const invalid = { candidates: [], year: 0, aliases: [] };
+  if (body.length > 2_000_000) return invalid;
 
   // The organizer publishes several announcements on this page. Read only the
   // final-lineup announcement so notices for other years cannot add performers.
   const heading = /\[\s*(XMF\s+(20\d{2}))\s+최종\s+라인업\s+공개\s*\]/i.exec(
     body,
   );
-  if (!heading) return [];
+  if (!heading) return invalid;
   const nextNotice = body.indexOf(
     'class="acd_row',
     heading.index + heading[0].length,
@@ -267,7 +274,7 @@ function xmfNoticeCandidates(
     announcement,
   );
   const venue = /이틀간\s+(.{2,80}?)에서\s+열리는/.exec(announcement)?.[1];
-  if (!dates || !venue) return [];
+  if (!dates || !venue) return invalid;
   const year = Number(heading[2]);
   const first = Number(dates[2]);
   const last = Number(dates[3]);
@@ -277,7 +284,7 @@ function xmfNoticeCandidates(
     new Date(Date.UTC(year, monthNumber - 1, day)).getUTCDate() === day &&
     new Date(Date.UTC(year, monthNumber - 1, day)).getUTCMonth() + 1 ===
       monthNumber;
-  if (!validDay(first) || !validDay(last) || last < first) return [];
+  if (!validDay(first) || !validDay(last) || last < first) return invalid;
 
   const dayOne =
     /첫날인\s+\d{1,2}월\s+\d{1,2}일에는\s+(.+?)\s+등\s+(\d{1,2})팀/.exec(
@@ -287,36 +294,58 @@ function xmfNoticeCandidates(
     /둘째\s+날인\s+\d{1,2}일\s+무대는\s+(.+?)\s+등\s+(\d{1,2})팀/.exec(
       announcement,
     );
-  if (!dayOne || !dayTwo) return [];
-  const names = [dayOne, dayTwo].flatMap((day) => {
-    const artists = day[1]
-      .split(/\s*,\s*/)
-      .map((name) => name.replace(/\s*\([^()]*\)\s*$/, '').trim());
-    return artists.length === Number(day[2]) ? artists : [];
-  });
-  if (names.length !== Number(dayOne[2]) + Number(dayTwo[2])) return [];
+  if (!dayOne || !dayTwo) return invalid;
+  const perDayLabels = [dayOne, dayTwo].map((day) => day[1].split(/\s*,\s*/));
+  if (
+    perDayLabels.some(
+      (labels, index) => labels.length !== Number([dayOne, dayTwo][index][2]),
+    )
+  )
+    return invalid;
+  const artistLabels = perDayLabels.flat();
   const openingDjs =
     /첫날은\s+(DJ\s+[^,]+?)\s*,\s*둘째\s+날은\s+(.+?)가\s+오프닝\s+무대/.exec(
       announcement,
     );
-  if (openingDjs) {
-    names.push(
-      openingDjs[1].replace(/\s*\([^()]*\)\s*$/, '').trim(),
-      openingDjs[2].replace(/\s*\([^()]*\)\s*$/, '').trim(),
-    );
-  }
-  if (names.some((name) => !name || name.length > 160)) return [];
+  if (openingDjs) artistLabels.push(openingDjs[1], openingDjs[2]);
+  const names = artistLabels.map((label) =>
+    label.replace(/\s*\([^()]*\)\s*$/, '').trim(),
+  );
+  if (names.some((name) => !name || name.length > 160)) return invalid;
+  const aliases = artistLabels.flatMap((label) => {
+    const match = /^(.+?)\s*\(([^()]+)\)\s*$/.exec(label.trim());
+    if (!match || !/[가-힣]/.test(match[1]) || !/[a-zA-Z]/.test(match[2]))
+      return [];
+    const name = match[1].trim();
+    const alias = match[2].trim();
+    return name.length <= 160 && alias.length <= 160 ? [{ name, alias }] : [];
+  });
   const day = (value: number) =>
     `${year}.${String(monthNumber).padStart(2, '0')}.${String(value).padStart(2, '0')}`;
-  return [
-    {
-      name: heading[1],
-      url: source.toString(),
-      date: `${day(first)} - ${day(last)}`,
-      venue,
-      artists: [...new Set(names)].map((name) => ({ name })),
-    },
-  ];
+  return {
+    year,
+    aliases,
+    candidates: [
+      {
+        name: heading[1],
+        url: source.toString(),
+        date: `${day(first)} - ${day(last)}`,
+        venue,
+        artists: [...new Set(names)].map((name) => ({ name })),
+      },
+    ],
+  };
+}
+
+export function xmfNoticeArtistAliases(
+  body: string,
+  base: string,
+  expectedYear: number,
+): { name: string; alias: string }[] | null {
+  const result = xmfNoticeCandidates(body, base);
+  return result?.year === expectedYear && result.candidates.length === 1
+    ? result.aliases
+    : null;
 }
 
 function officialLineupCandidates(
@@ -1047,7 +1076,7 @@ export function ticketCandidates(
   const officialLineup = officialLineupCandidates(body, base, config);
   if (officialLineup) return officialLineup;
   const xmfNotice = xmfNoticeCandidates(body, base);
-  if (xmfNotice) return xmfNotice;
+  if (xmfNotice) return xmfNotice.candidates;
   const mintPaper = mintPaperCandidates(body, base);
   if (mintPaper) return mintPaper;
   const melonSearch = melonSearchCandidates(body, base);

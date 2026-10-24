@@ -29,12 +29,13 @@ import {
   prepareCrawlImage,
   selectRunImages,
 } from './crawl-image';
-import { parseCrawl, plainText } from './crawl-parser';
+import { parseCrawl, plainText, xmfNoticeArtistAliases } from './crawl-parser';
 import { CrawlAlertService } from './crawl-alert.service';
 import { CrawlTimetableRevisionService } from './crawl-timetable-revision.service';
 import { extractTimetableImageCandidates } from './timetable-image-ocr';
 import { crawlArtistGallery } from './artist-gallery';
 import { timetableSourceConfig } from './timetable-source-config';
+import { normalizeArtistName } from '../../../../common/artist-name';
 
 const kstDay = (date = new Date()) =>
   new Intl.DateTimeFormat('en-CA', {
@@ -77,8 +78,10 @@ function artistImageConfig(config: Record<string, string>) {
     throw new UnprocessableEntityException(
       'artistName, festivalSourceUrl, imageHint가 필요합니다.',
     );
+  const reviewedConfig = { ...config };
+  delete reviewedConfig.artistAliasSource;
   return {
-    ...config,
+    ...reviewedConfig,
     artistName: artistName.trim(),
     ...(artistAlias === undefined ? {} : { artistAlias: artistAlias.trim() }),
     festivalSourceUrl: festival.toString(),
@@ -291,7 +294,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       if (!locked) throw new NotFoundException('크롤 소스를 찾을 수 없습니다.');
       const before = this.sourceAuditSnapshot(locked);
       Object.assign(locked, dto);
-      const parserConfig =
+      const parserConfig: Record<string, string> | undefined =
         dto.parserConfig && locked.kind === 'artist-image'
           ? artistImageConfig({ ...before.parserConfig, ...dto.parserConfig })
           : dto.parserConfig;
@@ -642,7 +645,9 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
                     ? 'ticket-list:v4'
                     : source.url.startsWith('https://nol.yanolja.com/ticket')
                       ? 'ticket-list:v5'
-                      : 'ticket-list:v3'
+                      : source.url === 'https://xmfestival.com/notice'
+                        ? 'ticket-list:v4'
+                        : 'ticket-list:v3'
             : '',
         )
         .digest('hex');
@@ -762,6 +767,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         )
         .orderBy('run.startedAt', 'DESC')
         .getOne();
+      await this.syncXmfArtistAliases(source, response.body);
       if (source.kind === 'artist-image') {
         run.result =
           previous?.contentHash === run.contentHash
@@ -892,6 +898,115 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
           run.error ?? '수집 실패',
         );
       }
+    }
+  }
+
+  private async syncXmfArtistAliases(
+    source: CrawlSource,
+    body: string,
+  ): Promise<void> {
+    if (
+      source.kind !== 'discovery' ||
+      source.url !== 'https://xmfestival.com/notice' ||
+      source.parserConfig.seed !== 'official-lineup' ||
+      !/^20\d{2}$/.test(source.parserConfig.expectedYear ?? '')
+    )
+      return;
+    const aliases = xmfNoticeArtistAliases(
+      body,
+      source.url,
+      Number(source.parserConfig.expectedYear),
+    );
+    if (!aliases) return;
+    const festivalSourceUrl = source.parserConfig.festivalSourceUrl;
+    if (!festivalSourceUrl) return;
+    const rows = await this.dataSource.query<
+      {
+        id: string;
+        enabled: boolean;
+        artistName: string;
+        artistAlias: string | null;
+        aliasSource: string | null;
+        seed: string | null;
+      }[]
+    >(
+      `SELECT id, enabled, "parserConfig"->>'artistName' AS "artistName",
+         "parserConfig"->>'artistAlias' AS "artistAlias",
+         "parserConfig"->>'artistAliasSource' AS "aliasSource",
+         "parserConfig"->>'seed' AS seed
+       FROM crawl_sources
+       WHERE kind = 'artist-image'
+         AND "parserConfig"->>'festivalSourceUrl' = $1::text`,
+      [festivalSourceUrl],
+    );
+    const owners = new Map<string, Set<string>>();
+    for (const row of rows) {
+      for (const name of [
+        row.artistName,
+        row.aliasSource === 'official-notice' ? null : row.artistAlias,
+      ]) {
+        if (!name) continue;
+        const key = normalizeArtistName(name);
+        const ids = owners.get(key) ?? new Set<string>();
+        ids.add(row.id);
+        owners.set(key, ids);
+      }
+    }
+    const targets = new Map<string, string>();
+    const proposedAliases = new Map<string, Set<string>>();
+    const proposedNamesByRow = new Map<string, Set<string>>();
+    for (const pair of aliases) {
+      const english = owners.get(normalizeArtistName(pair.alias));
+      if (english?.size !== 1) continue;
+      const row = rows.find((entry) => entry.id === [...english][0]);
+      if (
+        !row?.enabled ||
+        row.seed !== 'official-artist-gallery' ||
+        normalizeArtistName(row.artistName) !== normalizeArtistName(pair.alias)
+      )
+        continue;
+      const korean = owners.get(normalizeArtistName(pair.name));
+      if (korean?.size && (korean.size !== 1 || !korean.has(row.id))) continue;
+      const candidates =
+        proposedAliases.get(normalizeArtistName(pair.name)) ??
+        new Set<string>();
+      candidates.add(row.id);
+      proposedAliases.set(normalizeArtistName(pair.name), candidates);
+      const names = proposedNamesByRow.get(row.id) ?? new Set<string>();
+      names.add(normalizeArtistName(pair.name));
+      proposedNamesByRow.set(row.id, names);
+      targets.set(row.id, pair.name);
+    }
+    for (const row of rows) {
+      const proposed = targets.get(row.id) ?? null;
+      const desired =
+        proposed &&
+        proposedAliases.get(normalizeArtistName(proposed))?.size === 1 &&
+        proposedNamesByRow.get(row.id)?.size === 1
+          ? proposed
+          : null;
+      if (
+        row.aliasSource !== 'official-notice' &&
+        (row.artistAlias || !desired)
+      )
+        continue;
+      await this.dataSource.query(
+        `UPDATE crawl_sources SET "parserConfig" =
+           CASE WHEN $2::text IS NULL
+             THEN "parserConfig" - 'artistAlias' - 'artistAliasSource'
+             ELSE jsonb_set("parserConfig", '{artistAlias}', to_jsonb($2::text), true)
+               || jsonb_build_object('artistAliasSource', 'official-notice')
+           END,
+           "updatedAt" = now()
+         WHERE id = $1::uuid AND kind = 'artist-image'
+           AND "parserConfig"->>'festivalSourceUrl' = $3::text
+           AND ("parserConfig"->>'artistAliasSource' = 'official-notice'
+             OR NOT ("parserConfig" ? 'artistAlias'))
+           AND ("parserConfig"->>'artistAlias' IS DISTINCT FROM $2::text
+             OR "parserConfig"->>'artistAliasSource' IS DISTINCT FROM
+               CASE WHEN $2::text IS NULL THEN NULL ELSE 'official-notice' END)`,
+        [row.id, desired, festivalSourceUrl],
+      );
     }
   }
 

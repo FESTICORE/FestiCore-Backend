@@ -35,7 +35,13 @@ type PrivateCrawl = {
   }>;
   execute(run: CrawlRun, source: CrawlSource): Promise<void>;
   getListing(source: CrawlSource): Promise<{ status: number; body: string }>;
+  syncXmfArtistAliases(source: CrawlSource, body: string): Promise<void>;
 };
+
+const XMF_NOTICE_HTML = `<div class="acd_row"><h4>[XMF 2026 최종 라인업 공개]</h4>
+  <p>10월 3일부터 4일까지 이틀간 인천 파라다이스시티에서 열리는 XMF 2026.</p>
+  <p>첫날인 10월 3일에는 아도(Ado), 루시(LUCY) 등 2팀이 공연한다.</p>
+  <p>둘째 날인 4일 무대는 데이식스(DAY6) 등 1팀이 공연한다.</p></div>`;
 
 function harness() {
   const source = {
@@ -449,6 +455,8 @@ describe('CrawlService source audit', () => {
     source.url = 'https://xmfestival.com/lineup';
     source.parserConfig = {
       artistName: 'DAY6',
+      artistAlias: '이전 자동 별칭',
+      artistAliasSource: 'official-notice',
       imageHint: '20260811/9e91f35508e81.jpg',
       festivalSourceUrl:
         'https://ticket.melon.com/performance/index.htm?prodId=213766',
@@ -486,6 +494,331 @@ describe('CrawlService source audit', () => {
         seed: 'official-artist-gallery',
       },
     });
+    expect(repo.save.mock.calls[0][0].parserConfig).not.toHaveProperty(
+      'artistAliasSource',
+    );
+  });
+
+  it('replaces an automatic XMF alias while preserving a manually reviewed alias', async () => {
+    const { service, source, dataSource } = harness();
+    source.url = 'https://xmfestival.com/notice';
+    source.parserConfig = {
+      seed: 'official-lineup',
+      expectedYear: '2026',
+      festivalSourceUrl:
+        'https://ticket.melon.com/performance/index.htm?prodId=213766',
+    };
+    const rows = [
+      {
+        id: 'id-ado',
+        enabled: true,
+        artistName: 'Ａｄｏ',
+        artistAlias: '옛 아도',
+        aliasSource: 'official-notice',
+        seed: 'official-artist-gallery',
+      },
+      {
+        id: 'id-lucy',
+        enabled: true,
+        artistName: 'LUCY',
+        artistAlias: '수동 별칭',
+        aliasSource: null,
+        seed: 'official-artist-gallery',
+      },
+      {
+        id: 'id-day6',
+        enabled: true,
+        artistName: 'DAY6',
+        artistAlias: null,
+        aliasSource: null,
+        seed: 'official-artist-gallery',
+      },
+    ];
+    dataSource.query.mockImplementation((sql: string) =>
+      Promise.resolve(sql.includes('SELECT id, enabled') ? rows : []),
+    );
+
+    await service.syncXmfArtistAliases(source, XMF_NOTICE_HTML);
+
+    const updates = dataSource.query.mock.calls.filter(([sql]: [string]) =>
+      sql.includes('UPDATE crawl_sources'),
+    ) as [string, string[]][];
+    expect(updates.map(([, values]) => values.slice(0, 2))).toEqual([
+      ['id-ado', '아도'],
+      ['id-day6', '데이식스'],
+    ]);
+    expect(updates[0][0]).toContain("'artistAliasSource' = 'official-notice'");
+    expect(updates[0][0]).toContain(
+      'OR NOT ("parserConfig" ? \'artistAlias\')',
+    );
+  });
+
+  it('clears only obsolete automatic aliases and rejects same-festival conflicts', async () => {
+    const { service, source, dataSource } = harness();
+    source.url = 'https://xmfestival.com/notice';
+    source.parserConfig = {
+      seed: 'official-lineup',
+      expectedYear: '2026',
+      festivalSourceUrl:
+        'https://ticket.melon.com/performance/index.htm?prodId=213766',
+    };
+    const rows = [
+      {
+        id: 'id-ado',
+        enabled: true,
+        artistName: 'Ado',
+        artistAlias: '옛 아도',
+        aliasSource: 'official-notice',
+        seed: 'official-artist-gallery',
+      },
+      {
+        id: 'id-other',
+        enabled: true,
+        artistName: '아도',
+        artistAlias: null,
+        aliasSource: null,
+        seed: 'manual',
+      },
+      {
+        id: 'id-lucy',
+        enabled: false,
+        artistName: 'LUCY',
+        artistAlias: '루시',
+        aliasSource: 'official-notice',
+        seed: 'official-artist-gallery',
+      },
+      {
+        id: 'id-day6',
+        enabled: true,
+        artistName: 'DAY6',
+        artistAlias: null,
+        aliasSource: null,
+        seed: 'official-artist-gallery',
+      },
+      {
+        id: 'id-day6-other',
+        enabled: true,
+        artistName: 'DAY6',
+        artistAlias: null,
+        aliasSource: null,
+        seed: 'manual',
+      },
+    ];
+    dataSource.query.mockImplementation((sql: string) =>
+      Promise.resolve(sql.includes('SELECT id, enabled') ? rows : []),
+    );
+    await service.syncXmfArtistAliases(source, XMF_NOTICE_HTML);
+    expect(
+      dataSource.query.mock.calls
+        .filter(([sql]: [string]) => sql.includes('UPDATE crawl_sources'))
+        .map(([, values]: [string, string[]]) => values.slice(0, 2)),
+    ).toEqual([
+      ['id-ado', null],
+      ['id-lucy', null],
+    ]);
+  });
+
+  it('clears an automatic alias when the notice proposes two image owners', async () => {
+    const { service, source, dataSource } = harness();
+    source.url = 'https://xmfestival.com/notice';
+    source.parserConfig = {
+      seed: 'official-lineup',
+      expectedYear: '2026',
+      festivalSourceUrl:
+        'https://ticket.melon.com/performance/index.htm?prodId=213766',
+    };
+    const rows = [
+      {
+        id: 'id-lucy',
+        enabled: true,
+        artistName: 'LUCY',
+        artistAlias: '루시',
+        aliasSource: 'official-notice',
+        seed: 'official-artist-gallery',
+      },
+      {
+        id: 'id-band',
+        enabled: true,
+        artistName: 'LUCY BAND',
+        artistAlias: null,
+        aliasSource: null,
+        seed: 'official-artist-gallery',
+      },
+    ];
+    dataSource.query.mockImplementation((sql: string) =>
+      Promise.resolve(sql.includes('SELECT id, enabled') ? rows : []),
+    );
+    const notice = XMF_NOTICE_HTML.replace(
+      '루시(LUCY) 등 2팀',
+      '루시(LUCY), 루시(LUCY BAND) 등 3팀',
+    );
+    await service.syncXmfArtistAliases(source, notice);
+    expect(
+      dataSource.query.mock.calls
+        .filter(([sql]: [string]) => sql.includes('UPDATE crawl_sources'))
+        .map(([, values]: [string, string[]]) => values.slice(0, 2)),
+    ).toEqual([['id-lucy', null]]);
+  });
+
+  it('moves an automatic alias to its new official image owner in one run', async () => {
+    const { service, source, dataSource } = harness();
+    source.url = 'https://xmfestival.com/notice';
+    source.parserConfig = {
+      seed: 'official-lineup',
+      expectedYear: '2026',
+      festivalSourceUrl:
+        'https://ticket.melon.com/performance/index.htm?prodId=213766',
+    };
+    const rows = [
+      {
+        id: 'id-lucy',
+        enabled: true,
+        artistName: 'LUCY',
+        artistAlias: '루시',
+        aliasSource: 'official-notice',
+        seed: 'official-artist-gallery',
+      },
+      {
+        id: 'id-band',
+        enabled: true,
+        artistName: 'LUCY BAND',
+        artistAlias: null,
+        aliasSource: null,
+        seed: 'official-artist-gallery',
+      },
+    ];
+    dataSource.query.mockImplementation((sql: string) =>
+      Promise.resolve(sql.includes('SELECT id, enabled') ? rows : []),
+    );
+    const notice = XMF_NOTICE_HTML.replace('루시(LUCY)', '루시(LUCY BAND)');
+    await service.syncXmfArtistAliases(source, notice);
+    expect(
+      dataSource.query.mock.calls
+        .filter(([sql]: [string]) => sql.includes('UPDATE crawl_sources'))
+        .map(([, values]: [string, string[]]) => values.slice(0, 2)),
+    ).toEqual([
+      ['id-lucy', null],
+      ['id-band', '루시'],
+    ]);
+  });
+
+  it('does not change aliases for another official notice year or invalid counts', async () => {
+    const { service, source, dataSource } = harness();
+    source.url = 'https://xmfestival.com/notice';
+    source.parserConfig = {
+      seed: 'official-lineup',
+      expectedYear: '2027',
+      festivalSourceUrl:
+        'https://ticket.melon.com/performance/index.htm?prodId=213766',
+    };
+    await service.syncXmfArtistAliases(source, XMF_NOTICE_HTML);
+    source.parserConfig.expectedYear = '2026';
+    await service.syncXmfArtistAliases(
+      source,
+      XMF_NOTICE_HTML.replace('등 2팀', '등 3팀'),
+    );
+    expect(dataSource.query).not.toHaveBeenCalled();
+  });
+
+  it('links a gallery source added after the first valid notice collection', async () => {
+    const { service, source, dataSource } = harness();
+    source.url = 'https://xmfestival.com/notice';
+    source.parserConfig = {
+      seed: 'official-lineup',
+      expectedYear: '2026',
+      festivalSourceUrl:
+        'https://ticket.melon.com/performance/index.htm?prodId=213766',
+    };
+    let rows: object[] = [];
+    dataSource.query.mockImplementation((sql: string) =>
+      Promise.resolve(sql.includes('SELECT id, enabled') ? rows : []),
+    );
+    await service.syncXmfArtistAliases(source, XMF_NOTICE_HTML);
+    expect(
+      dataSource.query.mock.calls.some(([sql]: [string]) =>
+        sql.includes('UPDATE crawl_sources'),
+      ),
+    ).toBe(false);
+    rows = [
+      {
+        id: 'id-ado',
+        enabled: true,
+        artistName: 'Ado',
+        artistAlias: null,
+        aliasSource: null,
+        seed: 'official-artist-gallery',
+      },
+    ];
+    await service.syncXmfArtistAliases(source, XMF_NOTICE_HTML);
+    expect(
+      dataSource.query.mock.calls
+        .filter(([sql]: [string]) => sql.includes('UPDATE crawl_sources'))
+        .map(([, values]: [string, string[]]) => values.slice(0, 2)),
+    ).toEqual([['id-ado', '아도']]);
+  });
+
+  it('synchronizes a late gallery alias even when the notice content is unchanged', async () => {
+    const { service, source, run, runsRepo, dataSource, execute } = harness();
+    execute.mockRestore();
+    source.url = 'https://xmfestival.com/notice';
+    source.parserConfig = {
+      seed: 'official-lineup',
+      expectedYear: '2026',
+      festivalSourceUrl:
+        'https://ticket.melon.com/performance/index.htm?prodId=213766',
+    };
+    jest.spyOn(service, 'getListing').mockResolvedValue({
+      status: 200,
+      body: XMF_NOTICE_HTML,
+    });
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest
+      .spyOn(
+        service as unknown as {
+          captureImages(
+            source: CrawlSource,
+            run: CrawlRun,
+            urls: URL[],
+          ): Promise<string[]>;
+        },
+        'captureImages',
+      )
+      .mockResolvedValue([]);
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue({
+        contentHash: createHash('sha256')
+          .update(XMF_NOTICE_HTML)
+          .update('ticket-list:v4')
+          .digest('hex'),
+      }),
+    }));
+    dataSource.query.mockImplementation((sql: string) =>
+      Promise.resolve(
+        sql.includes('SELECT id, enabled')
+          ? [
+              {
+                id: 'id-ado',
+                enabled: true,
+                artistName: 'Ado',
+                artistAlias: null,
+                aliasSource: null,
+                seed: 'official-artist-gallery',
+              },
+            ]
+          : [],
+      ),
+    );
+    const proposalItems = jest.spyOn(service, 'proposalItems');
+    await service.execute(run, source);
+    expect(run.result).toBe('unchanged');
+    expect(
+      dataSource.query.mock.calls.some(([sql]: [string]) =>
+        sql.includes('UPDATE crawl_sources'),
+      ),
+    ).toBe(true);
+    expect(proposalItems).not.toHaveBeenCalled();
   });
 
   it('records the previous and new source settings', async () => {

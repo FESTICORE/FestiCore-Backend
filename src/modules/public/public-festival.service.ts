@@ -11,6 +11,7 @@ import { festivalSetId } from '../admin/festival/festival-set-id';
 import { CrawlTimetableSet } from '../admin/crawl/entity/crawl-timetable-revision.entity';
 import { PUBLIC_CRAWL_IMAGE_SQL } from './crawl-image-policy';
 import { Flag } from '../flags/flag.entity';
+import { artistNameKeys } from '../../common/artist-name';
 import {
   CacheService,
   PUBLIC_PACK_PROJECTION_VERSION,
@@ -57,21 +58,6 @@ function storedArtistImageUrl(value: unknown): string | null {
     /^\/api\/v1\/festivals\/images\/[0-9a-f-]{36}\.webp$/.test(value)
     ? value
     : null;
-}
-
-function artistNameKeys(name: string): string[] {
-  const normalize = (value: string) =>
-    value.normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase();
-  const keys = [normalize(name)];
-  const parts = /^(.+?)\s*[（(]([^()（）]+)[）)]$/.exec(name.trim());
-  if (parts) {
-    const [, primary, alias] = parts;
-    const koreanAndLatin =
-      (/[가-힣]/.test(primary) && /[a-zA-Z]/.test(alias)) ||
-      (/[a-zA-Z]/.test(primary) && /[가-힣]/.test(alias));
-    if (koreanAndLatin) keys.push(normalize(primary), normalize(alias));
-  }
-  return [...new Set(keys)];
 }
 
 function artistImageForName(

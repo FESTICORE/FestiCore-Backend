@@ -1,5 +1,5 @@
 import { CrawlSource } from '../entity/crawl-source.entity';
-import { parseCrawl } from './crawl-parser';
+import { parseCrawl, xmfNoticeArtistAliases } from './crawl-parser';
 
 function source(
   parser: CrawlSource['parser'],
@@ -483,9 +483,32 @@ describe('crawl parsers', () => {
         '에무뉴',
       ]),
     );
+    expect(xmfNoticeArtistAliases(html, xmf.url, 2026)).toEqual(
+      expect.arrayContaining([
+        { name: '아도', alias: 'Ado' },
+        { name: '루시', alias: 'LUCY' },
+        { name: '데이식스', alias: 'DAY6' },
+        { name: 'DJ 야베 유나', alias: 'YUNA YABE' },
+      ]),
+    );
+    expect(xmfNoticeArtistAliases(html, xmf.url, 2027)).toBeNull();
+    expect(
+      xmfNoticeArtistAliases(
+        html.replace('등 11팀이 공연을', '등 12팀이 공연을'),
+        xmf.url,
+        2026,
+      ),
+    ).toBeNull();
     await expect(
       parseCrawl(xmf, html.replace('등 11팀이 공연을', '등 12팀이 공연을')),
     ).rejects.toThrow('공개 예매 링크');
+    const swappedCounts = html
+      .replace('등 11팀이 관객과', '등 12팀이 관객과')
+      .replace('등 11팀이 공연을', '등 10팀이 공연을');
+    expect(xmfNoticeArtistAliases(swappedCounts, xmf.url, 2026)).toBeNull();
+    await expect(parseCrawl(xmf, swappedCounts)).rejects.toThrow(
+      '공개 예매 링크',
+    );
   });
 
   it('reads a YES24 detail Event without inventing a timetable', async () => {
