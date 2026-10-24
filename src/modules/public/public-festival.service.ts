@@ -383,6 +383,19 @@ export class PublicFestivalService {
       if (!profileImageByArtist.has(key))
         profileImageByArtist.set(key, image.id);
     }
+    const profileImageByName = new Map<string, Set<string>>();
+    for (const image of profileImages) {
+      for (const name of [image.artistName, image.artistAlias]) {
+        if (!name) continue;
+        for (const nameKey of artistNameKeys(name)) {
+          const normalizedKey = `${image.festivalSourceUrl}\u0000${nameKey}`;
+          const imageIds =
+            profileImageByName.get(normalizedKey) ?? new Set<string>();
+          imageIds.add(image.id);
+          profileImageByName.set(normalizedKey, imageIds);
+        }
+      }
+    }
     const englishProductIds = [
       ...new Set(
         entries.flatMap((entry) => {
@@ -429,8 +442,14 @@ export class PublicFestivalService {
       if (posterId)
         entry.thumbUrl = `/api/v1/festivals/images/${posterId}.webp`;
       entry.artists = entry.artists?.map((artist) => {
+        const matchingProfileIds = new Set(
+          artistNameKeys(artist.name).flatMap((nameKey) => [
+            ...(profileImageByName.get(`${entry.sourceUrl}\u0000${nameKey}`) ??
+              []),
+          ]),
+        );
         const imageId =
-          profileImageByArtist.get(`${entry.sourceUrl}\u0000${artist.name}`) ??
+          (matchingProfileIds.size === 1 ? [...matchingProfileIds][0] : null) ??
           (artist.sourceUrl && imageByUrl.get(artist.sourceUrl));
         return {
           ...artist,
