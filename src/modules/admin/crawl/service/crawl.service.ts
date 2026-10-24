@@ -521,6 +521,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         ) -
         Number(left.kind === 'artist-gallery' && left.url === GMF_LINEUP_URL),
     );
+    const listedIds = new Set(sources.map((source) => source.id));
     let gmfGalleryFailed = false;
     for (const listedSource of sources) {
       if (
@@ -585,6 +586,19 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
           this.logger.error('GMF 공식 갤러리 예약 크롤 실패');
         }
         gmfGalleryFailed = run.result === 'failed';
+        if (!gmfGalleryFailed) {
+          const newChildren = await this.sourcesRepo.findBy({
+            kind: 'artist-image',
+            url: GMF_LINEUP_URL,
+            enabled: true,
+            status: In(['ok', 'broken']),
+          });
+          for (const child of newChildren) {
+            if (listedIds.has(child.id)) continue;
+            sources.push(child);
+            listedIds.add(child.id);
+          }
+        }
       } else {
         void execution.catch(() => this.logger.error('예약 크롤 실패'));
       }

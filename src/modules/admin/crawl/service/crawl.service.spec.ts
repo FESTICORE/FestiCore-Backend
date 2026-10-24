@@ -301,6 +301,47 @@ describe('CrawlService scheduled runs', () => {
     expect(execute.mock.calls[1][1]).toBe(freshChild);
   });
 
+  it('runs new GMF image sources on the day the gallery creates them', async () => {
+    const {
+      service,
+      source,
+      sourcesRepo,
+      runsRepo,
+      updateQb,
+      insertQb,
+      execute,
+    } = harness();
+    source.kind = 'artist-gallery';
+    source.url = GMF_LINEUP_URL;
+    source.parserConfig = {
+      seed: 'gmf-official-lineup',
+      festivalSourceUrl: GMF_FESTIVAL_URL,
+    };
+    const child = {
+      ...source,
+      id: 'new-image-source',
+      kind: 'artist-image',
+      parserConfig: {
+        seed: 'official-gmf-lineup',
+        imageHint: '/GMF_2026_new.jpg',
+      },
+    } as CrawlSource;
+    sourcesRepo.findBy
+      .mockResolvedValueOnce([source])
+      .mockResolvedValueOnce([child]);
+    sourcesRepo.findOneBy.mockResolvedValue(child);
+    runsRepo.createQueryBuilder
+      .mockImplementationOnce(() => updateQb)
+      .mockImplementationOnce(() => insertQb);
+
+    await service.scheduleDue();
+
+    expect(execute.mock.calls.map((call) => call[1].id)).toEqual([
+      source.id,
+      child.id,
+    ]);
+  });
+
   it('skips a duplicate daily run that is still active', async () => {
     const { service, insertResult, reclaimResult, execute } = harness();
     insertResult.identifiers = [];
