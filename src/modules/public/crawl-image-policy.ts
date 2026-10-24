@@ -21,6 +21,7 @@ export const PUBLIC_CRAWL_IMAGE_SQL = `(
         'https://cdn.imweb.me/thumbnail/' || (source."parserConfig"->>'imageHint'))
     AND image."originUrl" LIKE 'https://%')
   OR (source.kind = 'timetable'
+    AND source."parserConfig"->>'publicSourceImage' IS DISTINCT FROM 'false'
     AND image."originUrl" LIKE 'https://%'
     AND EXISTS (
       SELECT 1 FROM crawl_timetable_revisions revision
