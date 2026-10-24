@@ -42,6 +42,11 @@ import {
   WONDERLIVET_LINEUP_URL,
 } from './wonderlivet-lineup';
 import {
+  WONDERLIVET_DETAIL_SEED,
+  WONDERLIVET_LINK_PAGE,
+  WONDERLIVET_TICKET_SEED,
+} from './wonderlivet-ticket-link';
+import {
   GMF_FESTIVAL_URL,
   GMF_LINEUP_URL,
   GMF_NOTICE_URL,
@@ -918,25 +923,30 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
                 'https://ticket.yes24.com/New/Genre/Ajax/GenreList_Data.aspx',
               )
               ? 'ticket-list:v4'
-              : source.url === 'https://ticket.yes24.com/English/Genre/Concert'
+              : source.url === WONDERLIVET_LINK_PAGE
                 ? 'ticket-list:v4'
-                : /^https:\/\/(?:www\.)?mintpaper\.co\.kr\/posts\/4819(?:[?#]|$)/.test(
-                      source.url,
-                    )
+                : source.url ===
+                    'https://ticket.yes24.com/English/Genre/Concert'
                   ? 'ticket-list:v4'
-                  : /^https:\/\/ticket\.yes24\.com\/(?:English\/)?Perf\/\d+$/.test(
+                  : /^https:\/\/(?:www\.)?mintpaper\.co\.kr\/posts\/4819(?:[?#]|$)/.test(
                         source.url,
                       )
                     ? 'ticket-list:v4'
-                    : source.url.startsWith(
-                          'https://ticket.melon.com/search/index.htm?',
+                    : /^https:\/\/ticket\.yes24\.com\/(?:English\/)?Perf\/\d+$/.test(
+                          source.url,
                         )
                       ? 'ticket-list:v4'
-                      : source.url.startsWith('https://nol.yanolja.com/ticket')
-                        ? 'ticket-list:v5'
-                        : source.url === 'https://xmfestival.com/notice'
-                          ? 'ticket-list:v4'
-                          : 'ticket-list:v3'
+                      : source.url.startsWith(
+                            'https://ticket.melon.com/search/index.htm?',
+                          )
+                        ? 'ticket-list:v4'
+                        : source.url.startsWith(
+                              'https://nol.yanolja.com/ticket',
+                            )
+                          ? 'ticket-list:v5'
+                          : source.url === 'https://xmfestival.com/notice'
+                            ? 'ticket-list:v4'
+                            : 'ticket-list:v3'
             : '',
         )
         .digest('hex');
@@ -1307,12 +1317,19 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         .getOne();
       await this.syncXmfArtistAliases(source, response.body);
       const officialTicketLinks =
-        source.url === 'https://www.mintpaper.co.kr/posts/4821';
+        source.url === 'https://www.mintpaper.co.kr/posts/4821' ||
+        source.url === WONDERLIVET_LINK_PAGE;
       let officialParsed: unknown = null;
       if (officialTicketLinks) {
         phase = 'PARSE';
         officialParsed = await parseCrawl(source, response.body);
-        await this.reconcileOfficialTicketLinks(source, officialParsed);
+        if (source.url === WONDERLIVET_LINK_PAGE)
+          await this.reconcileWonderlivetTicketLink(
+            source,
+            officialParsed,
+            run.id,
+          );
+        else await this.reconcileOfficialTicketLinks(source, officialParsed);
       }
       if (source.kind === 'artist-image') {
         run.result =
@@ -1534,6 +1551,98 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       );
       if (!updated.length)
         throw new Error('공식 예매 링크 부모 소스 설정이 변경되었습니다.');
+    });
+  }
+
+  private async reconcileWonderlivetTicketLink(
+    source: CrawlSource,
+    parsed: unknown,
+    runId: string,
+  ): Promise<void> {
+    if (
+      source.kind !== 'discovery' ||
+      source.parser !== 'ticket-list' ||
+      source.url !== WONDERLIVET_LINK_PAGE ||
+      source.parserConfig.seed !== WONDERLIVET_TICKET_SEED ||
+      source.parserConfig.festivalSourceUrl !== WONDERLIVET_FESTIVAL_URL ||
+      !Array.isArray(parsed) ||
+      parsed.length !== 1
+    )
+      throw new Error('원더리벳 공식 링크 소스 설정이 올바르지 않습니다.');
+    const candidate = parsed[0] as { name?: unknown; url?: unknown };
+    if (
+      candidate.name !== 'WONDERLIVET 2026' ||
+      typeof candidate.url !== 'string' ||
+      !/^https:\/\/ticket\.melon\.com\/performance\/index\.htm\?prodId=[1-9]\d*$/.test(
+        candidate.url,
+      )
+    )
+      throw new Error('원더리벳 공식 멜론 상품이 올바르지 않습니다.');
+    const detailConfig = JSON.stringify({
+      seed: WONDERLIVET_DETAIL_SEED,
+      festivalSourceUrl: WONDERLIVET_FESTIVAL_URL,
+      festivalSourceUrls: [candidate.url, WONDERLIVET_FESTIVAL_URL],
+    });
+    await this.dataSource.transaction(async (manager) => {
+      await manager.query(
+        `UPDATE crawl_sources SET "parserConfig" = "parserConfig" || $2::jsonb,
+         "updatedAt" = now()
+       WHERE url = $1::text AND kind = 'discovery' AND parser = 'ticket-list'
+         AND "parserConfig"->>'seed' IN ('ticket-detail', $3::text)
+         AND (NOT ("parserConfig" ? 'festivalSourceUrl')
+           OR "parserConfig"->>'festivalSourceUrl' = $4::text)
+         AND (NOT ("parserConfig" ? 'festivalSourceUrls')
+           OR "parserConfig"->'festivalSourceUrls' IN (
+             jsonb_build_array($4::text), jsonb_build_array($1::text, $4::text)))`,
+        [
+          candidate.url,
+          detailConfig,
+          WONDERLIVET_DETAIL_SEED,
+          WONDERLIVET_FESTIVAL_URL,
+        ],
+      );
+      await manager.query(
+        `INSERT INTO crawl_sources (kind, url, parser, "parserConfig", "createdAt")
+       SELECT 'discovery', $1::text, 'ticket-list', $2::jsonb, now() - interval '1 day'
+       WHERE NOT EXISTS (SELECT 1 FROM crawl_sources WHERE url = $1::text)`,
+        [candidate.url, detailConfig],
+      );
+      const children = await manager.query<
+        { parserConfig: Record<string, unknown>; enabled: boolean }[]
+      >(
+        `SELECT "parserConfig", enabled FROM crawl_sources
+       WHERE url = $1::text AND kind = 'discovery' AND parser = 'ticket-list'`,
+        [candidate.url],
+      );
+      if (
+        children.length !== 1 ||
+        !children[0].enabled ||
+        children[0].parserConfig.seed !== WONDERLIVET_DETAIL_SEED ||
+        children[0].parserConfig.festivalSourceUrl !==
+          WONDERLIVET_FESTIVAL_URL ||
+        JSON.stringify(children[0].parserConfig.festivalSourceUrls) !==
+          JSON.stringify([candidate.url, WONDERLIVET_FESTIVAL_URL])
+      )
+        throw new Error('멜론 상품 소스가 다른 축제에 연결되어 있습니다.');
+      const updated = await manager.query<{ id: string }[]>(
+        `UPDATE crawl_sources SET "parserConfig" = "parserConfig" ||
+         jsonb_build_object('verifiedTicketUrl', $2::text,
+           'verifiedRunId', $6::text), "updatedAt" = now()
+       WHERE id = $1::uuid AND url = $3::text AND enabled = true
+         AND "parserConfig"->>'seed' = $4::text
+         AND "parserConfig"->>'festivalSourceUrl' = $5::text
+       RETURNING id`,
+        [
+          source.id,
+          candidate.url,
+          WONDERLIVET_LINK_PAGE,
+          WONDERLIVET_TICKET_SEED,
+          WONDERLIVET_FESTIVAL_URL,
+          runId,
+        ],
+      );
+      if (updated.length !== 1)
+        throw new Error('공식 링크 부모 소스 설정이 변경되었습니다.');
     });
   }
 

@@ -497,6 +497,7 @@ describe('discovered festival artist profile images', () => {
       .mockResolvedValueOnce([{ candidate }])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([]);
     const service = new PublicFestivalService(
       { findOne: jest.fn().mockResolvedValue(null) } as never,
@@ -513,9 +514,9 @@ describe('discovered festival artist profile images', () => {
         },
       ],
     });
-    expect(query).toHaveBeenCalledTimes(4);
+    expect(query).toHaveBeenCalledTimes(5);
     expect(
-      (query.mock.calls as unknown as [string, [string[]]][])[2][1][0],
+      (query.mock.calls as unknown as [string, [string[]]][])[3][1][0],
     ).toEqual([sourceUrl]);
   });
 
@@ -539,6 +540,7 @@ describe('discovered festival artist profile images', () => {
     const query = jest
       .fn()
       .mockResolvedValueOnce([{ candidate }])
+      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([
@@ -565,8 +567,128 @@ describe('discovered festival artist profile images', () => {
     });
     const profileQuery = (
       query.mock.calls as unknown as [string, [string[]]][]
-    )[3];
+    )[4];
     expect(profileQuery[1][0]).toEqual([sourceUrl]);
+  });
+
+  it('links a stored official artist photo only after the exact Melon product is verified', async () => {
+    const melon =
+      'https://ticket.melon.com/performance/index.htm?prodId=214999';
+    const official = 'https://www.wonderli.vet/lineup';
+    const candidate = {
+      name: 'WONDERLIVET 2026 (원더리벳 2026)',
+      venue: 'KINTEX HALL 7/8/9/10',
+      date: '2026.11.20 - 2026.11.22',
+      url: melon,
+      artists: [{ name: 'The Shepherd Bois' }],
+    };
+    const imageId = '00000000-0000-4000-8000-000000000199';
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([{ candidate }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ url: melon, candidate }])
+      .mockResolvedValueOnce([
+        {
+          festivalSourceUrl: official,
+          artistName: 'The Shepherd Bois',
+          id: imageId,
+        },
+      ])
+      .mockResolvedValueOnce([]);
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    const original = discoverySummaries([{ candidate }])[0];
+    const detail = await service.detail(original.id);
+    expect(detail).toMatchObject({
+      id: original.id,
+      sourceUrl: melon,
+      ticketLinks: [{ label: '멜론티켓', url: melon }],
+      artists: [
+        {
+          name: 'The Shepherd Bois',
+          imageUrl: `/api/v1/festivals/images/${imageId}.webp`,
+        },
+      ],
+    });
+    expect(
+      (query.mock.calls as unknown as [string, [string[]]][])[3][1][0],
+    ).toEqual([melon, official]);
+    const proofQuery = (
+      query.mock.calls as unknown as [string, unknown[]][]
+    )[2][0];
+    const catalogQuery = (
+      query.mock.calls as unknown as [string, unknown[]][]
+    )[0][0];
+    expect(catalogQuery).toContain('jsonb_array_elements_text');
+    expect(catalogQuery).toContain('FROM latest JOIN details USING (url)');
+    expect(proofQuery).toContain(
+      "verified.result IN ('nochange-parsed', 'unchanged')",
+    );
+    expect(proofQuery).toContain('newer."startedAt" > verified."startedAt"');
+    expect(proofQuery).toContain("latest.decision IS DISTINCT FROM 'rejected'");
+    expect(proofQuery).toContain(
+      "childRun.result IN ('proposed', 'unchanged')",
+    );
+    expect(proofQuery).toContain(
+      'proposedRun."contentHash" = childRun."contentHash"',
+    );
+    expect(proofQuery).toContain('proposedRun."sourceId" = child.id');
+    expect(proofQuery).toContain('jsonb_build_array(child.url, $3::text)');
+  });
+
+  it.each([
+    [
+      'another product',
+      'https://ticket.melon.com/performance/index.htm?prodId=999',
+    ],
+    [
+      'another event',
+      'https://ticket.melon.com/performance/index.htm?prodId=214999',
+    ],
+  ])('does not borrow a photo for %s', async (reason, verifiedUrl) => {
+    const melon =
+      'https://ticket.melon.com/performance/index.htm?prodId=214999';
+    const candidate = {
+      name: 'WONDERLIVET 2026',
+      venue: 'KINTEX',
+      date: '2026.11.20 - 2026.11.22',
+      url: melon,
+      artists: [{ name: 'The Shepherd Bois' }],
+    };
+    const proof = {
+      ...candidate,
+      ...(reason === 'another event'
+        ? { date: '2026.11.21 - 2026.11.22' }
+        : {}),
+    };
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([{ candidate }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ url: verifiedUrl, candidate: proof }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    const detail = await service.detail(
+      discoverySummaries([{ candidate }])[0].id,
+    );
+    expect(detail.artists).toContainEqual({
+      name: 'The Shepherd Bois',
+      imageUrl: null,
+    });
+    expect(
+      (query.mock.calls as unknown as [string, [string[]]][])[3][1][0],
+    ).toEqual([melon]);
   });
 
   it('uses a reviewed alternate artist name for the lineup and timetable', async () => {

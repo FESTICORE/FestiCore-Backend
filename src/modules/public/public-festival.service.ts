@@ -22,6 +22,12 @@ import {
   DiscoverySummary,
   PublishedDiscoveryRow,
 } from './crawl-catalog';
+import {
+  WONDERLIVET_DETAIL_SEED,
+  WONDERLIVET_LINK_PAGE,
+  WONDERLIVET_TICKET_SEED,
+} from '../admin/crawl/service/wonderlivet-ticket-link';
+import { WONDERLIVET_FESTIVAL_URL } from '../admin/crawl/service/wonderlivet-lineup';
 
 type Document = Record<string, unknown>;
 
@@ -336,6 +342,7 @@ export class PublicFestivalService {
        WHERE published IS NOT NULL AND "publishedVersion" > 0`,
     );
     const summaries = discoverySummaries(discoveryRows, publishedRows);
+    await this.attachVerifiedWonderlivetTicket(summaries);
     const festivalSourceUrl = 'https://mintpaper.co.kr/festivals/178';
     const related = summaries.filter(
       (summary) =>
@@ -514,6 +521,112 @@ export class PublicFestivalService {
       ].slice(0, 5);
     }
     return summaries;
+  }
+
+  private async attachVerifiedWonderlivetTicket(
+    summaries: DiscoverySummary[],
+  ): Promise<void> {
+    const eventName = /^WONDERLIVET 2026(?: \(원더리벳 2026\))?$/;
+    if (
+      !summaries.some(
+        (summary) =>
+          eventName.test(summary.name) &&
+          summary.firstDate === '2026-11-20' &&
+          summary.lastDate === '2026-11-22' &&
+          /^https:\/\/ticket\.melon\.com\/performance\/index\.htm\?prodId=[1-9]\d*$/.test(
+            summary.sourceUrl,
+          ),
+      )
+    )
+      return;
+    const rows = await this.dataSource.query<
+      { url: string; candidate: unknown }[]
+    >(
+      `SELECT child.url, latest.candidate
+       FROM crawl_sources parent
+       JOIN crawl_runs verified ON verified.id::text =
+         parent."parserConfig"->>'verifiedRunId'
+       JOIN crawl_sources child ON child.url =
+         parent."parserConfig"->>'verifiedTicketUrl'
+       JOIN LATERAL (
+         SELECT run.result, run."contentHash" FROM crawl_runs run
+         WHERE run."sourceId" = child.id
+         ORDER BY run."startedAt" DESC, run.id DESC LIMIT 1
+       ) childRun ON childRun.result IN ('proposed', 'unchanged')
+       JOIN LATERAL (
+         SELECT p.status, p."runId", item->>'decision' AS decision,
+           item->'after' AS candidate
+         FROM crawl_proposals p
+         CROSS JOIN LATERAL jsonb_array_elements(p.items) item
+         WHERE p."sourceId" = child.id AND p.kind = 'festival.new'
+           AND item->'after'->>'url' = child.url
+         ORDER BY p."createdAt" DESC, p.id DESC
+         LIMIT 1
+       ) latest ON true
+       JOIN crawl_runs proposedRun ON proposedRun.id = latest."runId"
+         AND proposedRun."sourceId" = child.id
+         AND proposedRun.result = 'proposed'
+         AND proposedRun."contentHash" IS NOT NULL
+         AND proposedRun."contentHash" = childRun."contentHash"
+       WHERE parent.kind = 'discovery' AND parent.url = $1::text
+         AND parent.enabled = true
+         AND parent."parserConfig"->>'seed' = $2::text
+         AND parent."parserConfig"->>'festivalSourceUrl' = $3::text
+         AND verified."sourceId" = parent.id
+         AND verified.result IN ('nochange-parsed', 'unchanged')
+         AND NOT EXISTS (
+           SELECT 1 FROM crawl_runs newer
+           WHERE newer."sourceId" = parent.id
+             AND newer."startedAt" > verified."startedAt"
+         )
+         AND child.kind = 'discovery' AND child.enabled = true
+         AND child."parserConfig"->>'seed' = $4::text
+         AND child."parserConfig"->>'festivalSourceUrl' = $3::text
+         AND child."parserConfig"->'festivalSourceUrls' =
+           jsonb_build_array(child.url, $3::text)
+         AND latest.status IS DISTINCT FROM 'rejected'
+         AND latest.decision IS DISTINCT FROM 'rejected'`,
+      [
+        WONDERLIVET_LINK_PAGE,
+        WONDERLIVET_TICKET_SEED,
+        WONDERLIVET_FESTIVAL_URL,
+        WONDERLIVET_DETAIL_SEED,
+      ],
+    );
+    for (const row of rows) {
+      if (
+        !/^https:\/\/ticket\.melon\.com\/performance\/index\.htm\?prodId=[1-9]\d*$/.test(
+          row.url,
+        )
+      )
+        continue;
+      const candidate = row.candidate;
+      if (
+        !object(candidate) ||
+        candidate.url !== row.url ||
+        typeof candidate.name !== 'string' ||
+        !eventName.test(candidate.name)
+      )
+        continue;
+      const verified = discoverySummaries([{ candidate }]);
+      if (
+        verified.length !== 1 ||
+        verified[0].firstDate !== '2026-11-20' ||
+        verified[0].lastDate !== '2026-11-22'
+      )
+        continue;
+      for (const summary of summaries) {
+        if (
+          summary.sourceUrl !== row.url ||
+          !eventName.test(summary.name) ||
+          summary.firstDate !== verified[0].firstDate ||
+          summary.lastDate !== verified[0].lastDate
+        )
+          continue;
+        if (!summary.sourceUrls.includes(WONDERLIVET_FESTIVAL_URL))
+          summary.sourceUrls.push(WONDERLIVET_FESTIVAL_URL);
+      }
+    }
   }
 
   async discovered(id: string): Promise<DiscoverySummary | null> {
