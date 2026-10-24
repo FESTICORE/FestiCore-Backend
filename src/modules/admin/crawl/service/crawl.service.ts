@@ -929,18 +929,24 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       throw new Error('공식 예매 링크의 축제 연결이 올바르지 않습니다.');
     if (!Array.isArray(parsed) || !parsed.length)
       throw new Error('공식 예매 링크를 찾지 못했습니다.');
+    const urls = parsed.map((item: unknown) =>
+      item && typeof item === 'object' && 'url' in item ? item.url : null,
+    );
+    if (
+      urls.length > 5 ||
+      urls.some(
+        (url) =>
+          typeof url !== 'string' ||
+          !/^https:\/\/nol\.yanolja\.com\/ticket\/products\/\d+$/.test(url),
+      )
+    )
+      throw new Error('공식 NOL 상품 링크가 올바르지 않습니다.');
     const detailConfig = JSON.stringify({
       seed: 'official-ticket-link-detail',
       festivalSourceUrl,
       festivalSourceUrls: [festivalSourceUrl],
     });
-    for (const item of parsed) {
-      const url = (item as { url?: unknown }).url;
-      if (
-        typeof url !== 'string' ||
-        !/^https:\/\/nol\.yanolja\.com\/ticket\/products\/\d+$/.test(url)
-      )
-        throw new Error('공식 NOL 상품 링크가 올바르지 않습니다.');
+    for (const url of urls as string[]) {
       await this.dataSource.query(
         `UPDATE crawl_sources SET "parserConfig" = "parserConfig" || $2::jsonb,
            "updatedAt" = now()
@@ -966,10 +972,18 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         rows[0]?.parserConfig.seed !== 'official-ticket-link-detail' ||
         rows[0]?.parserConfig.festivalSourceUrl !== festivalSourceUrl
       )
-        this.logger.warn(
-          `기존 NOL 크롤 소스 설정이 달라 자동 변경하지 않았습니다: ${url}`,
-        );
+        throw new Error(`기존 NOL 크롤 소스 설정이 다릅니다: ${url}`);
     }
+    const updated = await this.dataSource.query<{ id: string }[]>(
+      `UPDATE crawl_sources SET "parserConfig" = "parserConfig" ||
+         jsonb_build_object('verifiedTicketUrls', $2::text), "updatedAt" = now()
+       WHERE id = $1 AND "parserConfig"->>'seed' = 'official-ticket-links'
+         AND "parserConfig"->>'festivalSourceUrl' = $3
+       RETURNING id`,
+      [source.id, JSON.stringify(urls), festivalSourceUrl],
+    );
+    if (!updated.length)
+      throw new Error('공식 예매 링크 부모 소스 설정이 변경되었습니다.');
   }
 
   private async syncXmfArtistAliases(

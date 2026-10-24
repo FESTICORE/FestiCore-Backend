@@ -36,6 +36,10 @@ type PrivateCrawl = {
   execute(run: CrawlRun, source: CrawlSource): Promise<void>;
   getListing(source: CrawlSource): Promise<{ status: number; body: string }>;
   syncXmfArtistAliases(source: CrawlSource, body: string): Promise<void>;
+  reconcileOfficialTicketLinks(
+    source: CrawlSource,
+    parsed: unknown,
+  ): Promise<void>;
 };
 
 const XMF_NOTICE_HTML = `<div class="acd_row"><h4>[XMF 2026 최종 라인업 공개]</h4>
@@ -1151,16 +1155,18 @@ describe('CrawlService manual runs and snapshots', () => {
       body: `<script id="__NEXT_DATA__" type="application/json">${JSON.stringify({ props: { apolloState: { data: { 'Post:4821': post } } } })}</script>`,
     });
     dataSource.query.mockImplementation((sql: string) =>
-      sql.includes('SELECT "parserConfig"')
-        ? [
-            {
-              parserConfig: {
-                seed: 'official-ticket-link-detail',
-                festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
+      sql.includes('RETURNING id')
+        ? [{ id: source.id }]
+        : sql.includes('SELECT "parserConfig"')
+          ? [
+              {
+                parserConfig: {
+                  seed: 'official-ticket-link-detail',
+                  festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
+                },
               },
-            },
-          ]
-        : [],
+            ]
+          : [],
     );
     runsRepo.createQueryBuilder = jest.fn(() => ({
       where: jest.fn().mockReturnThis(),
@@ -1195,6 +1201,48 @@ describe('CrawlService manual runs and snapshots', () => {
       `"parserConfig"->>'festivalSourceUrl' = $3`,
     );
     expect(statements[0][1][2]).toBe('https://mintpaper.co.kr/festivals/178');
+    const verifiedUpdate = statements.find(([sql]) =>
+      sql.includes("'verifiedTicketUrls'"),
+    );
+    expect(verifiedUpdate?.[0]).toContain('RETURNING id');
+    expect(verifiedUpdate?.[1]).toEqual([
+      source.id,
+      '["https://nol.yanolja.com/ticket/products/26014568"]',
+      'https://mintpaper.co.kr/festivals/178',
+    ]);
+  });
+
+  it('fails when the official parent changes before the verified URL set is saved', async () => {
+    const { service, source, dataSource } = harness();
+    source.parserConfig = {
+      seed: 'official-ticket-links',
+      festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
+    };
+    dataSource.query.mockImplementation((sql: string) =>
+      sql.includes('SELECT "parserConfig"')
+        ? [
+            {
+              parserConfig: {
+                seed: 'official-ticket-link-detail',
+                festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
+              },
+            },
+          ]
+        : [],
+    );
+    await expect(
+      service.reconcileOfficialTicketLinks(source, [
+        { url: 'https://nol.yanolja.com/ticket/products/26014568' },
+      ]),
+    ).rejects.toThrow('부모 소스 설정이 변경');
+    expect(dataSource.query).toHaveBeenCalledWith(
+      expect.stringContaining("'verifiedTicketUrls'"),
+      [
+        source.id,
+        '["https://nol.yanolja.com/ticket/products/26014568"]',
+        'https://mintpaper.co.kr/festivals/178',
+      ],
+    );
   });
 
   it('reconciles an official NOL link even when the notice content is unchanged', async () => {
@@ -1219,16 +1267,18 @@ describe('CrawlService manual runs and snapshots', () => {
       }),
     }));
     dataSource.query.mockImplementation((sql: string) =>
-      sql.includes('SELECT "parserConfig"')
-        ? [
-            {
-              parserConfig: {
-                seed: 'official-ticket-link-detail',
-                festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
+      sql.includes('RETURNING id')
+        ? [{ id: source.id }]
+        : sql.includes('SELECT "parserConfig"')
+          ? [
+              {
+                parserConfig: {
+                  seed: 'official-ticket-link-detail',
+                  festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
+                },
               },
-            },
-          ]
-        : [],
+            ]
+          : [],
     );
     const proposals = jest.spyOn(service, 'proposalItems');
 
@@ -1353,9 +1403,10 @@ describe('CrawlService manual runs and snapshots', () => {
 
     await service.execute(run, source);
 
-    expect(run.result).toBe('nochange-parsed');
+    expect(run.result).toBe('failed');
+    expect(run.error).toBe('PARSE');
     expect(warning).toHaveBeenCalledWith(
-      '기존 NOL 크롤 소스 설정이 달라 자동 변경하지 않았습니다: https://nol.yanolja.com/ticket/products/26014568',
+      expect.stringContaining('크롤 처리 실패:'),
     );
     const update = (
       dataSource.query.mock.calls as unknown as [string, string[]][]

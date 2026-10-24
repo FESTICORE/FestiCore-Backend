@@ -847,8 +847,7 @@ describe('crawl parsers', () => {
       content:
         '<p>COUNTDOWN FANTASY 2026-2027 일시 : 2026년 12월 31일(목)</p>' +
         '<a href="https://nol.yanolja.com/ticket/products/26014568">NOL</a>' +
-        '<a href="https://nol.yanolja.com/ticket/products/26014568">NOL 중복</a>' +
-        '<a href="https://nol.yanolja.com/ticket/products/999?ref=other">무관</a>',
+        '<a href="https://nol.yanolja.com/ticket/products/26014568">NOL 중복</a>',
     };
     const html = (value: typeof post) =>
       `<script id="__NEXT_DATA__" type="application/json">${JSON.stringify({ props: { apolloState: { data: { 'Post:4821': value } } } })}</script>`;
@@ -858,6 +857,41 @@ describe('crawl parsers', () => {
         url: 'https://nol.yanolja.com/ticket/products/26014568',
       },
     ]);
+    for (const invalid of [
+      'https://nol.yanolja.com/ticket/products/999?ref=other',
+      'https://nol.yanolja.com/ticket/products/999/',
+      'http://nol.yanolja.com/ticket/products/999',
+      'https://NOL.yanolja.com/ticket/products/999',
+      'https://nol.yanolja.com/ticket/places/999',
+    ]) {
+      await expect(
+        parseCrawl(
+          mint,
+          html({
+            ...post,
+            content: `${post.content}<a href="${invalid}">NOL</a>`,
+          }),
+        ),
+      ).rejects.toThrow('공개 예매 링크');
+    }
+    await expect(
+      parseCrawl(
+        mint,
+        html({
+          ...post,
+          content: `${post.content}<a href=https://nol.yanolja.com/ticket/places/999>NOL</a>`,
+        }),
+      ),
+    ).rejects.toThrow('공개 예매 링크');
+    await expect(
+      parseCrawl(
+        mint,
+        html({
+          ...post,
+          content: `${post.content}${Array.from({ length: 5 }, (_, i) => `<a href="https://nol.yanolja.com/ticket/products/${i + 1}">NOL</a>`).join('')}`,
+        }),
+      ),
+    ).rejects.toThrow('공개 예매 링크');
     await expect(
       parseCrawl(mint, html({ ...post, title: '다른 공연 안내' })),
     ).rejects.toThrow('공개 예매 링크');
