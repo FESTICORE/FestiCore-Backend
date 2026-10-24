@@ -157,12 +157,24 @@ function mintPaperOfficialTicketLinks(
       ) !== '2026.12.31'
     )
       return [];
-    const urls = [
+    const hrefs = [
       ...post.content.matchAll(
-        /<a\b[^>]*\bhref=["'](https:\/\/nol\.yanolja\.com\/ticket\/products\/\d+)["'][^>]*>/gi,
+        /<a\b[^>]*\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>/gi,
       ),
-    ].map((match) => match[1]);
-    return [...new Set(urls)].slice(0, 5).map((url) => ({
+    ].map((match) => match[1] ?? match[2] ?? match[3]);
+    const urls = hrefs.filter((href) =>
+      href.toLowerCase().includes('nol.yanolja.com'),
+    );
+    if (
+      urls.some(
+        (url) =>
+          !/^https:\/\/nol\.yanolja\.com\/ticket\/products\/\d+$/.test(url),
+      )
+    )
+      return [];
+    const uniqueUrls = [...new Set(urls)];
+    if (!uniqueUrls.length || uniqueUrls.length > 5) return [];
+    return uniqueUrls.map((url) => ({
       name: 'COUNTDOWN FANTASY 2026-2027',
       url,
     }));

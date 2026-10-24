@@ -318,7 +318,89 @@ export class PublicFestivalService {
        FROM admin_festivals
        WHERE published IS NOT NULL AND "publishedVersion" > 0`,
     );
-    return discoverySummaries(discoveryRows, publishedRows);
+    const summaries = discoverySummaries(discoveryRows, publishedRows);
+    const festivalSourceUrl = 'https://mintpaper.co.kr/festivals/178';
+    const related = summaries.filter(
+      (summary) =>
+        summary.sourceUrl === festivalSourceUrl ||
+        summary.ticketLinks.some((link) => link.url === festivalSourceUrl),
+    );
+    if (!related.length) return summaries;
+
+    const linkRows = await this.dataSource.query<
+      { url: string; verifiedTicketUrls: string }[]
+    >(
+      `SELECT child.url, parent."parserConfig"->>'verifiedTicketUrls' AS "verifiedTicketUrls"
+       FROM crawl_sources parent JOIN crawl_sources child
+         ON child."parserConfig"->>'festivalSourceUrl' =
+            parent."parserConfig"->>'festivalSourceUrl'
+       WHERE parent.url = $1 AND parent.enabled = true AND child.enabled = true
+         AND parent."parserConfig"->>'seed' = 'official-ticket-links'
+         AND parent."parserConfig"->>'festivalSourceUrl' = $2
+         AND child."parserConfig"->>'seed' = 'official-ticket-link-detail'
+       ORDER BY child.url`,
+      ['https://www.mintpaper.co.kr/posts/4821', festivalSourceUrl],
+    );
+    const verifiedUrls: string[] = [];
+    let noticeOrder: string[] = [];
+    for (const row of linkRows) {
+      let allowed: unknown;
+      try {
+        allowed = JSON.parse(row.verifiedTicketUrls);
+      } catch {
+        continue;
+      }
+      if (
+        !Array.isArray(allowed) ||
+        allowed.length > 5 ||
+        !allowed.every(
+          (url) =>
+            typeof url === 'string' &&
+            /^https:\/\/nol\.yanolja\.com\/ticket\/products\/\d+$/.test(url),
+        ) ||
+        !allowed.includes(row.url) ||
+        verifiedUrls.includes(row.url)
+      )
+        continue;
+      if (!noticeOrder.length) noticeOrder = allowed as string[];
+      verifiedUrls.push(row.url);
+    }
+    verifiedUrls.sort(
+      (a, b) => noticeOrder.indexOf(a) - noticeOrder.indexOf(b),
+    );
+    for (const summary of related) {
+      if (
+        /^https:\/\/nol\.yanolja\.com\/ticket\/products\//.test(
+          summary.sourceUrl,
+        )
+      )
+        summary.sourceUrl = festivalSourceUrl;
+      const primary = summary.ticketLinks.find(
+        (link) =>
+          link.url === summary.sourceUrl &&
+          (link.label !== 'NOL' || verifiedUrls.includes(link.url)),
+      );
+      const nol = verifiedUrls
+        .filter((url) => url !== primary?.url)
+        .map((url) => ({ label: 'NOL', url }));
+      const other = summary.ticketLinks.filter(
+        (link) =>
+          link.url !== primary?.url &&
+          link.label !== 'NOL' &&
+          !/^https:\/\/nol\.yanolja\.com\//.test(link.url) &&
+          link.label !== '공식 인스타그램',
+      );
+      const instagram = summary.ticketLinks.filter(
+        (link) => link.label === '공식 인스타그램',
+      );
+      summary.ticketLinks = [
+        ...(primary ? [primary] : []),
+        ...nol,
+        ...other,
+        ...instagram,
+      ].slice(0, 5);
+    }
+    return summaries;
   }
 
   private async attachStoredImages(
