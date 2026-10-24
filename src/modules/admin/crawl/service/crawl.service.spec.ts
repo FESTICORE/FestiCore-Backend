@@ -8,6 +8,11 @@ import sharp from 'sharp';
 import * as imageOcr from './timetable-image-ocr';
 import * as artistGallery from './artist-gallery';
 import {
+  WONDERLIVET_FESTIVAL_URL,
+  WONDERLIVET_IMAGE_ORIGIN,
+  WONDERLIVET_LINEUP_URL,
+} from './wonderlivet-lineup';
+import {
   CreateCrawlSourceDto,
   UpdateCrawlSourceDto,
 } from '../dto/crawl-source.dto';
@@ -1227,6 +1232,320 @@ describe('CrawlService manual runs and snapshots', () => {
     );
     gallery.mockRestore();
     warning.mockRestore();
+  });
+
+  it('reconciles official Wonderlivet artist sources from a complete JSON response', async () => {
+    const { service, source, run, execute, dataSource } = harness();
+    execute.mockRestore();
+    source.kind = 'artist-gallery';
+    source.url = WONDERLIVET_LINEUP_URL;
+    source.parser = 'html-text';
+    source.parserConfig = { festivalSourceUrl: WONDERLIVET_FESTIVAL_URL };
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({
+      status: 200,
+      body: JSON.stringify({
+        result: {
+          data: {
+            json: {
+              dataState: 'ready',
+              isComingSoon: false,
+              artists: [
+                {
+                  name: 'Official Act',
+                  performanceDay: 'DAY2',
+                  isPublished: true,
+                  imageUrl: `${WONDERLIVET_IMAGE_ORIGIN}/lineup/artists/production/live/day2/official-123.webp`,
+                },
+              ],
+            },
+          },
+        },
+      }),
+    });
+    dataSource.query.mockImplementation((sql: string) =>
+      Promise.resolve(sql.includes('RETURNING id') ? [[], 0] : []),
+    );
+
+    await service.execute(run, source);
+
+    const calls = dataSource.query.mock.calls as unknown as [
+      string,
+      unknown[],
+    ][];
+    const insert = calls.find(([sql]) => sql.includes("SELECT 'artist-image'"));
+    expect(insert?.[1]).toEqual([
+      WONDERLIVET_LINEUP_URL,
+      WONDERLIVET_FESTIVAL_URL,
+      'Official Act',
+      '/lineup/artists/production/live/day2/official-123.webp',
+    ]);
+    expect(run.result).toBe('nochange-parsed');
+  });
+
+  it('preserves existing Wonderlivet artist sources on upstream JSON failure', async () => {
+    const { service, source, run, execute, dataSource } = harness();
+    execute.mockRestore();
+    source.kind = 'artist-gallery';
+    source.url = WONDERLIVET_LINEUP_URL;
+    source.parser = 'html-text';
+    source.parserConfig = { festivalSourceUrl: WONDERLIVET_FESTIVAL_URL };
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({
+      status: 200,
+      body: JSON.stringify({ error: { json: { message: 'Failed query' } } }),
+    });
+
+    await service.execute(run, source);
+
+    expect(run.result).toBe('failed');
+    const mutations = dataSource.query.mock.calls.map(([sql]) => String(sql));
+    expect(
+      mutations.filter((sql) => sql.includes("kind = 'artist-image'")),
+    ).toEqual([]);
+  });
+
+  it('disables only previously enabled official children absent from a complete published lineup', async () => {
+    const { service, source, run, execute, dataSource } = harness();
+    execute.mockRestore();
+    source.kind = 'artist-gallery';
+    source.url = WONDERLIVET_LINEUP_URL;
+    source.parser = 'html-text';
+    source.parserConfig = { festivalSourceUrl: WONDERLIVET_FESTIVAL_URL };
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({
+      status: 200,
+      body: JSON.stringify({
+        result: {
+          data: {
+            json: {
+              dataState: 'ready',
+              isComingSoon: false,
+              artists: [
+                {
+                  name: 'Former Act',
+                  performanceDay: 'DAY1',
+                  isPublished: false,
+                  imageUrl: null,
+                },
+                {
+                  name: 'Current Act',
+                  performanceDay: 'DAY2',
+                  isPublished: true,
+                  imageUrl: `${WONDERLIVET_IMAGE_ORIGIN}/lineup/artists/production/live/day2/current.webp`,
+                },
+              ],
+            },
+          },
+        },
+      }),
+    });
+    dataSource.query.mockImplementation((sql: string) =>
+      Promise.resolve(
+        sql.includes('SELECT id, "parserConfig"')
+          ? [
+              {
+                id: '00000000-0000-4000-8000-000000000001',
+                artistName: 'Former Act',
+              },
+            ]
+          : [],
+      ),
+    );
+
+    await service.execute(run, source);
+
+    const disable = (
+      dataSource.query.mock.calls as unknown as [string, unknown[]][]
+    ).find(([sql]) => sql.includes("'disabledBy', 'official-lineup'"));
+    expect(disable?.[0]).toContain('AND enabled = true');
+    expect(disable?.[1]).toEqual([
+      WONDERLIVET_LINEUP_URL,
+      WONDERLIVET_FESTIVAL_URL,
+      [],
+      ['00000000-0000-4000-8000-000000000001'],
+    ]);
+    expect(run.result).toBe('nochange-parsed');
+  });
+
+  it('updates a normalized name match without creating a second image owner', async () => {
+    const { service, source, run, execute, dataSource } = harness();
+    execute.mockRestore();
+    source.kind = 'artist-gallery';
+    source.url = WONDERLIVET_LINEUP_URL;
+    source.parser = 'html-text';
+    source.parserConfig = { festivalSourceUrl: WONDERLIVET_FESTIVAL_URL };
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({
+      status: 200,
+      body: JSON.stringify({
+        result: {
+          data: {
+            json: {
+              dataState: 'ready',
+              isComingSoon: false,
+              artists: [
+                {
+                  name: 'ACT A',
+                  performanceDay: 'DAY1',
+                  isPublished: true,
+                  imageUrl: `${WONDERLIVET_IMAGE_ORIGIN}/lineup/artists/production/live/day1/new.webp`,
+                },
+              ],
+            },
+          },
+        },
+      }),
+    });
+    dataSource.query.mockImplementation((sql: string) =>
+      Promise.resolve(
+        sql.includes('SELECT id, "parserConfig"')
+          ? [
+              {
+                id: '00000000-0000-4000-8000-000000000002',
+                artistName: 'ＡＣＴ Ａ',
+              },
+            ]
+          : [],
+      ),
+    );
+
+    await service.execute(run, source);
+
+    const calls = dataSource.query.mock.calls as unknown as [
+      string,
+      unknown[],
+    ][];
+    expect(calls.some(([sql]) => sql.includes("SELECT 'artist-image'"))).toBe(
+      false,
+    );
+    const update = calls.find(([sql]) => sql.includes('previousImageHint'));
+    expect(update?.[1]).toEqual([
+      '00000000-0000-4000-8000-000000000002',
+      'ACT A',
+      '/lineup/artists/production/live/day1/new.webp',
+      WONDERLIVET_LINEUP_URL,
+    ]);
+    expect(update?.[0]).toContain(
+      'COALESCE("parserConfig"->>\'previousImageHint\'',
+    );
+  });
+
+  it('selects only the matching official Wonderlivet image for an artist source', async () => {
+    const { service, source, run, execute, runsRepo, dataSource } = harness();
+    execute.mockRestore();
+    source.kind = 'artist-image';
+    source.url = WONDERLIVET_LINEUP_URL;
+    source.parser = 'html-text';
+    source.parserConfig = {
+      seed: 'official-wonderlivet-lineup',
+      artistName: 'Official Act',
+      festivalSourceUrl: WONDERLIVET_FESTIVAL_URL,
+      imageHint: '/lineup/artists/production/live/day1/official-123.webp',
+    };
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({
+      status: 200,
+      body: JSON.stringify({
+        result: {
+          data: {
+            json: {
+              dataState: 'ready',
+              isComingSoon: false,
+              artists: [
+                {
+                  name: 'Official Act',
+                  performanceDay: 'DAY1',
+                  isPublished: true,
+                  imageUrl: `${WONDERLIVET_IMAGE_ORIGIN}/lineup/artists/production/live/day1/official-123.webp`,
+                },
+              ],
+            },
+          },
+        },
+      }),
+    });
+    const capture = jest
+      .spyOn(
+        service as unknown as {
+          captureImages: (...args: unknown[]) => Promise<string[]>;
+        },
+        'captureImages',
+      )
+      .mockResolvedValue(['/api/v1/admin/crawl/images/image-1']);
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(null),
+    }));
+
+    await service.execute(run, source);
+
+    expect(capture.mock.calls[0][2]).toEqual([
+      new URL(
+        `${WONDERLIVET_IMAGE_ORIGIN}/lineup/artists/production/live/day1/official-123.webp`,
+      ),
+    ]);
+    expect(run.result).toBe('nochange-parsed');
+    expect(
+      dataSource.query.mock.calls.some(([sql]) =>
+        String(sql).includes("- 'previousImageHint'"),
+      ),
+    ).toBe(true);
+  });
+
+  it('keeps the previous official image path when replacement capture fails', async () => {
+    const { service, source, run, execute, dataSource } = harness();
+    execute.mockRestore();
+    source.kind = 'artist-image';
+    source.url = WONDERLIVET_LINEUP_URL;
+    source.parser = 'html-text';
+    source.parserConfig = {
+      seed: 'official-wonderlivet-lineup',
+      artistName: 'Official Act',
+      festivalSourceUrl: WONDERLIVET_FESTIVAL_URL,
+      imageHint: '/lineup/artists/production/live/day1/new.webp',
+      previousImageHint: '/lineup/artists/production/live/day1/old.webp',
+    };
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({
+      status: 200,
+      body: JSON.stringify({
+        result: {
+          data: {
+            json: {
+              dataState: 'ready',
+              isComingSoon: false,
+              artists: [
+                {
+                  name: 'Official Act',
+                  performanceDay: 'DAY1',
+                  isPublished: true,
+                  imageUrl: `${WONDERLIVET_IMAGE_ORIGIN}/lineup/artists/production/live/day1/new.webp`,
+                },
+              ],
+            },
+          },
+        },
+      }),
+    });
+    jest
+      .spyOn(
+        service as unknown as {
+          captureImages: (...args: unknown[]) => Promise<string[]>;
+        },
+        'captureImages',
+      )
+      .mockRejectedValue(new Error('image download failed'));
+
+    await service.execute(run, source);
+
+    expect(run.result).toBe('failed');
+    expect(
+      dataSource.query.mock.calls.some(([sql]) =>
+        String(sql).includes("- 'previousImageHint'"),
+      ),
+    ).toBe(false);
   });
 
   it('reparses an unchanged English YES24 listing after the parser update', async () => {

@@ -36,6 +36,11 @@ import { extractTimetableImageCandidates } from './timetable-image-ocr';
 import { crawlArtistGallery } from './artist-gallery';
 import { timetableSourceConfig } from './timetable-source-config';
 import { normalizeArtistName } from '../../../../common/artist-name';
+import {
+  parseWonderlivetLineup,
+  WONDERLIVET_FESTIVAL_URL,
+  WONDERLIVET_LINEUP_URL,
+} from './wonderlivet-lineup';
 
 const kstDay = (date = new Date()) =>
   new Intl.DateTimeFormat('en-CA', {
@@ -57,18 +62,25 @@ function artistImageConfig(config: Record<string, string>) {
       '유효한 festivalSourceUrl이 필요합니다.',
     );
   }
+  const officialWonderlivet =
+    config.seed === 'official-wonderlivet-lineup' &&
+    festival.toString() === WONDERLIVET_FESTIVAL_URL &&
+    /^\/lineup\/artists\/production\/live\/day[123]\/[a-z0-9-]{1,110}\.webp$/.test(
+      imageHint ?? '',
+    );
   if (
-    ![
-      'ticket.melon.com',
-      'ticket.yes24.com',
-      'nol.yanolja.com',
-      'mintpaper.co.kr',
-    ].includes(festival.hostname) ||
+    (!officialWonderlivet &&
+      ![
+        'ticket.melon.com',
+        'ticket.yes24.com',
+        'nol.yanolja.com',
+        'mintpaper.co.kr',
+      ].includes(festival.hostname)) ||
     !artistName?.trim() ||
     artistName.length > 160 ||
     !imageHint?.trim() ||
     imageHint.length < 8 ||
-    imageHint.length > 120 ||
+    imageHint.length > (officialWonderlivet ? 180 : 120) ||
     /[\s<>"']/.test(imageHint) ||
     (artistAlias !== undefined &&
       (typeof artistAlias !== 'string' ||
@@ -100,12 +112,14 @@ function artistGalleryConfig(url: string, config: Record<string, string>) {
       '유효한 공식 갤러리 URL과 festivalSourceUrl이 필요합니다.',
     );
   }
-  if (
-    source.hostname !== 'xmfestival.com' ||
-    source.pathname !== '/lineup' ||
-    festival.toString() !==
-      'https://ticket.melon.com/performance/index.htm?prodId=213766'
-  )
+  if (!(
+    (source.hostname === 'xmfestival.com' &&
+      source.pathname === '/lineup' &&
+      festival.toString() ===
+        'https://ticket.melon.com/performance/index.htm?prodId=213766') ||
+    (source.toString() === WONDERLIVET_LINEUP_URL &&
+      festival.toString() === WONDERLIVET_FESTIVAL_URL)
+  ))
     throw new UnprocessableEntityException(
       '지원되는 공식 갤러리와 축제 연결 주소가 필요합니다.',
     );
@@ -299,6 +313,13 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
           ? artistImageConfig({ ...before.parserConfig, ...dto.parserConfig })
           : dto.parserConfig;
       if (parserConfig) locked.parserConfig = parserConfig;
+      if (
+        dto.enabled !== undefined &&
+        locked.parserConfig.seed === 'official-wonderlivet-lineup'
+      ) {
+        locked.parserConfig = { ...locked.parserConfig };
+        delete locked.parserConfig.disabledBy;
+      }
       if (dto.enabled !== undefined)
         locked.status = dto.enabled ? 'ok' : 'disabled';
       const saved = await repo.save(locked);
@@ -385,7 +406,9 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     return {
       parsed:
         source.kind === 'artist-gallery'
-          ? await crawlArtistGallery(response.body, source.url)
+          ? source.url === WONDERLIVET_LINEUP_URL
+            ? parseWonderlivetLineup(response.body)
+            : await crawlArtistGallery(response.body, source.url)
           : await parseCrawl(source, response.body),
       excerpt: plainText(response.body).slice(0, 500),
     };
@@ -671,6 +694,88 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       if (source.kind === 'artist-gallery') {
         phase = 'PARSE';
         const config = artistGalleryConfig(source.url, source.parserConfig);
+        if (source.url === WONDERLIVET_LINEUP_URL) {
+          const entries = parseWonderlivetLineup(response.body);
+          const rows = await this.dataSource.query<
+            { id: string; artistName: string }[]
+          >(
+            `SELECT id, "parserConfig"->>'artistName' AS "artistName"
+             FROM crawl_sources WHERE kind = 'artist-image' AND url = $1::text
+               AND "parserConfig"->>'festivalSourceUrl' = $2::text
+               AND "parserConfig"->>'seed' = 'official-wonderlivet-lineup'`,
+            [source.url, config.festivalSourceUrl],
+          );
+          const owners = new Map<string, { id: string; artistName: string }>();
+          for (const row of rows) {
+            const key = normalizeArtistName(row.artistName);
+            if (owners.has(key))
+              throw new Error('공식 라인업의 기존 출연진 소스가 중복됩니다.');
+            owners.set(key, row);
+          }
+          const seenIds: string[] = [];
+          for (const entry of entries) {
+            const imageHint = entry.imageUrl.pathname;
+            const existing = owners.get(normalizeArtistName(entry.artistName));
+            if (existing) {
+              seenIds.push(existing.id);
+              await this.dataSource.query(
+                `UPDATE crawl_sources SET
+                   "parserConfig" = ("parserConfig" - 'disabledBy') ||
+                     jsonb_build_object('artistName', $2::text, 'imageHint', $3::text,
+                       'previousImageHint', COALESCE("parserConfig"->>'previousImageHint',
+                         "parserConfig"->>'imageHint')),
+                   enabled = CASE WHEN "parserConfig"->>'disabledBy' = 'official-lineup'
+                     THEN true ELSE enabled END,
+                   status = CASE WHEN "parserConfig"->>'disabledBy' = 'official-lineup'
+                     THEN 'ok' ELSE status END,
+                   "updatedAt" = now()
+                 WHERE id = $1::uuid AND kind = 'artist-image'
+                   AND url = $4::text
+                   AND "parserConfig"->>'seed' = 'official-wonderlivet-lineup'`,
+                [existing.id, entry.artistName, imageHint, source.url],
+              );
+              continue;
+            }
+            await this.dataSource.query(
+              `INSERT INTO crawl_sources (kind, url, parser, "parserConfig", "createdAt")
+               SELECT 'artist-image', $1::text, 'html-text',
+                 jsonb_build_object('seed', 'official-wonderlivet-lineup',
+                   'festivalSourceUrl', $2::text, 'artistName', $3::text,
+                   'imageHint', $4::text), now() - interval '1 day'
+               WHERE NOT EXISTS (
+                 SELECT 1 FROM crawl_sources WHERE kind = 'artist-image' AND url = $1::text
+                   AND "parserConfig"->>'festivalSourceUrl' = $2::text
+                   AND "parserConfig"->>'artistName' = $3::text
+               )`,
+              [
+                source.url,
+                config.festivalSourceUrl,
+                entry.artistName,
+                imageHint,
+              ],
+            );
+          }
+          await this.dataSource.query(
+            `UPDATE crawl_sources SET enabled = false, status = 'disabled',
+               "parserConfig" = "parserConfig" || jsonb_build_object('disabledBy', 'official-lineup'),
+               "updatedAt" = now()
+             WHERE kind = 'artist-image' AND url = $1::text
+               AND "parserConfig"->>'festivalSourceUrl' = $2::text
+               AND "parserConfig"->>'seed' = 'official-wonderlivet-lineup'
+               AND enabled = true AND id = ANY($4::uuid[])
+               AND NOT (id = ANY($3::uuid[]))`,
+            [
+              source.url,
+              config.festivalSourceUrl,
+              seenIds,
+              rows.map((row) => row.id),
+            ],
+          );
+          run.result = 'nochange-parsed';
+          source.lastChangedAt = new Date();
+          source.status = 'ok';
+          return;
+        }
         const officialTicketLink = [
           ...response.body.matchAll(/<a\b[^>]*\bhref=["']([^"']+)["']/gi),
         ].some((link) => {
@@ -767,11 +872,18 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       }
       const profileImage =
         source.kind === 'artist-image'
-          ? artistProfileImageUrl(
-              response.body,
-              source.url,
-              source.parserConfig.imageHint,
-            )
+          ? source.parserConfig.seed === 'official-wonderlivet-lineup' &&
+            source.url === WONDERLIVET_LINEUP_URL
+            ? (parseWonderlivetLineup(response.body).find(
+                (entry) =>
+                  entry.artistName === source.parserConfig.artistName &&
+                  entry.imageUrl.pathname === source.parserConfig.imageHint,
+              )?.imageUrl ?? null)
+            : artistProfileImageUrl(
+                response.body,
+                source.url,
+                source.parserConfig.imageHint,
+              )
           : null;
       if (source.kind === 'artist-image' && !profileImage)
         throw new Error('프로필 이미지가 공식 페이지에서 확인되지 않았습니다.');
@@ -784,6 +896,17 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       );
       if (source.kind === 'artist-image' && !imageUrls.length)
         throw new Error('프로필 이미지를 저장하지 못했습니다.');
+      if (
+        source.kind === 'artist-image' &&
+        source.parserConfig.seed === 'official-wonderlivet-lineup'
+      )
+        await this.dataSource.query(
+          `UPDATE crawl_sources SET "parserConfig" = "parserConfig" - 'previousImageHint',
+             "updatedAt" = now()
+           WHERE id = $1::uuid AND kind = 'artist-image'
+             AND "parserConfig"->>'seed' = 'official-wonderlivet-lineup'`,
+          [source.id],
+        );
       const previous = await this.runsRepo
         .createQueryBuilder('run')
         .where(
