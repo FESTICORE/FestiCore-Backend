@@ -1484,10 +1484,12 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       urls.some(
         (url) =>
           typeof url !== 'string' ||
-          !/^https:\/\/nol\.yanolja\.com\/ticket\/products\/\d+$/.test(url),
+          !/^https:\/\/(?:nol\.yanolja\.com\/ticket\/products|ticket\.yes24\.com\/Perf)\/\d+$/.test(
+            url,
+          ),
       )
     )
-      throw new Error('공식 NOL 상품 링크가 올바르지 않습니다.');
+      throw new Error('공식 예매 상품 링크가 올바르지 않습니다.');
     const detailConfig = JSON.stringify({
       seed: 'official-ticket-link-detail',
       festivalSourceUrl,
@@ -1519,7 +1521,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         rows[0]?.parserConfig.seed !== 'official-ticket-link-detail' ||
         rows[0]?.parserConfig.festivalSourceUrl !== festivalSourceUrl
       )
-        throw new Error(`기존 NOL 크롤 소스 설정이 다릅니다: ${url}`);
+        throw new Error(`기존 예매처 크롤 소스 설정이 다릅니다: ${url}`);
     }
     const updated = await this.dataSource.query<{ id: string }[]>(
       `UPDATE crawl_sources SET "parserConfig" = "parserConfig" ||

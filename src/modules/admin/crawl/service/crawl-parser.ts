@@ -162,16 +162,32 @@ function mintPaperOfficialTicketLinks(
         /<a\b[^>]*\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>/gi,
       ),
     ].map((match) => match[1] ?? match[2] ?? match[3]);
-    const urls = hrefs.filter((href) =>
-      href.toLowerCase().includes('nol.yanolja.com'),
-    );
-    if (
-      urls.some(
-        (url) =>
-          !/^https:\/\/nol\.yanolja\.com\/ticket\/products\/\d+$/.test(url),
-      )
-    )
-      return [];
+    const urls: string[] = [];
+    for (const href of hrefs) {
+      if (/nol\.yanolja\.com/i.test(href)) {
+        if (!/^https:\/\/nol\.yanolja\.com\/ticket\/products\/\d+$/.test(href))
+          return [];
+        urls.push(href);
+      } else if (/ticket\.yes24\.com/i.test(href)) {
+        let ticket: URL;
+        try {
+          ticket = new URL(href);
+        } catch {
+          return [];
+        }
+        if (
+          ticket.protocol !== 'https:' ||
+          ticket.hostname !== 'ticket.yes24.com' ||
+          ticket.port ||
+          ticket.username ||
+          ticket.password ||
+          ticket.hash ||
+          !/^\/Perf\/\d+$/.test(ticket.pathname)
+        )
+          return [];
+        urls.push(`${ticket.origin}${ticket.pathname}`);
+      }
+    }
     const uniqueUrls = [...new Set(urls)];
     if (!uniqueUrls.length || uniqueUrls.length > 5) return [];
     return uniqueUrls.map((url) => ({

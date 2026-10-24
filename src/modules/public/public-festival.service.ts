@@ -373,7 +373,9 @@ export class PublicFestivalService {
         !allowed.every(
           (url) =>
             typeof url === 'string' &&
-            /^https:\/\/nol\.yanolja\.com\/ticket\/products\/\d+$/.test(url),
+            /^https:\/\/(?:nol\.yanolja\.com\/ticket\/products|ticket\.yes24\.com\/Perf)\/\d+$/.test(
+              url,
+            ),
         ) ||
         !allowed.includes(row.url) ||
         verifiedUrls.includes(row.url)
@@ -385,6 +387,67 @@ export class PublicFestivalService {
     verifiedUrls.sort(
       (a, b) => noticeOrder.indexOf(a) - noticeOrder.indexOf(b),
     );
+    const verifiedYes24Ids = new Set(
+      verifiedUrls
+        .map(
+          (url) => /^https:\/\/ticket\.yes24\.com\/Perf\/(\d+)$/.exec(url)?.[1],
+        )
+        .filter((id): id is string => !!id),
+    );
+    const official = related.find(
+      (summary) => summary.sourceUrl === festivalSourceUrl,
+    );
+    if (official) {
+      const eventName = official.name
+        .normalize('NFKC')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+      for (const summary of summaries) {
+        if (summary === official) continue;
+        const productId =
+          /^https:\/\/ticket\.yes24\.com\/(?:English\/)?Perf\/(\d+)$/.exec(
+            summary.sourceUrl,
+          )?.[1];
+        if (
+          !productId ||
+          !verifiedYes24Ids.has(productId) ||
+          summary.name
+            .normalize('NFKC')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .toLowerCase() !== eventName ||
+          summary.firstDate !== official.firstDate ||
+          summary.lastDate < summary.firstDate ||
+          summary.lastDate > official.lastDate ||
+          summary.sourceUrls.some((url) => {
+            const match =
+              /^https:\/\/ticket\.yes24\.com\/(?:English\/)?Perf\/(\d+)$/.exec(
+                url,
+              );
+            return (
+              url.startsWith('https://ticket.yes24.com/') &&
+              match?.[1] !== productId
+            );
+          })
+        )
+          continue;
+        summary.sourceUrls = [
+          ...new Set([
+            ...summary.sourceUrls,
+            festivalSourceUrl,
+            `https://ticket.yes24.com/Perf/${productId}`,
+          ]),
+        ];
+        official.sourceUrls = [
+          ...new Set([
+            ...official.sourceUrls,
+            summary.sourceUrl,
+            `https://ticket.yes24.com/Perf/${productId}`,
+          ]),
+        ];
+      }
+    }
     for (const summary of related) {
       if (
         /^https:\/\/nol\.yanolja\.com\/ticket\/products\//.test(
@@ -408,12 +471,19 @@ export class PublicFestivalService {
           (link.label !== 'NOL' || verifiedUrls.includes(link.url)),
       );
       const nol = verifiedUrls
-        .filter((url) => url !== primary?.url)
+        .filter(
+          (url) =>
+            url !== primary?.url && url.startsWith('https://nol.yanolja.com/'),
+        )
         .map((url) => ({ label: 'NOL', url }));
+      const yes24 = verifiedUrls
+        .filter((url) => url.startsWith('https://ticket.yes24.com/'))
+        .map((url) => ({ label: '예스24', url }));
       const other = summary.ticketLinks.filter(
         (link) =>
           link.url !== primary?.url &&
           link.label !== 'NOL' &&
+          !verifiedUrls.includes(link.url) &&
           !/^https:\/\/nol\.yanolja\.com\//.test(link.url) &&
           link.label !== '공식 인스타그램',
       );
@@ -423,6 +493,7 @@ export class PublicFestivalService {
       summary.ticketLinks = [
         ...(primary ? [primary] : []),
         ...nol,
+        ...yes24,
         ...other,
         ...instagram,
       ].slice(0, 5);
