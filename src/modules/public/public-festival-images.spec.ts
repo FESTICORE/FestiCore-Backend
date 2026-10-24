@@ -1,6 +1,61 @@
 import { discoverySummaries } from './crawl-catalog';
 import { PublicFestivalService } from './public-festival.service';
 describe('discovered festival artist profile images', () => {
+  it('prefers a stored primary performer image over a linked source profile', async () => {
+    const yes24Url = 'https://ticket.yes24.com/Perf/60590';
+    const melonUrl =
+      'https://ticket.melon.com/performance/index.htm?prodId=213793';
+    const performerUrl = 'https://tkfile.yes24.com/artists/band-a.jpg';
+    const candidates = [
+      {
+        candidate: {
+          name: 'Linked Festival',
+          venue: 'KINTEX',
+          date: '2026.11.20 - 2026.11.21',
+          url: yes24Url,
+          artists: [{ name: 'Band A', sourceUrl: performerUrl }],
+        },
+      },
+      {
+        candidate: {
+          name: 'Linked Festival',
+          venue: 'KINTEX',
+          date: '2026.11.20 - 2026.11.21',
+          url: melonUrl,
+          artists: [{ name: 'Band A' }],
+        },
+      },
+    ];
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce(candidates)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ originUrl: performerUrl, id: 'primary-image' }])
+      .mockResolvedValueOnce([
+        {
+          festivalSourceUrl: melonUrl,
+          artistName: 'Band A',
+          id: 'linked-image',
+        },
+      ])
+      .mockResolvedValueOnce([]);
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    const id = discoverySummaries(candidates)[0].id;
+    await expect(service.detail(id)).resolves.toMatchObject({
+      artists: [
+        {
+          name: 'Band A',
+          imageUrl: '/api/v1/festivals/images/primary-image.webp',
+        },
+      ],
+    });
+  });
+
   it('keeps the primary image when two linked sources store different photos of one artist', async () => {
     const yes24Url = 'https://ticket.yes24.com/Perf/60590';
     const melonUrl =

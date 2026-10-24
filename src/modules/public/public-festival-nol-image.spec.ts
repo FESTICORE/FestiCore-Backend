@@ -80,6 +80,7 @@ describe('NOL festival poster', () => {
   it('removes stale proposal NOL links even when a NOL row is the primary source', async () => {
     const festivalUrl = 'https://mintpaper.co.kr/festivals/178';
     const stale = 'https://nol.yanolja.com/ticket/products/111';
+    const stalePlace = 'https://nol.yanolja.com/ticket/places/111';
     const valid = 'https://nol.yanolja.com/ticket/products/222';
     let verifiedRows = [
       { url: valid, verifiedTicketUrls: JSON.stringify([valid]) },
@@ -95,7 +96,12 @@ describe('NOL festival poster', () => {
     });
     const query = jest.fn().mockImplementation((sql: string) => {
       if (sql.includes('WITH candidates'))
-        return [candidate(stale), candidate(festivalUrl), candidate(valid)];
+        return [
+          candidate(stale),
+          candidate(stalePlace),
+          candidate(festivalUrl),
+          candidate(valid),
+        ];
       if (sql.includes('SELECT child.url')) return verifiedRows;
       return [];
     });
@@ -144,6 +150,8 @@ describe('NOL festival poster', () => {
     expect(profileQueries[0][1][0]).toEqual([festivalUrl, valid]);
     expect(profileQueries[1][1][0]).toEqual([festivalUrl]);
     expect(profileQueries[0][1][0]).not.toContain(stale);
+    expect(profileQueries[0][1][0]).not.toContain(stalePlace);
+    expect(profileQueries[1][1][0]).not.toContain(stalePlace);
   });
 
   it('checks the official notice when Mint Paper is beyond the visible link cap', async () => {

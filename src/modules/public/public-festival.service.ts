@@ -11,7 +11,7 @@ import { festivalSetId } from '../admin/festival/festival-set-id';
 import { CrawlTimetableSet } from '../admin/crawl/entity/crawl-timetable-revision.entity';
 import { PUBLIC_CRAWL_IMAGE_SQL } from './crawl-image-policy';
 import { Flag } from '../flags/flag.entity';
-import { artistNameKeys } from '../../common/artist-name';
+import { artistNameKeys, normalizeArtistName } from '../../common/artist-name';
 import {
   CacheService,
   PUBLIC_PACK_PROJECTION_VERSION,
@@ -379,7 +379,7 @@ export class PublicFestivalService {
         ...new Set([
           ...summary.sourceUrls.filter(
             (url) =>
-              !/^https:\/\/nol\.yanolja\.com\/ticket\/products\//.test(url) ||
+              !/^https:\/\/nol\.yanolja\.com\//.test(url) ||
               verifiedUrls.includes(url),
           ),
           festivalSourceUrl,
@@ -565,12 +565,11 @@ export class PublicFestivalService {
           ),
         );
         const imageId =
-          (primaryProfileIds.size === 1
-            ? [...primaryProfileIds][0]
-            : primaryProfileIds.size === 0 && matchingProfileIds.size === 1
-              ? [...matchingProfileIds][0]
-              : null) ??
-          (artist.sourceUrl && imageByUrl.get(artist.sourceUrl));
+          (primaryProfileIds.size === 1 ? [...primaryProfileIds][0] : null) ??
+          (artist.sourceUrl && imageByUrl.get(artist.sourceUrl)) ??
+          (primaryProfileIds.size === 0 && matchingProfileIds.size === 1
+            ? [...matchingProfileIds][0]
+            : null);
         return {
           ...artist,
           imageUrl: imageId ? `/api/v1/festivals/images/${imageId}.webp` : null,
@@ -668,10 +667,9 @@ export class PublicFestivalService {
       (a, b) =>
         Date.parse(a.startsAt) - Date.parse(b.startsAt) ||
         a.date.localeCompare(b.date) ||
-        a.stageName
-          .trim()
-          .toLocaleLowerCase()
-          .localeCompare(b.stageName.trim().toLocaleLowerCase()) ||
+        normalizeArtistName(a.stageName).localeCompare(
+          normalizeArtistName(b.stageName),
+        ) ||
         artistNameKeys(a.artist)[0].localeCompare(
           artistNameKeys(b.artist)[0],
         ) ||
@@ -682,8 +680,10 @@ export class PublicFestivalService {
     const uniqueTimetable = timetable.filter((set) => {
       const key = JSON.stringify([
         set.date,
-        set.stageName.trim().toLocaleLowerCase(),
-        Date.parse(set.startsAt),
+        normalizeArtistName(set.stageName),
+        Number.isNaN(Date.parse(set.startsAt))
+          ? set.startsAt
+          : Date.parse(set.startsAt),
         artistNameKeys(set.artist)[0],
       ]);
       if (seenSets.has(key)) return false;
