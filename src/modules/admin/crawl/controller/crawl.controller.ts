@@ -69,7 +69,7 @@ export class CrawlController {
   @ApiOperation({
     summary: '크롤 소스 등록',
     description:
-      'owner 전용. discovery·artist-gallery·artist-image·이미지 시간표를 제외한 종류는 festivalId가 필요합니다. artist-gallery는 XMF 공식 라인업 URL과 parserConfig.festivalSourceUrl을 지정하며 출연진 사진 소스를 동적으로 생성합니다. 이미지 시간표는 parser=image-ocr, 공식 이미지 URL, parserConfig의 festivalSourceUrl·sourcePageUrl·date·expectedRows·columns(JSON 문자열)가 필요합니다. robots.txt와 HTTPS 주소를 확인하고 매일 KST 00:00 이후 예약 실행합니다.',
+      'owner 전용. discovery·artist-gallery·artist-image·이미지 시간표를 제외한 종류는 festivalId가 필요합니다. artist-gallery는 XMF 공식 라인업 또는 Wonderlivet 공식 JSON URL과 해당 parserConfig.festivalSourceUrl을 지정하며 출연진 사진 소스를 동적으로 생성합니다. 이미지 시간표는 parser=image-ocr, 공식 이미지 URL, parserConfig의 festivalSourceUrl·sourcePageUrl·date·expectedRows·columns(JSON 문자열)가 필요합니다. robots.txt와 HTTPS 주소를 확인하고 매일 KST 00:00 이후 예약 실행합니다.',
   })
   @ApiResponse({
     status: 201,
