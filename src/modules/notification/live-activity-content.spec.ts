@@ -188,18 +188,20 @@ describe('buildLiveActivityContentState', () => {
 
   it('hides archived/cross-festival crews and expires gather after ten minutes', () => {
     const source = input();
+    const crew = source.member?.crew;
+    if (!crew) throw new Error('test fixture requires a crew');
     source.now = new Date('2026-10-24T10:05:00Z');
     expect(
       buildLiveActivityContentState(source).crewSummary?.gatherZoneId,
     ).toBeNull();
     source.member = {
       ...source.member!,
-      crew: { ...source.member!.crew!, archived: true },
+      crew: { ...crew, archived: true },
     };
     expect(buildLiveActivityContentState(source).crewSummary).toBeNull();
     source.member = {
       ...source.member,
-      crew: { ...source.member.crew, archived: false, festivalId: 'fst_other' },
+      crew: { ...crew, festivalId: 'fst_other' },
     };
     expect(buildLiveActivityContentState(source).crewSummary).toBeNull();
   });
