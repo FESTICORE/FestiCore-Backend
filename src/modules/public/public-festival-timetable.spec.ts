@@ -13,6 +13,57 @@ describe('discovered festival timetable', () => {
   };
   const id = discoverySummaries([{ candidate }])[0].id;
 
+  it('publishes a verified official timetable linked to the ticket catalog source', async () => {
+    const ticketUrl = 'https://ticket.yes24.com/Perf/60368';
+    const officialUrl = 'https://festival.example.kr/festival/848';
+    const ticketCandidate = { ...candidate, url: ticketUrl, artists: [] };
+    const ticketId = discoverySummaries([{ candidate: ticketCandidate }])[0].id;
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([{ candidate: ticketCandidate }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          id: 'official-verified',
+          sourceUrl: `${officialUrl}/timetable.jpg`,
+          sourceImageId: null,
+          verifiedAt: new Date('2026-10-24T00:00:00Z'),
+          sets: [
+            {
+              artist: '공식 출연진',
+              date: '2026-10-24',
+              stageName: '버스킹',
+              startsAt: '2026-10-24T13:30:00+09:00',
+              endsAt: '2026-10-24T14:00:00+09:00',
+            },
+          ],
+        },
+      ]);
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+
+    await expect(service.detail(ticketId)).resolves.toMatchObject({
+      timetable: [{ artist: '공식 출연진', stageName: '버스킹' }],
+    });
+    const [sql, parameters] = query.mock.calls[3] as [string, string[][]];
+    expect(sql).toContain('timetable_source.id = revision."sourceId"');
+    expect(sql).toContain(
+      'timetable_source."parserConfig"->>\'festivalSourceUrl\' =',
+    );
+    expect(sql).toContain('official_source.url = revision."festivalSourceUrl"');
+    expect(sql).toContain(
+      'official_source."parserConfig"->>\'festivalSourceUrl\' =',
+    );
+    expect(sql).toContain('ANY($1::text[])');
+    expect(sql).toContain("revision.status = 'verified'");
+    expect(parameters).toEqual([[ticketUrl]]);
+  });
+
   it('keeps the newest verified set when linked sources repeat the same performance', async () => {
     const linked = {
       ...candidate,
