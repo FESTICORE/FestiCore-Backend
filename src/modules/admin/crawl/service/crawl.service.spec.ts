@@ -41,6 +41,7 @@ type PrivateCrawl = {
   execute(run: CrawlRun, source: CrawlSource): Promise<void>;
   getListing(source: CrawlSource): Promise<{ status: number; body: string }>;
   syncXmfArtistAliases(source: CrawlSource, body: string): Promise<void>;
+  syncXmfAliasesFromRecentSnapshot(source: CrawlSource): Promise<void>;
   reconcileOfficialTicketLinks(
     source: CrawlSource,
     parsed: unknown,
@@ -894,6 +895,129 @@ describe('CrawlService source audit', () => {
       ),
     ).toBe(true);
     expect(proposalItems).not.toHaveBeenCalled();
+  });
+
+  it('recovers proven XMF aliases from a recent official notice snapshot after HTTP 403', async () => {
+    const {
+      service,
+      source,
+      run,
+      execute,
+      sourcesRepo,
+      dataSource,
+      imageStorage,
+    } = harness();
+    execute.mockRestore();
+    const festivalSourceUrl =
+      'https://ticket.melon.com/performance/index.htm?prodId=213766';
+    source.kind = 'artist-gallery';
+    source.url = 'https://xmfestival.com/lineup';
+    source.parserConfig = { festivalSourceUrl };
+    const notice = {
+      ...source,
+      id: 'notice-1',
+      kind: 'discovery',
+      url: 'https://xmfestival.com/notice',
+      parserConfig: {
+        seed: 'official-lineup',
+        expectedYear: '2026',
+        festivalSourceUrl,
+      },
+    } as CrawlSource;
+    sourcesRepo.findOneBy.mockResolvedValue(notice);
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({
+      status: 403,
+      body: '',
+    });
+    const officialNotice = XMF_NOTICE_HTML.replace(
+      '아도(Ado), 루시(LUCY) 등 2팀',
+      '아도(Ado), 루시(LUCY), 나카시마 미카(MIKA NAKASHIMA) 등 3팀',
+    );
+    imageStorage.readCrawlSnapshot.mockResolvedValue(
+      Buffer.from(officialNotice),
+    );
+    dataSource.query.mockImplementation((sql: string) => {
+      if (sql.includes('FROM crawl_snapshots'))
+        return Promise.resolve([
+          { objectKey: 'crawl/snapshots/official-notice.txt' },
+        ]);
+      if (sql.includes('SELECT id, enabled'))
+        return Promise.resolve([
+          {
+            id: 'ado-image',
+            enabled: true,
+            artistName: 'Ado',
+            artistAlias: null,
+            aliasSource: null,
+            officialSiteKeys: null,
+            seed: 'official-artist-gallery',
+          },
+          {
+            id: 'mika-image',
+            enabled: true,
+            artistName: 'MIKA',
+            artistAlias: null,
+            aliasSource: null,
+            officialSiteKeys: null,
+            seed: 'official-artist-gallery',
+          },
+        ]);
+      return Promise.resolve([]);
+    });
+
+    await service.execute(run, source);
+
+    expect(run.result).toBe('failed');
+    expect(run.error).toBe('HTTP_403');
+    expect(imageStorage.readCrawlSnapshot).toHaveBeenCalledWith(
+      'crawl/snapshots/official-notice.txt',
+    );
+    const lookup = dataSource.query.mock.calls.find(([sql]: [string]) =>
+      sql.includes('FROM crawl_snapshots'),
+    ) as [string, string[]];
+    expect(lookup[0]).toContain("interval '48 hours'");
+    expect(lookup[0]).toContain('previous."httpStatus" = 200');
+    expect(lookup[0]).toContain('snapshot."expiresAt" > now()');
+    expect(lookup[1]).toEqual([
+      notice.id,
+      notice.url,
+      '2026',
+      festivalSourceUrl,
+    ]);
+    const updates = dataSource.query.mock.calls.filter(([sql]: [string]) =>
+      sql.includes('UPDATE crawl_sources SET "parserConfig"'),
+    ) as [string, string[]][];
+    expect(updates.map(([, values]) => [values[0], values[2]])).toEqual([
+      ['ado-image', '아도'],
+    ]);
+  });
+
+  it('ignores a stale or mismatched XMF snapshot without changing aliases', async () => {
+    const { service, source, sourcesRepo, dataSource, imageStorage } =
+      harness();
+    source.kind = 'artist-gallery';
+    source.url = 'https://xmfestival.com/lineup';
+    source.parserConfig = { festivalSourceUrl: 'https://other.example/fest' };
+    sourcesRepo.findOneBy.mockResolvedValue({
+      ...source,
+      kind: 'discovery',
+      url: 'https://xmfestival.com/notice',
+      parserConfig: {
+        seed: 'official-lineup',
+        expectedYear: '2026',
+        festivalSourceUrl:
+          'https://ticket.melon.com/performance/index.htm?prodId=213766',
+      },
+    });
+    await service.syncXmfAliasesFromRecentSnapshot(source);
+    expect(dataSource.query).not.toHaveBeenCalled();
+
+    source.parserConfig.festivalSourceUrl =
+      'https://ticket.melon.com/performance/index.htm?prodId=213766';
+    await service.syncXmfAliasesFromRecentSnapshot(source);
+    expect(dataSource.query).toHaveBeenCalledTimes(1);
+    expect(imageStorage.readCrawlSnapshot).not.toHaveBeenCalled();
   });
 
   it('records the previous and new source settings', async () => {
