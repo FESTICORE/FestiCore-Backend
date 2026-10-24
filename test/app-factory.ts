@@ -53,6 +53,7 @@ export async function createTestApp(): Promise<TestContext> {
   };
   const users = new FakeRepository<User>();
   const refreshTokens = new FakeRepository<RefreshToken>();
+  const sessions = new Map<string, { id: string; revokedAt: Date | null }>();
   const google = {
     verify: jest.fn(),
     exchangeAuthCode: jest.fn(),
@@ -78,7 +79,60 @@ export async function createTestApp(): Promise<TestContext> {
           work({
             query: jest
               .fn()
-              .mockImplementation((sql: string, params?: string[]) => {
+              .mockImplementation((sql: string, params?: unknown[]) => {
+                if (sql.includes('INSERT INTO "refresh_token_sessions"')) {
+                  const id = params?.[0] as string;
+                  sessions.set(id, { id, revokedAt: null });
+                  return Promise.resolve([]);
+                }
+                if (sql.includes('INSERT INTO "refresh_tokens"')) {
+                  return refreshTokens.save({
+                    id: params?.[0] as string,
+                    userId: params?.[1] as string,
+                    sessionId: params?.[2] as string,
+                    tokenHash: params?.[3] as string,
+                    expiresAt: params?.[4] as Date,
+                    revokedAt: null,
+                  } as RefreshToken);
+                }
+                if (
+                  sql.includes('FROM "refresh_token_sessions"') &&
+                  sql.includes('FOR UPDATE')
+                ) {
+                  const session = sessions.get(params?.[0] as string);
+                  return Promise.resolve(session ? [session] : []);
+                }
+                if (sql.includes('UPDATE "refresh_token_sessions"')) {
+                  const ids = sql.includes('SELECT "sessionId"')
+                    ? refreshTokens.rows
+                        .filter((row) => row.userId === params?.[0])
+                        .map((row) => row.sessionId)
+                    : [params?.[0] as string];
+                  for (const id of ids) {
+                    const session = sessions.get(id);
+                    if (session) session.revokedAt = new Date();
+                  }
+                  return Promise.resolve([]);
+                }
+                if (
+                  sql.includes('UPDATE "refresh_tokens"') &&
+                  sql.includes('RETURNING "userId"')
+                ) {
+                  const row = refreshTokens.rows.find(
+                    (item) =>
+                      item.tokenHash === params?.[0] &&
+                      item.sessionId === params?.[1] &&
+                      !item.revokedAt,
+                  );
+                  if (!row) return Promise.resolve([[], 0]);
+                  row.revokedAt = new Date();
+                  return Promise.resolve([[{ userId: row.userId }], 1]);
+                }
+                if (sql.includes('SELECT "id", "provider" FROM "users"')) {
+                  return users
+                    .findOne({ where: { id: params?.[0] } })
+                    .then((user) => (user ? [user] : []));
+                }
                 if (
                   sql.includes('FROM "users"') &&
                   sql.includes('FOR UPDATE')
@@ -88,6 +142,12 @@ export async function createTestApp(): Promise<TestContext> {
                     .then((user) => (user ? [user] : []));
                 }
                 if (sql.includes('UPDATE "refresh_tokens"')) {
+                  if (sql.includes('WHERE "sessionId"')) {
+                    return refreshTokens.update(
+                      { sessionId: params?.[0], revokedAt: IsNull() },
+                      { revokedAt: new Date() },
+                    );
+                  }
                   return refreshTokens.update(
                     { userId: params?.[0], revokedAt: IsNull() },
                     { revokedAt: new Date() },
