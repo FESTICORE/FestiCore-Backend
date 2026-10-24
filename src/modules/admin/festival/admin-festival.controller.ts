@@ -249,6 +249,62 @@ export class AdminFestivalController {
     return this.service.create(body, request.admin?.id ?? null);
   }
 
+  @AdminRoles('editor')
+  @Post('discovered/:id/import')
+  @ApiOperation({
+    summary: '발견된 축제를 관리 초안으로 가져오기',
+    description:
+      '공개 발견 카탈로그의 축제 ID·이름·장소·출처·이미지·티켓 링크를 서버에서 확인해 같은 ID의 관리 초안을 만듭니다. 발견 데이터에는 공연 시각이 없으므로 관리자가 날짜별 시작·종료 시각을 입력해야 합니다. 이 요청은 축제를 공개하지 않습니다.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: '공개 축제 목록에서 받은 발견 축제 ID',
+    example: 'fst_0123456789abcdef',
+  })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['days'],
+      properties: {
+        days: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 7,
+          description:
+            '첫날과 마지막 날은 발견 축제의 날짜 범위와 같아야 합니다. 공연 시각은 공식 정보를 확인해 입력하세요.',
+          items: {
+            type: 'object',
+            required: ['date', 'startsAt', 'endsAt'],
+            properties: {
+              date: { type: 'string', format: 'date' },
+              startsAt: { type: 'string', format: 'date-time' },
+              endsAt: { type: 'string', format: 'date-time' },
+            },
+          },
+        },
+      },
+      example: { days: [festivalDay] },
+    },
+  })
+  @ApiResponse({
+    status: 201,
+    description: '생성된 관리 초안',
+    schema: draftResponse,
+  })
+  @ApiResponse({ status: 400, description: '날짜 범위 또는 초안 검증 실패' })
+  @ApiResponse({ status: 404, description: '발견 축제가 존재하지 않음' })
+  @ApiResponse({
+    status: 409,
+    description: '해당 ID의 관리 축제가 이미 존재함',
+  })
+  importDiscovered(
+    @Param('id') id: string,
+    @Body() body: { days: unknown[] },
+    @Req() request: AdminRequest,
+  ) {
+    return this.service.importDiscovered(id, body, request.admin?.id ?? null);
+  }
+
   @Get(':id/draft')
   @ApiOperation({
     summary: '축제 초안 조회',

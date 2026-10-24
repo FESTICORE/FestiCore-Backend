@@ -66,6 +66,26 @@ describe('ticket discovery catalog', () => {
     ]);
     expect(untrusted[0].artists?.[0]).toEqual({ name: '혁오' });
   });
+  it('keeps every linked source for enrichment after the public link cap', () => {
+    const urls = Array.from(
+      { length: 6 },
+      (_, index) => `https://ticket.yes24.com/Perf/${60000 + index}`,
+    );
+    const entries = discoverySummaries(
+      urls.map((url) => ({
+        candidate: {
+          name: 'Linked Festival',
+          venue: 'KINTEX',
+          date: '2026.11.20 - 2026.11.21',
+          url,
+        },
+      })),
+    );
+    expect(entries).toHaveLength(1);
+    expect(entries[0].ticketLinks).toHaveLength(5);
+    expect(entries[0].sourceUrls).toEqual(urls);
+  });
+
   it('parses Korean and English ticket dates without inventing event times', () => {
     expect(ticketDateRange('2026.12.25 - 2026.12.26')).toEqual({
       firstDate: '2026-12-25',

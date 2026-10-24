@@ -31,6 +31,7 @@ export interface DiscoverySummary {
   ticketLinks: { label: string; url: string }[];
   status: 'discovered';
   sourceUrl: string;
+  sourceUrls: string[];
   officialInstagramUrl?: string;
   posterUrl?: string;
   artists?: {
@@ -340,6 +341,8 @@ export function discoverySummaries(
     );
     const existing = found.get(key);
     if (existing) {
+      if (!existing.sourceUrls.includes(url.toString()))
+        existing.sourceUrls.push(url.toString());
       if (
         existing.ticketLinks.length < 5 &&
         !existing.ticketLinks.some((link) => link.url === url.toString())
@@ -394,6 +397,7 @@ export function discoverySummaries(
       ],
       status: 'discovered',
       sourceUrl: url.toString(),
+      sourceUrls: [url.toString()],
       ...(instagramUrl ? { officialInstagramUrl: instagramUrl } : {}),
       ...(posterUrl ? { posterUrl } : {}),
       ...(artists.length ? { artists } : {}),
