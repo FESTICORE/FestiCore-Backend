@@ -45,17 +45,35 @@ describe('관리자 깃발 상태 강제 변경', () => {
     const record = jest
       .fn<Promise<void>, [EntityManager, AdminAuditInput]>()
       .mockResolvedValue(undefined);
+    const enqueueFestival = jest.fn().mockResolvedValue(undefined);
     const service = Object.create(FlagsService.prototype) as FlagsService;
     Reflect.set(service, 'db', { transaction } as unknown as DataSource);
     Reflect.set(service, 'adminAudit', {
       record,
     } as unknown as AdminAuditService);
-    return { service, manager, flag, transaction, saveFlag, saveEvent, record };
+    Reflect.set(service, 'liveActivity', { enqueueFestival });
+    return {
+      service,
+      manager,
+      flag,
+      transaction,
+      saveFlag,
+      saveEvent,
+      record,
+      enqueueFestival,
+    };
   }
 
   it('상태·이벤트·감사 기록을 같은 트랜잭션에 저장한다', async () => {
-    const { service, manager, transaction, saveFlag, saveEvent, record } =
-      setup();
+    const {
+      service,
+      manager,
+      transaction,
+      saveFlag,
+      saveEvent,
+      record,
+      enqueueFestival,
+    } = setup();
     const result = await service.forceStatus('flg_1', 'admin_1', {
       status: 'active',
       zoneId: 'zone_main',
@@ -80,6 +98,7 @@ describe('관리자 깃발 상태 강제 변경', () => {
       status: 'scheduled',
     });
     expect(record.mock.calls[0][1].after).toMatchObject({ status: 'active' });
+    expect(enqueueFestival).toHaveBeenCalledWith('fst_1', manager);
     expect(result).toMatchObject({
       status: 'active',
       zoneId: 'zone_main',
@@ -88,7 +107,7 @@ describe('관리자 깃발 상태 강제 변경', () => {
   });
 
   it('발행된 축제에 없는 존은 상태를 저장하지 않는다', async () => {
-    const { service, saveFlag, saveEvent, record } = setup([]);
+    const { service, saveFlag, saveEvent, record, enqueueFestival } = setup([]);
     await expect(
       service.forceStatus('flg_1', 'admin_1', {
         status: 'active',
@@ -99,6 +118,7 @@ describe('관리자 깃발 상태 강제 변경', () => {
     expect(saveFlag).not.toHaveBeenCalled();
     expect(saveEvent).not.toHaveBeenCalled();
     expect(record).not.toHaveBeenCalled();
+    expect(enqueueFestival).not.toHaveBeenCalled();
   });
 
   it('감사 기록 실패 시 트랜잭션 오류를 호출자에게 전파한다', async () => {
