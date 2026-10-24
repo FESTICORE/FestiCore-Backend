@@ -1028,6 +1028,15 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       this.logger.warn(
         `크롤 처리 실패: source=${source.id}, run=${run.id}, code=${run.error}`,
       );
+      if (run.error === 'HTTP_403') {
+        try {
+          await this.syncXmfAliasesFromRecentSnapshot(source);
+        } catch {
+          this.logger.warn(
+            `XMF 공식 공지 스냅샷 별칭 복구 실패: source=${source.id}`,
+          );
+        }
+      }
       source.consecutiveFailures += 1;
       if (source.consecutiveFailures >= 3) source.status = 'broken';
     } finally {
@@ -1316,6 +1325,62 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     if (response.status !== 200)
       throw new Error(`XMF 공식 라인업 공지 HTTP ${response.status}`);
     await this.syncXmfArtistAliases(notice, response.body);
+  }
+
+  private async syncXmfAliasesFromRecentSnapshot(
+    source: CrawlSource,
+  ): Promise<void> {
+    const notice =
+      source.kind === 'discovery' &&
+      source.url === 'https://xmfestival.com/notice'
+        ? source
+        : source.kind === 'artist-gallery' &&
+            source.url === 'https://xmfestival.com/lineup'
+          ? await this.sourcesRepo.findOneBy({
+              kind: 'discovery',
+              url: 'https://xmfestival.com/notice',
+              enabled: true,
+            })
+          : null;
+    if (
+      !notice?.enabled ||
+      notice.parserConfig.seed !== 'official-lineup' ||
+      !/^20\d{2}$/.test(notice.parserConfig.expectedYear ?? '') ||
+      !notice.parserConfig.festivalSourceUrl ||
+      (source.kind === 'artist-gallery' &&
+        notice.parserConfig.festivalSourceUrl !==
+          source.parserConfig.festivalSourceUrl)
+    )
+      return;
+    const snapshots = await this.dataSource.query<{ objectKey: string }[]>(
+      `SELECT snapshot."objectKey" AS "objectKey"
+       FROM crawl_snapshots snapshot
+       JOIN crawl_runs previous ON previous.id = snapshot."runId"
+       JOIN crawl_sources origin ON origin.id = previous."sourceId"
+       WHERE previous."sourceId" = $1::uuid
+         AND origin.kind = 'discovery' AND origin.url = $2::text
+         AND origin.enabled = true
+         AND origin."parserConfig"->>'seed' = 'official-lineup'
+         AND origin."parserConfig"->>'expectedYear' = $3::text
+         AND origin."parserConfig"->>'festivalSourceUrl' = $4::text
+         AND previous."httpStatus" = 200
+         AND previous.result IN ('nochange-parsed', 'proposed', 'unchanged')
+         AND previous."finishedAt" >= now() - interval '48 hours'
+         AND snapshot."expiresAt" > now()
+       ORDER BY previous."finishedAt" DESC LIMIT 1`,
+      [
+        notice.id,
+        notice.url,
+        notice.parserConfig.expectedYear,
+        notice.parserConfig.festivalSourceUrl,
+      ],
+    );
+    if (!snapshots[0]) return;
+    const body = await this.imageStorage.readCrawlSnapshot(
+      snapshots[0].objectKey,
+    );
+    if (!body || body.length > 2_000_000) return;
+    await this.syncXmfArtistAliases(notice, body.toString('utf8'));
   }
 
   private async proposalItems(
