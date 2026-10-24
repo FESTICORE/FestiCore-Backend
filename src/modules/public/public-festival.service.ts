@@ -394,9 +394,17 @@ export class PublicFestivalService {
         )
         .filter((id): id is string => !!id),
     );
-    const official = related.find(
-      (summary) => summary.sourceUrl === festivalSourceUrl,
-    );
+    const verifiedYes24Product = (url: string) => {
+      if (!url.startsWith('https://ticket.yes24.com/')) return true;
+      const id =
+        /^https:\/\/ticket\.yes24\.com\/(?:English\/)?Perf\/(\d+)$/.exec(
+          url,
+        )?.[1];
+      return !!id && verifiedYes24Ids.has(id);
+    };
+    const official =
+      related.find((summary) => summary.sourceUrl === festivalSourceUrl) ??
+      related.find((summary) => summary.sourceUrls.includes(festivalSourceUrl));
     if (official) {
       const eventName = official.name
         .normalize('NFKC')
@@ -452,15 +460,17 @@ export class PublicFestivalService {
       if (
         /^https:\/\/nol\.yanolja\.com\/ticket\/products\//.test(
           summary.sourceUrl,
-        )
+        ) ||
+        !verifiedYes24Product(summary.sourceUrl)
       )
         summary.sourceUrl = festivalSourceUrl;
       summary.sourceUrls = [
         ...new Set([
           ...summary.sourceUrls.filter(
             (url) =>
-              !/^https:\/\/nol\.yanolja\.com\//.test(url) ||
-              verifiedUrls.includes(url),
+              (!/^https:\/\/nol\.yanolja\.com\//.test(url) ||
+                verifiedUrls.includes(url)) &&
+              verifiedYes24Product(url),
           ),
           festivalSourceUrl,
         ]),
@@ -468,7 +478,8 @@ export class PublicFestivalService {
       const primary = summary.ticketLinks.find(
         (link) =>
           link.url === summary.sourceUrl &&
-          (link.label !== 'NOL' || verifiedUrls.includes(link.url)),
+          (link.label !== 'NOL' || verifiedUrls.includes(link.url)) &&
+          verifiedYes24Product(link.url),
       );
       const nol = verifiedUrls
         .filter(
@@ -477,7 +488,10 @@ export class PublicFestivalService {
         )
         .map((url) => ({ label: 'NOL', url }));
       const yes24 = verifiedUrls
-        .filter((url) => url.startsWith('https://ticket.yes24.com/'))
+        .filter(
+          (url) =>
+            url !== primary?.url && url.startsWith('https://ticket.yes24.com/'),
+        )
         .map((url) => ({ label: '예스24', url }));
       const other = summary.ticketLinks.filter(
         (link) =>
@@ -485,6 +499,7 @@ export class PublicFestivalService {
           link.label !== 'NOL' &&
           !verifiedUrls.includes(link.url) &&
           !/^https:\/\/nol\.yanolja\.com\//.test(link.url) &&
+          verifiedYes24Product(link.url) &&
           link.label !== '공식 인스타그램',
       );
       const instagram = summary.ticketLinks.filter(

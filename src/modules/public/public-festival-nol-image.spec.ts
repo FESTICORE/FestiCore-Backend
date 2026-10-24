@@ -121,6 +121,75 @@ describe('NOL festival poster', () => {
     ]);
   });
 
+  it.each([
+    {
+      order: 'official first',
+      urls: ['official', 'verified', 'unverified'],
+      primary: 'official',
+    },
+    {
+      order: 'YES24 first',
+      urls: ['verified', 'official', 'unverified'],
+      primary: 'verified',
+    },
+    {
+      order: 'unverified first',
+      urls: ['unverified', 'official', 'verified'],
+      primary: 'official',
+    },
+  ])(
+    'keeps one verified YES24 link when discovery already merged both sources: %s',
+    async ({ urls, primary }) => {
+      const festivalUrl = 'https://mintpaper.co.kr/festivals/178';
+      const yes24 = 'https://ticket.yes24.com/Perf/60590';
+      const unverified = 'https://ticket.yes24.com/Perf/60591';
+      const sources = { official: festivalUrl, verified: yes24, unverified };
+      const candidates = urls.map((source) => ({
+        candidate: {
+          name: 'COUNTDOWN FANTASY 2026-2027',
+          url: sources[source as keyof typeof sources],
+          venue: 'KINTEX',
+          date: '2026.12.31',
+          artists: [{ name: 'Band A' }],
+        },
+      }));
+      const query = jest.fn().mockImplementation((sql: string) => {
+        if (sql.includes('WITH candidates')) return candidates;
+        if (sql.includes('SELECT child.url'))
+          return [{ url: yes24, verifiedTicketUrls: JSON.stringify([yes24]) }];
+        return [];
+      });
+      const builder = {
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        addOrderBy: jest.fn().mockReturnThis(),
+        take: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue([]),
+      };
+      const service = new PublicFestivalService(
+        { createQueryBuilder: () => builder } as never,
+        {} as never,
+        { query } as never,
+        {} as never,
+      );
+      const result = await service.list(
+        undefined,
+        '50',
+        new Date('2026-10-22T00:00:00Z'),
+      );
+      expect(result.items).toHaveLength(1);
+      const detail = await service.discovered(result.items[0].id);
+      expect(detail?.sourceUrl).toBe(
+        primary === 'official' ? festivalUrl : yes24,
+      );
+      expect(detail?.ticketLinks.map((link) => link.url).sort()).toEqual(
+        [festivalUrl, yes24].sort(),
+      );
+      expect(new Set(detail?.ticketLinks.map((link) => link.url)).size).toBe(2);
+    },
+  );
+
   it('does not join a different YES24 product or a mismatched event', async () => {
     const festivalUrl = 'https://mintpaper.co.kr/festivals/178';
     const yes24 = 'https://ticket.yes24.com/Perf/60590';
@@ -313,14 +382,16 @@ describe('NOL festival poster', () => {
     );
     expect(result.items).toHaveLength(1);
     expect(result.items[0].ticketLinks).toEqual([
-      { label: '예스24', url: 'https://ticket.yes24.com/Perf/99999' },
-      { label: 'NOL', url: nolUrl },
       { label: '공식 사이트', url: festivalUrl },
+      { label: 'NOL', url: nolUrl },
       {
         label: '멜론티켓',
         url: 'https://ticket.melon.com/performance/index.htm?prodId=123',
       },
-      { label: '예스24', url: 'https://ticket.yes24.com/English/Perf/99999' },
+      {
+        label: '공식 인스타그램',
+        url: 'https://www.instagram.com/countdown_fantasy/',
+      },
     ]);
     expect(query).toHaveBeenCalledWith(
       expect.stringContaining('parent.enabled = true AND child.enabled = true'),

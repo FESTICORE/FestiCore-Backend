@@ -1495,44 +1495,46 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       festivalSourceUrl,
       festivalSourceUrls: [festivalSourceUrl],
     });
-    for (const url of urls as string[]) {
-      await this.dataSource.query(
-        `UPDATE crawl_sources SET "parserConfig" = "parserConfig" || $2::jsonb,
+    await this.dataSource.transaction(async (manager) => {
+      for (const url of urls as string[]) {
+        await manager.query(
+          `UPDATE crawl_sources SET "parserConfig" = "parserConfig" || $2::jsonb,
            "updatedAt" = now()
          WHERE "url" = $1 AND "kind" = 'discovery' AND "parser" = 'ticket-list'
            AND "parserConfig"->>'seed' = 'ticket-detail'
            AND (NOT ("parserConfig" ? 'festivalSourceUrl')
              OR "parserConfig"->>'festivalSourceUrl' = $3)
            AND NOT ("parserConfig" ? 'festivalSourceUrls')`,
-        [url, detailConfig, festivalSourceUrl],
-      );
-      await this.dataSource.query(
-        `INSERT INTO crawl_sources ("kind", "url", "parser", "parserConfig", "createdAt")
+          [url, detailConfig, festivalSourceUrl],
+        );
+        await manager.query(
+          `INSERT INTO crawl_sources ("kind", "url", "parser", "parserConfig", "createdAt")
          SELECT 'discovery', $1::varchar, 'ticket-list', $2::jsonb, now() - interval '1 day'
          WHERE NOT EXISTS (SELECT 1 FROM crawl_sources WHERE "url" = $1)`,
-        [url, detailConfig],
-      );
-      const rows = await this.dataSource.query<
-        { parserConfig: Record<string, unknown> }[]
-      >(`SELECT "parserConfig" FROM crawl_sources WHERE "url" = $1 LIMIT 1`, [
-        url,
-      ]);
-      if (
-        rows[0]?.parserConfig.seed !== 'official-ticket-link-detail' ||
-        rows[0]?.parserConfig.festivalSourceUrl !== festivalSourceUrl
-      )
-        throw new Error(`기존 예매처 크롤 소스 설정이 다릅니다: ${url}`);
-    }
-    const updated = await this.dataSource.query<{ id: string }[]>(
-      `UPDATE crawl_sources SET "parserConfig" = "parserConfig" ||
+          [url, detailConfig],
+        );
+        const rows = await manager.query<
+          { parserConfig: Record<string, unknown> }[]
+        >(`SELECT "parserConfig" FROM crawl_sources WHERE "url" = $1 LIMIT 1`, [
+          url,
+        ]);
+        if (
+          rows[0]?.parserConfig.seed !== 'official-ticket-link-detail' ||
+          rows[0]?.parserConfig.festivalSourceUrl !== festivalSourceUrl
+        )
+          throw new Error(`기존 예매처 크롤 소스 설정이 다릅니다: ${url}`);
+      }
+      const updated = await manager.query<{ id: string }[]>(
+        `UPDATE crawl_sources SET "parserConfig" = "parserConfig" ||
          jsonb_build_object('verifiedTicketUrls', $2::text), "updatedAt" = now()
        WHERE id = $1 AND "parserConfig"->>'seed' = 'official-ticket-links'
          AND "parserConfig"->>'festivalSourceUrl' = $3
        RETURNING id`,
-      [source.id, JSON.stringify(urls), festivalSourceUrl],
-    );
-    if (!updated.length)
-      throw new Error('공식 예매 링크 부모 소스 설정이 변경되었습니다.');
+        [source.id, JSON.stringify(urls), festivalSourceUrl],
+      );
+      if (!updated.length)
+        throw new Error('공식 예매 링크 부모 소스 설정이 변경되었습니다.');
+    });
   }
 
   private async syncXmfArtistAliases(

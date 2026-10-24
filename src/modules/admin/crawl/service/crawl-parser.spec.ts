@@ -892,6 +892,44 @@ describe('crawl parsers', () => {
         url: 'https://ticket.yes24.com/Perf/60590',
       },
     ]);
+    const nolOnly = [
+      {
+        name: 'COUNTDOWN FANTASY 2026-2027',
+        url: 'https://nol.yanolja.com/ticket/products/26014568',
+      },
+    ];
+    const nolAnchor =
+      '<a href="https://nol.yanolja.com/ticket/products/26014568">NOL</a>';
+    for (const misleadingAnchor of [
+      '<a data-href="https://ticket.yes24.com/Perf/60591">YES24</a>',
+      '<a href="https://example.com" data-href="https://ticket.yes24.com/Perf/60591">Other</a>',
+      '<a data-href="https://ticket.yes24.com/Perf/60591" href="https://example.com">Other</a>',
+    ]) {
+      expect(
+        await parseCrawl(
+          mint,
+          html({
+            ...post,
+            content: `<p>COUNTDOWN FANTASY 2026-2027 일시 : 2026년 12월 31일(목)</p>${nolAnchor}${misleadingAnchor}`,
+          }),
+        ),
+      ).toEqual(nolOnly);
+    }
+    expect(
+      await parseCrawl(
+        mint,
+        html({
+          ...post,
+          content: `<p>COUNTDOWN FANTASY 2026-2027 일시 : 2026년 12월 31일(목)</p>${nolAnchor}<a data-href="https://ticket.yes24.com/Perf/60591" href="https://ticket.yes24.com/Perf/60590?Gcode=009_207">YES24</a>`,
+        }),
+      ),
+    ).toEqual([
+      ...nolOnly,
+      {
+        name: 'COUNTDOWN FANTASY 2026-2027',
+        url: 'https://ticket.yes24.com/Perf/60590',
+      },
+    ]);
     for (const forged of [
       'https://ticket.yes24.com.evil.example/Perf/60590',
       'https://evil.example/?next=ticket.yes24.com/Perf/60590',

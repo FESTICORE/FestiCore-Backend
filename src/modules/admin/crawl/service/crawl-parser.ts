@@ -157,11 +157,12 @@ function mintPaperOfficialTicketLinks(
       ) !== '2026.12.31'
     )
       return [];
-    const hrefs = [
-      ...post.content.matchAll(
-        /<a\b[^>]*\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>/gi,
-      ),
-    ].map((match) => match[1] ?? match[2] ?? match[3]);
+    const hrefs = [...post.content.matchAll(/<a\b([^>]*)>/gi)]
+      .map((anchor) =>
+        /(?:^|\s)href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(anchor[1]),
+      )
+      .filter((match): match is RegExpExecArray => match !== null)
+      .map((match) => match[1] ?? match[2] ?? match[3]);
     const urls: string[] = [];
     for (const href of hrefs) {
       if (/nol\.yanolja\.com/i.test(href)) {
