@@ -66,6 +66,58 @@ describe('ticket discovery catalog', () => {
     ]);
     expect(untrusted[0].artists?.[0]).toEqual({ name: '혁오' });
   });
+
+  it('keeps the catalog available when an artist proposal has an invalid source URL', () => {
+    const entries = discoverySummaries([
+      {
+        candidate: {
+          name: 'Broken source festival',
+          venue: '킨텍스',
+          date: '2026.12.31',
+          url: 'https://ticket.yes24.com/Perf/60590',
+          artistSourceUrl: 'not a url',
+          artists: [{ name: '혁오' }],
+        },
+      },
+      {
+        candidate: {
+          name: 'Valid festival',
+          venue: '킨텍스',
+          date: '2026.12.30',
+          url: 'https://ticket.yes24.com/Perf/60591',
+        },
+      },
+    ]);
+    expect(entries.map((entry) => entry.name)).toEqual([
+      'Broken source festival',
+      'Valid festival',
+    ]);
+    expect(entries[0].artists).toBeUndefined();
+  });
+
+  it('accepts the official post apex URL with query parameters', () => {
+    const entries = discoverySummaries([
+      {
+        candidate: {
+          name: 'COUNTDOWN FANTASY 2026-2027',
+          venue: '킨텍스',
+          date: '2026.12.31',
+          url: 'https://mintpaper.co.kr/festivals/178',
+          artistSourceUrl: 'https://mintpaper.co.kr/posts/4819?source=official',
+          artists: [
+            {
+              name: '혁오',
+              profileUrl: 'https://www.instagram.com/hyukohofficial/',
+            },
+          ],
+        },
+      },
+    ]);
+    expect(entries[0].artists?.[0].profileUrl).toBe(
+      'https://www.instagram.com/hyukohofficial/',
+    );
+  });
+
   it('keeps every linked source for enrichment after the public link cap', () => {
     const urls = Array.from(
       { length: 6 },

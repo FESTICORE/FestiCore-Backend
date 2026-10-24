@@ -7,8 +7,9 @@ describe('discovered festival artist profile images', () => {
       venue: '킨텍스',
       date: '2026.12.31 - 2026.12.31',
       url: 'https://mintpaper.co.kr/festivals/178',
-      artistSourceUrl: 'https://www.mintpaper.co.kr/posts/4819',
-      artists: [
+      artistSourceUrl: 'https://ticket.yes24.com/Perf/60590',
+      artists: [{ name: '혁오' }],
+      officialProfileArtists: [
         {
           name: '혁오',
           profileUrl: 'https://www.instagram.com/hyukohofficial/',
@@ -46,7 +47,8 @@ describe('discovered festival artist profile images', () => {
       ],
     });
     const calls = query.mock.calls as unknown as [string, unknown[]][];
-    expect(calls[0][0]).toContain('artistSourceUrl');
+    expect(calls[0][0]).toContain('"officialProfileArtists"');
+    expect(calls[0][0]).toContain("'https://www.mintpaper.co.kr/posts/4819'");
   });
 
   it('prefers a stored primary performer image over a linked source profile', async () => {

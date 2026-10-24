@@ -102,7 +102,20 @@ function verifiedArtists(
   sourceUrl: string,
 ): { name: string; sourceUrl?: string; profileUrl?: string }[] {
   if (!Array.isArray(raw)) return [];
-  const sourceHost = new URL(sourceUrl).hostname;
+  let source: URL;
+  try {
+    source = new URL(sourceUrl);
+  } catch {
+    return [];
+  }
+  if (
+    source.protocol !== 'https:' ||
+    source.username ||
+    source.password ||
+    source.port
+  )
+    return [];
+  const sourceHost = source.hostname;
   const artists: {
     name: string;
     sourceUrl?: string;
@@ -117,7 +130,10 @@ function verifiedArtists(
       sourceUrl?: string;
       profileUrl?: string;
     } = { name: name.trim() };
-    if (sourceUrl === 'https://www.mintpaper.co.kr/posts/4819') {
+    if (
+      ['mintpaper.co.kr', 'www.mintpaper.co.kr'].includes(sourceHost) &&
+      source.pathname === '/posts/4819'
+    ) {
       const profile = officialInstagramUrl(
         (value as Record<string, unknown>).profileUrl,
       );
@@ -339,6 +355,15 @@ export function discoverySummaries(
         ? value.artistSourceUrl
         : url.toString(),
     );
+    for (const official of verifiedArtists(
+      value.officialProfileArtists,
+      'https://www.mintpaper.co.kr/posts/4819',
+    )) {
+      const current = artists.find((artist) => artist.name === official.name);
+      if (current) {
+        if (official.profileUrl) current.profileUrl = official.profileUrl;
+      } else if (artists.length < 80) artists.push(official);
+    }
     const existing = found.get(key);
     if (existing) {
       if (!existing.sourceUrls.includes(url.toString()))
