@@ -909,9 +909,15 @@ describe('crawl parsers', () => {
       `<a href="https://example.com" data-note='please href="https://ticket.yes24.com/Perf/60591"'>Other</a>`,
       '<a href="https://example.com" href="https://ticket.yes24.com/Perf/60591">Other</a>',
       '<a href="https://ticket.yes24.com/Perf/60591" href="https://example.com">Other</a>',
+      '<a href href=https://ticket.yes24.com/Perf/60591>Other</a>',
+      '<a href=https://ticket.yes24.com/Perf/60591 href>Other</a>',
       `<div data-note='<a href="https://ticket.yes24.com/Perf/60591">'>Other</div>`,
       `<script>const fake = '<a href="https://ticket.yes24.com/Perf/60591">';</script>`,
+      `<script>const fake = '</scriptx><a href="https://ticket.yes24.com/Perf/60591">';</script>`,
       `<style>p::before { content: '<a href="https://ticket.yes24.com/Perf/60591">'; }</style>`,
+      `<style>p::before { content: '</stylex><a href="https://ticket.yes24.com/Perf/60591">'; }</style>`,
+      `<textarea><a href="https://ticket.yes24.com/Perf/60591">Other</textarea>`,
+      `&lt;a href="https://ticket.yes24.com/Perf/60591"&gt;Other`,
     ]) {
       expect(
         await parseCrawl(

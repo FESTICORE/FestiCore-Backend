@@ -100,7 +100,7 @@ function htmlAnchorHrefs(html: string): string[] {
     position += tag[0].length;
     const tagName = tag[0].toLowerCase();
     let href: string | undefined;
-    let duplicateHref = false;
+    let hrefCount = 0;
     let closedTag = false;
     while (position < html.length) {
       while (/\s/.test(html[position] ?? '')) position++;
@@ -122,6 +122,7 @@ function htmlAnchorHrefs(html: string): string[] {
         continue;
       }
       const name = html.slice(nameStart, position).toLowerCase();
+      if (name === 'href') hrefCount++;
       while (/\s/.test(html[position] ?? '')) position++;
       if (html[position] !== '=') continue;
       position++;
@@ -139,19 +140,31 @@ function htmlAnchorHrefs(html: string): string[] {
           position++;
         value = html.slice(valueStart, position);
       }
-      if (name === 'href') {
-        if (href !== undefined) duplicateHref = true;
-        else href = value;
-      }
+      if (name === 'href') href = value;
     }
     if (!closedTag) return [];
-    if (!closing && tagName === 'a' && href !== undefined && !duplicateHref)
+    if (!closing && tagName === 'a' && href !== undefined && hrefCount === 1)
       hrefs.push(href);
     cursor = position;
-    if (!closing && (tagName === 'script' || tagName === 'style')) {
-      const rawEnd = lowercaseHtml.indexOf(`</${tagName}`, cursor);
+    if (
+      !closing &&
+      (tagName === 'script' ||
+        tagName === 'style' ||
+        tagName === 'textarea' ||
+        tagName === 'title')
+    ) {
+      let rawEnd = lowercaseHtml.indexOf(`</${tagName}`, cursor);
+      while (rawEnd >= 0) {
+        const afterName = rawEnd + tagName.length + 2;
+        if (/[\s>]/.test(html[afterName] ?? '')) {
+          const end = html.indexOf('>', afterName);
+          if (end < 0) return hrefs;
+          cursor = end + 1;
+          break;
+        }
+        rawEnd = lowercaseHtml.indexOf(`</${tagName}`, afterName);
+      }
       if (rawEnd < 0) break;
-      cursor = rawEnd;
     }
   }
   return hrefs;
