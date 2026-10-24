@@ -261,6 +261,7 @@ export class PublicFestivalService {
          SELECT item->'after' AS candidate,
            item->'after'->>'url' AS url,
            catalog.url AS "catalogUrl",
+           source."parserConfig"->>'seed' AS "sourceSeed",
            item->>'decision' AS decision,
            p.status AS "proposalStatus",
            p."createdAt" AS created_at,
@@ -283,15 +284,18 @@ export class PublicFestivalService {
        ), details AS (
          SELECT "catalogUrl" AS url,
            (array_agg(candidate->>'officialInstagramUrl' ORDER BY created_at DESC, proposal_id DESC)
-             FILTER (WHERE decision IS DISTINCT FROM 'rejected'
+             FILTER (WHERE "sourceSeed" IS DISTINCT FROM 'official-ticket-link-detail'
+               AND decision IS DISTINCT FROM 'rejected'
                AND "proposalStatus" IS DISTINCT FROM 'rejected'
                AND candidate->>'officialInstagramUrl' IS NOT NULL))[1] AS account,
            (array_agg(candidate->>'posterUrl' ORDER BY created_at DESC, proposal_id DESC)
-             FILTER (WHERE decision IS DISTINCT FROM 'rejected'
+             FILTER (WHERE "sourceSeed" IS DISTINCT FROM 'official-ticket-link-detail'
+               AND decision IS DISTINCT FROM 'rejected'
                AND "proposalStatus" IS DISTINCT FROM 'rejected'
                AND candidate->>'posterUrl' IS NOT NULL))[1] AS poster,
            (array_agg(candidate->'artists' ORDER BY created_at DESC, proposal_id DESC)
-             FILTER (WHERE decision IS DISTINCT FROM 'rejected'
+             FILTER (WHERE "sourceSeed" IS DISTINCT FROM 'official-ticket-link-detail'
+               AND decision IS DISTINCT FROM 'rejected'
                AND "proposalStatus" IS DISTINCT FROM 'rejected'
                AND jsonb_array_length(CASE WHEN jsonb_typeof(candidate->'artists') = 'array'
                  THEN candidate->'artists' ELSE '[]'::jsonb END) > 0))[1] AS artists

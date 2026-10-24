@@ -120,6 +120,57 @@ function nolEventDate(value: string): string | undefined {
   return last >= first ? `${first} - ${last}` : undefined;
 }
 
+function mintPaperOfficialTicketLinks(
+  body: string,
+  base: string,
+): FestivalCandidate[] | null {
+  if (base !== 'https://www.mintpaper.co.kr/posts/4821') return null;
+  if (body.length > 2_000_000) return [];
+  const script =
+    /<script\b[^>]*\bid=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i.exec(
+      body,
+    )?.[1];
+  if (!script) return [];
+  try {
+    const payload = JSON.parse(script) as {
+      props?: {
+        apolloState?: {
+          data?: Record<string, { title?: string; content?: string }>;
+        };
+      };
+    };
+    const post = payload.props?.apolloState?.data?.['Post:4821'];
+    if (
+      post?.title !== 'CDF2026-2027 TICKET | 예매 안내, 입장 안내, 관람 안내' ||
+      typeof post.content !== 'string'
+    )
+      return [];
+    const content = plainText(post.content).normalize('NFKC');
+    if (!/COUNTDOWN FANTASY 2026-2027/i.test(content)) return [];
+    const date = /일시\s*:\s*(20\d{2})년\s*(\d{1,2})월\s*(\d{1,2})일/.exec(
+      content,
+    );
+    if (
+      !date ||
+      nolEventDate(
+        `${date[1]}.${date[2].padStart(2, '0')}.${date[3].padStart(2, '0')}`,
+      ) !== '2026.12.31'
+    )
+      return [];
+    const urls = [
+      ...post.content.matchAll(
+        /<a\b[^>]*\bhref=["'](https:\/\/nol\.yanolja\.com\/ticket\/products\/\d+)["'][^>]*>/gi,
+      ),
+    ].map((match) => match[1]);
+    return [...new Set(urls)].slice(0, 5).map((url) => ({
+      name: 'COUNTDOWN FANTASY 2026-2027',
+      url,
+    }));
+  } catch {
+    return [];
+  }
+}
+
 function mintPaperCandidates(
   body: string,
   base: string,
@@ -1071,6 +1122,8 @@ export function ticketCandidates(
   base: string,
   config: Record<string, string> = {},
 ): FestivalCandidate[] {
+  const officialTicketLinks = mintPaperOfficialTicketLinks(body, base);
+  if (officialTicketLinks) return officialTicketLinks;
   const seoulCultureLineup = seoulCultureLineupCandidates(body, base, config);
   if (seoulCultureLineup) return seoulCultureLineup;
   const officialLineup = officialLineupCandidates(body, base, config);
