@@ -94,7 +94,7 @@ export class AuthController {
   @ApiOperation({
     summary: '제시된 refresh 세션 폐기',
     description:
-      'access 토큰 없이 refreshToken으로 해당 세션만 폐기합니다. 이미 회전된 토큰도 같은 세션의 후속 토큰을 폐기합니다. 계정의 다른 웹·iOS 세션은 변경하지 않습니다. 웹과 iOS가 공용 로그인 경로를 사용하므로 토큰 자체에는 플랫폼 구분이 없습니다. 클라이언트는 자신이 보유한 세션 토큰만 전달하고 이후 도착한 재발급 결과를 저장하지 않아야 합니다. 이미 발급된 access 토큰은 만료까지 유효합니다.',
+      'access 토큰 없이 refreshToken으로 해당 세션만 폐기합니다. 이미 회전되거나 만료된 서명 유효 토큰도 같은 세션의 후속 토큰을 폐기합니다. 계정의 다른 웹·iOS 세션은 변경하지 않습니다. 웹과 iOS가 공용 로그인 경로를 사용하므로 토큰 자체에는 플랫폼 구분이 없습니다. 클라이언트는 자신이 보유한 세션 토큰만 전달하고 이후 도착한 재발급 결과를 저장하지 않아야 합니다. 이미 발급된 access 토큰은 만료까지 유효합니다.',
   })
   @ApiBody({ type: RevokeSessionDto })
   @ApiResponse({

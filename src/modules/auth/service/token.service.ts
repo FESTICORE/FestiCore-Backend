@@ -58,10 +58,14 @@ export class TokenService {
     return { accessToken, refreshToken };
   }
 
-  private async verifyRefresh(token: string): Promise<RefreshPayload | null> {
+  private async verifyRefresh(
+    token: string,
+    ignoreExpiration = false,
+  ): Promise<RefreshPayload | null> {
     try {
       const payload = await this.jwt.verifyAsync<RefreshPayload>(token, {
         secret: this.config.get<string>('auth.jwt.refreshSecret'),
+        ignoreExpiration,
       });
       return payload.typ === 'refresh' &&
         typeof payload.sub === 'string' &&
@@ -165,7 +169,8 @@ export class TokenService {
    * 서명/형식 실패만 조용히 처리하고 DB 오류는 호출자에게 전파한다.
    */
   async revokeSession(refreshToken: string): Promise<void> {
-    const payload = await this.verifyRefresh(refreshToken);
+    // 회전 직후 원본 JWT가 만료됐더라도 같은 세션의 후속 토큰을 닫을 수 있다.
+    const payload = await this.verifyRefresh(refreshToken, true);
     if (!payload) return;
     const row = await this.refreshRepo.findOne({
       where: { tokenHash: this.hash(refreshToken) },

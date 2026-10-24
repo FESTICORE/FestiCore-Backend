@@ -184,6 +184,32 @@ describe('Auth (e2e)', () => {
       .expect(200);
   });
 
+  it('회전 후 원본 JWT가 만료돼도 해당 세션의 후속 토큰을 폐기한다', async () => {
+    ctx.env['auth.jwt.refreshTtl'] = '3s';
+    const first = dataOf(await socialLogin().expect(200));
+    ctx.env['auth.jwt.refreshTtl'] = '14d';
+    const rotated = dataOf(
+      await request(server)
+        .post('/api/v1/auth/refresh')
+        .send({ refreshToken: first.refreshToken })
+        .expect(200),
+    );
+    const originalNow = Date.now();
+    const clock = jest.spyOn(Date, 'now').mockReturnValue(originalNow + 4_000);
+    try {
+      await request(server)
+        .post('/api/v1/auth/session/revoke')
+        .send({ refreshToken: first.refreshToken })
+        .expect(204);
+      await request(server)
+        .post('/api/v1/auth/refresh')
+        .send({ refreshToken: rotated.refreshToken })
+        .expect(401);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it('세션 조회 DB 오류를 성공 응답으로 숨기지 않는다', async () => {
     const login = dataOf(await socialLogin().expect(200));
     const findOne = jest
