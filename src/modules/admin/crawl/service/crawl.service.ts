@@ -753,7 +753,13 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
              AND NOT ("parserConfig"->>'artistName' = ANY($3::text[]))`,
           [source.url, config.festivalSourceUrl, [...names]],
         );
-        await this.syncXmfGalleryAliases(config.festivalSourceUrl);
+        try {
+          await this.syncXmfGalleryAliases(config.festivalSourceUrl);
+        } catch (error) {
+          this.logger.warn(
+            `XMF 갤러리 사진을 저장했지만 공식 공지 별칭을 확인하지 못했습니다: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
         run.result = 'nochange-parsed';
         source.lastChangedAt = new Date();
         source.status = 'ok';
@@ -1122,47 +1128,50 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
           ? proposed
           : null;
       const officialName = desired ? (officialNames.get(row.id) ?? null) : null;
-      if (
+      const updateOfficial =
         row.officialNameSource === 'official-notice-and-modal-site' ||
-        (!row.artistOfficialName && officialName)
-      )
-        await this.dataSource.query(
-          `UPDATE crawl_sources SET "parserConfig" =
-             CASE WHEN $2::text IS NULL
-               THEN "parserConfig" - 'artistOfficialName' - 'artistOfficialNameSource'
-               ELSE "parserConfig" || jsonb_build_object(
-                 'artistOfficialName', $2::text,
-                 'artistOfficialNameSource', 'official-notice-and-modal-site')
-             END, "updatedAt" = now()
-           WHERE id = $1::uuid AND kind = 'artist-image'
-             AND "parserConfig"->>'festivalSourceUrl' = $3::text
-             AND ("parserConfig"->>'artistOfficialNameSource' =
-               'official-notice-and-modal-site'
-               OR NOT ("parserConfig" ? 'artistOfficialName'))
-             AND "parserConfig"->>'artistOfficialName' IS DISTINCT FROM $2::text`,
-          [row.id, officialName, festivalSourceUrl],
-        );
+        (!row.artistOfficialName && !!officialName);
+      const updateAlias =
+        row.aliasSource === 'official-notice' ||
+        (!row.artistAlias && !!desired);
       if (
-        row.aliasSource !== 'official-notice' &&
-        (row.artistAlias || !desired)
+        (!updateOfficial ||
+          (row.artistOfficialName === officialName &&
+            row.officialNameSource ===
+              (officialName ? 'official-notice-and-modal-site' : null))) &&
+        (!updateAlias ||
+          (row.artistAlias === desired &&
+            row.aliasSource === (desired ? 'official-notice' : null)))
       )
         continue;
       await this.dataSource.query(
         `UPDATE crawl_sources SET "parserConfig" =
-           CASE WHEN $2::text IS NULL
-             THEN "parserConfig" - 'artistAlias' - 'artistAliasSource'
-             ELSE jsonb_set("parserConfig", '{artistAlias}', to_jsonb($2::text), true)
-               || jsonb_build_object('artistAliasSource', 'official-notice')
-           END,
+           ("parserConfig"
+             - CASE WHEN $5::boolean THEN ARRAY['artistOfficialName', 'artistOfficialNameSource'] ELSE ARRAY[]::text[] END
+             - CASE WHEN $6::boolean THEN ARRAY['artistAlias', 'artistAliasSource'] ELSE ARRAY[]::text[] END)
+           || CASE WHEN $5::boolean AND $2::text IS NOT NULL
+             THEN jsonb_build_object('artistOfficialName', $2::text,
+               'artistOfficialNameSource', 'official-notice-and-modal-site')
+             ELSE '{}'::jsonb END
+           || CASE WHEN $6::boolean AND $3::text IS NOT NULL
+             THEN jsonb_build_object('artistAlias', $3::text,
+               'artistAliasSource', 'official-notice')
+             ELSE '{}'::jsonb END,
            "updatedAt" = now()
          WHERE id = $1::uuid AND kind = 'artist-image'
-           AND "parserConfig"->>'festivalSourceUrl' = $3::text
-           AND ("parserConfig"->>'artistAliasSource' = 'official-notice'
-             OR NOT ("parserConfig" ? 'artistAlias'))
-           AND ("parserConfig"->>'artistAlias' IS DISTINCT FROM $2::text
-             OR "parserConfig"->>'artistAliasSource' IS DISTINCT FROM
-               CASE WHEN $2::text IS NULL THEN NULL ELSE 'official-notice' END)`,
-        [row.id, desired, festivalSourceUrl],
+           AND "parserConfig"->>'festivalSourceUrl' = $4::text
+           AND (NOT $5::boolean OR "parserConfig"->>'artistOfficialNameSource' =
+             'official-notice-and-modal-site' OR NOT ("parserConfig" ? 'artistOfficialName'))
+           AND (NOT $6::boolean OR "parserConfig"->>'artistAliasSource' =
+             'official-notice' OR NOT ("parserConfig" ? 'artistAlias'))`,
+        [
+          row.id,
+          officialName,
+          desired,
+          festivalSourceUrl,
+          updateOfficial,
+          updateAlias,
+        ],
       );
     }
   }

@@ -106,10 +106,13 @@ describe('crawlArtistGallery', () => {
     const html = card('m1', 'b1', 'https://cdn.imweb.me/thumbnail/mika.jpg');
     const payload = JSON.stringify({
       msg: 'SUCCESS',
-      html: `<h4 class="modal-title">artist_MIKA</h4>
-        <a href="https://www.mikanakashima.com">Official Site</a>
+      html: `<a href="https://otherartist.com">Unrelated page link</a>
+        <h4 class="modal-title">artist_MIKA</h4><div class="modal-body">
+        <div><a href="https://www.mikanakashima.com">Official Site</a>
         <a href="http://mikanakashima.com">Insecure</a>
-        <a href="https://mikanakashima.evil.test">Unrelated</a>`,
+        <a href="https://mikanakashima.evil.test">Unrelated</a>
+        <a href="https://linktr.ee/mikanakashima">Shared profile</a></div></div>
+        <a href="https://anotherartist.com">Unrelated footer link</a>`,
     });
     await expect(
       crawlArtistGallery(html, pageUrl, () => Promise.resolve(payload)),

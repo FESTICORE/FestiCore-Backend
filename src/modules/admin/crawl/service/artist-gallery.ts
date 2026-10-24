@@ -209,19 +209,50 @@ function modalArtist(
           return code < 32 || code === 127;
         })
       ) {
+        const bodyStart = payload.html
+          .slice(match.index + match[0].length)
+          .search(
+            /<div\b[^>]*\bclass\s*=\s*["'][^"']*\bmodal-body\b[^"']*["'][^>]*>/i,
+          );
+        if (bodyStart < 0) return { artistName: name, officialSiteKeys: [] };
+        const bodyOffset = match.index + match[0].length + bodyStart;
+        const tags = /<\/?div\b[^>]*>/gi;
+        tags.lastIndex = bodyOffset;
+        let depth = 0;
+        let bodyEnd = payload.html.length;
+        for (const tag of payload.html.matchAll(tags)) {
+          if (tag.index < bodyOffset) continue;
+          depth += /^<\/div\b/i.test(tag[0]) ? -1 : 1;
+          if (depth === 0) {
+            bodyEnd = tag.index;
+            break;
+          }
+        }
+        const modalBody = payload.html.slice(bodyOffset, bodyEnd);
         const officialSiteKeys = new Set<string>();
-        for (const link of payload.html.matchAll(
+        for (const link of modalBody.matchAll(
           /<a\b[^>]*\bhref\s*=\s*["'](https:\/\/[^"']+)["']/gi,
         )) {
           try {
             const url = new URL(decodeHtml(link[1]));
             const labels = url.hostname.replace(/^www\./, '').split('.');
+            const sharedHosts = new Set([
+              'instagram.com',
+              'youtube.com',
+              'youtu.be',
+              'facebook.com',
+              'x.com',
+              'twitter.com',
+              'tiktok.com',
+              'linktr.ee',
+            ]);
             if (
               url.protocol !== 'https:' ||
               url.username ||
               url.password ||
               url.port ||
-              labels.length !== 2
+              labels.length !== 2 ||
+              sharedHosts.has(url.hostname.replace(/^www\./, ''))
             )
               continue;
             const key = labels[0].replace(/[^a-z0-9]/gi, '').toLowerCase();
