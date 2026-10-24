@@ -78,6 +78,7 @@ export function plainText(html: string): string {
 
 function htmlAnchorHrefs(html: string): string[] {
   const hrefs: string[] = [];
+  const lowercaseHtml = html.toLowerCase();
   let cursor = 0;
   while (cursor < html.length) {
     const tagStart = html.indexOf('<', cursor);
@@ -97,14 +98,20 @@ function htmlAnchorHrefs(html: string): string[] {
       continue;
     }
     position += tag[0].length;
+    const tagName = tag[0].toLowerCase();
+    let href: string | undefined;
+    let duplicateHref = false;
+    let closedTag = false;
     while (position < html.length) {
       while (/\s/.test(html[position] ?? '')) position++;
       if (html[position] === '>') {
         position++;
+        closedTag = true;
         break;
       }
       if (html[position] === '/' && html[position + 1] === '>') {
         position += 2;
+        closedTag = true;
         break;
       }
       const nameStart = position;
@@ -132,10 +139,20 @@ function htmlAnchorHrefs(html: string): string[] {
           position++;
         value = html.slice(valueStart, position);
       }
-      if (!closing && tag[0].toLowerCase() === 'a' && name === 'href')
-        hrefs.push(value);
+      if (name === 'href') {
+        if (href !== undefined) duplicateHref = true;
+        else href = value;
+      }
     }
+    if (!closedTag) return [];
+    if (!closing && tagName === 'a' && href !== undefined && !duplicateHref)
+      hrefs.push(href);
     cursor = position;
+    if (!closing && (tagName === 'script' || tagName === 'style')) {
+      const rawEnd = lowercaseHtml.indexOf(`</${tagName}`, cursor);
+      if (rawEnd < 0) break;
+      cursor = rawEnd;
+    }
   }
   return hrefs;
 }

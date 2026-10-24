@@ -881,7 +881,7 @@ describe('crawl parsers', () => {
         '<a href="https://ticket.yes24.com/Perf/60590?Gcode=009_207">YES24</a>',
     };
     const html = (value: typeof post) =>
-      `<script id="__NEXT_DATA__" type="application/json">${JSON.stringify({ props: { apolloState: { data: { 'Post:4821': value } } } })}</script>`;
+      `<script id="__NEXT_DATA__" type="application/json">${JSON.stringify({ props: { apolloState: { data: { 'Post:4821': value } } } }).replace(/</g, '\\u003c')}</script>`;
     expect(await parseCrawl(mint, html(post))).toEqual([
       {
         name: 'COUNTDOWN FANTASY 2026-2027',
@@ -907,7 +907,11 @@ describe('crawl parsers', () => {
       `<a data-note='please href="https://ticket.yes24.com/Perf/60591"'>Other</a>`,
       `<a data-note="please href='https://ticket.yes24.com/Perf/60591'">Other</a>`,
       `<a href="https://example.com" data-note='please href="https://ticket.yes24.com/Perf/60591"'>Other</a>`,
+      '<a href="https://example.com" href="https://ticket.yes24.com/Perf/60591">Other</a>',
+      '<a href="https://ticket.yes24.com/Perf/60591" href="https://example.com">Other</a>',
       `<div data-note='<a href="https://ticket.yes24.com/Perf/60591">'>Other</div>`,
+      `<script>const fake = '<a href="https://ticket.yes24.com/Perf/60591">';</script>`,
+      `<style>p::before { content: '<a href="https://ticket.yes24.com/Perf/60591">'; }</style>`,
     ]) {
       expect(
         await parseCrawl(
