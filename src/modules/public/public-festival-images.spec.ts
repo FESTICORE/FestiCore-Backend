@@ -1,6 +1,110 @@
 import { discoverySummaries } from './crawl-catalog';
 import { PublicFestivalService } from './public-festival.service';
 describe('discovered festival artist profile images', () => {
+  it('adds only saved official GMF child artists when the discovery has no lineup', async () => {
+    const gmfUrl = 'https://mintpaper.co.kr/festivals/172';
+    const candidate = {
+      name: 'Grand Mint Festival 2026',
+      venue: 'Olympic Park',
+      date: '2026.10.17 - 2026.10.18',
+      url: gmfUrl,
+      artists: [],
+    };
+    const query = jest.fn().mockImplementation((sql: string) => {
+      if (sql.includes('WITH candidates AS')) return [{ candidate }];
+      if (
+        sql.includes('FROM crawl_images image') &&
+        sql.includes("source.kind = 'artist-image'")
+      )
+        return [
+          {
+            festivalSourceUrl: gmfUrl,
+            artistName: '이소라',
+            seed: 'official-gmf-lineup',
+            id: 'official-photo',
+          },
+          {
+            festivalSourceUrl: gmfUrl,
+            artistName: '잘못된 소스',
+            seed: 'manual',
+            id: 'manual-photo',
+          },
+          {
+            festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
+            artistName: '다른 축제',
+            seed: 'official-gmf-lineup',
+            id: 'other-photo',
+          },
+        ];
+      return [];
+    });
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    const result = await service.detail(
+      discoverySummaries([{ candidate }])[0].id,
+    );
+    expect(result.artists).toEqual([
+      {
+        name: '이소라',
+        imageUrl: '/api/v1/festivals/images/official-photo.webp',
+      },
+    ]);
+    expect(result.timetable).toEqual([]);
+  });
+
+  it('shows only the saved GMF artist image on its official festival detail', async () => {
+    const gmfUrl = 'https://mintpaper.co.kr/festivals/172';
+    const otherUrl = 'https://mintpaper.co.kr/festivals/178';
+    const candidate = {
+      name: 'GRAND MINT FESTIVAL 2026',
+      venue: '올림픽공원',
+      date: '2026.10.17 - 2026.10.18',
+      url: gmfUrl,
+      artists: [{ name: '이소라' }],
+    };
+    const query = jest.fn().mockImplementation((sql: string) => {
+      if (sql.includes('WITH candidates AS')) return [{ candidate }];
+      if (sql.includes('FROM admin_festivals')) return [];
+      if (
+        sql.includes('FROM crawl_images image') &&
+        sql.includes("source.kind = 'artist-image'")
+      )
+        return [
+          { festivalSourceUrl: gmfUrl, artistName: '이소라', id: 'gmf-photo' },
+          {
+            festivalSourceUrl: otherUrl,
+            artistName: '이소라',
+            id: 'other-photo',
+          },
+        ];
+      return [];
+    });
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    const result = await service.detail(
+      discoverySummaries([{ candidate }])[0].id,
+    );
+    expect(result.artists).toContainEqual({
+      name: '이소라',
+      imageUrl: '/api/v1/festivals/images/gmf-photo.webp',
+    });
+    const imageQuery = (query.mock.calls as [string, unknown[]][]).find(
+      ([sql]) =>
+        sql.includes('FROM crawl_images image') &&
+        sql.includes("source.kind = 'artist-image'"),
+    );
+    expect(imageQuery?.[1][0]).toContain(gmfUrl);
+    expect(imageQuery?.[1][0]).not.toContain(otherUrl);
+  });
+
   it('shows an official CDF performer profile beside an already stored artist photo', async () => {
     const candidate = {
       name: 'COUNTDOWN FANTASY 2026-2027',
