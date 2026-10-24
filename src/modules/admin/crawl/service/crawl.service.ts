@@ -779,6 +779,13 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       } else {
         phase = 'PARSE';
         const parsed = await parseCrawl(source, response.body);
+        const officialTicketLinks =
+          source.url === 'https://www.mintpaper.co.kr/posts/4821';
+        if (
+          officialTicketLinks &&
+          source.parserConfig.seed !== 'official-ticket-links'
+        )
+          throw new Error('공식 예매 링크 소스 설정이 올바르지 않습니다.');
         if (
           source.url === 'https://mintpaper.co.kr/festivals' &&
           Array.isArray(parsed)
@@ -800,7 +807,58 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
             );
           }
         }
-        if (source.kind === 'discovery' && Array.isArray(parsed)) {
+        if (officialTicketLinks && Array.isArray(parsed)) {
+          const festivalSourceUrl = source.parserConfig.festivalSourceUrl;
+          if (festivalSourceUrl !== 'https://mintpaper.co.kr/festivals/178')
+            throw new Error('공식 예매 링크의 축제 연결이 올바르지 않습니다.');
+          const detailConfig = JSON.stringify({
+            seed: 'official-ticket-link-detail',
+            festivalSourceUrl,
+            festivalSourceUrls: [festivalSourceUrl],
+          });
+          for (const item of parsed) {
+            const url = (item as { url?: unknown }).url;
+            if (
+              typeof url !== 'string' ||
+              !/^https:\/\/nol\.yanolja\.com\/ticket\/products\/\d+$/.test(url)
+            )
+              throw new Error('공식 NOL 상품 링크가 올바르지 않습니다.');
+            await this.dataSource.query(
+              `UPDATE crawl_sources SET "parserConfig" = "parserConfig" || $2::jsonb,
+                 "updatedAt" = now()
+               WHERE "url" = $1 AND "kind" = 'discovery' AND "parser" = 'ticket-list'
+                 AND "parserConfig"->>'seed' = 'ticket-detail'
+                 AND (NOT ("parserConfig" ? 'festivalSourceUrl')
+                   OR "parserConfig"->>'festivalSourceUrl' = $3)
+                 AND NOT ("parserConfig" ? 'festivalSourceUrls')`,
+              [url, detailConfig, festivalSourceUrl],
+            );
+            await this.dataSource.query(
+              `INSERT INTO crawl_sources ("kind", "url", "parser", "parserConfig", "createdAt")
+               SELECT 'discovery', $1::varchar, 'ticket-list', $2::jsonb, now() - interval '1 day'
+               WHERE NOT EXISTS (SELECT 1 FROM crawl_sources WHERE "url" = $1)`,
+              [url, detailConfig],
+            );
+            const rows = await this.dataSource.query<
+              { parserConfig: Record<string, unknown> }[]
+            >(
+              `SELECT "parserConfig" FROM crawl_sources WHERE "url" = $1 LIMIT 1`,
+              [url],
+            );
+            if (
+              rows[0]?.parserConfig.seed !== 'official-ticket-link-detail' ||
+              rows[0]?.parserConfig.festivalSourceUrl !== festivalSourceUrl
+            )
+              this.logger.warn(
+                '기존 NOL 크롤 소스 설정이 달라 자동 변경하지 않았습니다.',
+              );
+          }
+        }
+        if (
+          !officialTicketLinks &&
+          source.kind === 'discovery' &&
+          Array.isArray(parsed)
+        ) {
           for (const item of parsed.slice(0, 100) as unknown[]) {
             if (!item || typeof item !== 'object' || !('url' in item)) continue;
             const url = item.url;
@@ -826,7 +884,9 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
             );
           }
         }
-        const candidate = await this.proposalItems(source, parsed);
+        const candidate = officialTicketLinks
+          ? { kind: 'festival.new' as const, items: [] }
+          : await this.proposalItems(source, parsed);
         if (candidate.items.length) {
           const proposal = await this.proposalsRepo.save(
             this.proposalsRepo.create({

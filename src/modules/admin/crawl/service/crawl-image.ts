@@ -287,6 +287,7 @@ function mintPaperImages(html: string, pageUrl: string): URL[] | null {
 }
 
 export function discoverImageUrls(html: string, pageUrl: string): URL[] {
+  if (pageUrl === 'https://www.mintpaper.co.kr/posts/4821') return [];
   const officialImages = mintPaperImages(html, pageUrl);
   if (officialImages) return officialImages;
   const melonImages = melonDetailImages(html, pageUrl);

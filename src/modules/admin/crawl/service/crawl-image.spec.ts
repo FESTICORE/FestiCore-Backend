@@ -37,6 +37,15 @@ describe('crawl image safety', () => {
     ]);
   });
 
+  it('does not save unrelated images from the official NOL ticket notice', () => {
+    expect(
+      discoverImageUrls(
+        '<img src="https://ticketimage.interpark.com/Play/image/large/26/99999999_p.gif">',
+        'https://www.mintpaper.co.kr/posts/4821',
+      ),
+    ).toEqual([]);
+  });
+
   it('uses only festival posters from Melon listing JSON', () => {
     const json = JSON.stringify({
       data: [

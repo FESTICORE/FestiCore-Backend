@@ -837,6 +837,50 @@ describe('crawl parsers', () => {
     );
   });
 
+  it('discovers only the NOL product linked by the official CDF ticket notice', async () => {
+    const mint = source('ticket-list', 'discovery', {
+      seed: 'official-ticket-links',
+    });
+    mint.url = 'https://www.mintpaper.co.kr/posts/4821';
+    const post = {
+      title: 'CDF2026-2027 TICKET | 예매 안내, 입장 안내, 관람 안내',
+      content:
+        '<p>COUNTDOWN FANTASY 2026-2027 일시 : 2026년 12월 31일(목)</p>' +
+        '<a href="https://nol.yanolja.com/ticket/products/26014568">NOL</a>' +
+        '<a href="https://nol.yanolja.com/ticket/products/26014568">NOL 중복</a>' +
+        '<a href="https://nol.yanolja.com/ticket/products/999?ref=other">무관</a>',
+    };
+    const html = (value: typeof post) =>
+      `<script id="__NEXT_DATA__" type="application/json">${JSON.stringify({ props: { apolloState: { data: { 'Post:4821': value } } } })}</script>`;
+    expect(await parseCrawl(mint, html(post))).toEqual([
+      {
+        name: 'COUNTDOWN FANTASY 2026-2027',
+        url: 'https://nol.yanolja.com/ticket/products/26014568',
+      },
+    ]);
+    await expect(
+      parseCrawl(mint, html({ ...post, title: '다른 공연 안내' })),
+    ).rejects.toThrow('공개 예매 링크');
+    await expect(
+      parseCrawl(
+        mint,
+        html({
+          ...post,
+          content: post.content.replace('2026년 12월 31일', '2026년 2월 30일'),
+        }),
+      ),
+    ).rejects.toThrow('공개 예매 링크');
+    await expect(
+      parseCrawl(
+        mint,
+        html({
+          ...post,
+          content: post.content.replace('2026년 12월 31일', '2027년 1월 1일'),
+        }),
+      ),
+    ).rejects.toThrow('공개 예매 링크');
+  });
+
   it('extracts 11 Oneway performers from the official Melon notice HTML', async () => {
     const melon = source('ticket-list', 'discovery', {
       festivalSourceUrl:

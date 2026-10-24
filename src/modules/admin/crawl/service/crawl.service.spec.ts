@@ -1131,6 +1131,145 @@ describe('CrawlService manual runs and snapshots', () => {
     ]);
   });
 
+  it('registers an official Mint Paper NOL link without a duplicate festival proposal', async () => {
+    const { service, source, run, dataSource, runsRepo, execute } = harness();
+    execute.mockRestore();
+    source.url = 'https://www.mintpaper.co.kr/posts/4821';
+    source.parserConfig = {
+      seed: 'official-ticket-links',
+      festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
+    };
+    const post = {
+      title: 'CDF2026-2027 TICKET | 예매 안내, 입장 안내, 관람 안내',
+      content:
+        '<p>COUNTDOWN FANTASY 2026-2027 일시 : 2026년 12월 31일</p>' +
+        '<a href="https://nol.yanolja.com/ticket/products/26014568">NOL</a>',
+    };
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({
+      status: 200,
+      body: `<script id="__NEXT_DATA__" type="application/json">${JSON.stringify({ props: { apolloState: { data: { 'Post:4821': post } } } })}</script>`,
+    });
+    dataSource.query.mockImplementation((sql: string) =>
+      sql.includes('SELECT "parserConfig"')
+        ? [
+            {
+              parserConfig: {
+                seed: 'official-ticket-link-detail',
+                festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
+              },
+            },
+          ]
+        : [],
+    );
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(null),
+    }));
+    const proposals = jest.spyOn(service, 'proposalItems');
+
+    await service.execute(run, source);
+
+    expect(run.result).toBe('nochange-parsed');
+    expect(proposals).not.toHaveBeenCalled();
+    const calls = dataSource.query.mock.calls as unknown as [
+      string,
+      string[],
+    ][];
+    const statements = calls.filter(([sql]) => sql.includes('crawl_sources'));
+    expect(
+      statements.filter(([sql]) => sql.includes('INSERT INTO')),
+    ).toHaveLength(1);
+    expect(statements[0][1][0]).toBe(
+      'https://nol.yanolja.com/ticket/products/26014568',
+    );
+    expect(statements[1][1][1]).toContain('official-ticket-link-detail');
+    expect(statements[1][1][1]).toContain(
+      'https://mintpaper.co.kr/festivals/178',
+    );
+    expect(statements[0][0]).toContain(
+      `"parserConfig"->>'seed' = 'ticket-detail'`,
+    );
+    expect(statements[0][0]).toContain(
+      `"parserConfig"->>'festivalSourceUrl' = $3`,
+    );
+    expect(statements[0][1][2]).toBe('https://mintpaper.co.kr/festivals/178');
+  });
+
+  it('preserves an existing NOL source with a different configuration', async () => {
+    const { service, source, run, dataSource, runsRepo, execute } = harness();
+    execute.mockRestore();
+    source.url = 'https://www.mintpaper.co.kr/posts/4821';
+    source.parserConfig = {
+      seed: 'official-ticket-links',
+      festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
+    };
+    const content =
+      '<p>COUNTDOWN FANTASY 2026-2027 일시 : 2026년 12월 31일</p>' +
+      '<a href="https://nol.yanolja.com/ticket/products/26014568">NOL</a>';
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({
+      status: 200,
+      body: `<script id="__NEXT_DATA__">${JSON.stringify({ props: { apolloState: { data: { 'Post:4821': { title: 'CDF2026-2027 TICKET | 예매 안내, 입장 안내, 관람 안내', content } } } } })}</script>`,
+    });
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(null),
+    }));
+    dataSource.query.mockImplementation((sql: string) =>
+      sql.includes('SELECT "parserConfig"')
+        ? [{ parserConfig: { seed: 'manual', festivalSourceUrl: 'other' } }]
+        : [],
+    );
+    const warning = jest.spyOn(
+      (service as unknown as { logger: { warn: (message: string) => void } })
+        .logger,
+      'warn',
+    );
+
+    await service.execute(run, source);
+
+    expect(run.result).toBe('nochange-parsed');
+    expect(warning).toHaveBeenCalledWith(
+      '기존 NOL 크롤 소스 설정이 달라 자동 변경하지 않았습니다.',
+    );
+    const update = (
+      dataSource.query.mock.calls as unknown as [string, string[]][]
+    ).find(([sql]) => sql.includes('UPDATE crawl_sources'));
+    expect(update?.[0]).toContain(`"parserConfig"->>'seed' = 'ticket-detail'`);
+    expect(update?.[0]).toContain(`"parserConfig"->>'festivalSourceUrl' = $3`);
+  });
+
+  it('does not turn a reconfigured official post source into a festival proposal', async () => {
+    const { service, source, run, dataSource, runsRepo, execute } = harness();
+    execute.mockRestore();
+    source.url = 'https://www.mintpaper.co.kr/posts/4821';
+    source.parserConfig = { seed: 'manual' };
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({
+      status: 200,
+      body: `<script id="__NEXT_DATA__">${JSON.stringify({ props: { apolloState: { data: { 'Post:4821': { title: 'CDF2026-2027 TICKET | 예매 안내, 입장 안내, 관람 안내', content: '<p>COUNTDOWN FANTASY 2026-2027 일시 : 2026년 12월 31일</p><a href="https://nol.yanolja.com/ticket/products/26014568">NOL</a>' } } } } })}</script>`,
+    });
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(null),
+    }));
+    const proposals = jest.spyOn(service, 'proposalItems');
+
+    await service.execute(run, source);
+
+    expect(run.result).toBe('failed');
+    expect(proposals).not.toHaveBeenCalled();
+    expect(
+      dataSource.query.mock.calls.some(([sql]: [string]) =>
+        sql.includes('INSERT INTO crawl_sources'),
+      ),
+    ).toBe(false);
+  });
+
   it('fetches bounded YES24 category pages and combines their listings', async () => {
     const { service, source } = harness();
     source.url =
