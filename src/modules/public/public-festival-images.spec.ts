@@ -194,4 +194,84 @@ describe('discovered festival artist profile images', () => {
       ]),
     );
   });
+
+  it('matches harmless name formatting differences without guessing a different artist', async () => {
+    const sourceUrl =
+      'https://ticket.melon.com/performance/index.htm?prodId=213766';
+    const candidate = {
+      name: 'XMF 2026',
+      venue: '파라다이스시티',
+      date: '2026.10.03 - 2026.10.04',
+      url: sourceUrl,
+      artists: [{ name: '  DAY6  ' }, { name: 'Ado' }],
+    };
+    const imageId = '00000000-0000-4000-8000-000000000001';
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([{ candidate }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          festivalSourceUrl: sourceUrl,
+          artistName: 'day6',
+          artistAlias: null,
+          id: imageId,
+        },
+      ])
+      .mockResolvedValueOnce([]);
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    const id = discoverySummaries([{ candidate }])[0].id;
+    await expect(service.detail(id)).resolves.toMatchObject({
+      artists: [
+        { name: 'DAY6', imageUrl: `/api/v1/festivals/images/${imageId}.webp` },
+        { name: 'Ado', imageUrl: null },
+      ],
+    });
+  });
+
+  it('does not choose a profile when reviewed aliases collide', async () => {
+    const sourceUrl =
+      'https://ticket.melon.com/performance/index.htm?prodId=213766';
+    const candidate = {
+      name: 'XMF 2026',
+      venue: '파라다이스시티',
+      date: '2026.10.03 - 2026.10.04',
+      url: sourceUrl,
+      artists: [{ name: 'day6' }],
+    };
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([{ candidate }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          festivalSourceUrl: sourceUrl,
+          artistName: 'Band A',
+          artistAlias: 'DAY6',
+          id: 'image-a',
+        },
+        {
+          festivalSourceUrl: sourceUrl,
+          artistName: 'Band B',
+          artistAlias: 'Day6',
+          id: 'image-b',
+        },
+      ])
+      .mockResolvedValueOnce([]);
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    const id = discoverySummaries([{ candidate }])[0].id;
+    await expect(service.detail(id)).resolves.toMatchObject({
+      artists: [{ name: 'day6', imageUrl: null }],
+    });
+  });
 });
