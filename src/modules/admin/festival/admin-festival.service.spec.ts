@@ -32,6 +32,7 @@ describe('AdminFestivalService optimistic edits', () => {
       {} as never,
       {} as never,
       {} as never,
+      { enqueueFestival: jest.fn().mockResolvedValue(undefined) } as never,
     );
 
     await expect(service.list()).resolves.toEqual({
@@ -79,6 +80,7 @@ describe('AdminFestivalService optimistic edits', () => {
     {} as never,
     {} as never,
     {} as never,
+    { enqueueFestival: jest.fn().mockResolvedValue(undefined) } as never,
   );
 
   beforeEach(() => save.mockClear());
@@ -173,6 +175,7 @@ describe('discovered festival import', () => {
       { record } as never,
       {} as never,
       { discovered: discoveredLookup } as never,
+      { enqueueFestival: jest.fn().mockResolvedValue(undefined) } as never,
     );
     return { service, query, record, discoveredLookup, manager };
   }
@@ -268,6 +271,7 @@ describe('festival edit audit', () => {
       { record } as never,
       {} as never,
       {} as never,
+      { enqueueFestival: jest.fn().mockResolvedValue(undefined) } as never,
     );
 
     const result = (await service.create(
@@ -331,6 +335,7 @@ describe('festival edit audit', () => {
       { record } as never,
       {} as never,
       {} as never,
+      { enqueueFestival: jest.fn().mockResolvedValue(undefined) } as never,
     );
 
     await expect(
@@ -371,6 +376,7 @@ describe('festival source freshness warnings', () => {
         {} as never,
         {} as never,
         {} as never,
+        { enqueueFestival: jest.fn().mockResolvedValue(undefined) } as never,
       );
 
       await expect(service.getDraft(row.id)).resolves.toMatchObject({
@@ -434,6 +440,7 @@ describe('pack update delivery queue', () => {
     const query = jest.fn().mockResolvedValue([{ id: 'one' }, { id: 'two' }]);
     const record = jest.fn().mockResolvedValue(undefined);
     const invalidatePack = jest.fn().mockResolvedValue(undefined);
+    const enqueueFestival = jest.fn().mockResolvedValue(undefined);
     const manager = {
       getRepository: (entity: unknown) =>
         entity === AdminFestival ? festivalRepo : versionRepo,
@@ -449,6 +456,7 @@ describe('pack update delivery queue', () => {
       { record } as never,
       { invalidatePack } as never,
       {} as never,
+      { enqueueFestival } as never,
     );
 
     await expect(
@@ -458,6 +466,7 @@ describe('pack update delivery queue', () => {
       service.publish(draft.id, '', '"d2"', null),
     ).rejects.toMatchObject({ status: 412 });
     expect(festivalRepo.save).not.toHaveBeenCalled();
+    expect(enqueueFestival).not.toHaveBeenCalled();
     await expect(
       service.publish(draft.id, '', '"d1"', null),
     ).resolves.toMatchObject({
@@ -468,6 +477,7 @@ describe('pack update delivery queue', () => {
     const calls = query.mock.calls as unknown[][];
     expect(calls[0][0]).toContain('s."packUpdates" = true');
     expect(calls[0][1]).toEqual([draft.id, `pack-updated:${draft.id}:1`]);
+    expect(enqueueFestival).toHaveBeenCalledWith(draft.id, manager);
     expect(record).toHaveBeenCalledWith(manager, {
       actor: null,
       action: 'festival.published',
@@ -479,6 +489,7 @@ describe('pack update delivery queue', () => {
       packVersion: 2,
       pushedDevices: 2,
     });
+    expect(enqueueFestival).toHaveBeenCalledTimes(2);
     expect(invalidatePack).toHaveBeenCalledTimes(2);
     expect(invalidatePack).toHaveBeenCalledWith(draft.id);
     record.mockRejectedValueOnce(new Error('transaction failed'));

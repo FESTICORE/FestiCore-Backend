@@ -48,6 +48,7 @@ import {
 } from './flag-claim-throttle.service';
 import { FlagPackSyncService } from './flag-pack-sync.service';
 import { SocialNotificationService } from '../notification/social-notification.service';
+import { LiveActivityService } from '../notification/live-activity.service';
 
 const codeAlphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 function newCode(): string {
@@ -90,6 +91,7 @@ export class FlagsService {
     private readonly packSync: FlagPackSyncService,
     private readonly adminAudit: AdminAuditService,
     private readonly socialNotifications: SocialNotificationService,
+    private readonly liveActivity: LiveActivityService,
   ) {}
 
   private codeKey(): Buffer {
@@ -351,6 +353,7 @@ export class FlagsService {
         await flags.save(locked);
         const pin = await pins.findOne({ where: { userId } });
         if (!pin?.flagId) await pins.save(pins.create({ userId, flagId: id }));
+        await this.liveActivity.enqueueUser(userId, undefined, manager);
       }
       const response = {
         flagId: id,
@@ -389,6 +392,8 @@ export class FlagsService {
         pin.flagId = latest?.flagId ?? null;
         await pins.save(pin);
       }
+      if (deleted.affected)
+        await this.liveActivity.enqueueUser(userId, undefined, manager);
       return {
         flagId: id,
         following: false,
@@ -422,13 +427,22 @@ export class FlagsService {
         message: 'flagId 문자열 또는 null이 필요합니다.',
       });
     const flagId = input.flagId;
-    if (flagId && !(await this.follows.exists({ where: { userId, flagId } })))
-      throw new ConflictException({
-        code: 'PIN_NOT_FOLLOWING',
-        message: '팔로우한 깃발만 핀할 수 있습니다.',
-      });
-    await this.pins.save(this.pins.create({ userId, flagId }));
-    return { pinnedFlagId: flagId };
+    return this.db.transaction(async (manager) => {
+      await this.lockActiveUser(manager, userId);
+      const follows = manager.getRepository(FlagFollow);
+      if (flagId && !(await follows.exists({ where: { userId, flagId } })))
+        throw new ConflictException({
+          code: 'PIN_NOT_FOLLOWING',
+          message: '팔로우한 깃발만 핀할 수 있습니다.',
+        });
+      const pins = manager.getRepository(FlagPin);
+      const previous = await pins.findOne({ where: { userId } });
+      if ((previous?.flagId ?? null) !== flagId) {
+        await pins.save(pins.create({ userId, flagId }));
+        await this.liveActivity.enqueueUser(userId, undefined, manager);
+      }
+      return { pinnedFlagId: flagId };
+    });
   }
 
   async report(id: string, userId: string, input: unknown) {
@@ -471,6 +485,8 @@ export class FlagsService {
       locked.reportCount += 1;
       if (locked.reportCount >= 3) locked.hidden = true;
       await flags.save(locked);
+      if (locked.hidden)
+        await this.liveActivity.enqueueFestival(locked.festivalId, manager);
       return { reportId: row.id };
     });
   }
@@ -810,6 +826,7 @@ export class FlagsService {
         activity: flag.activity,
       });
       await this.socialNotifications.enqueueFlagStatus(manager, flag, userId);
+      await this.liveActivity.enqueueFestival(flag.festivalId, manager);
       const response = statusView(flag);
       await this.remember(
         manager,
@@ -868,6 +885,7 @@ export class FlagsService {
         before,
         after,
       });
+      await this.liveActivity.enqueueFestival(flag.festivalId, manager);
       return after;
     });
   }
@@ -1039,6 +1057,8 @@ export class FlagsService {
       const before = { hidden: flag.hidden };
       flag.hidden = hidden;
       await repo.save(flag);
+      if (before.hidden !== hidden)
+        await this.liveActivity.enqueueFestival(flag.festivalId, manager);
       await this.adminAudit.record(manager, {
         actor,
         action: hidden ? 'flag.hidden' : 'flag.unhidden',

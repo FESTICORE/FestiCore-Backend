@@ -19,6 +19,7 @@ import { AdminAuditService } from '../audit/admin-audit.service';
 import { CacheService } from '../../redis/service/cache.service';
 import { PublicFestivalService } from '../../public/public-festival.service';
 import { DiscoverySummary } from '../../public/crawl-catalog';
+import { LiveActivityService } from '../../notification/live-activity.service';
 
 const alphabet = '0123456789abcdefghjkmnpqrstvwxyz';
 const SOURCE_STALE_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
@@ -112,6 +113,7 @@ export class AdminFestivalService {
     private readonly audit: AdminAuditService,
     private readonly cache: CacheService,
     private readonly publicFestivals: PublicFestivalService,
+    private readonly liveActivity: LiveActivityService,
   ) {}
 
   async list() {
@@ -376,6 +378,7 @@ export class AdminFestivalService {
         id,
         packVersion,
       );
+      await this.liveActivity.enqueueFestival(id, manager);
       await this.audit.record(manager, {
         actor,
         action: 'festival.published',
@@ -455,6 +458,7 @@ export class AdminFestivalService {
         id,
         packVersion,
       );
+      await this.liveActivity.enqueueFestival(id, manager);
       await this.audit.record(manager, {
         actor,
         action: 'festival.rolled_back',

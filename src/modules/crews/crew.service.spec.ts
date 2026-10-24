@@ -15,6 +15,7 @@ import {
 } from './crew.entity';
 import { CrewService } from './crew.service';
 import { SocialNotificationService } from '../notification/social-notification.service';
+import { LiveActivityService } from '../notification/live-activity.service';
 
 const ownerId = '00000000-0000-4000-8000-000000000001';
 const otherId = '00000000-0000-4000-8000-000000000002';
@@ -57,6 +58,10 @@ function setup() {
     enqueueCrewGather: jest.fn().mockResolvedValue(undefined),
     enqueueCrewDissolved: jest.fn().mockResolvedValue(undefined),
   };
+  const liveActivity = {
+    enqueueCrewMembers: jest.fn().mockResolvedValue(undefined),
+    enqueueUser: jest.fn().mockResolvedValue(undefined),
+  };
   const service = new CrewService(
     crewRepository as unknown as Repository<Crew>,
     memberRepository as unknown as Repository<CrewMember>,
@@ -64,8 +69,15 @@ function setup() {
     festivalRepository as unknown as Repository<AdminFestival>,
     {} as Repository<User>,
     socialNotifications as unknown as SocialNotificationService,
+    liveActivity as unknown as LiveActivityService,
   );
-  return { service, crewRepository, memberRepository, socialNotifications };
+  return {
+    service,
+    crewRepository,
+    memberRepository,
+    socialNotifications,
+    liveActivity,
+  };
 }
 
 describe('CrewService authorization and invitations', () => {
@@ -464,8 +476,13 @@ describe('CrewService authorization and invitations', () => {
   });
 
   it('queues a dissolution notice before deleting the crew in one transaction', async () => {
-    const { service, crewRepository, memberRepository, socialNotifications } =
-      setup();
+    const {
+      service,
+      crewRepository,
+      memberRepository,
+      socialNotifications,
+      liveActivity,
+    } = setup();
     memberRepository.findOne.mockResolvedValue({
       crewId: crew.id,
       userId: ownerId,
@@ -481,6 +498,10 @@ describe('CrewService authorization and invitations', () => {
     };
     socialNotifications.enqueueCrewDissolved.mockImplementation(() => {
       operations.push('enqueue');
+      return Promise.resolve();
+    });
+    liveActivity.enqueueCrewMembers.mockImplementation(() => {
+      operations.push('live-activity');
       return Promise.resolve();
     });
     const manager = {
@@ -501,7 +522,7 @@ describe('CrewService authorization and invitations', () => {
       lockedCrew,
       ownerId,
     );
-    expect(operations).toEqual(['enqueue', 'delete']);
+    expect(operations).toEqual(['enqueue', 'live-activity', 'delete']);
   });
 
   it('does not gather after the caller loses membership before the crew lock', async () => {

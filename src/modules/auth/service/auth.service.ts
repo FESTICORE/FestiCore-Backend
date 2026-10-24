@@ -13,6 +13,7 @@ import { SocialLoginDto } from '../dto/social-login.dto';
 import { RefreshToken } from '../entity/refresh-token.entity';
 import { User } from '../entity/user.entity';
 import { FlagPackSyncService } from '../../flags/flag-pack-sync.service';
+import { LiveActivityService } from '../../notification/live-activity.service';
 import type { SocialProfile } from '../types/social-profile';
 import type { OauthGrant } from '../types/social-profile';
 import { AppleService } from './apple.service';
@@ -70,6 +71,7 @@ export class AuthService {
     private readonly dataSource: DataSource,
     private readonly appleRetry: AppleRevokeRetryService,
     private readonly flagPackSync: FlagPackSyncService,
+    private readonly liveActivity: LiveActivityService,
   ) {}
 
   async login(dto: SocialLoginDto): Promise<LoginResult> {
@@ -317,6 +319,13 @@ export class AuthService {
           `SELECT "id" FROM "crews" WHERE "ownerId" = $1 ORDER BY "id" FOR UPDATE`,
           [userId],
         );
+        const memberCrews = await manager.query<
+          { crewId: string; festivalId: string }[]
+        >(
+          `SELECT "crewId", "festivalId" FROM "crew_members"
+           WHERE "userId" = $1 ORDER BY "crewId"`,
+          [userId],
+        );
         for (const crew of ownedCrews) {
           const successors = await manager.query<{ userId: string }[]>(
             `SELECT "userId" FROM "crew_members"
@@ -337,9 +346,14 @@ export class AuthService {
         }
         // 소유 깃발과 팔로우 중인 깃발을 ID 순서로 잠가 기수 변경/팔로워 수 갱신을 직렬화한다.
         const affectedFlags = await manager.query<
-          { id: string; ownerId: string | null }[]
+          {
+            id: string;
+            ownerId: string | null;
+            festivalId: string;
+            hidden: boolean;
+          }[]
         >(
-          `SELECT "id", "ownerId" FROM "flags"
+          `SELECT "id", "ownerId", "festivalId", "hidden" FROM "flags"
          WHERE "ownerId" = $1 OR "id" IN (
            SELECT "flagId" FROM "flag_follows" WHERE "userId" = $1
          ) OR "id" IN (
@@ -347,6 +361,7 @@ export class AuthService {
          ) ORDER BY "id" FOR UPDATE`,
           [userId],
         );
+        const hiddenFestivals = new Set<string>();
         for (const flag of affectedFlags) {
           if (flag.ownerId !== userId) continue;
           const successors = await manager.query<{ userId: string }[]>(
@@ -365,6 +380,7 @@ export class AuthService {
               [flag.id, successors[0].userId],
             );
           } else {
+            if (!flag.hidden) hiddenFestivals.add(flag.festivalId);
             await manager.query(
               `UPDATE "flags" SET "ownerId" = NULL, "hidden" = true, "updatedAt" = now() WHERE "id" = $1`,
               [flag.id],
@@ -430,12 +446,21 @@ export class AuthService {
             [flag.id],
           );
         }
-        if (affectedFlags.length)
-          return this.flagPackSync.syncMany(
-            affectedFlags.map((flag) => flag.id),
+        const changedFestivals = affectedFlags.length
+          ? await this.flagPackSync.syncMany(
+              affectedFlags.map((flag) => flag.id),
+              manager,
+            )
+          : [];
+        for (const crew of memberCrews)
+          await this.liveActivity.enqueueCrewMembers(
+            crew.crewId,
+            crew.festivalId,
             manager,
           );
-        return [];
+        for (const festivalId of hiddenFestivals)
+          await this.liveActivity.enqueueFestival(festivalId, manager);
+        return changedFestivals;
       },
     );
     if (changedFestivals?.length)

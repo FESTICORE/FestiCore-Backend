@@ -48,6 +48,16 @@ describe('LiveActivityService durable queue', () => {
     expect(query.mock.calls[1][1]).toEqual(['user-one', 'fst_one']);
   });
 
+  it('enqueues only active festival devices belonging to crew members', async () => {
+    await service.enqueueCrewMembers('crew-1', 'fst_one');
+    expect(query.mock.calls[0][0]).toContain(
+      'JOIN "devices" d ON d."userId" = m."userId"',
+    );
+    expect(query.mock.calls[0][0]).toContain('d."liveActivityFestivalId" = $2');
+    expect(query.mock.calls[0][0]).not.toContain('"lastAttemptAt" =');
+    expect(query.mock.calls[0][1]).toEqual(['crew-1', 'fst_one']);
+  });
+
   it('keeps the attempt clock when an activity stops', async () => {
     await service.stopDevice(deviceId);
     expect(query.mock.calls[0][0]).toContain('"active" = false');

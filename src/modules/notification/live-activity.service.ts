@@ -166,6 +166,28 @@ export class LiveActivityService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
+  async enqueueCrewMembers(
+    crewId: string,
+    festivalId: string,
+    manager: EntityManager = this.db.manager,
+  ): Promise<void> {
+    await manager.query(
+      `INSERT INTO "live_activity_deliveries" ("deviceId")
+      SELECT d."id" FROM "crew_members" m
+      JOIN "devices" d ON d."userId" = m."userId"
+      WHERE m."crewId" = $1 AND m."festivalId" = $2
+        AND d."liveActivityFestivalId" = $2
+        AND d."liveActivityPushToken" IS NOT NULL
+        AND d."liveActivityId" IS NOT NULL
+      ON CONFLICT ("deviceId") DO UPDATE SET
+        "revision" = "live_activity_deliveries"."revision" + 1,
+        "active" = true, "status" = 'pending', "leaseId" = NULL,
+        "leaseUntil" = NULL, "nextAttemptAt" = now(), "attempts" = 0,
+        "lastErrorCode" = NULL, "updatedAt" = now()`,
+      [crewId, festivalId],
+    );
+  }
+
   async stopDevice(
     deviceId: string,
     manager: EntityManager = this.db.manager,

@@ -7,6 +7,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { LessThan, Repository } from 'typeorm';
 import { AdminFestival } from '../admin/festival/festival.entity';
+import { LiveActivityService } from '../notification/live-activity.service';
 import {
   Crew,
   CrewGather,
@@ -31,6 +32,7 @@ export class CrewArchiveService implements OnModuleInit, OnModuleDestroy {
     private readonly festivals: Repository<AdminFestival>,
     @InjectRepository(CrewStatusIdempotency)
     private readonly idempotency: Repository<CrewStatusIdempotency>,
+    private readonly liveActivity: LiveActivityService,
   ) {}
 
   onModuleInit() {
@@ -67,8 +69,15 @@ export class CrewArchiveService implements OnModuleInit, OnModuleDestroy {
               .filter(Number.isFinite)
           : [];
         if (ends.length && now.getTime() >= Math.max(...ends) + DAY_MS) {
-          crew.archivedAt = now;
-          await this.crews.save(crew);
+          await this.crews.manager.transaction(async (manager) => {
+            crew.archivedAt = now;
+            await manager.getRepository(Crew).save(crew);
+            await this.liveActivity.enqueueCrewMembers(
+              crew.id,
+              crew.festivalId,
+              manager,
+            );
+          });
         }
       }
       if (
