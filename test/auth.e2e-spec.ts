@@ -100,6 +100,7 @@ describe('Auth (e2e)', () => {
     expect(paths['/api/v1/auth/session']).toBeUndefined();
     expect(paths['/api/v1/auth/me']).toBeUndefined();
     expect(paths['/api/v1/auth/logout']?.post).toBeDefined();
+    expect(paths['/api/v1/auth/session/revoke']?.post).toBeDefined();
     expect(paths['/api/v1/auth/logout']?.post?.parameters).not.toEqual(
       expect.arrayContaining([
         expect.objectContaining({ name: 'X-Device-Id' }),
@@ -137,6 +138,66 @@ describe('Auth (e2e)', () => {
       .post('/api/v1/auth/refresh')
       .send({ refreshToken: dataOf(rotated).refreshToken })
       .expect(401);
+  });
+
+  it('access 헤더 없이 과거 refresh 토큰으로 현재 웹 세션만 반복 폐기한다', async () => {
+    const first = dataOf(await socialLogin().expect(200));
+    const other = dataOf(await socialLogin().expect(200));
+    const rotated = dataOf(
+      await request(server)
+        .post('/api/v1/auth/refresh')
+        .send({ refreshToken: first.refreshToken })
+        .expect(200),
+    );
+    for (let i = 0; i < 2; i += 1) {
+      const revoked = await request(server)
+        .post('/api/v1/auth/session/revoke')
+        .send({ refreshToken: first.refreshToken })
+        .expect(204);
+      expect(revoked.text).toBe('');
+    }
+    await request(server)
+      .post('/api/v1/auth/refresh')
+      .send({ refreshToken: rotated.refreshToken })
+      .expect(401);
+    await request(server)
+      .post('/api/v1/auth/refresh')
+      .send({ refreshToken: other.refreshToken })
+      .expect(200);
+  });
+
+  it('잘못된/만료된/access 토큰은 204이며 본문 크기 오류는 400이다', async () => {
+    const login = dataOf(await socialLogin().expect(200));
+    for (const refreshToken of ['invalid', login.accessToken]) {
+      await request(server)
+        .post('/api/v1/auth/session/revoke')
+        .send({ refreshToken })
+        .expect(204);
+    }
+    await request(server)
+      .post('/api/v1/auth/session/revoke')
+      .send({ refreshToken: 'x'.repeat(4097) })
+      .expect(400);
+    await request(server)
+      .post('/api/v1/auth/refresh')
+      .send({ refreshToken: login.refreshToken })
+      .expect(200);
+  });
+
+  it('세션 조회 DB 오류를 성공 응답으로 숨기지 않는다', async () => {
+    const login = dataOf(await socialLogin().expect(200));
+    const findOne = jest
+      .spyOn(ctx.refreshTokens, 'findOne')
+      .mockRejectedValueOnce(new Error('database unavailable'));
+    await request(server)
+      .post('/api/v1/auth/session/revoke')
+      .send({ refreshToken: login.refreshToken })
+      .expect(500);
+    findOne.mockRestore();
+    await request(server)
+      .post('/api/v1/auth/refresh')
+      .send({ refreshToken: login.refreshToken })
+      .expect(200);
   });
 
   it('같은 refresh 토큰 동시 2회 → 하나만 성공', async () => {
