@@ -496,6 +496,7 @@ describe('CrawlService scheduled runs', () => {
     insertResult.identifiers = [];
 
     await service.scheduleDue();
+    await service.gmfImageQueue;
 
     expect(updateQb.andWhere).not.toHaveBeenCalledWith(
       'result = :failed',
