@@ -1,3 +1,5 @@
+import { CDF_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/cdf-profile';
+
 // Both the image lookup and the download endpoint must apply this condition.
 
 export const PUBLIC_CRAWL_IMAGE_SQL = `(
@@ -17,6 +19,7 @@ export const PUBLIC_CRAWL_IMAGE_SQL = `(
     AND source.enabled = true
     AND source."parserConfig"->>'seed' IS DISTINCT FROM 'official-wonderlivet-lineup'
     AND source."parserConfig"->>'seed' IS DISTINCT FROM 'official-gmf-lineup'
+    AND source."parserConfig"->>'seed' IS DISTINCT FROM 'cdf-official-profile'
     AND source."parserConfig"->>'festivalSourceUrl' ~ '^https://(ticket[.]melon[.]com|ticket[.]yes24[.]com|nol[.]yanolja[.]com|mintpaper[.]co[.]kr)/'
     AND (source."parserConfig"->>'seed' IS DISTINCT FROM 'official-artist-gallery'
       OR split_part(image."originUrl", '?', 1) =
@@ -42,6 +45,13 @@ export const PUBLIC_CRAWL_IMAGE_SQL = `(
       OR (source."parserConfig"->>'previousImageHint' ~ '^/GMF_2026_[A-Za-z0-9_]+[.]jpe?g$'
         AND image."originUrl" = 'https://mintpaper.s3.ap-northeast-2.amazonaws.com' ||
           (source."parserConfig"->>'previousImageHint'))))
+  OR (source.kind = 'artist-image'
+    AND source.enabled = true
+    AND source."parserConfig"->>'seed' = 'cdf-official-profile'
+    AND source."parserConfig"->>'festivalSourceUrl' = 'https://mintpaper.co.kr/festivals/178'
+    AND (
+      ${CDF_PUBLIC_IMAGE_SQL}
+    ))
   OR (source.kind = 'artist-image'
     AND source.enabled = true
     AND source.url = 'https://www.wonderli.vet/api/trpc/lineup.list'
