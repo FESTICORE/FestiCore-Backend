@@ -107,6 +107,12 @@ function harness() {
       callback({}),
     ),
   };
+  const proposalsRepo = {
+    create: jest.fn((value: unknown) => value),
+    save: jest.fn((value: unknown) =>
+      Promise.resolve({ ...(value as object), id: 'proposal-1' }),
+    ),
+  };
   const imageStorage = {
     readCrawlSnapshot: jest.fn(),
     saveCrawlSnapshot: jest.fn().mockResolvedValue(undefined),
@@ -128,7 +134,7 @@ function harness() {
     runsRepo as never,
     snapshotsRepo as never,
     {} as never,
-    {} as never,
+    proposalsRepo as never,
     dataSource as never,
     imageStorage as never,
     alerts as never,
@@ -143,6 +149,7 @@ function harness() {
     runsRepo,
     sourcesRepo,
     dataSource,
+    proposalsRepo,
     snapshotsRepo,
     imageStorage,
     alerts,
@@ -1091,6 +1098,61 @@ describe('CrawlService manual runs and snapshots', () => {
         .filter(([sql]: [string]) => sql.includes('INSERT INTO crawl_sources'))
         .map(([, parameters]: [string, string[]]) => parameters[0]),
     ).toContain('https://ticket.yes24.com/English/Perf/60590');
+  });
+
+  it('reparses an unchanged CDF official post to persist performer profiles', async () => {
+    const { service, source, run, runsRepo, proposalsRepo, execute } =
+      harness();
+    execute.mockRestore();
+    source.url = 'https://www.mintpaper.co.kr/posts/4819';
+    source.parserConfig = {
+      seed: 'official-lineup',
+      festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
+    };
+    const profiles = Array.from({ length: 12 }, (_, index) => [
+      `Artist ${index + 1}`,
+      `artist_${index + 1}`,
+    ]);
+    const body = `<h1>COUNTDOWN FANTASY 2026-2027 1차 라인업 공개</h1>
+      <div class="PostContent_content__test">12.31<br>
+      ${profiles.map(([name, handle]) => `${name} <a href="https://www.instagram.com/${handle}/">@${handle}</a>`).join('<br>')}
+      <br>and many more</div>`;
+    const oldHash = createHash('sha256')
+      .update(body)
+      .update('ticket-list:v3')
+      .digest('hex');
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({ status: 200, body });
+    jest
+      .spyOn(
+        service as unknown as {
+          captureImages(
+            source: CrawlSource,
+            run: CrawlRun,
+            urls: URL[],
+          ): Promise<string[]>;
+        },
+        'captureImages',
+      )
+      .mockResolvedValue([]);
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue({ contentHash: oldHash }),
+    }));
+
+    await service.execute(run, source);
+
+    expect(run.contentHash).not.toBe(oldHash);
+    expect(run.result).toBe('proposed');
+    const proposal = proposalsRepo.save.mock.calls[0][0] as {
+      items: { after: { artists: { name: string; profileUrl: string }[] } }[];
+    };
+    expect(proposal.items[0].after.artists).toHaveLength(12);
+    expect(proposal.items[0].after.artists[0]).toEqual({
+      name: 'Artist 1',
+      profileUrl: 'https://www.instagram.com/artist_1/',
+    });
   });
 
   it('registers only NOL product pages discovered from a festival listing', async () => {

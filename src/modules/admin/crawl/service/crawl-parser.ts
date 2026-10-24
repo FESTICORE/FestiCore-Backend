@@ -443,7 +443,7 @@ function officialLineupCandidates(
   if (isMintPost) {
     const title = /<h1\b[^>]*>([\s\S]*?)<\/h1>/i.exec(body)?.[1];
     const article =
-      /<div\b[^>]*class=["'][^"']*\bPostContent_content\S*[^"']*["'][^>]*>([\s\S]*?)<\/div>/i.exec(
+      /<div\b[^>]*class=["'][^"']*\bPostContent_content[^"']*["'][^>]*>([\s\S]*?)<\/div>/i.exec(
         body,
       )?.[1];
     if (!title || !article) return [];

@@ -445,6 +445,10 @@ export function discoverySummaries(
       summary.artists = officialArtists;
       continue;
     }
+    const profileClaims = new Map<
+      NonNullable<DiscoverySummary['artists']>[number],
+      Set<string>
+    >();
     for (const official of officialArtists) {
       const officialKeys = new Set(artistNameKeys(official.name));
       const matches = summary.artists.filter((artist) =>
@@ -452,8 +456,15 @@ export function discoverySummaries(
           officialKeys.has(nameKey),
         ),
       );
-      if (matches.length === 1 && official.profileUrl)
-        matches[0].profileUrl = official.profileUrl;
+      if (matches.length === 1 && official.profileUrl) {
+        const claims = profileClaims.get(matches[0]) ?? new Set<string>();
+        claims.add(official.profileUrl);
+        profileClaims.set(matches[0], claims);
+      }
+    }
+    for (const [artist, claims] of profileClaims) {
+      if (claims.size === 1 && !artist.profileUrl)
+        artist.profileUrl = [...claims][0];
     }
   }
   return [...found.values()];
