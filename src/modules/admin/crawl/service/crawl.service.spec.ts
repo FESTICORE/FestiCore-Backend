@@ -18,7 +18,10 @@ import {
 } from '../dto/crawl-source.dto';
 
 type PrivateCrawl = {
+  onModuleInit(): void;
+  onModuleDestroy(): void;
   scheduleDue(): Promise<void>;
+  reconcileRecentXmf403(): Promise<void>;
   runNow(id: string): Promise<{ runId: string }>;
   createSource(
     dto: CreateCrawlSourceDto,
@@ -187,6 +190,20 @@ describe('CrawlService scheduled runs', () => {
     expect(execute).toHaveBeenCalledTimes(1);
   });
 
+  it('reconciles prior XMF HTTP 403 runs once when the server starts', () => {
+    const { service } = harness();
+    const schedule = jest.spyOn(service, 'scheduleDue').mockResolvedValue();
+    const reconcile = jest
+      .spyOn(service, 'reconcileRecentXmf403')
+      .mockResolvedValue();
+
+    service.onModuleInit();
+    service.onModuleDestroy();
+
+    expect(schedule).toHaveBeenCalledTimes(1);
+    expect(reconcile).toHaveBeenCalledTimes(1);
+  });
+
   it('skips a duplicate daily run that is still active', async () => {
     const { service, insertResult, reclaimResult, execute } = harness();
     insertResult.identifiers = [];
@@ -327,6 +344,7 @@ describe('CrawlService official timetable image', () => {
 });
 
 describe('CrawlService source audit', () => {
+  afterEach(() => jest.useRealTimers());
   it('records a new source in the same transaction', async () => {
     const { service, dataSource, audit } = harness();
     jest.spyOn(service, 'checkRobots').mockResolvedValue(undefined);
@@ -898,6 +916,7 @@ describe('CrawlService source audit', () => {
   });
 
   it('recovers proven XMF aliases from a recent official notice snapshot after HTTP 403', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-10-25T00:00:00Z'));
     const {
       service,
       source,
@@ -976,7 +995,7 @@ describe('CrawlService source audit', () => {
     const lookup = dataSource.query.mock.calls.find(([sql]: [string]) =>
       sql.includes('FROM crawl_snapshots'),
     ) as [string, string[]];
-    expect(lookup[0]).toContain("interval '48 hours'");
+    expect(lookup[0]).toContain("interval '7 days'");
     expect(lookup[0]).toContain('previous."httpStatus" = 200');
     expect(lookup[0]).toContain('snapshot."expiresAt" > now()');
     expect(lookup[1]).toEqual([
@@ -994,6 +1013,7 @@ describe('CrawlService source audit', () => {
   });
 
   it('ignores a stale or mismatched XMF snapshot without changing aliases', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-10-25T00:00:00Z'));
     const { service, source, sourcesRepo, dataSource, imageStorage } =
       harness();
     source.kind = 'artist-gallery';
@@ -1016,6 +1036,95 @@ describe('CrawlService source audit', () => {
     source.parserConfig.festivalSourceUrl =
       'https://ticket.melon.com/performance/index.htm?prodId=213766';
     await service.syncXmfAliasesFromRecentSnapshot(source);
+    expect(dataSource.query).toHaveBeenCalledTimes(1);
+    expect(imageStorage.readCrawlSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('uses a saved official notice after a pre-deploy 403 without changing the failed run', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-10-25T00:00:00Z'));
+    const { service, source, sourcesRepo, dataSource, imageStorage } =
+      harness();
+    const festivalSourceUrl =
+      'https://ticket.melon.com/performance/index.htm?prodId=213766';
+    source.kind = 'artist-gallery';
+    source.url = 'https://xmfestival.com/lineup';
+    source.parserConfig = { festivalSourceUrl };
+    const notice = {
+      ...source,
+      id: 'notice-1',
+      kind: 'discovery',
+      url: 'https://xmfestival.com/notice',
+      parserConfig: {
+        seed: 'official-lineup',
+        expectedYear: '2026',
+        festivalSourceUrl,
+      },
+    } as CrawlSource;
+    sourcesRepo.findOneBy.mockImplementation((where: { id?: string }) =>
+      Promise.resolve(where.id ? source : notice),
+    );
+    imageStorage.readCrawlSnapshot.mockResolvedValue(
+      Buffer.from(XMF_NOTICE_HTML),
+    );
+    let savedAlias: string | null = null;
+    dataSource.query.mockImplementation((sql: string) => {
+      if (sql.includes('SELECT DISTINCT source.id'))
+        return Promise.resolve([{ id: source.id }]);
+      if (sql.includes('FROM crawl_snapshots'))
+        return Promise.resolve([
+          { objectKey: 'crawl/snapshots/official-notice.txt' },
+        ]);
+      if (sql.includes('SELECT id, enabled'))
+        return Promise.resolve([
+          {
+            id: 'ado-image',
+            enabled: true,
+            artistName: 'Ado',
+            artistAlias: savedAlias,
+            aliasSource: savedAlias ? 'official-notice' : null,
+            officialSiteKeys: null,
+            seed: 'official-artist-gallery',
+          },
+        ]);
+      if (sql.includes('UPDATE crawl_sources SET "parserConfig"'))
+        savedAlias = '아도';
+      return Promise.resolve([]);
+    });
+
+    await service.reconcileRecentXmf403();
+    await service.reconcileRecentXmf403();
+
+    const recentFailures = dataSource.query.mock.calls.find(([sql]: [string]) =>
+      sql.includes('SELECT DISTINCT source.id'),
+    ) as [string, string[]];
+    expect(recentFailures[0]).toContain('failed."httpStatus" = 403');
+    expect(recentFailures[0]).toContain("interval '7 days'");
+    expect(
+      dataSource.query.mock.calls.filter(([sql]: [string]) =>
+        sql.includes('UPDATE crawl_sources SET "parserConfig"'),
+      ),
+    ).toHaveLength(1);
+    expect(
+      dataSource.query.mock.calls.some(([sql]: [string]) =>
+        sql.includes('UPDATE crawl_runs'),
+      ),
+    ).toBe(false);
+  });
+
+  it('skips XMF alias recovery for an older event year or no recent 403', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-10-25T00:00:00Z'));
+    const { service, source, dataSource, imageStorage } = harness();
+    source.url = 'https://xmfestival.com/notice';
+    source.parserConfig = {
+      seed: 'official-lineup',
+      expectedYear: '2025',
+      festivalSourceUrl:
+        'https://ticket.melon.com/performance/index.htm?prodId=213766',
+    };
+
+    await service.syncXmfAliasesFromRecentSnapshot(source);
+    await service.reconcileRecentXmf403();
+
     expect(dataSource.query).toHaveBeenCalledTimes(1);
     expect(imageStorage.readCrawlSnapshot).not.toHaveBeenCalled();
   });
