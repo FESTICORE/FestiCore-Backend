@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { artistNameKeys } from '../../common/artist-name';
 
 interface DateRange {
   firstDate: string;
@@ -34,7 +35,12 @@ export interface DiscoverySummary {
   sourceUrls: string[];
   officialInstagramUrl?: string;
   posterUrl?: string;
-  artists?: { name: string; sourceUrl?: string; imageUrl?: string | null }[];
+  artists?: {
+    name: string;
+    sourceUrl?: string;
+    profileUrl?: string;
+    imageUrl?: string | null;
+  }[];
   sortAt: string;
 }
 
@@ -94,15 +100,46 @@ function officialPosterUrl(raw: unknown): string | null {
 
 function verifiedArtists(
   raw: unknown,
-  sourceHost: string,
-): { name: string; sourceUrl?: string }[] {
+  sourceUrl: string,
+): { name: string; sourceUrl?: string; profileUrl?: string }[] {
   if (!Array.isArray(raw)) return [];
-  const artists: { name: string; sourceUrl?: string }[] = [];
+  let source: URL;
+  try {
+    source = new URL(sourceUrl);
+  } catch {
+    return [];
+  }
+  if (
+    source.protocol !== 'https:' ||
+    source.username ||
+    source.password ||
+    source.port
+  )
+    return [];
+  const sourceHost = source.hostname;
+  const artists: {
+    name: string;
+    sourceUrl?: string;
+    profileUrl?: string;
+  }[] = [];
   for (const value of raw.slice(0, 80)) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
     const name = (value as Record<string, unknown>).name;
     if (typeof name !== 'string' || !name.trim() || name.length > 160) continue;
-    const artist: { name: string; sourceUrl?: string } = { name: name.trim() };
+    const artist: {
+      name: string;
+      sourceUrl?: string;
+      profileUrl?: string;
+    } = { name: name.trim() };
+    if (
+      ['mintpaper.co.kr', 'www.mintpaper.co.kr'].includes(sourceHost) &&
+      source.pathname === '/posts/4819'
+    ) {
+      const profile = officialInstagramUrl(
+        (value as Record<string, unknown>).profileUrl,
+      );
+      if (profile) artist.profileUrl = profile;
+    }
     const rawUrl = (value as Record<string, unknown>).sourceUrl;
     if (typeof rawUrl === 'string') {
       try {
@@ -273,6 +310,10 @@ export function discoverySummaries(
     }
   }
   const found = new Map<string, DiscoverySummary>();
+  const officialArtistsByKey = new Map<
+    string,
+    ReturnType<typeof verifiedArtists>
+  >();
   for (const { candidate, decision, proposalStatus } of byUrl.values()) {
     if (decision === 'rejected' || proposalStatus === 'rejected') continue;
     if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate))
@@ -313,7 +354,24 @@ export function discoverySummaries(
     if (publishedKeys.has(key)) continue;
     const instagramUrl = officialInstagramUrl(value.officialInstagramUrl);
     const posterUrl = officialPosterUrl(value.posterUrl);
-    const artists = verifiedArtists(value.artists, url.hostname);
+    const artists = verifiedArtists(
+      value.artists,
+      typeof value.artistSourceUrl === 'string'
+        ? value.artistSourceUrl
+        : url.toString(),
+    );
+    const officialArtists = verifiedArtists(
+      value.officialProfileArtists,
+      'https://www.mintpaper.co.kr/posts/4819',
+    );
+    if (officialArtists.length) {
+      const known = officialArtistsByKey.get(key) ?? [];
+      for (const official of officialArtists) {
+        if (!known.some((artist) => artist.name === official.name))
+          known.push(official);
+      }
+      officialArtistsByKey.set(key, known);
+    }
     const existing = found.get(key);
     if (existing) {
       if (!existing.sourceUrls.includes(url.toString()))
@@ -344,11 +402,12 @@ export function discoverySummaries(
         );
         for (const artist of artists) {
           const current = merged.get(artist.name);
-          if (
-            (current && !current.sourceUrl && artist.sourceUrl) ||
-            (!current && merged.size < 80)
-          )
-            merged.set(artist.name, artist);
+          if (current) {
+            if (!current.sourceUrl && artist.sourceUrl)
+              current.sourceUrl = artist.sourceUrl;
+            if (!current.profileUrl && artist.profileUrl)
+              current.profileUrl = artist.profileUrl;
+          } else if (merged.size < 80) merged.set(artist.name, artist);
         }
         existing.artists = [...merged.values()];
       }
@@ -378,6 +437,35 @@ export function discoverySummaries(
       // 정렬 전용 날짜 하한. 실제 공연 시작 시각으로 반환하지 않는다.
       sortAt: `${dates.firstDate}T00:00:00+09:00`,
     });
+  }
+  for (const [key, officialArtists] of officialArtistsByKey) {
+    const summary = found.get(key);
+    if (!summary) continue;
+    if (!summary.artists?.length) {
+      summary.artists = officialArtists;
+      continue;
+    }
+    const profileClaims = new Map<
+      NonNullable<DiscoverySummary['artists']>[number],
+      Set<string>
+    >();
+    for (const official of officialArtists) {
+      const officialKeys = new Set(artistNameKeys(official.name));
+      const matches = summary.artists.filter((artist) =>
+        artistNameKeys(artist.name).some((nameKey) =>
+          officialKeys.has(nameKey),
+        ),
+      );
+      if (matches.length === 1 && official.profileUrl) {
+        const claims = profileClaims.get(matches[0]) ?? new Set<string>();
+        claims.add(official.profileUrl);
+        profileClaims.set(matches[0], claims);
+      }
+    }
+    for (const [artist, claims] of profileClaims) {
+      if (claims.size === 1 && !artist.profileUrl)
+        artist.profileUrl = [...claims][0];
+    }
   }
   return [...found.values()];
 }

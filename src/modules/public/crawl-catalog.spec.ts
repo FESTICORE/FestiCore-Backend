@@ -1,6 +1,233 @@
 import { discoverySummaries, ticketDateRange } from './crawl-catalog';
 
 describe('ticket discovery catalog', () => {
+  it('retains official CDF performer profiles without treating them as image URLs', () => {
+    const base = {
+      name: 'COUNTDOWN FANTASY 2026-2027',
+      venue: '킨텍스',
+      date: '2026.12.31 - 2026.12.31',
+    };
+    const entries = discoverySummaries([
+      {
+        candidate: {
+          ...base,
+          url: 'https://ticket.yes24.com/Perf/60590',
+          artists: [
+            {
+              name: '혁오',
+              sourceUrl: 'https://tkfile.yes24.com/artists/hyukoh.jpg',
+            },
+          ],
+        },
+      },
+      {
+        candidate: {
+          ...base,
+          url: 'https://mintpaper.co.kr/festivals/178',
+          officialProfileArtists: [
+            {
+              name: '혁오',
+              profileUrl: 'https://www.instagram.com/hyukohofficial/',
+            },
+            {
+              name: '실리카겔',
+              profileUrl: 'https://www.instagram.com/silicagel.official/',
+            },
+          ],
+        },
+      },
+    ]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].artists).toEqual([
+      {
+        name: '혁오',
+        sourceUrl: 'https://tkfile.yes24.com/artists/hyukoh.jpg',
+        profileUrl: 'https://www.instagram.com/hyukohofficial/',
+      },
+    ]);
+    const untrusted = discoverySummaries([
+      {
+        candidate: {
+          ...base,
+          url: 'https://ticket.yes24.com/Perf/60590',
+          artists: [
+            {
+              name: '혁오',
+              profileUrl: 'https://www.instagram.com/hyukohofficial/',
+            },
+          ],
+        },
+      },
+    ]);
+    expect(untrusted[0].artists?.[0]).toEqual({ name: '혁오' });
+  });
+
+  it('keeps the catalog available when an artist proposal has an invalid source URL', () => {
+    const entries = discoverySummaries([
+      {
+        candidate: {
+          name: 'Broken source festival',
+          venue: '킨텍스',
+          date: '2026.12.31',
+          url: 'https://ticket.yes24.com/Perf/60590',
+          artistSourceUrl: 'not a url',
+          artists: [{ name: '혁오' }],
+        },
+      },
+      {
+        candidate: {
+          name: 'Valid festival',
+          venue: '킨텍스',
+          date: '2026.12.30',
+          url: 'https://ticket.yes24.com/Perf/60591',
+        },
+      },
+    ]);
+    expect(entries.map((entry) => entry.name)).toEqual([
+      'Broken source festival',
+      'Valid festival',
+    ]);
+    expect(entries[0].artists).toBeUndefined();
+  });
+
+  it('accepts the official post apex URL with query parameters', () => {
+    const entries = discoverySummaries([
+      {
+        candidate: {
+          name: 'COUNTDOWN FANTASY 2026-2027',
+          venue: '킨텍스',
+          date: '2026.12.31',
+          url: 'https://mintpaper.co.kr/festivals/178',
+          artistSourceUrl: 'https://mintpaper.co.kr/posts/4819?source=official',
+          artists: [
+            {
+              name: '혁오',
+              profileUrl: 'https://www.instagram.com/hyukohofficial/',
+            },
+          ],
+        },
+      },
+    ]);
+    expect(entries[0].artists?.[0].profileUrl).toBe(
+      'https://www.instagram.com/hyukohofficial/',
+    );
+  });
+
+  it('adds official profiles only to matching current performers', () => {
+    const entries = discoverySummaries([
+      {
+        candidate: {
+          name: 'COUNTDOWN FANTASY 2026-2027',
+          venue: '킨텍스',
+          date: '2026.12.31',
+          url: 'https://ticket.yes24.com/Perf/60590',
+          artists: [{ name: 'ONEWE' }, { name: '혁오' }],
+          officialProfileArtists: [
+            {
+              name: 'ONEWE(원위)',
+              profileUrl: 'https://www.instagram.com/official_onewe/',
+            },
+            {
+              name: '취소된 출연진',
+              profileUrl: 'https://www.instagram.com/cancelled_band/',
+            },
+          ],
+        },
+      },
+    ]);
+    expect(entries[0].artists).toEqual([
+      {
+        name: 'ONEWE',
+        profileUrl: 'https://www.instagram.com/official_onewe/',
+      },
+      { name: '혁오' },
+    ]);
+  });
+
+  it('does not restore dropped performers when the official catalog row comes first', () => {
+    const base = {
+      name: 'COUNTDOWN FANTASY 2026-2027',
+      venue: '킨텍스',
+      date: '2026.12.31',
+    };
+    const entries = discoverySummaries([
+      {
+        candidate: {
+          ...base,
+          url: 'https://mintpaper.co.kr/festivals/178',
+          officialProfileArtists: [
+            {
+              name: 'ONEWE(원위)',
+              profileUrl: 'https://www.instagram.com/official_onewe/',
+            },
+            {
+              name: '취소된 출연진',
+              profileUrl: 'https://www.instagram.com/cancelled_band/',
+            },
+          ],
+        },
+      },
+      {
+        candidate: {
+          ...base,
+          url: 'https://ticket.yes24.com/Perf/60590',
+          artists: [{ name: 'ONEWE' }],
+        },
+      },
+    ]);
+    expect(entries[0].artists).toEqual([
+      {
+        name: 'ONEWE',
+        profileUrl: 'https://www.instagram.com/official_onewe/',
+      },
+    ]);
+    const officialOnly = discoverySummaries([
+      {
+        candidate: {
+          ...base,
+          url: 'https://mintpaper.co.kr/festivals/178',
+          officialProfileArtists: [
+            {
+              name: 'ONEWE(원위)',
+              profileUrl: 'https://www.instagram.com/official_onewe/',
+            },
+          ],
+        },
+      },
+    ]);
+    expect(officialOnly[0].artists).toEqual([
+      {
+        name: 'ONEWE(원위)',
+        profileUrl: 'https://www.instagram.com/official_onewe/',
+      },
+    ]);
+  });
+
+  it('leaves a profile unset when two official names claim one performer', () => {
+    const entries = discoverySummaries([
+      {
+        candidate: {
+          name: 'COUNTDOWN FANTASY 2026-2027',
+          venue: '킨텍스',
+          date: '2026.12.31',
+          url: 'https://ticket.yes24.com/Perf/60590',
+          artists: [{ name: 'ONEWE' }],
+          officialProfileArtists: [
+            {
+              name: 'ONEWE',
+              profileUrl: 'https://www.instagram.com/first_onewe/',
+            },
+            {
+              name: 'ONEWE(원위)',
+              profileUrl: 'https://www.instagram.com/second_onewe/',
+            },
+          ],
+        },
+      },
+    ]);
+    expect(entries[0].artists).toEqual([{ name: 'ONEWE' }]);
+  });
+
   it('keeps every linked source for enrichment after the public link cap', () => {
     const urls = Array.from(
       { length: 6 },

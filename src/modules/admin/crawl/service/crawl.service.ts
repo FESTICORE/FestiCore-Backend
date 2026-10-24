@@ -635,19 +635,23 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
               ? 'ticket-list:v4'
               : source.url === 'https://ticket.yes24.com/English/Genre/Concert'
                 ? 'ticket-list:v4'
-                : /^https:\/\/ticket\.yes24\.com\/(?:English\/)?Perf\/\d+$/.test(
+                : /^https:\/\/(?:www\.)?mintpaper\.co\.kr\/posts\/4819(?:[?#]|$)/.test(
                       source.url,
                     )
                   ? 'ticket-list:v4'
-                  : source.url.startsWith(
-                        'https://ticket.melon.com/search/index.htm?',
+                  : /^https:\/\/ticket\.yes24\.com\/(?:English\/)?Perf\/\d+$/.test(
+                        source.url,
                       )
                     ? 'ticket-list:v4'
-                    : source.url.startsWith('https://nol.yanolja.com/ticket')
-                      ? 'ticket-list:v5'
-                      : source.url === 'https://xmfestival.com/notice'
-                        ? 'ticket-list:v4'
-                        : 'ticket-list:v3'
+                    : source.url.startsWith(
+                          'https://ticket.melon.com/search/index.htm?',
+                        )
+                      ? 'ticket-list:v4'
+                      : source.url.startsWith('https://nol.yanolja.com/ticket')
+                        ? 'ticket-list:v5'
+                        : source.url === 'https://xmfestival.com/notice'
+                          ? 'ticket-list:v4'
+                          : 'ticket-list:v3'
             : '',
         )
         .digest('hex');

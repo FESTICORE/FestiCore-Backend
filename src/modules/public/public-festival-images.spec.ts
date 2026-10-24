@@ -1,6 +1,65 @@
 import { discoverySummaries } from './crawl-catalog';
 import { PublicFestivalService } from './public-festival.service';
 describe('discovered festival artist profile images', () => {
+  it('shows an official CDF performer profile beside an already stored artist photo', async () => {
+    const candidate = {
+      name: 'COUNTDOWN FANTASY 2026-2027',
+      venue: '킨텍스',
+      date: '2026.12.31 - 2026.12.31',
+      url: 'https://mintpaper.co.kr/festivals/178',
+      artistSourceUrl: 'https://ticket.yes24.com/Perf/60590',
+      artists: [{ name: '혁오' }],
+      officialProfileArtists: [
+        {
+          name: '혁오',
+          profileUrl: 'https://www.instagram.com/hyukohofficial/',
+        },
+      ],
+    };
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([{ candidate }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          festivalSourceUrl: candidate.url,
+          artistName: '혁오',
+          artistAlias: null,
+          id: 'stored-image',
+        },
+      ])
+      .mockResolvedValueOnce([]);
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    const id = discoverySummaries([{ candidate }])[0].id;
+    await expect(service.detail(id)).resolves.toMatchObject({
+      artists: [
+        {
+          name: '혁오',
+          profileUrl: 'https://www.instagram.com/hyukohofficial/',
+          imageUrl: '/api/v1/festivals/images/stored-image.webp',
+        },
+      ],
+    });
+    const calls = query.mock.calls as unknown as [string, unknown[]][];
+    expect(calls[0][0]).toContain('"officialProfileArtists"');
+    expect(calls[0][0]).toContain("'https://www.mintpaper.co.kr/posts/4819'");
+    expect(calls[0][0]).toContain(
+      "jsonb_build_object(\n               'artists', candidate->'artists', 'url', candidate->>'url')",
+    );
+    expect(calls[0][0]).toContain('details."artistDetails"->\'artists\'');
+    expect(calls[0][0]).toContain('details."artistDetails"->>\'url\'');
+    expect(calls[0][0]).toContain('"sourceSeed" = \'official-lineup\'');
+    expect(calls[0][0]).toContain(
+      "NOT IN (\n                 'https://www.mintpaper.co.kr/posts/4819'",
+    );
+  });
+
   it('prefers a stored primary performer image over a linked source profile', async () => {
     const yes24Url = 'https://ticket.yes24.com/Perf/60590';
     const melonUrl =

@@ -257,6 +257,7 @@ describe('NOL festival poster', () => {
     expect(
       sql.match(/"sourceSeed" IS DISTINCT FROM 'official-ticket-link-detail'/g),
     ).toHaveLength(3);
+    expect(sql).toContain('AS "artistDetails"');
   });
 
   it('attaches a stored NOL poster through the public image policy', async () => {

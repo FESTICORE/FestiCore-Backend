@@ -293,17 +293,34 @@ export class PublicFestivalService {
                AND decision IS DISTINCT FROM 'rejected'
                AND "proposalStatus" IS DISTINCT FROM 'rejected'
                AND candidate->>'posterUrl' IS NOT NULL))[1] AS poster,
-           (array_agg(candidate->'artists' ORDER BY created_at DESC, proposal_id DESC)
+           (array_agg(jsonb_build_object(
+               'artists', candidate->'artists', 'url', candidate->>'url')
+               ORDER BY created_at DESC, proposal_id DESC, candidates.url DESC)
              FILTER (WHERE "sourceSeed" IS DISTINCT FROM 'official-ticket-link-detail'
                AND decision IS DISTINCT FROM 'rejected'
                AND "proposalStatus" IS DISTINCT FROM 'rejected'
+               AND regexp_replace(candidate->>'url', '[?#].*$', '') NOT IN (
+                 'https://www.mintpaper.co.kr/posts/4819',
+                 'https://mintpaper.co.kr/posts/4819')
                AND jsonb_array_length(CASE WHEN jsonb_typeof(candidate->'artists') = 'array'
-                 THEN candidate->'artists' ELSE '[]'::jsonb END) > 0))[1] AS artists
+                 THEN candidate->'artists' ELSE '[]'::jsonb END) > 0))[1] AS "artistDetails",
+           (array_agg(candidate->'artists'
+               ORDER BY created_at DESC, proposal_id DESC, candidates.url DESC)
+             FILTER (WHERE "sourceSeed" = 'official-lineup'
+               AND decision IS DISTINCT FROM 'rejected'
+               AND "proposalStatus" IS DISTINCT FROM 'rejected'
+               AND regexp_replace(candidate->>'url', '[?#].*$', '') IN (
+                 'https://www.mintpaper.co.kr/posts/4819',
+                 'https://mintpaper.co.kr/posts/4819')
+               AND jsonb_array_length(CASE WHEN jsonb_typeof(candidate->'artists') = 'array'
+                 THEN candidate->'artists' ELSE '[]'::jsonb END) > 0))[1] AS "officialProfileArtists"
          FROM candidates GROUP BY "catalogUrl"
        )
-       SELECT latest.candidate || jsonb_strip_nulls(jsonb_build_object(
+       SELECT (latest.candidate - 'artistSourceUrl' - 'officialProfileArtists') || jsonb_strip_nulls(jsonb_build_object(
            'officialInstagramUrl', details.account, 'posterUrl', details.poster,
-           'artists', details.artists
+           'artists', details."artistDetails"->'artists',
+           'artistSourceUrl', details."artistDetails"->>'url',
+           'officialProfileArtists', details."officialProfileArtists"
          )) AS candidate,
          latest.decision,
          latest."proposalStatus"
@@ -711,11 +728,15 @@ export class PublicFestivalService {
     const artists = new Map(
       (entry.artists ?? []).map((artist) => [
         artist.name,
-        artistImage(artist.name),
+        {
+          imageUrl: artistImage(artist.name),
+          ...(artist.profileUrl ? { profileUrl: artist.profileUrl } : {}),
+        },
       ]),
     );
     for (const set of uniqueTimetable) {
-      if (!artists.has(set.artist)) artists.set(set.artist, set.imageUrl);
+      if (!artists.has(set.artist))
+        artists.set(set.artist, { imageUrl: set.imageUrl });
     }
     return {
       id: entry.id,
@@ -730,7 +751,7 @@ export class PublicFestivalService {
       ticketLinks: entry.ticketLinks,
       sourceUrl: entry.sourceUrl,
       officialInstagramUrl: entry.officialInstagramUrl ?? null,
-      artists: [...artists].map(([name, imageUrl]) => ({ name, imageUrl })),
+      artists: [...artists].map(([name, details]) => ({ name, ...details })),
       timetable: uniqueTimetable,
     };
   }

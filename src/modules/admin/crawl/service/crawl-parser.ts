@@ -83,7 +83,7 @@ type FestivalCandidate = {
   venue?: string;
   posterUrl?: string;
   officialInstagramUrl?: string;
-  artists?: { name: string; sourceUrl?: string }[];
+  artists?: { name: string; sourceUrl?: string; profileUrl?: string }[];
 };
 
 const FESTIVAL_TITLE = /(?:페스티벌|축제|festival|\bfest\b)/i;
@@ -443,7 +443,7 @@ function officialLineupCandidates(
   if (isMintPost) {
     const title = /<h1\b[^>]*>([\s\S]*?)<\/h1>/i.exec(body)?.[1];
     const article =
-      /<div\b[^>]*class=["'][^"']*\bPostContent_content\S*[^"']*["'][^>]*>([\s\S]*?)<\/div>/i.exec(
+      /<div\b[^>]*class=["'][^"']*\bPostContent_content[^"']*["'][^>]*>([\s\S]*?)<\/div>/i.exec(
         body,
       )?.[1];
     if (!title || !article) return [];
@@ -457,20 +457,22 @@ function officialLineupCandidates(
       /12[.．]31/i.test(plainText(line).normalize('NFKC')),
     );
     if (day < 0) return [];
-    const artists: { name: string }[] = [];
+    const artists: { name: string; profileUrl: string }[] = [];
     for (const line of lineup.slice(day + 1, day + 81)) {
       if (/and\s+many\s+more/i.test(plainText(line).normalize('NFKC'))) break;
-      if (
-        !/<a\b[^>]*href=["']https:\/\/www\.instagram\.com\/[A-Za-z0-9._]+\/?["']/i.test(
+      const profile =
+        /<a\b[^>]*\bhref=["'](https:\/\/www\.instagram\.com\/[A-Za-z0-9._]+\/?)["'][^>]*>/i.exec(
           line,
-        )
-      )
-        continue;
+        )?.[1];
+      if (!profile) continue;
       const artistName = plainText(line.split(/<a\b/i)[0])
         .normalize('NFKC')
         .trim();
       if (artistName && artistName.length <= 160)
-        artists.push({ name: artistName });
+        artists.push({
+          name: artistName,
+          profileUrl: `${profile.replace(/\/$/, '')}/`,
+        });
     }
     if (artists.length !== 12) return [];
     return [{ name, url: source.toString(), artists }];
