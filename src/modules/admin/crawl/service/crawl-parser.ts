@@ -1,6 +1,10 @@
 import { createHash } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
 import type { CrawlSource } from '../entity/crawl-source.entity';
+import {
+  WONDERLIVET_LINK_PAGE,
+  wonderlivetMelonProduct,
+} from './wonderlivet-ticket-link';
 
 const REGEX_TIMEOUT_MS = 1000;
 const MAX_REGEX_WORKERS = 10;
@@ -1242,6 +1246,8 @@ export function ticketCandidates(
   base: string,
   config: Record<string, string> = {},
 ): FestivalCandidate[] {
+  if (base === WONDERLIVET_LINK_PAGE)
+    return [{ name: 'WONDERLIVET 2026', url: wonderlivetMelonProduct(body) }];
   const officialTicketLinks = mintPaperOfficialTicketLinks(body, base);
   if (officialTicketLinks) return officialTicketLinks;
   const seoulCultureLineup = seoulCultureLineupCandidates(body, base, config);

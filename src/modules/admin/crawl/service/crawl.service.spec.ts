@@ -58,6 +58,11 @@ type PrivateCrawl = {
     source: CrawlSource,
     parsed: unknown,
   ): Promise<void>;
+  reconcileWonderlivetTicketLink(
+    source: CrawlSource,
+    parsed: unknown,
+    runId: string,
+  ): Promise<void>;
 };
 
 const CDF_PAGE = 'https://www.bandkardi.com/profile';
@@ -2669,6 +2674,108 @@ describe('CrawlService manual runs and snapshots', () => {
     expect(sourceUrls).toEqual([
       'https://nol.yanolja.com/ticket/products/26013510',
     ]);
+  });
+
+  it('registers a dynamic official WONDERLIVET Melon product on the daily crawl', async () => {
+    const { service, source, run, dataSource, runsRepo, execute } = harness();
+    execute.mockRestore();
+    source.url = 'https://litt.ly/wonderlivet';
+    source.parserConfig = {
+      seed: 'wonderlivet-official-ticket-links',
+      festivalSourceUrl: 'https://www.wonderli.vet/lineup',
+    };
+    const product =
+      'https://ticket.melon.com/performance/index.htm?prodId=214999';
+    const body = `<title>WONDERLIVET·원더리벳</title><h1>WONDERLIVET·원더리벳</h1>
+      <p>원더리벳 2026 전체 라인업과 타임테이블이 공개되었습니다.</p>
+      <a href="https://www.wonderli.vet/">홈페이지 바로가기</a><h2>TICKET</h2>
+      <a href="${product}">[멜론티켓] 예매페이지 바로가기</a>`;
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({ status: 200, body });
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(null),
+    }));
+    dataSource.query.mockImplementation((sql: string) =>
+      sql.includes('SELECT "parserConfig", enabled')
+        ? [
+            {
+              enabled: true,
+              parserConfig: {
+                seed: 'wonderlivet-official-ticket-detail',
+                festivalSourceUrl: 'https://www.wonderli.vet/lineup',
+                festivalSourceUrls: ['https://www.wonderli.vet/lineup'],
+              },
+            },
+          ]
+        : sql.includes('RETURNING id')
+          ? [{ id: source.id }]
+          : [],
+    );
+    const proposals = jest.spyOn(service, 'proposalItems');
+
+    await service.execute(run, source);
+
+    expect(run.result).toBe('nochange-parsed');
+    expect(proposals).not.toHaveBeenCalled();
+    const calls = dataSource.query.mock.calls as unknown as [
+      string,
+      unknown[],
+    ][];
+    const parentUpdate = calls.find(([sql]) =>
+      sql.includes("'verifiedTicketUrl'"),
+    );
+    expect(parentUpdate?.[1]).toEqual([
+      source.id,
+      product,
+      'https://litt.ly/wonderlivet',
+      'wonderlivet-official-ticket-links',
+      'https://www.wonderli.vet/lineup',
+      run.id,
+    ]);
+    expect(
+      calls.find(([sql]) => sql.includes('INSERT INTO crawl_sources'))?.[1][0],
+    ).toBe(product);
+  });
+
+  it('does not publish a WONDERLIVET bridge when the existing product belongs to another source', async () => {
+    const { service, source, dataSource } = harness();
+    source.url = 'https://litt.ly/wonderlivet';
+    source.parserConfig = {
+      seed: 'wonderlivet-official-ticket-links',
+      festivalSourceUrl: 'https://www.wonderli.vet/lineup',
+    };
+    dataSource.query.mockImplementation((sql: string) =>
+      sql.includes('SELECT "parserConfig", enabled')
+        ? [
+            {
+              enabled: true,
+              parserConfig: {
+                seed: 'official-ticket-link-detail',
+                festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
+              },
+            },
+          ]
+        : [],
+    );
+    await expect(
+      service.reconcileWonderlivetTicketLink(
+        source,
+        [
+          {
+            name: 'WONDERLIVET 2026',
+            url: 'https://ticket.melon.com/performance/index.htm?prodId=214999',
+          },
+        ],
+        'run-1',
+      ),
+    ).rejects.toThrow('다른 축제');
+    expect(
+      dataSource.query.mock.calls.some(([sql]: [string]) =>
+        sql.includes("'verifiedTicketUrl'"),
+      ),
+    ).toBe(false);
   });
 
   it('registers an official Mint Paper NOL link without a duplicate festival proposal', async () => {
