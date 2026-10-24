@@ -15,7 +15,8 @@ describe('LiveActivityService durable queue', () => {
     manager,
     query,
     transaction: jest.fn(
-      async (work: (manager: typeof manager) => Promise<void>) => work(manager),
+      async (work: (entityManager: typeof manager) => Promise<void>) =>
+        work(manager),
     ),
   };
   const apns = {
