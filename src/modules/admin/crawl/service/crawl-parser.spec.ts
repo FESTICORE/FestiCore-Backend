@@ -464,7 +464,7 @@ describe('crawl parsers', () => {
       url: string;
       date: string;
       venue: string;
-      artists: { name: string }[];
+      artists: { name: string; profileUrl: string }[];
     }[];
     expect(candidate).toHaveLength(1);
     expect(candidate[0]).toMatchObject({
@@ -829,9 +829,39 @@ describe('crawl parsers', () => {
     expect(candidates[0].url).toBe(mint.url);
     expect(candidates[0].name).toBe('COUNTDOWN FANTASY 2026-2027');
     expect(candidates[0].artists).toHaveLength(12);
-    expect(candidates[0].artists.map((artist) => artist.name)).toEqual(
-      expect.arrayContaining(['극동아시아타이거즈', 'LOW HIGH LOW', '혁오']),
+    expect(candidates[0].artists).toEqual(
+      [
+        ['극동아시아타이거즈', 'far_east_asian_tigers'],
+        ['LOW HIGH LOW', 'band_lowhighlow'],
+        ['THE SOLUTIONS', 'the_solutions'],
+        ['실리카겔', 'silicagel.official'],
+        ['AxMxP', 'axmxp_official'],
+        ['FTISLAND', 'ftisland'],
+        ['OYSTERS', 'oysters.999'],
+        ['ONEWE(원위)', 'official_onewe'],
+        ['IDIOTAPE', 'idiotapeofficial'],
+        ['KARDI', 'bandkardi_'],
+        ['포져군단', 'poseridiott'],
+        ['혁오', 'hyukohofficial'],
+      ].map(([name, handle]) => ({
+        name,
+        profileUrl: `https://www.instagram.com/${handle}/`,
+      })),
     );
+    expect(candidates[0].artists).not.toContainEqual(
+      expect.objectContaining({
+        profileUrl: 'https://www.instagram.com/grandmintfestival/',
+      }),
+    );
+    await expect(
+      parseCrawl(
+        mint,
+        html.replace(
+          'https://www.instagram.com/hyukohofficial/',
+          'https://evil.example/hyukohofficial/',
+        ),
+      ),
+    ).rejects.toThrow('공개 예매 링크');
     await expect(parseCrawl(mint, html.replace('혁오', ''))).rejects.toThrow(
       '공개 예매 링크',
     );

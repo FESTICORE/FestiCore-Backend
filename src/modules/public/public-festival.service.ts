@@ -298,12 +298,18 @@ export class PublicFestivalService {
                AND decision IS DISTINCT FROM 'rejected'
                AND "proposalStatus" IS DISTINCT FROM 'rejected'
                AND jsonb_array_length(CASE WHEN jsonb_typeof(candidate->'artists') = 'array'
-                 THEN candidate->'artists' ELSE '[]'::jsonb END) > 0))[1] AS artists
+                 THEN candidate->'artists' ELSE '[]'::jsonb END) > 0))[1] AS artists,
+           (array_agg(candidate->>'url' ORDER BY created_at DESC, proposal_id DESC)
+             FILTER (WHERE "sourceSeed" IS DISTINCT FROM 'official-ticket-link-detail'
+               AND decision IS DISTINCT FROM 'rejected'
+               AND "proposalStatus" IS DISTINCT FROM 'rejected'
+               AND jsonb_array_length(CASE WHEN jsonb_typeof(candidate->'artists') = 'array'
+                 THEN candidate->'artists' ELSE '[]'::jsonb END) > 0))[1] AS "artistSourceUrl"
          FROM candidates GROUP BY "catalogUrl"
        )
        SELECT latest.candidate || jsonb_strip_nulls(jsonb_build_object(
            'officialInstagramUrl', details.account, 'posterUrl', details.poster,
-           'artists', details.artists
+           'artists', details.artists, 'artistSourceUrl', details."artistSourceUrl"
          )) AS candidate,
          latest.decision,
          latest."proposalStatus"
@@ -631,11 +637,15 @@ export class PublicFestivalService {
     const artists = new Map(
       (entry.artists ?? []).map((artist) => [
         artist.name,
-        artistImageForName(artist.name, artistImages),
+        {
+          imageUrl: artistImageForName(artist.name, artistImages),
+          ...(artist.profileUrl ? { profileUrl: artist.profileUrl } : {}),
+        },
       ]),
     );
     for (const set of timetable) {
-      if (!artists.has(set.artist)) artists.set(set.artist, set.imageUrl);
+      if (!artists.has(set.artist))
+        artists.set(set.artist, { imageUrl: set.imageUrl });
     }
     return {
       id: entry.id,
@@ -650,7 +660,7 @@ export class PublicFestivalService {
       ticketLinks: entry.ticketLinks,
       sourceUrl: entry.sourceUrl,
       officialInstagramUrl: entry.officialInstagramUrl ?? null,
-      artists: [...artists].map(([name, imageUrl]) => ({ name, imageUrl })),
+      artists: [...artists].map(([name, details]) => ({ name, ...details })),
       timetable,
     };
   }

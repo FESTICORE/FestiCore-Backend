@@ -253,7 +253,8 @@ export class PublicFestivalController {
   })
   @ApiResponse({
     status: 200,
-    description: '축제 상세와 발행된 타임테이블 또는 발견 출연진',
+    description:
+      '축제 상세와 발행된 타임테이블 또는 발견 출연진. 공식 출연진 계정이 검증된 발견 축제에는 artists[].profileUrl이 포함될 수 있습니다. imageUrl은 서버에 저장된 사진에만 부여합니다.',
     schema: {
       type: 'object',
       example: {

@@ -33,7 +33,12 @@ export interface DiscoverySummary {
   sourceUrl: string;
   officialInstagramUrl?: string;
   posterUrl?: string;
-  artists?: { name: string; sourceUrl?: string; imageUrl?: string | null }[];
+  artists?: {
+    name: string;
+    sourceUrl?: string;
+    profileUrl?: string;
+    imageUrl?: string | null;
+  }[];
   sortAt: string;
 }
 
@@ -93,15 +98,30 @@ function officialPosterUrl(raw: unknown): string | null {
 
 function verifiedArtists(
   raw: unknown,
-  sourceHost: string,
-): { name: string; sourceUrl?: string }[] {
+  sourceUrl: string,
+): { name: string; sourceUrl?: string; profileUrl?: string }[] {
   if (!Array.isArray(raw)) return [];
-  const artists: { name: string; sourceUrl?: string }[] = [];
+  const sourceHost = new URL(sourceUrl).hostname;
+  const artists: {
+    name: string;
+    sourceUrl?: string;
+    profileUrl?: string;
+  }[] = [];
   for (const value of raw.slice(0, 80)) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
     const name = (value as Record<string, unknown>).name;
     if (typeof name !== 'string' || !name.trim() || name.length > 160) continue;
-    const artist: { name: string; sourceUrl?: string } = { name: name.trim() };
+    const artist: {
+      name: string;
+      sourceUrl?: string;
+      profileUrl?: string;
+    } = { name: name.trim() };
+    if (sourceUrl === 'https://www.mintpaper.co.kr/posts/4819') {
+      const profile = officialInstagramUrl(
+        (value as Record<string, unknown>).profileUrl,
+      );
+      if (profile) artist.profileUrl = profile;
+    }
     const rawUrl = (value as Record<string, unknown>).sourceUrl;
     if (typeof rawUrl === 'string') {
       try {
@@ -312,7 +332,12 @@ export function discoverySummaries(
     if (publishedKeys.has(key)) continue;
     const instagramUrl = officialInstagramUrl(value.officialInstagramUrl);
     const posterUrl = officialPosterUrl(value.posterUrl);
-    const artists = verifiedArtists(value.artists, url.hostname);
+    const artists = verifiedArtists(
+      value.artists,
+      typeof value.artistSourceUrl === 'string'
+        ? value.artistSourceUrl
+        : url.toString(),
+    );
     const existing = found.get(key);
     if (existing) {
       if (
@@ -341,11 +366,12 @@ export function discoverySummaries(
         );
         for (const artist of artists) {
           const current = merged.get(artist.name);
-          if (
-            (current && !current.sourceUrl && artist.sourceUrl) ||
-            (!current && merged.size < 80)
-          )
-            merged.set(artist.name, artist);
+          if (current) {
+            if (!current.sourceUrl && artist.sourceUrl)
+              current.sourceUrl = artist.sourceUrl;
+            if (!current.profileUrl && artist.profileUrl)
+              current.profileUrl = artist.profileUrl;
+          } else if (merged.size < 80) merged.set(artist.name, artist);
         }
         existing.artists = [...merged.values()];
       }

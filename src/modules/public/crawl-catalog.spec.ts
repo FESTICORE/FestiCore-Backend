@@ -1,6 +1,71 @@
 import { discoverySummaries, ticketDateRange } from './crawl-catalog';
 
 describe('ticket discovery catalog', () => {
+  it('retains official CDF performer profiles without treating them as image URLs', () => {
+    const base = {
+      name: 'COUNTDOWN FANTASY 2026-2027',
+      venue: '킨텍스',
+      date: '2026.12.31 - 2026.12.31',
+    };
+    const entries = discoverySummaries([
+      {
+        candidate: {
+          ...base,
+          url: 'https://ticket.yes24.com/Perf/60590',
+          artists: [
+            {
+              name: '혁오',
+              sourceUrl: 'https://tkfile.yes24.com/artists/hyukoh.jpg',
+            },
+          ],
+        },
+      },
+      {
+        candidate: {
+          ...base,
+          url: 'https://mintpaper.co.kr/festivals/178',
+          artistSourceUrl: 'https://www.mintpaper.co.kr/posts/4819',
+          artists: [
+            {
+              name: '혁오',
+              profileUrl: 'https://www.instagram.com/hyukohofficial/',
+            },
+            {
+              name: '실리카겔',
+              profileUrl: 'https://www.instagram.com/silicagel.official/',
+            },
+          ],
+        },
+      },
+    ]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].artists).toEqual([
+      {
+        name: '혁오',
+        sourceUrl: 'https://tkfile.yes24.com/artists/hyukoh.jpg',
+        profileUrl: 'https://www.instagram.com/hyukohofficial/',
+      },
+      {
+        name: '실리카겔',
+        profileUrl: 'https://www.instagram.com/silicagel.official/',
+      },
+    ]);
+    const untrusted = discoverySummaries([
+      {
+        candidate: {
+          ...base,
+          url: 'https://ticket.yes24.com/Perf/60590',
+          artists: [
+            {
+              name: '혁오',
+              profileUrl: 'https://www.instagram.com/hyukohofficial/',
+            },
+          ],
+        },
+      },
+    ]);
+    expect(untrusted[0].artists?.[0]).toEqual({ name: '혁오' });
+  });
   it('parses Korean and English ticket dates without inventing event times', () => {
     expect(ticketDateRange('2026.12.25 - 2026.12.26')).toEqual({
       firstDate: '2026-12-25',

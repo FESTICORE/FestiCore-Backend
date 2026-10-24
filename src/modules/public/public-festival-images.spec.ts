@@ -1,6 +1,54 @@
 import { discoverySummaries } from './crawl-catalog';
 import { PublicFestivalService } from './public-festival.service';
 describe('discovered festival artist profile images', () => {
+  it('shows an official CDF performer profile beside an already stored artist photo', async () => {
+    const candidate = {
+      name: 'COUNTDOWN FANTASY 2026-2027',
+      venue: '킨텍스',
+      date: '2026.12.31 - 2026.12.31',
+      url: 'https://mintpaper.co.kr/festivals/178',
+      artistSourceUrl: 'https://www.mintpaper.co.kr/posts/4819',
+      artists: [
+        {
+          name: '혁오',
+          profileUrl: 'https://www.instagram.com/hyukohofficial/',
+        },
+      ],
+    };
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([{ candidate }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          festivalSourceUrl: candidate.url,
+          artistName: '혁오',
+          artistAlias: null,
+          id: 'stored-image',
+        },
+      ])
+      .mockResolvedValueOnce([]);
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    const id = discoverySummaries([{ candidate }])[0].id;
+    await expect(service.detail(id)).resolves.toMatchObject({
+      artists: [
+        {
+          name: '혁오',
+          profileUrl: 'https://www.instagram.com/hyukohofficial/',
+          imageUrl: '/api/v1/festivals/images/stored-image.webp',
+        },
+      ],
+    });
+    const calls = query.mock.calls as unknown as [string, unknown[]][];
+    expect(calls[0][0]).toContain('artistSourceUrl');
+  });
+
   it('serves a YES24 performer image only when its exact origin URL was stored', async () => {
     const imageUrl = 'https://tkfile.yes24.com/artists/band-a.jpg';
     const candidate = {
