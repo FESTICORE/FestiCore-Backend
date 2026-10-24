@@ -549,12 +549,12 @@ export class PublicFestivalService {
        JOIN crawl_sources child ON child.url =
          parent."parserConfig"->>'verifiedTicketUrl'
        JOIN LATERAL (
-         SELECT run.result FROM crawl_runs run
+         SELECT run.result, run."contentHash" FROM crawl_runs run
          WHERE run."sourceId" = child.id
          ORDER BY run."startedAt" DESC, run.id DESC LIMIT 1
-       ) childRun ON childRun.result IN ('proposed', 'unchanged', 'nochange-parsed')
+       ) childRun ON childRun.result IN ('proposed', 'unchanged')
        JOIN LATERAL (
-         SELECT p.status, item->>'decision' AS decision,
+         SELECT p.status, p."runId", item->>'decision' AS decision,
            item->'after' AS candidate
          FROM crawl_proposals p
          CROSS JOIN LATERAL jsonb_array_elements(p.items) item
@@ -563,6 +563,11 @@ export class PublicFestivalService {
          ORDER BY p."createdAt" DESC, p.id DESC
          LIMIT 1
        ) latest ON true
+       JOIN crawl_runs proposedRun ON proposedRun.id = latest."runId"
+         AND proposedRun."sourceId" = child.id
+         AND proposedRun.result = 'proposed'
+         AND proposedRun."contentHash" IS NOT NULL
+         AND proposedRun."contentHash" = childRun."contentHash"
        WHERE parent.kind = 'discovery' AND parent.url = $1::text
          AND parent.enabled = true
          AND parent."parserConfig"->>'seed' = $2::text
@@ -577,7 +582,8 @@ export class PublicFestivalService {
          AND child.kind = 'discovery' AND child.enabled = true
          AND child."parserConfig"->>'seed' = $4::text
          AND child."parserConfig"->>'festivalSourceUrl' = $3::text
-         AND child."parserConfig"->'festivalSourceUrls' = jsonb_build_array($3::text)
+         AND child."parserConfig"->'festivalSourceUrls' =
+           jsonb_build_array(child.url, $3::text)
          AND latest.status IS DISTINCT FROM 'rejected'
          AND latest.decision IS DISTINCT FROM 'rejected'`,
       [

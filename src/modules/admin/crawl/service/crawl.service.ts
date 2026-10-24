@@ -1581,65 +1581,69 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     const detailConfig = JSON.stringify({
       seed: WONDERLIVET_DETAIL_SEED,
       festivalSourceUrl: WONDERLIVET_FESTIVAL_URL,
-      festivalSourceUrls: [WONDERLIVET_FESTIVAL_URL],
+      festivalSourceUrls: [candidate.url, WONDERLIVET_FESTIVAL_URL],
     });
-    await this.dataSource.query(
-      `UPDATE crawl_sources SET "parserConfig" = "parserConfig" || $2::jsonb,
+    await this.dataSource.transaction(async (manager) => {
+      await manager.query(
+        `UPDATE crawl_sources SET "parserConfig" = "parserConfig" || $2::jsonb,
          "updatedAt" = now()
        WHERE url = $1::text AND kind = 'discovery' AND parser = 'ticket-list'
          AND "parserConfig"->>'seed' IN ('ticket-detail', $3::text)
          AND (NOT ("parserConfig" ? 'festivalSourceUrl')
            OR "parserConfig"->>'festivalSourceUrl' = $4::text)
          AND (NOT ("parserConfig" ? 'festivalSourceUrls')
-           OR "parserConfig"->'festivalSourceUrls' = jsonb_build_array($4::text))`,
-      [
-        candidate.url,
-        detailConfig,
-        WONDERLIVET_DETAIL_SEED,
-        WONDERLIVET_FESTIVAL_URL,
-      ],
-    );
-    await this.dataSource.query(
-      `INSERT INTO crawl_sources (kind, url, parser, "parserConfig", "createdAt")
+           OR "parserConfig"->'festivalSourceUrls' IN (
+             jsonb_build_array($4::text), jsonb_build_array($1::text, $4::text)))`,
+        [
+          candidate.url,
+          detailConfig,
+          WONDERLIVET_DETAIL_SEED,
+          WONDERLIVET_FESTIVAL_URL,
+        ],
+      );
+      await manager.query(
+        `INSERT INTO crawl_sources (kind, url, parser, "parserConfig", "createdAt")
        SELECT 'discovery', $1::text, 'ticket-list', $2::jsonb, now() - interval '1 day'
        WHERE NOT EXISTS (SELECT 1 FROM crawl_sources WHERE url = $1::text)`,
-      [candidate.url, detailConfig],
-    );
-    const children = await this.dataSource.query<
-      { parserConfig: Record<string, unknown>; enabled: boolean }[]
-    >(
-      `SELECT "parserConfig", enabled FROM crawl_sources
+        [candidate.url, detailConfig],
+      );
+      const children = await manager.query<
+        { parserConfig: Record<string, unknown>; enabled: boolean }[]
+      >(
+        `SELECT "parserConfig", enabled FROM crawl_sources
        WHERE url = $1::text AND kind = 'discovery' AND parser = 'ticket-list'`,
-      [candidate.url],
-    );
-    if (
-      children.length !== 1 ||
-      !children[0].enabled ||
-      children[0].parserConfig.seed !== WONDERLIVET_DETAIL_SEED ||
-      children[0].parserConfig.festivalSourceUrl !== WONDERLIVET_FESTIVAL_URL ||
-      JSON.stringify(children[0].parserConfig.festivalSourceUrls) !==
-        JSON.stringify([WONDERLIVET_FESTIVAL_URL])
-    )
-      throw new Error('멜론 상품 소스가 다른 축제에 연결되어 있습니다.');
-    const updated = await this.dataSource.query<{ id: string }[]>(
-      `UPDATE crawl_sources SET "parserConfig" = "parserConfig" ||
+        [candidate.url],
+      );
+      if (
+        children.length !== 1 ||
+        !children[0].enabled ||
+        children[0].parserConfig.seed !== WONDERLIVET_DETAIL_SEED ||
+        children[0].parserConfig.festivalSourceUrl !==
+          WONDERLIVET_FESTIVAL_URL ||
+        JSON.stringify(children[0].parserConfig.festivalSourceUrls) !==
+          JSON.stringify([candidate.url, WONDERLIVET_FESTIVAL_URL])
+      )
+        throw new Error('멜론 상품 소스가 다른 축제에 연결되어 있습니다.');
+      const updated = await manager.query<{ id: string }[]>(
+        `UPDATE crawl_sources SET "parserConfig" = "parserConfig" ||
          jsonb_build_object('verifiedTicketUrl', $2::text,
            'verifiedRunId', $6::text), "updatedAt" = now()
        WHERE id = $1::uuid AND url = $3::text AND enabled = true
          AND "parserConfig"->>'seed' = $4::text
          AND "parserConfig"->>'festivalSourceUrl' = $5::text
        RETURNING id`,
-      [
-        source.id,
-        candidate.url,
-        WONDERLIVET_LINK_PAGE,
-        WONDERLIVET_TICKET_SEED,
-        WONDERLIVET_FESTIVAL_URL,
-        runId,
-      ],
-    );
-    if (updated.length !== 1)
-      throw new Error('공식 링크 부모 소스 설정이 변경되었습니다.');
+        [
+          source.id,
+          candidate.url,
+          WONDERLIVET_LINK_PAGE,
+          WONDERLIVET_TICKET_SEED,
+          WONDERLIVET_FESTIVAL_URL,
+          runId,
+        ],
+      );
+      if (updated.length !== 1)
+        throw new Error('공식 링크 부모 소스 설정이 변경되었습니다.');
+    });
   }
 
   private async syncXmfArtistAliases(

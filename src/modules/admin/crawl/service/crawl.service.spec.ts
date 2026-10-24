@@ -2697,7 +2697,7 @@ describe('CrawlService manual runs and snapshots', () => {
       orderBy: jest.fn().mockReturnThis(),
       getOne: jest.fn().mockResolvedValue(null),
     }));
-    dataSource.query.mockImplementation((sql: string) =>
+    const childQuery = jest.fn((sql: string) =>
       sql.includes('SELECT "parserConfig", enabled')
         ? [
             {
@@ -2705,7 +2705,10 @@ describe('CrawlService manual runs and snapshots', () => {
               parserConfig: {
                 seed: 'wonderlivet-official-ticket-detail',
                 festivalSourceUrl: 'https://www.wonderli.vet/lineup',
-                festivalSourceUrls: ['https://www.wonderli.vet/lineup'],
+                festivalSourceUrls: [
+                  product,
+                  'https://www.wonderli.vet/lineup',
+                ],
               },
             },
           ]
@@ -2713,16 +2716,16 @@ describe('CrawlService manual runs and snapshots', () => {
           ? [{ id: source.id }]
           : [],
     );
+    dataSource.transaction = jest.fn(async (operation) =>
+      operation({ query: childQuery }),
+    );
     const proposals = jest.spyOn(service, 'proposalItems');
 
     await service.execute(run, source);
 
     expect(run.result).toBe('nochange-parsed');
     expect(proposals).not.toHaveBeenCalled();
-    const calls = dataSource.query.mock.calls as unknown as [
-      string,
-      unknown[],
-    ][];
+    const calls = childQuery.mock.calls as unknown as [string, unknown[]][];
     const parentUpdate = calls.find(([sql]) =>
       sql.includes("'verifiedTicketUrl'"),
     );
@@ -2737,6 +2740,16 @@ describe('CrawlService manual runs and snapshots', () => {
     expect(
       calls.find(([sql]) => sql.includes('INSERT INTO crawl_sources'))?.[1][0],
     ).toBe(product);
+    const insertedConfig = JSON.parse(
+      calls.find(([sql]) =>
+        sql.includes('INSERT INTO crawl_sources'),
+      )?.[1][1] as string,
+    ) as Record<string, unknown>;
+    expect(insertedConfig.festivalSourceUrls).toEqual([
+      product,
+      'https://www.wonderli.vet/lineup',
+    ]);
+    expect(dataSource.transaction).toHaveBeenCalledTimes(1);
   });
 
   it('does not publish a WONDERLIVET bridge when the existing product belongs to another source', async () => {
@@ -2746,7 +2759,7 @@ describe('CrawlService manual runs and snapshots', () => {
       seed: 'wonderlivet-official-ticket-links',
       festivalSourceUrl: 'https://www.wonderli.vet/lineup',
     };
-    dataSource.query.mockImplementation((sql: string) =>
+    const childQuery = jest.fn((sql: string) =>
       sql.includes('SELECT "parserConfig", enabled')
         ? [
             {
@@ -2758,6 +2771,9 @@ describe('CrawlService manual runs and snapshots', () => {
             },
           ]
         : [],
+    );
+    dataSource.transaction = jest.fn(async (operation) =>
+      operation({ query: childQuery }),
     );
     await expect(
       service.reconcileWonderlivetTicketLink(
@@ -2772,10 +2788,58 @@ describe('CrawlService manual runs and snapshots', () => {
       ),
     ).rejects.toThrow('다른 축제');
     expect(
-      dataSource.query.mock.calls.some(([sql]: [string]) =>
+      childQuery.mock.calls.some(([sql]: [string]) =>
         sql.includes("'verifiedTicketUrl'"),
       ),
     ).toBe(false);
+  });
+
+  it('rolls back the Wonderlivet child configuration if parent verification fails', async () => {
+    const { service, source, dataSource } = harness();
+    source.url = 'https://litt.ly/wonderlivet';
+    source.parserConfig = {
+      seed: 'wonderlivet-official-ticket-links',
+      festivalSourceUrl: 'https://www.wonderli.vet/lineup',
+    };
+    const product =
+      'https://ticket.melon.com/performance/index.htm?prodId=214999';
+    const staged: string[] = [];
+    let committed = false;
+    dataSource.transaction = jest.fn(async (operation) => {
+      const result = await operation({
+        query: jest.fn((sql: string) => {
+          if (sql.includes('SELECT "parserConfig", enabled'))
+            return [
+              {
+                enabled: true,
+                parserConfig: {
+                  seed: 'wonderlivet-official-ticket-detail',
+                  festivalSourceUrl: 'https://www.wonderli.vet/lineup',
+                  festivalSourceUrls: [
+                    product,
+                    'https://www.wonderli.vet/lineup',
+                  ],
+                },
+              },
+            ];
+          if (sql.includes("'verifiedTicketUrl'")) return [];
+          staged.push(sql);
+          return [];
+        }),
+      });
+      committed = true;
+      return result;
+    });
+    await expect(
+      service.reconcileWonderlivetTicketLink(
+        source,
+        [{ name: 'WONDERLIVET 2026', url: product }],
+        'run-1',
+      ),
+    ).rejects.toThrow('부모 소스 설정');
+    expect(staged.length).toBeGreaterThan(0);
+    expect(committed).toBe(false);
+    expect(dataSource.query).not.toHaveBeenCalled();
   });
 
   it('registers an official Mint Paper NOL link without a duplicate festival proposal', async () => {

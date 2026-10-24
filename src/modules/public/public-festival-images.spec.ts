@@ -621,11 +621,24 @@ describe('discovered festival artist profile images', () => {
     const proofQuery = (
       query.mock.calls as unknown as [string, unknown[]][]
     )[2][0];
+    const catalogQuery = (
+      query.mock.calls as unknown as [string, unknown[]][]
+    )[0][0];
+    expect(catalogQuery).toContain('jsonb_array_elements_text');
+    expect(catalogQuery).toContain('FROM latest JOIN details USING (url)');
     expect(proofQuery).toContain(
       "verified.result IN ('nochange-parsed', 'unchanged')",
     );
     expect(proofQuery).toContain('newer."startedAt" > verified."startedAt"');
     expect(proofQuery).toContain("latest.decision IS DISTINCT FROM 'rejected'");
+    expect(proofQuery).toContain(
+      "childRun.result IN ('proposed', 'unchanged')",
+    );
+    expect(proofQuery).toContain(
+      'proposedRun."contentHash" = childRun."contentHash"',
+    );
+    expect(proofQuery).toContain('proposedRun."sourceId" = child.id');
+    expect(proofQuery).toContain('jsonb_build_array(child.url, $3::text)');
   });
 
   it.each([
