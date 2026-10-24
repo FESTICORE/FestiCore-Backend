@@ -174,11 +174,12 @@ function harness() {
     findBy: jest.fn().mockResolvedValue([source]),
     findOneBy: jest.fn().mockResolvedValue(source),
   };
+  const dataSourceQuery = jest.fn().mockResolvedValue([]);
   const dataSource = {
-    query: jest.fn().mockResolvedValue([]),
+    query: dataSourceQuery,
     getRepository: jest.fn(),
     transaction: jest.fn((callback: (manager: unknown) => Promise<unknown>) =>
-      callback({}),
+      callback({ query: dataSourceQuery }),
     ),
   };
   const proposalsRepo = {
@@ -2682,7 +2683,8 @@ describe('CrawlService manual runs and snapshots', () => {
       title: 'CDF2026-2027 TICKET | 예매 안내, 입장 안내, 관람 안내',
       content:
         '<p>COUNTDOWN FANTASY 2026-2027 일시 : 2026년 12월 31일</p>' +
-        '<a href="https://nol.yanolja.com/ticket/products/26014568">NOL</a>',
+        '<a href="https://nol.yanolja.com/ticket/products/26014568">NOL</a>' +
+        '<a href="https://ticket.yes24.com/Perf/60590?Gcode=009_207">YES24</a>',
     };
     jest.spyOn(service, 'checkRobots').mockResolvedValue();
     jest.spyOn(service, 'getListing').mockResolvedValue({
@@ -2721,7 +2723,7 @@ describe('CrawlService manual runs and snapshots', () => {
     const statements = calls.filter(([sql]) => sql.includes('crawl_sources'));
     expect(
       statements.filter(([sql]) => sql.includes('INSERT INTO')),
-    ).toHaveLength(1);
+    ).toHaveLength(2);
     expect(statements[0][1][0]).toBe(
       'https://nol.yanolja.com/ticket/products/26014568',
     );
@@ -2736,13 +2738,18 @@ describe('CrawlService manual runs and snapshots', () => {
       `"parserConfig"->>'festivalSourceUrl' = $3`,
     );
     expect(statements[0][1][2]).toBe('https://mintpaper.co.kr/festivals/178');
+    expect(
+      statements.some(
+        ([, params]) => params[0] === 'https://ticket.yes24.com/Perf/60590',
+      ),
+    ).toBe(true);
     const verifiedUpdate = statements.find(([sql]) =>
       sql.includes("'verifiedTicketUrls'"),
     );
     expect(verifiedUpdate?.[0]).toContain('RETURNING id');
     expect(verifiedUpdate?.[1]).toEqual([
       source.id,
-      '["https://nol.yanolja.com/ticket/products/26014568"]',
+      '["https://nol.yanolja.com/ticket/products/26014568","https://ticket.yes24.com/Perf/60590"]',
       'https://mintpaper.co.kr/festivals/178',
     ]);
   });
@@ -2948,6 +2955,99 @@ describe('CrawlService manual runs and snapshots', () => {
     ).find(([sql]) => sql.includes('UPDATE crawl_sources'));
     expect(update?.[0]).toContain(`"parserConfig"->>'seed' = 'ticket-detail'`);
     expect(update?.[0]).toContain(`"parserConfig"->>'festivalSourceUrl' = $3`);
+  });
+
+  it('does not overwrite a YES24 source already assigned to another festival', async () => {
+    const { service, source, dataSource } = harness();
+    source.parserConfig = {
+      seed: 'official-ticket-links',
+      festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
+    };
+    const yes24 = 'https://ticket.yes24.com/Perf/60590';
+    dataSource.query.mockImplementation((sql: string) =>
+      sql.includes('SELECT "parserConfig"')
+        ? [
+            {
+              parserConfig: {
+                seed: 'ticket-detail',
+                festivalSourceUrl: 'https://mintpaper.co.kr/festivals/177',
+              },
+            },
+          ]
+        : [],
+    );
+
+    await expect(
+      service.reconcileOfficialTicketLinks(source, [{ url: yes24 }]),
+    ).rejects.toThrow('기존 예매처 크롤 소스 설정이 다릅니다');
+    const update = (dataSource.query.mock.calls as [string, string[]][]).find(
+      ([sql]) => sql.includes('UPDATE crawl_sources SET "parserConfig"'),
+    );
+    expect(update?.[0]).toContain(`"parserConfig"->>'festivalSourceUrl' = $3`);
+    expect(update?.[0]).toContain(
+      `NOT ("parserConfig" ? 'festivalSourceUrls')`,
+    );
+    expect(update?.[1][0]).toBe(yes24);
+  });
+
+  it('rolls back a preceding NOL source update when the YES24 source conflicts', async () => {
+    const { service, source, dataSource } = harness();
+    source.parserConfig = {
+      seed: 'official-ticket-links',
+      festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
+    };
+    const nol = 'https://nol.yanolja.com/ticket/products/26014568';
+    const yes24 = 'https://ticket.yes24.com/Perf/60590';
+    const persisted = new Map([
+      [nol, { seed: 'ticket-detail' }],
+      [
+        yes24,
+        {
+          seed: 'ticket-detail',
+          festivalSourceUrl: 'https://mintpaper.co.kr/festivals/177',
+        },
+      ],
+    ]);
+    const transactionQueries: string[] = [];
+    dataSource.transaction.mockImplementation(
+      async (
+        callback: (manager: {
+          query: (sql: string, parameters: string[]) => Promise<unknown>;
+        }) => Promise<unknown>,
+      ) => {
+        const pending = new Map(persisted);
+        const query = jest.fn((sql: string, parameters: string[]) => {
+          transactionQueries.push(sql);
+          const url = parameters[0];
+          if (sql.startsWith('UPDATE crawl_sources') && url === nol) {
+            pending.set(nol, {
+              seed: 'official-ticket-link-detail',
+              festivalSourceUrl: source.parserConfig.festivalSourceUrl,
+            });
+          }
+          if (sql.startsWith('SELECT "parserConfig"'))
+            return Promise.resolve([{ parserConfig: pending.get(url) }]);
+          return Promise.resolve([]);
+        });
+        const result = await callback({ query });
+        for (const [url, config] of pending) persisted.set(url, config);
+        return result;
+      },
+    );
+
+    await expect(
+      service.reconcileOfficialTicketLinks(source, [
+        { url: nol },
+        { url: yes24 },
+      ]),
+    ).rejects.toThrow('기존 예매처 크롤 소스 설정이 다릅니다');
+    expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+    expect(transactionQueries).toHaveLength(6);
+    expect(
+      transactionQueries.some((sql) => sql.includes('verifiedTicketUrls')),
+    ).toBe(false);
+    expect(persisted.get(nol)).toEqual({ seed: 'ticket-detail' });
+    expect(dataSource.query).not.toHaveBeenCalled();
   });
 
   it('does not turn a reconfigured official post source into a festival proposal', async () => {

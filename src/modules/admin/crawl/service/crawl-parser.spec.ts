@@ -867,7 +867,7 @@ describe('crawl parsers', () => {
     );
   });
 
-  it('discovers only the NOL product linked by the official CDF ticket notice', async () => {
+  it('discovers canonical NOL and YES24 products linked by the official CDF ticket notice', async () => {
     const mint = source('ticket-list', 'discovery', {
       seed: 'official-ticket-links',
     });
@@ -877,16 +877,91 @@ describe('crawl parsers', () => {
       content:
         '<p>COUNTDOWN FANTASY 2026-2027 일시 : 2026년 12월 31일(목)</p>' +
         '<a href="https://nol.yanolja.com/ticket/products/26014568">NOL</a>' +
-        '<a href="https://nol.yanolja.com/ticket/products/26014568">NOL 중복</a>',
+        '<a href="https://nol.yanolja.com/ticket/products/26014568">NOL 중복</a>' +
+        '<a href="https://ticket.yes24.com/Perf/60590?Gcode=009_207">YES24</a>',
     };
     const html = (value: typeof post) =>
-      `<script id="__NEXT_DATA__" type="application/json">${JSON.stringify({ props: { apolloState: { data: { 'Post:4821': value } } } })}</script>`;
+      `<script id="__NEXT_DATA__" type="application/json">${JSON.stringify({ props: { apolloState: { data: { 'Post:4821': value } } } }).replace(/</g, '\\u003c')}</script>`;
     expect(await parseCrawl(mint, html(post))).toEqual([
       {
         name: 'COUNTDOWN FANTASY 2026-2027',
         url: 'https://nol.yanolja.com/ticket/products/26014568',
       },
+      {
+        name: 'COUNTDOWN FANTASY 2026-2027',
+        url: 'https://ticket.yes24.com/Perf/60590',
+      },
     ]);
+    const nolOnly = [
+      {
+        name: 'COUNTDOWN FANTASY 2026-2027',
+        url: 'https://nol.yanolja.com/ticket/products/26014568',
+      },
+    ];
+    const nolAnchor =
+      '<a href="https://nol.yanolja.com/ticket/products/26014568">NOL</a>';
+    for (const misleadingAnchor of [
+      '<a data-href="https://ticket.yes24.com/Perf/60591">YES24</a>',
+      '<a href="https://example.com" data-href="https://ticket.yes24.com/Perf/60591">Other</a>',
+      '<a data-href="https://ticket.yes24.com/Perf/60591" href="https://example.com">Other</a>',
+      `<a data-note='please href="https://ticket.yes24.com/Perf/60591"'>Other</a>`,
+      `<a data-note="please href='https://ticket.yes24.com/Perf/60591'">Other</a>`,
+      `<a href="https://example.com" data-note='please href="https://ticket.yes24.com/Perf/60591"'>Other</a>`,
+      '<a href="https://example.com" href="https://ticket.yes24.com/Perf/60591">Other</a>',
+      '<a href="https://ticket.yes24.com/Perf/60591" href="https://example.com">Other</a>',
+      '<a href href=https://ticket.yes24.com/Perf/60591>Other</a>',
+      '<a href=https://ticket.yes24.com/Perf/60591 href>Other</a>',
+      `<div data-note='<a href="https://ticket.yes24.com/Perf/60591">'>Other</div>`,
+      `<script>const fake = '<a href="https://ticket.yes24.com/Perf/60591">';</script>`,
+      `<script>const fake = '</scriptx><a href="https://ticket.yes24.com/Perf/60591">';</script>`,
+      `<style>p::before { content: '<a href="https://ticket.yes24.com/Perf/60591">'; }</style>`,
+      `<style>p::before { content: '</stylex><a href="https://ticket.yes24.com/Perf/60591">'; }</style>`,
+      `<textarea><a href="https://ticket.yes24.com/Perf/60591">Other</textarea>`,
+      `&lt;a href="https://ticket.yes24.com/Perf/60591"&gt;Other`,
+    ]) {
+      expect(
+        await parseCrawl(
+          mint,
+          html({
+            ...post,
+            content: `<p>COUNTDOWN FANTASY 2026-2027 일시 : 2026년 12월 31일(목)</p>${nolAnchor}${misleadingAnchor}`,
+          }),
+        ),
+      ).toEqual(nolOnly);
+    }
+    expect(
+      await parseCrawl(
+        mint,
+        html({
+          ...post,
+          content: `<p>COUNTDOWN FANTASY 2026-2027 일시 : 2026년 12월 31일(목)</p>${nolAnchor}<a data-note='please href="https://ticket.yes24.com/Perf/60591"' data-href="https://ticket.yes24.com/Perf/60591" href="https://ticket.yes24.com/Perf/60590?Gcode=009_207">YES24</a>`,
+        }),
+      ),
+    ).toEqual([
+      ...nolOnly,
+      {
+        name: 'COUNTDOWN FANTASY 2026-2027',
+        url: 'https://ticket.yes24.com/Perf/60590',
+      },
+    ]);
+    for (const forged of [
+      'https://ticket.yes24.com.evil.example/Perf/60590',
+      'https://evil.example/?next=ticket.yes24.com/Perf/60590',
+      'http://ticket.yes24.com/Perf/60590',
+      'https://ticket.yes24.com/English/Perf/60590',
+      'https://ticket.yes24.com/Perf/not-a-product',
+      'https://user@ticket.yes24.com/Perf/60590',
+    ]) {
+      await expect(
+        parseCrawl(
+          mint,
+          html({
+            ...post,
+            content: `${post.content}<a href="${forged}">YES24</a>`,
+          }),
+        ),
+      ).rejects.toThrow('공개 예매 링크');
+    }
     for (const invalid of [
       'https://nol.yanolja.com/ticket/products/999?ref=other',
       'https://nol.yanolja.com/ticket/products/999/',

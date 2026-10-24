@@ -76,6 +76,100 @@ export function plainText(html: string): string {
     .trim();
 }
 
+function htmlAnchorHrefs(html: string): string[] {
+  const hrefs: string[] = [];
+  const lowercaseHtml = html.toLowerCase();
+  let cursor = 0;
+  while (cursor < html.length) {
+    const tagStart = html.indexOf('<', cursor);
+    if (tagStart < 0) break;
+    if (html.startsWith('<!--', tagStart)) {
+      const commentEnd = html.indexOf('-->', tagStart + 4);
+      if (commentEnd < 0) break;
+      cursor = commentEnd + 3;
+      continue;
+    }
+    let position = tagStart + 1;
+    const closing = html[position] === '/';
+    if (closing) position++;
+    const tag = /^[a-z][\w:-]*/i.exec(html.slice(position));
+    if (!tag) {
+      cursor = position;
+      continue;
+    }
+    position += tag[0].length;
+    const tagName = tag[0].toLowerCase();
+    let href: string | undefined;
+    let hrefCount = 0;
+    let closedTag = false;
+    while (position < html.length) {
+      while (/\s/.test(html[position] ?? '')) position++;
+      if (html[position] === '>') {
+        position++;
+        closedTag = true;
+        break;
+      }
+      if (html[position] === '/' && html[position + 1] === '>') {
+        position += 2;
+        closedTag = true;
+        break;
+      }
+      const nameStart = position;
+      while (position < html.length && !/[\s=/>]/.test(html[position]))
+        position++;
+      if (position === nameStart) {
+        position++;
+        continue;
+      }
+      const name = html.slice(nameStart, position).toLowerCase();
+      if (name === 'href') hrefCount++;
+      while (/\s/.test(html[position] ?? '')) position++;
+      if (html[position] !== '=') continue;
+      position++;
+      while (/\s/.test(html[position] ?? '')) position++;
+      let value: string;
+      if (html[position] === '"' || html[position] === "'") {
+        const quote = html[position++];
+        const end = html.indexOf(quote, position);
+        if (end < 0) return [];
+        value = html.slice(position, end);
+        position = end + 1;
+      } else {
+        const valueStart = position;
+        while (position < html.length && !/[\s>]/.test(html[position]))
+          position++;
+        value = html.slice(valueStart, position);
+      }
+      if (name === 'href') href = value;
+    }
+    if (!closedTag) return [];
+    if (!closing && tagName === 'a' && href !== undefined && hrefCount === 1)
+      hrefs.push(href);
+    cursor = position;
+    if (
+      !closing &&
+      (tagName === 'script' ||
+        tagName === 'style' ||
+        tagName === 'textarea' ||
+        tagName === 'title')
+    ) {
+      let rawEnd = lowercaseHtml.indexOf(`</${tagName}`, cursor);
+      while (rawEnd >= 0) {
+        const afterName = rawEnd + tagName.length + 2;
+        if (/[\s>]/.test(html[afterName] ?? '')) {
+          const end = html.indexOf('>', afterName);
+          if (end < 0) return hrefs;
+          cursor = end + 1;
+          break;
+        }
+        rawEnd = lowercaseHtml.indexOf(`</${tagName}`, afterName);
+      }
+      if (rawEnd < 0) break;
+    }
+  }
+  return hrefs;
+}
+
 type FestivalCandidate = {
   name: string;
   url: string;
@@ -157,21 +251,33 @@ function mintPaperOfficialTicketLinks(
       ) !== '2026.12.31'
     )
       return [];
-    const hrefs = [
-      ...post.content.matchAll(
-        /<a\b[^>]*\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>/gi,
-      ),
-    ].map((match) => match[1] ?? match[2] ?? match[3]);
-    const urls = hrefs.filter((href) =>
-      href.toLowerCase().includes('nol.yanolja.com'),
-    );
-    if (
-      urls.some(
-        (url) =>
-          !/^https:\/\/nol\.yanolja\.com\/ticket\/products\/\d+$/.test(url),
-      )
-    )
-      return [];
+    const hrefs = htmlAnchorHrefs(post.content);
+    const urls: string[] = [];
+    for (const href of hrefs) {
+      if (/nol\.yanolja\.com/i.test(href)) {
+        if (!/^https:\/\/nol\.yanolja\.com\/ticket\/products\/\d+$/.test(href))
+          return [];
+        urls.push(href);
+      } else if (/ticket\.yes24\.com/i.test(href)) {
+        let ticket: URL;
+        try {
+          ticket = new URL(href);
+        } catch {
+          return [];
+        }
+        if (
+          ticket.protocol !== 'https:' ||
+          ticket.hostname !== 'ticket.yes24.com' ||
+          ticket.port ||
+          ticket.username ||
+          ticket.password ||
+          ticket.hash ||
+          !/^\/Perf\/\d+$/.test(ticket.pathname)
+        )
+          return [];
+        urls.push(`${ticket.origin}${ticket.pathname}`);
+      }
+    }
     const uniqueUrls = [...new Set(urls)];
     if (!uniqueUrls.length || uniqueUrls.length > 5) return [];
     return uniqueUrls.map((url) => ({
