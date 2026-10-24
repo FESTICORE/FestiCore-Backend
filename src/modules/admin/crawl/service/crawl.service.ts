@@ -181,6 +181,9 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     void this.scheduleDue().catch(() =>
       this.logger.error('예약 크롤 점검 실패'),
     );
+    void this.reconcileRecentXmf403().catch(() =>
+      this.logger.warn('XMF 공식 출연진 별칭 시작 시 복구 실패'),
+    );
   }
 
   onModuleDestroy() {
@@ -1346,6 +1349,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       !notice?.enabled ||
       notice.parserConfig.seed !== 'official-lineup' ||
       !/^20\d{2}$/.test(notice.parserConfig.expectedYear ?? '') ||
+      notice.parserConfig.expectedYear !== kstDay().slice(0, 4) ||
       !notice.parserConfig.festivalSourceUrl ||
       (source.kind === 'artist-gallery' &&
         notice.parserConfig.festivalSourceUrl !==
@@ -1365,7 +1369,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
          AND origin."parserConfig"->>'festivalSourceUrl' = $4::text
          AND previous."httpStatus" = 200
          AND previous.result IN ('nochange-parsed', 'proposed', 'unchanged')
-         AND previous."finishedAt" >= now() - interval '48 hours'
+         AND previous."finishedAt" >= now() - interval '7 days'
          AND snapshot."expiresAt" > now()
        ORDER BY previous."finishedAt" DESC LIMIT 1`,
       [
@@ -1381,6 +1385,28 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     );
     if (!body || body.length > 2_000_000) return;
     await this.syncXmfArtistAliases(notice, body.toString('utf8'));
+  }
+
+  private async reconcileRecentXmf403(): Promise<void> {
+    const sources = await this.dataSource.query<{ id: string }[]>(
+      `SELECT DISTINCT source.id
+       FROM crawl_sources source
+       JOIN crawl_runs failed ON failed."sourceId" = source.id
+       WHERE source.enabled = true
+         AND ((source.kind = 'discovery' AND source.url = 'https://xmfestival.com/notice'
+           AND source."parserConfig"->>'seed' = 'official-lineup')
+           OR (source.kind = 'artist-gallery' AND source.url = 'https://xmfestival.com/lineup'))
+         AND failed.result = 'failed' AND failed."httpStatus" = 403
+         AND failed."finishedAt" >= now() - interval '7 days'`,
+    );
+    for (const { id } of sources) {
+      try {
+        const source = await this.sourcesRepo.findOneBy({ id, enabled: true });
+        if (source) await this.syncXmfAliasesFromRecentSnapshot(source);
+      } catch {
+        this.logger.warn(`XMF 공식 출연진 별칭 복구 실패: source=${id}`);
+      }
+    }
   }
 
   private async proposalItems(
