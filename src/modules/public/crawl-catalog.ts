@@ -310,6 +310,10 @@ export function discoverySummaries(
     }
   }
   const found = new Map<string, DiscoverySummary>();
+  const officialArtistsByKey = new Map<
+    string,
+    ReturnType<typeof verifiedArtists>
+  >();
   for (const { candidate, decision, proposalStatus } of byUrl.values()) {
     if (decision === 'rejected' || proposalStatus === 'rejected') continue;
     if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate))
@@ -360,16 +364,13 @@ export function discoverySummaries(
       value.officialProfileArtists,
       'https://www.mintpaper.co.kr/posts/4819',
     );
-    if (!artists.length) artists.push(...officialArtists);
-    else {
+    if (officialArtists.length) {
+      const known = officialArtistsByKey.get(key) ?? [];
       for (const official of officialArtists) {
-        const officialKeys = new Set(artistNameKeys(official.name));
-        const matches = artists.filter((artist) =>
-          artistNameKeys(artist.name).some((key) => officialKeys.has(key)),
-        );
-        if (matches.length === 1 && official.profileUrl)
-          matches[0].profileUrl = official.profileUrl;
+        if (!known.some((artist) => artist.name === official.name))
+          known.push(official);
       }
+      officialArtistsByKey.set(key, known);
     }
     const existing = found.get(key);
     if (existing) {
@@ -436,6 +437,24 @@ export function discoverySummaries(
       // 정렬 전용 날짜 하한. 실제 공연 시작 시각으로 반환하지 않는다.
       sortAt: `${dates.firstDate}T00:00:00+09:00`,
     });
+  }
+  for (const [key, officialArtists] of officialArtistsByKey) {
+    const summary = found.get(key);
+    if (!summary) continue;
+    if (!summary.artists?.length) {
+      summary.artists = officialArtists;
+      continue;
+    }
+    for (const official of officialArtists) {
+      const officialKeys = new Set(artistNameKeys(official.name));
+      const matches = summary.artists.filter((artist) =>
+        artistNameKeys(artist.name).some((nameKey) =>
+          officialKeys.has(nameKey),
+        ),
+      );
+      if (matches.length === 1 && official.profileUrl)
+        matches[0].profileUrl = official.profileUrl;
+    }
   }
   return [...found.values()];
 }

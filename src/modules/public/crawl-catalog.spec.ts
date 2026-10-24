@@ -24,8 +24,7 @@ describe('ticket discovery catalog', () => {
         candidate: {
           ...base,
           url: 'https://mintpaper.co.kr/festivals/178',
-          artistSourceUrl: 'https://www.mintpaper.co.kr/posts/4819',
-          artists: [
+          officialProfileArtists: [
             {
               name: '혁오',
               profileUrl: 'https://www.instagram.com/hyukohofficial/',
@@ -44,10 +43,6 @@ describe('ticket discovery catalog', () => {
         name: '혁오',
         sourceUrl: 'https://tkfile.yes24.com/artists/hyukoh.jpg',
         profileUrl: 'https://www.instagram.com/hyukohofficial/',
-      },
-      {
-        name: '실리카겔',
-        profileUrl: 'https://www.instagram.com/silicagel.official/',
       },
     ]);
     const untrusted = discoverySummaries([
@@ -146,6 +141,65 @@ describe('ticket discovery catalog', () => {
         profileUrl: 'https://www.instagram.com/official_onewe/',
       },
       { name: '혁오' },
+    ]);
+  });
+
+  it('does not restore dropped performers when the official catalog row comes first', () => {
+    const base = {
+      name: 'COUNTDOWN FANTASY 2026-2027',
+      venue: '킨텍스',
+      date: '2026.12.31',
+    };
+    const entries = discoverySummaries([
+      {
+        candidate: {
+          ...base,
+          url: 'https://mintpaper.co.kr/festivals/178',
+          officialProfileArtists: [
+            {
+              name: 'ONEWE(원위)',
+              profileUrl: 'https://www.instagram.com/official_onewe/',
+            },
+            {
+              name: '취소된 출연진',
+              profileUrl: 'https://www.instagram.com/cancelled_band/',
+            },
+          ],
+        },
+      },
+      {
+        candidate: {
+          ...base,
+          url: 'https://ticket.yes24.com/Perf/60590',
+          artists: [{ name: 'ONEWE' }],
+        },
+      },
+    ]);
+    expect(entries[0].artists).toEqual([
+      {
+        name: 'ONEWE',
+        profileUrl: 'https://www.instagram.com/official_onewe/',
+      },
+    ]);
+    const officialOnly = discoverySummaries([
+      {
+        candidate: {
+          ...base,
+          url: 'https://mintpaper.co.kr/festivals/178',
+          officialProfileArtists: [
+            {
+              name: 'ONEWE(원위)',
+              profileUrl: 'https://www.instagram.com/official_onewe/',
+            },
+          ],
+        },
+      },
+    ]);
+    expect(officialOnly[0].artists).toEqual([
+      {
+        name: 'ONEWE(원위)',
+        profileUrl: 'https://www.instagram.com/official_onewe/',
+      },
     ]);
   });
 

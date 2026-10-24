@@ -299,10 +299,15 @@ export class PublicFestivalService {
              FILTER (WHERE "sourceSeed" IS DISTINCT FROM 'official-ticket-link-detail'
                AND decision IS DISTINCT FROM 'rejected'
                AND "proposalStatus" IS DISTINCT FROM 'rejected'
+               AND regexp_replace(candidate->>'url', '[?#].*$', '') NOT IN (
+                 'https://www.mintpaper.co.kr/posts/4819',
+                 'https://mintpaper.co.kr/posts/4819')
                AND jsonb_array_length(CASE WHEN jsonb_typeof(candidate->'artists') = 'array'
                  THEN candidate->'artists' ELSE '[]'::jsonb END) > 0))[1] AS "artistDetails",
-           (array_agg(candidate->'artists' ORDER BY created_at DESC, proposal_id DESC)
-             FILTER (WHERE decision IS DISTINCT FROM 'rejected'
+           (array_agg(candidate->'artists'
+               ORDER BY created_at DESC, proposal_id DESC, candidates.url DESC)
+             FILTER (WHERE "sourceSeed" = 'official-lineup'
+               AND decision IS DISTINCT FROM 'rejected'
                AND "proposalStatus" IS DISTINCT FROM 'rejected'
                AND regexp_replace(candidate->>'url', '[?#].*$', '') IN (
                  'https://www.mintpaper.co.kr/posts/4819',

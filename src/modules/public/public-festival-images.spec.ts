@@ -54,6 +54,10 @@ describe('discovered festival artist profile images', () => {
     );
     expect(calls[0][0]).toContain('details."artistDetails"->\'artists\'');
     expect(calls[0][0]).toContain('details."artistDetails"->>\'url\'');
+    expect(calls[0][0]).toContain('"sourceSeed" = \'official-lineup\'');
+    expect(calls[0][0]).toContain(
+      "NOT IN (\n                 'https://www.mintpaper.co.kr/posts/4819'",
+    );
   });
 
   it('prefers a stored primary performer image over a linked source profile', async () => {
