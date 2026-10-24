@@ -85,7 +85,7 @@ describe('discovered festival timetable', () => {
     expect(sql).toContain('DISTINCT ON (revision."sourceId")');
     expect(sql).toContain("revision.status = 'verified'");
     expect(sql).toContain('revision."imageId" = image.id');
-    expect(parameters).toEqual([sourceUrl]);
+    expect(parameters).toEqual([[sourceUrl]]);
   });
 
   it('retains the prior verified source revision when a newer collection is pending', async () => {

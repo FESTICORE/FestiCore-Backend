@@ -444,7 +444,7 @@ export class PublicFestivalService {
       ...new Set(
         entries
           .filter((entry) => includeTimetableArtists || entry.artists?.length)
-          .map((entry) => entry.sourceUrl),
+          .flatMap((entry) => entry.sourceUrls),
       ),
     ];
     const profileImages = festivalSourceUrls.length
@@ -542,10 +542,11 @@ export class PublicFestivalService {
         entry.thumbUrl = `/api/v1/festivals/images/${posterId}.webp`;
       entry.artists = entry.artists?.map((artist) => {
         const matchingProfileIds = new Set(
-          artistNameKeys(artist.name).flatMap((nameKey) => [
-            ...(profileImageByName.get(`${entry.sourceUrl}\u0000${nameKey}`) ??
-              []),
-          ]),
+          entry.sourceUrls.flatMap((sourceUrl) =>
+            artistNameKeys(artist.name).flatMap((nameKey) => [
+              ...(profileImageByName.get(`${sourceUrl}\u0000${nameKey}`) ?? []),
+            ]),
+          ),
         );
         const imageId =
           (matchingProfileIds.size === 1 ? [...matchingProfileIds][0] : null) ??
@@ -593,10 +594,11 @@ export class PublicFestivalService {
        FROM crawl_timetable_revisions revision
        LEFT JOIN crawl_images image ON image.id = revision."imageId"
        LEFT JOIN crawl_sources source ON source.id = image."sourceId"
-       WHERE revision."festivalSourceUrl" = $1 AND revision.status = 'verified'
+       WHERE revision."festivalSourceUrl" = ANY($1::text[])
+         AND revision.status = 'verified'
        ORDER BY revision."sourceId", revision."verifiedAt" DESC,
          revision."createdAt" DESC, revision.id DESC`,
-      [entry.sourceUrl],
+      [entry.sourceUrls],
     );
     const artistImages = new Map<string, Set<string>>();
     const addArtistImage = (name: string, imageUrl: string) => {
@@ -611,7 +613,7 @@ export class PublicFestivalService {
     }
     for (const [key, imageId] of profileImages) {
       const [festivalSourceUrl, artistName] = key.split('\u0000');
-      if (festivalSourceUrl === entry.sourceUrl)
+      if (entry.sourceUrls.includes(festivalSourceUrl))
         addArtistImage(artistName, `/api/v1/festivals/images/${imageId}.webp`);
     }
     const timetable = (revisions ?? []).flatMap((revision) =>
