@@ -1444,7 +1444,8 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
           )
             run.proposalId = candidate.matchedProposalId ?? null;
         }
-        source.lastChangedAt = new Date();
+        if (previous?.contentHash !== run.contentHash)
+          source.lastChangedAt = new Date();
       }
       source.consecutiveFailures = 0;
       source.status = 'ok';

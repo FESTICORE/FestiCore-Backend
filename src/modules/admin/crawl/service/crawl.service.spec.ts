@@ -2807,6 +2807,8 @@ describe('CrawlService manual runs and snapshots', () => {
       seed: 'wonderlivet-official-ticket-detail',
       festivalSourceUrl: 'https://www.wonderli.vet/lineup',
     };
+    const lastChangedAt = new Date('2026-10-24T00:00:00Z');
+    source.lastChangedAt = lastChangedAt;
     const body = `<strong class="tit">WONDERLIVET 2026 (원더리벳 2026)</strong>
       <span class="txt_info">2026.11.20 - 2026.11.22</span>
       <span class="place">KINTEX HALL 7/8/9/10</span>`;
@@ -2847,6 +2849,7 @@ describe('CrawlService manual runs and snapshots', () => {
     expect(proposalItems).toHaveBeenCalledTimes(1);
     expect(run.result).toBe('nochange-parsed');
     expect(run.proposalId).toBe('proposal-1');
+    expect(source.lastChangedAt).toBe(lastChangedAt);
     expect(proposalsRepo.save).not.toHaveBeenCalled();
   });
 
