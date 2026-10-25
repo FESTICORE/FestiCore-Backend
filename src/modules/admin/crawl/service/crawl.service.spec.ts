@@ -2806,14 +2806,24 @@ describe('CrawlService manual runs and snapshots', () => {
     source.parserConfig = {
       seed: 'wonderlivet-official-ticket-detail',
       festivalSourceUrl: 'https://www.wonderli.vet/lineup',
-      festivalSourceUrls: [source.url, 'https://www.wonderli.vet/lineup'],
     };
     const body = `<strong class="tit">WONDERLIVET 2026 (원더리벳 2026)</strong>
       <span class="txt_info">2026.11.20 - 2026.11.22</span>
       <span class="place">KINTEX HALL 7/8/9/10</span>`;
     jest.spyOn(service, 'checkRobots').mockResolvedValue();
     jest.spyOn(service, 'getListing').mockResolvedValue({ status: 200, body });
-    jest.spyOn(service as never, 'captureImages').mockResolvedValue([]);
+    jest
+      .spyOn(
+        service as unknown as {
+          captureImages(
+            source: CrawlSource,
+            run: CrawlRun,
+            urls: URL[],
+          ): Promise<string[]>;
+        },
+        'captureImages',
+      )
+      .mockResolvedValue([]);
     runsRepo.createQueryBuilder = jest.fn(() => ({
       where: jest.fn().mockReturnThis(),
       orderBy: jest.fn().mockReturnThis(),
