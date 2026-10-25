@@ -54,6 +54,9 @@ type PrivateCrawl = {
   getListing(source: CrawlSource): Promise<{ status: number; body: string }>;
   syncXmfArtistAliases(source: CrawlSource, body: string): Promise<void>;
   syncXmfAliasesFromRecentSnapshot(source: CrawlSource): Promise<void>;
+  restoreXmfGalleryIdentityFromRecentSnapshot(
+    source: CrawlSource,
+  ): Promise<void>;
   reconcileOfficialTicketLinks(
     source: CrawlSource,
     parsed: unknown,
@@ -1541,6 +1544,93 @@ describe('CrawlService source audit', () => {
       ['ado-image', '아도'],
     ]);
   });
+
+  it.each([0, 1, 2])(
+    'reprocesses a saved official gallery and updates only one matching image source (matches=%i)',
+    async (matches) => {
+      const { service, source, dataSource, imageStorage } = harness();
+      const festivalSourceUrl =
+        'https://ticket.melon.com/performance/index.htm?prodId=213766';
+      source.kind = 'artist-gallery';
+      source.url = 'https://xmfestival.com/lineup';
+      source.parserConfig = {
+        seed: 'xmf-official-gallery',
+        festivalSourceUrl,
+      };
+      jest.spyOn(service, 'checkRobots').mockResolvedValue();
+      const galleryHtml =
+        `<a href="${festivalSourceUrl.replace('&', '&amp;')}">Ticket</a>` +
+        '<a class="item_container _item_container" href="javascript:SITE.openModalMenu(\'m1\', \'b1\');">' +
+        '<div class="img_wrap _img_wrap" data-src="https://cdn.imweb.me/thumbnail/20260811/photo.jpg"></div></a>';
+      imageStorage.readCrawlSnapshot.mockResolvedValue(
+        Buffer.from(galleryHtml),
+      );
+      const parse = jest
+        .spyOn(artistGallery, 'crawlArtistGallery')
+        .mockResolvedValue([
+          {
+            artistName: 'MIKA',
+            officialSiteKeys: ['mikanakashima'],
+            imageUrl: new URL(
+              'https://cdn.imweb.me/thumbnail/20260811/photo.jpg',
+            ),
+          },
+        ]);
+      let savedKey = false;
+      dataSource.query.mockImplementation((sql: string) => {
+        if (sql.includes('FROM crawl_snapshots'))
+          return Promise.resolve([
+            { objectKey: 'crawl/snapshots/gallery.txt' },
+          ]);
+        if (sql.includes('SELECT source.id FROM crawl_sources source'))
+          return Promise.resolve(
+            Array.from({ length: savedKey ? 0 : matches }, (_, index) => ({
+              id: `image-${index}`,
+            })),
+          );
+        if (sql.includes("jsonb_build_object('officialSiteKeys'"))
+          savedKey = true;
+        return Promise.resolve([]);
+      });
+      await service.restoreXmfGalleryIdentityFromRecentSnapshot(source);
+      if (matches === 1)
+        await service.restoreXmfGalleryIdentityFromRecentSnapshot(source);
+      expect(imageStorage.readCrawlSnapshot).toHaveBeenCalledWith(
+        'crawl/snapshots/gallery.txt',
+      );
+      expect(parse).toHaveBeenCalledWith(galleryHtml, source.url);
+      const lookup = dataSource.query.mock.calls.find(([sql]: [string]) =>
+        sql.includes('SELECT source.id FROM crawl_sources source'),
+      ) as [string, string[]];
+      expect(lookup[0]).toContain(
+        'source."parserConfig"->>\'imageHint\' = $4::text',
+      );
+      expect(lookup[0]).toContain(
+        'split_part(image."originUrl", \'?\', 1) = $5::text',
+      );
+      expect(lookup[1]).toEqual([
+        source.url,
+        festivalSourceUrl,
+        'MIKA',
+        '20260811/photo.jpg',
+        'https://cdn.imweb.me/thumbnail/20260811/photo.jpg',
+      ]);
+      const updates = dataSource.query.mock.calls.filter(([sql]: [string]) =>
+        sql.includes("jsonb_build_object('officialSiteKeys'"),
+      ) as [string, string[]][];
+      expect(updates).toHaveLength(matches === 1 ? 1 : 0);
+      if (matches === 1) {
+        expect(updates[0][1].slice(0, 2)).toEqual([
+          'image-0',
+          '["mikanakashima"]',
+        ]);
+        expect(updates[0][0]).toContain(
+          'NOT ("parserConfig" ? \'officialSiteKeys\')',
+        );
+      }
+      parse.mockRestore();
+    },
+  );
 
   it('ignores a stale or mismatched XMF snapshot without changing aliases', async () => {
     jest.useFakeTimers().setSystemTime(new Date('2026-10-25T00:00:00Z'));

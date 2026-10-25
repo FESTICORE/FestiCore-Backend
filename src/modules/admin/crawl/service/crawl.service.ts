@@ -1864,6 +1864,18 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
           source.parserConfig.festivalSourceUrl)
     )
       return;
+    if (
+      source.kind === 'artist-gallery' &&
+      source.parserConfig.seed === 'xmf-official-gallery'
+    ) {
+      try {
+        await this.restoreXmfGalleryIdentityFromRecentSnapshot(source);
+      } catch (error) {
+        this.logger.warn(
+          `XMF 공식 갤러리 신원 복구 실패: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
     const snapshots = await this.dataSource.query<{ objectKey: string }[]>(
       `SELECT snapshot."objectKey" AS "objectKey"
        FROM crawl_snapshots snapshot
@@ -1893,6 +1905,103 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     );
     if (!body || body.length > 2_000_000) return;
     await this.syncXmfArtistAliases(notice, body.toString('utf8'));
+  }
+
+  private async restoreXmfGalleryIdentityFromRecentSnapshot(
+    gallery: CrawlSource,
+  ): Promise<void> {
+    const festivalSourceUrl = gallery.parserConfig.festivalSourceUrl;
+    const snapshots = await this.dataSource.query<{ objectKey: string }[]>(
+      `SELECT snapshot."objectKey" AS "objectKey"
+       FROM crawl_snapshots snapshot
+       JOIN crawl_runs previous ON previous.id = snapshot."runId"
+       WHERE previous."sourceId" = $1::uuid
+         AND previous."httpStatus" = 200
+         AND previous.result IN ('nochange-parsed', 'proposed', 'unchanged')
+         AND previous."finishedAt" >= now() - interval '7 days'
+         AND snapshot."expiresAt" > now()
+       ORDER BY previous."finishedAt" DESC LIMIT 1`,
+      [gallery.id],
+    );
+    if (!snapshots[0]) return;
+    const body = await this.imageStorage.readCrawlSnapshot(
+      snapshots[0].objectKey,
+    );
+    if (!body || body.length > 2_000_000) return;
+    const html = body.toString('utf8');
+    const officialTicketLink = [
+      ...html.matchAll(/<a\b[^>]*\bhref=["']([^"']+)["']/gi),
+    ].some((link) => {
+      try {
+        return (
+          checkedUrl(link[1].replace(/&amp;/gi, '&')).toString() ===
+          festivalSourceUrl
+        );
+      } catch {
+        return false;
+      }
+    });
+    if (!officialTicketLink) return;
+    await this.checkRobots('https://xmfestival.com/ajax/get_modal_menu.cm');
+    const entries = await crawlArtistGallery(html, gallery.url);
+    if (
+      !entries.length ||
+      new Set(entries.map((entry) => entry.artistName)).size !== entries.length
+    )
+      return;
+    for (const entry of entries) {
+      if (!entry.officialSiteKeys.length) continue;
+      const imageHint = entry.imageUrl.pathname.replace(/^\/thumbnail\//, '');
+      if (imageHint === entry.imageUrl.pathname) continue;
+      const rows = await this.dataSource.query<{ id: string }[]>(
+        `SELECT source.id FROM crawl_sources source
+         WHERE source.kind = 'artist-image' AND source.enabled = true
+           AND source.url = $1::text
+           AND source."parserConfig"->>'seed' = 'official-artist-gallery'
+           AND source."parserConfig"->>'festivalSourceUrl' = $2::text
+           AND source."parserConfig"->>'artistName' = $3::text
+           AND source."parserConfig"->>'imageHint' = $4::text
+           AND NOT (source."parserConfig" ? 'officialSiteKeys')
+           AND EXISTS (
+             SELECT 1 FROM crawl_images image
+             WHERE image."sourceId" = source.id
+               AND split_part(image."originUrl", '?', 1) = $5::text)`,
+        [
+          gallery.url,
+          festivalSourceUrl,
+          entry.artistName,
+          imageHint,
+          entry.imageUrl.origin + entry.imageUrl.pathname,
+        ],
+      );
+      if (rows.length !== 1) continue;
+      await this.dataSource.query(
+        `UPDATE crawl_sources SET
+           "parserConfig" = "parserConfig" ||
+             jsonb_build_object('officialSiteKeys', $2::jsonb),
+           "updatedAt" = now()
+         WHERE id = $1::uuid AND kind = 'artist-image' AND enabled = true
+           AND url = $3::text
+           AND "parserConfig"->>'seed' = 'official-artist-gallery'
+           AND "parserConfig"->>'festivalSourceUrl' = $4::text
+           AND "parserConfig"->>'artistName' = $5::text
+           AND "parserConfig"->>'imageHint' = $6::text
+           AND NOT ("parserConfig" ? 'officialSiteKeys')
+           AND EXISTS (
+             SELECT 1 FROM crawl_images image
+             WHERE image."sourceId" = crawl_sources.id
+               AND split_part(image."originUrl", '?', 1) = $7::text)`,
+        [
+          rows[0].id,
+          JSON.stringify(entry.officialSiteKeys),
+          gallery.url,
+          festivalSourceUrl,
+          entry.artistName,
+          imageHint,
+          entry.imageUrl.origin + entry.imageUrl.pathname,
+        ],
+      );
+    }
   }
 
   private async reconcileRecentXmf403(): Promise<void> {

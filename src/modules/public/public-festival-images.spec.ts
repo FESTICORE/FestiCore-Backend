@@ -763,7 +763,11 @@ describe('discovered festival artist profile images', () => {
       venue: '파라다이스시티',
       date: '2026.10.03 - 2026.10.04',
       url: sourceUrl,
-      artists: [{ name: 'MIKA NAKASHIMA' }, { name: '다른 가수' }],
+      artists: [
+        { name: '나카시마 미카' },
+        { name: 'MIKA NAKASHIMA' },
+        { name: '다른 가수' },
+      ],
     };
     const imageId = '00000000-0000-4000-8000-000000000051';
     const query = jest
@@ -794,6 +798,13 @@ describe('discovered festival artist profile images', () => {
           verifiedAt: new Date('2026-10-23T00:00:00Z'),
           sets: [
             {
+              artist: '나카시마 미카',
+              date: '2026-10-03',
+              stageName: 'STAGE A',
+              startsAt: '2026-10-03T21:00:00+09:00',
+              endsAt: null,
+            },
+            {
               artist: 'MIKA NAKASHIMA',
               date: '2026-10-04',
               stageName: 'STAGE A',
@@ -815,133 +826,27 @@ describe('discovered festival artist profile images', () => {
     );
 
     const imageUrl = `/api/v1/festivals/images/${imageId}.webp`;
+    expect(result.artists).toContainEqual({ name: '나카시마 미카', imageUrl });
     expect(result.artists).toContainEqual({ name: 'MIKA NAKASHIMA', imageUrl });
     expect(result.artists).toContainEqual({
       name: '다른 가수',
       imageUrl: null,
     });
-    expect(result.timetable).toEqual([
-      expect.objectContaining({ artist: 'MIKA NAKASHIMA', imageUrl }),
-    ]);
+    expect(result.timetable).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ artist: '나카시마 미카', imageUrl }),
+        expect.objectContaining({ artist: 'MIKA NAKASHIMA', imageUrl }),
+      ]),
+    );
     const profileQuery = (
       query.mock.calls as unknown as [string, [string[]]][]
     )[2];
     expect(profileQuery[0]).toContain("'official-notice-and-modal-site'");
+    expect(profileQuery[0]).toContain(
+      "source.url = 'https://xmfestival.com/lineup'",
+    );
+    expect(profileQuery[0]).toContain("'official-artist-gallery'");
     expect(profileQuery[1][0]).toEqual([sourceUrl]);
-  });
-
-  it('uses the stored XMF MIKA gallery image for both official notice names in detail and timetable', async () => {
-    const sourceUrl =
-      'https://ticket.melon.com/performance/index.htm?prodId=213766';
-    const candidate = {
-      name: 'XMF 2026',
-      venue: '파라다이스시티',
-      date: '2026.10.03 - 2026.10.04',
-      url: sourceUrl,
-      artists: [{ name: '나카시마 미카' }, { name: 'MIKA NAKASHIMA' }],
-    };
-    const imageId = '00000000-0000-4000-8000-000000000053';
-    const query = jest
-      .fn()
-      .mockResolvedValueOnce([{ candidate }])
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([
-        {
-          festivalSourceUrl: sourceUrl,
-          artistName: 'MIKA',
-          artistAlias: null,
-          artistOfficialName: null,
-          seed: 'official-artist-gallery',
-          id: imageId,
-        },
-      ])
-      .mockResolvedValueOnce([
-        {
-          id: 'xmf-official-revision',
-          sourceUrl: 'https://xmfestival.com/notice',
-          sourceImageId: null,
-          verifiedAt: new Date('2026-10-23T00:00:00Z'),
-          sets: [
-            {
-              artist: '나카시마 미카',
-              date: '2026-10-03',
-              stageName: 'STAGE A',
-              startsAt: '2026-10-03T20:00:00+09:00',
-              endsAt: null,
-            },
-            {
-              artist: 'MIKA NAKASHIMA',
-              date: '2026-10-03',
-              stageName: 'STAGE A',
-              startsAt: '2026-10-03T21:00:00+09:00',
-              endsAt: null,
-            },
-          ],
-        },
-      ]);
-    const service = new PublicFestivalService(
-      { findOne: jest.fn().mockResolvedValue(null) } as never,
-      {} as never,
-      { query } as never,
-      {} as never,
-    );
-
-    const result = await service.detail(
-      discoverySummaries([{ candidate }])[0].id,
-    );
-    const imageUrl = `/api/v1/festivals/images/${imageId}.webp`;
-    for (const name of ['나카시마 미카', 'MIKA NAKASHIMA']) {
-      expect(result.artists).toContainEqual({ name, imageUrl });
-      expect(result.timetable).toContainEqual(
-        expect.objectContaining({ artist: name, imageUrl }),
-      );
-    }
-  });
-
-  it('does not use a non-XMF or non-gallery MIKA image for the XMF alias', async () => {
-    const sourceUrl =
-      'https://ticket.melon.com/performance/index.htm?prodId=213766';
-    const candidate = {
-      name: 'XMF 2026',
-      venue: '파라다이스시티',
-      date: '2026.10.03 - 2026.10.04',
-      url: sourceUrl,
-      artists: [{ name: '나카시마 미카' }],
-    };
-    const query = jest
-      .fn()
-      .mockResolvedValueOnce([{ candidate }])
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([
-        {
-          festivalSourceUrl: sourceUrl,
-          artistName: 'MIKA',
-          seed: 'manual',
-          id: 'manual-image',
-        },
-        {
-          festivalSourceUrl:
-            'https://ticket.melon.com/performance/index.htm?prodId=999999',
-          artistName: 'MIKA',
-          seed: 'official-artist-gallery',
-          id: 'other-festival-image',
-        },
-      ])
-      .mockResolvedValueOnce([]);
-    const service = new PublicFestivalService(
-      { findOne: jest.fn().mockResolvedValue(null) } as never,
-      {} as never,
-      { query } as never,
-      {} as never,
-    );
-
-    const result = await service.detail(
-      discoverySummaries([{ candidate }])[0].id,
-    );
-    expect(result.artists).toContainEqual({
-      name: '나카시마 미카',
-      imageUrl: null,
-    });
   });
 
   it('matches harmless name formatting differences without guessing a different artist', async () => {

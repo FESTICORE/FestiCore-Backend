@@ -702,6 +702,10 @@ export class PublicFestivalService {
            ORDER BY source."parserConfig"->>'festivalSourceUrl',
              source."parserConfig"->>'artistName',
              CASE WHEN source."parserConfig"->>'seed' = 'official-gmf-lineup'
+               OR (source.url = 'https://xmfestival.com/lineup'
+                 AND source."parserConfig"->>'festivalSourceUrl' =
+                   'https://ticket.melon.com/performance/index.htm?prodId=213766'
+                 AND source."parserConfig"->>'seed' = 'official-artist-gallery')
                THEN 0 ELSE 1 END, image."lastSeenAt" DESC`,
           [festivalSourceUrls],
         )
@@ -712,21 +716,8 @@ export class PublicFestivalService {
         image.id,
       ]),
     );
-    const namesForProfile = (image: (typeof profileImages)[number]) => [
-      image.artistName,
-      image.artistAlias,
-      image.artistOfficialName,
-      // #131: xmfestival.com/notice names 나카시마 미카(MIKA NAKASHIMA), while
-      // the same festival's official gallery labels its stored card MIKA.
-      ...(image.festivalSourceUrl ===
-        'https://ticket.melon.com/performance/index.htm?prodId=213766' &&
-      image.seed === 'official-artist-gallery' &&
-      image.artistName === 'MIKA'
-        ? ['나카시마 미카', 'MIKA NAKASHIMA']
-        : []),
-    ];
     for (const image of profileImages) {
-      for (const name of namesForProfile(image)) {
+      for (const name of [image.artistAlias, image.artistOfficialName]) {
         if (!name) continue;
         const key = `${image.festivalSourceUrl}\u0000${name}`;
         if (!profileImageByArtist.has(key))
@@ -735,7 +726,11 @@ export class PublicFestivalService {
     }
     const profileImageByName = new Map<string, Set<string>>();
     for (const image of profileImages) {
-      for (const name of namesForProfile(image)) {
+      for (const name of [
+        image.artistName,
+        image.artistAlias,
+        image.artistOfficialName,
+      ]) {
         if (!name) continue;
         for (const nameKey of artistNameKeys(name)) {
           const normalizedKey = `${image.festivalSourceUrl}\u0000${nameKey}`;
