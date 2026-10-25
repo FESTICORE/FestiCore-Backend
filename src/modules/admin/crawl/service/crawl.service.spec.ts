@@ -977,6 +977,33 @@ describe('CrawlService source audit', () => {
     expect(dataSource.transaction).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { seed: 'official-artist-gallery' },
+    { artistOfficialNameSource: 'official-notice-and-modal-site' },
+    { officialSiteKeys: '["artist-site"]' },
+  ])(
+    'rejects administrator supplied official gallery identity %j',
+    async (protectedConfig) => {
+      const { service, dataSource } = harness();
+      const dto = {
+        kind: 'artist-image',
+        url: 'https://xmfestival.com/lineup',
+        parser: 'html-text',
+        parserConfig: {
+          artistName: 'Artist',
+          festivalSourceUrl:
+            'https://ticket.melon.com/performance/index.htm?prodId=213766',
+          imageHint: '20260811/9e91f35508e81.jpg',
+          ...protectedConfig,
+        },
+      } as unknown as CreateCrawlSourceDto;
+      await expect(service.createSource(dto, 'admin-1')).rejects.toMatchObject({
+        status: 422,
+      });
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+    },
+  );
+
   it('does not connect the XMF gallery to another ticket on the same site', async () => {
     const { service, dataSource } = harness();
     await expect(
@@ -1719,6 +1746,10 @@ describe('CrawlService source audit', () => {
     ) as [string, string[]];
     expect(recentFailures[0]).toContain('failed."httpStatus" = 403');
     expect(recentFailures[0]).toContain("interval '7 days'");
+    expect(recentFailures[0]).toContain(
+      `NOT (image."parserConfig" ? 'officialSiteKeys')`,
+    );
+    expect(recentFailures[0]).toContain('snapshot."expiresAt" > now()');
     expect(
       dataSource.query.mock.calls.filter(([sql]: [string]) =>
         sql.includes('UPDATE crawl_sources SET "parserConfig"'),

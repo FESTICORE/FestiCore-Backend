@@ -24,8 +24,15 @@ export const PUBLIC_CRAWL_IMAGE_SQL = `(
     AND source."parserConfig"->>'seed' IS DISTINCT FROM 'drdr-official-profile'
     AND source."parserConfig"->>'festivalSourceUrl' ~ '^https://(ticket[.]melon[.]com|ticket[.]yes24[.]com|nol[.]yanolja[.]com|mintpaper[.]co[.]kr)/'
     AND (source."parserConfig"->>'seed' IS DISTINCT FROM 'official-artist-gallery'
-      OR split_part(image."originUrl", '?', 1) =
-        'https://cdn.imweb.me/thumbnail/' || (source."parserConfig"->>'imageHint'))
+      OR (split_part(image."originUrl", '?', 1) =
+            'https://cdn.imweb.me/thumbnail/' || (source."parserConfig"->>'imageHint')
+        AND EXISTS (
+          SELECT 1 FROM crawl_sources gallery
+          WHERE gallery.kind = 'artist-gallery' AND gallery.enabled = true
+            AND gallery.url = source.url
+            AND gallery."parserConfig"->>'seed' = 'xmf-official-gallery'
+            AND gallery."parserConfig"->>'festivalSourceUrl' =
+              source."parserConfig"->>'festivalSourceUrl')))
     AND image."originUrl" LIKE 'https://%')
   OR (source.kind = 'artist-image'
     AND source.enabled = true

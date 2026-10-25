@@ -267,6 +267,18 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
   }
 
   async createSource(dto: CreateCrawlSourceDto, actor: string | null) {
+    if (
+      dto.kind === 'artist-image' &&
+      (dto.parserConfig.seed === 'official-artist-gallery' ||
+        [
+          'officialSiteKeys',
+          'artistOfficialName',
+          'artistOfficialNameSource',
+        ].some((key) => Object.hasOwn(dto.parserConfig, key)))
+    )
+      throw new UnprocessableEntityException(
+        '공식 갤러리 신원 정보는 수집 결과로만 등록할 수 있습니다.',
+      );
     const parsers: Record<CrawlSource['kind'], CrawlSource['parser']> = {
       discovery: 'ticket-list',
       'artist-gallery': 'html-text',
@@ -2014,7 +2026,29 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
            AND source."parserConfig"->>'seed' = 'official-lineup')
            OR (source.kind = 'artist-gallery' AND source.url = 'https://xmfestival.com/lineup'))
          AND failed.result = 'failed' AND failed."httpStatus" = 403
-         AND failed."finishedAt" >= now() - interval '7 days'`,
+         AND failed."finishedAt" >= now() - interval '7 days'
+       UNION
+       SELECT gallery.id
+       FROM crawl_sources gallery
+       WHERE gallery.enabled = true AND gallery.kind = 'artist-gallery'
+         AND gallery.url = 'https://xmfestival.com/lineup'
+         AND gallery."parserConfig"->>'seed' = 'xmf-official-gallery'
+         AND EXISTS (
+           SELECT 1 FROM crawl_sources image
+           WHERE image.kind = 'artist-image' AND image.enabled = true
+             AND image.url = gallery.url
+             AND image."parserConfig"->>'seed' = 'official-artist-gallery'
+             AND image."parserConfig"->>'festivalSourceUrl' =
+               gallery."parserConfig"->>'festivalSourceUrl'
+             AND NOT (image."parserConfig" ? 'officialSiteKeys'))
+         AND EXISTS (
+           SELECT 1 FROM crawl_runs previous
+           JOIN crawl_snapshots snapshot ON snapshot."runId" = previous.id
+           WHERE previous."sourceId" = gallery.id
+             AND previous."httpStatus" = 200
+             AND previous.result IN ('nochange-parsed', 'proposed', 'unchanged')
+             AND previous."finishedAt" >= now() - interval '7 days'
+             AND snapshot."expiresAt" > now())`,
     );
     for (const { id } of sources) {
       try {

@@ -1,3 +1,5 @@
+import { QueryRunner } from 'typeorm';
+import { ScrubUntrustedGalleryIdentity1792500073000 } from '../../database/migrations/1792500073000-scrub-untrusted-gallery-identity';
 import { discoverySummaries } from './crawl-catalog';
 import { PublicFestivalService } from './public-festival.service';
 describe('discovered festival artist profile images', () => {
@@ -841,12 +843,37 @@ describe('discovered festival artist profile images', () => {
     const profileQuery = (
       query.mock.calls as unknown as [string, [string[]]][]
     )[2];
-    expect(profileQuery[0]).toContain("'official-notice-and-modal-site'");
-    expect(profileQuery[0]).toContain(
-      "source.url = 'https://xmfestival.com/lineup'",
-    );
     expect(profileQuery[0]).toContain("'official-artist-gallery'");
+    const galleryPredicate =
+      /source\."parserConfig"->>'seed' = 'official-artist-gallery'\s+AND source\."parserConfig"->>'artistOfficialNameSource' =\s+'official-notice-and-modal-site'\s+AND EXISTS \(\s+SELECT 1 FROM crawl_sources gallery\s+WHERE gallery\.kind = 'artist-gallery'\s+AND gallery\.enabled = true\s+AND gallery\.url = source\.url\s+AND gallery\."parserConfig"->>'seed' = 'xmf-official-gallery'\s+AND gallery\."parserConfig"->>'festivalSourceUrl' =\s+source\."parserConfig"->>'festivalSourceUrl'\s+\)/g;
+    expect(profileQuery[0].match(galleryPredicate)).toHaveLength(2);
+    expect(profileQuery[0]).toMatch(
+      /CASE WHEN source\."parserConfig"->>'seed' = 'official-artist-gallery'[\s\S]+THEN source\."parserConfig"->>'artistOfficialName'/,
+    );
+    expect(profileQuery[0]).not.toContain('prodId=213766');
     expect(profileQuery[1][0]).toEqual([sourceUrl]);
+  });
+
+  it('scrubs historical admin-created identity claims while preserving crawler-created sources', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    await new ScrubUntrustedGalleryIdentity1792500073000().up({
+      query,
+    } as unknown as QueryRunner);
+
+    const sql = (query.mock.calls as unknown as [string][])[0][0];
+    expect(sql).toContain("source.kind = 'artist-image'");
+    expect(sql).toContain('source."parserConfig" ?| ARRAY[');
+    expect(sql).toContain("'officialSiteKeys', 'artistOfficialName'");
+    expect(sql).toContain("'artistOfficialNameSource'");
+    expect(sql).toContain("THEN ARRAY['seed']::text[]");
+    expect(sql).toContain(
+      "'official-artist-gallery' THEN false ELSE source.enabled END",
+    );
+    expect(sql).toContain(
+      "'official-artist-gallery' THEN 'disabled' ELSE source.status END",
+    );
+    expect(sql).toContain("audit.action = 'crawl.source.created'");
+    expect(sql).toContain("audit.target = 'crawl-source:' || source.id::text");
   });
 
   it('matches harmless name formatting differences without guessing a different artist', async () => {
