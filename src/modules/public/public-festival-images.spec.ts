@@ -632,15 +632,57 @@ describe('discovered festival artist profile images', () => {
       "verified.result IN ('nochange-parsed', 'unchanged')",
     );
     expect(proofQuery).toContain('newer."startedAt" > verified."startedAt"');
+    expect(proofQuery).toContain("latest.status IS DISTINCT FROM 'rejected'");
     expect(proofQuery).toContain("latest.decision IS DISTINCT FROM 'rejected'");
+    expect(proofQuery).toContain(
+      "childRun.result IN ('proposed', 'unchanged', 'nochange-parsed')",
+    );
     expect(proofQuery).toContain(
       "childRun.result IN ('proposed', 'unchanged')",
     );
     expect(proofQuery).toContain(
       'proposedRun."contentHash" = childRun."contentHash"',
     );
+    expect(proofQuery).toContain("childRun.result = 'nochange-parsed'");
+    expect(proofQuery).toContain('childRun."proposalId" = latest."proposalId"');
     expect(proofQuery).toContain('proposedRun."sourceId" = child.id');
     expect(proofQuery).toContain('jsonb_build_array(child.url, $3::text)');
+  });
+
+  it('does not bridge a rejected latest proposal to the official lineup', async () => {
+    const melon =
+      'https://ticket.melon.com/performance/index.htm?prodId=214999';
+    const candidate = {
+      name: 'WONDERLIVET 2026',
+      venue: 'KINTEX HALL 7/8/9/10',
+      date: '2026.11.20 - 2026.11.22',
+      url: melon,
+      artists: [{ name: 'The Shepherd Bois' }],
+    };
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([{ candidate }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    const detail = await service.detail(
+      discoverySummaries([{ candidate }])[0].id,
+    );
+    expect(detail).toMatchObject({
+      artists: [{ name: 'The Shepherd Bois', imageUrl: null }],
+    });
+    const proofQuery = (
+      query.mock.calls as unknown as [string, unknown[]][]
+    )[2][0];
+    expect(proofQuery).toContain("latest.status IS DISTINCT FROM 'rejected'");
+    expect(proofQuery).toContain("latest.decision IS DISTINCT FROM 'rejected'");
   });
 
   it.each([

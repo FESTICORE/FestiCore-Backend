@@ -49,6 +49,7 @@ type PrivateCrawl = {
   ): Promise<{
     kind: string;
     items: { id: string; op: string; path: string; after: unknown }[];
+    matchedProposalId?: string;
   }>;
   execute(run: CrawlRun, source: CrawlSource): Promise<void>;
   getListing(source: CrawlSource): Promise<{ status: number; body: string }>;
@@ -2797,6 +2798,48 @@ describe('CrawlService manual runs and snapshots', () => {
     ]);
   });
 
+  it('reparses unchanged Wonderlivet detail and records its matching pending proposal', async () => {
+    const { service, source, run, runsRepo, proposalsRepo, execute } =
+      harness();
+    execute.mockRestore();
+    source.url = 'https://ticket.melon.com/performance/index.htm?prodId=214999';
+    source.parserConfig = {
+      seed: 'wonderlivet-official-ticket-detail',
+      festivalSourceUrl: 'https://www.wonderli.vet/lineup',
+      festivalSourceUrls: [source.url, 'https://www.wonderli.vet/lineup'],
+    };
+    const body = `<strong class="tit">WONDERLIVET 2026 (원더리벳 2026)</strong>
+      <span class="txt_info">2026.11.20 - 2026.11.22</span>
+      <span class="place">KINTEX HALL 7/8/9/10</span>`;
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({ status: 200, body });
+    jest.spyOn(service as never, 'captureImages').mockResolvedValue([]);
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue({
+        contentHash: createHash('sha256')
+          .update(body)
+          .update('ticket-list:v3')
+          .digest('hex'),
+      }),
+    }));
+    const proposalItems = jest
+      .spyOn(service, 'proposalItems')
+      .mockResolvedValue({
+        kind: 'festival.new',
+        items: [],
+        matchedProposalId: 'proposal-1',
+      });
+
+    await service.execute(run, source);
+
+    expect(proposalItems).toHaveBeenCalledTimes(1);
+    expect(run.result).toBe('nochange-parsed');
+    expect(run.proposalId).toBe('proposal-1');
+    expect(proposalsRepo.save).not.toHaveBeenCalled();
+  });
+
   it('registers a dynamic official WONDERLIVET Melon product on the daily crawl', async () => {
     const { service, source, run, dataSource, runsRepo, execute } = harness();
     execute.mockRestore();
@@ -3590,6 +3633,42 @@ describe('CrawlService proposal changes', () => {
     ]);
 
     expect(result.items).toEqual([]);
+  });
+
+  it('attests only an identical pending proposal, never a draft URL, changed candidate, or rejected proposal', async () => {
+    const { service, source, dataSource } = harness();
+    const url = 'https://tickets.example.com/one';
+    const entry = { name: '현재 축제', url };
+    dataSource.query.mockResolvedValueOnce([
+      { url, value: { url, name: '현재 축제' }, proposalId: 'proposal-1' },
+    ]);
+    const matched = await service.proposalItems(source, [entry]);
+    expect(matched.items).toEqual([]);
+    expect(matched.matchedProposalId).toBe('proposal-1');
+
+    dataSource.query.mockResolvedValueOnce([
+      { url, value: null, proposalId: null },
+    ]);
+    const draftOnly = await service.proposalItems(source, [entry]);
+    expect(draftOnly.items).toEqual([]);
+    expect(draftOnly.matchedProposalId).toBeUndefined();
+
+    dataSource.query.mockResolvedValueOnce([
+      { url, value: { name: '이전 축제', url }, proposalId: 'proposal-1' },
+    ]);
+    const changed = await service.proposalItems(source, [entry]);
+    expect(changed.items).toHaveLength(1);
+    expect(changed.matchedProposalId).toBeUndefined();
+
+    dataSource.query.mockResolvedValueOnce([]);
+    const rejected = await service.proposalItems(source, [entry]);
+    expect(rejected.items).toHaveLength(1);
+    expect(rejected.matchedProposalId).toBeUndefined();
+    const sql = (
+      dataSource.query.mock.calls as unknown as [string, unknown[]][]
+    )[0][0];
+    expect(sql).toContain("status IN ('open', 'partial')");
+    expect(sql).toContain("item->>'decision' = 'pending'");
   });
 
   it('removes disappeared timetable sets only when owned by this source', async () => {

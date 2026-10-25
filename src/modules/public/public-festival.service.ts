@@ -549,12 +549,12 @@ export class PublicFestivalService {
        JOIN crawl_sources child ON child.url =
          parent."parserConfig"->>'verifiedTicketUrl'
        JOIN LATERAL (
-         SELECT run.result, run."contentHash" FROM crawl_runs run
+         SELECT run.result, run."contentHash", run."proposalId" FROM crawl_runs run
          WHERE run."sourceId" = child.id
          ORDER BY run."startedAt" DESC, run.id DESC LIMIT 1
-       ) childRun ON childRun.result IN ('proposed', 'unchanged')
+       ) childRun ON childRun.result IN ('proposed', 'unchanged', 'nochange-parsed')
        JOIN LATERAL (
-         SELECT p.status, p."runId", item->>'decision' AS decision,
+         SELECT p.id AS "proposalId", p.status, p."runId", item->>'decision' AS decision,
            item->'after' AS candidate
          FROM crawl_proposals p
          CROSS JOIN LATERAL jsonb_array_elements(p.items) item
@@ -567,7 +567,12 @@ export class PublicFestivalService {
          AND proposedRun."sourceId" = child.id
          AND proposedRun.result = 'proposed'
          AND proposedRun."contentHash" IS NOT NULL
-         AND proposedRun."contentHash" = childRun."contentHash"
+         AND (
+           (childRun.result IN ('proposed', 'unchanged')
+             AND proposedRun."contentHash" = childRun."contentHash")
+           OR (childRun.result = 'nochange-parsed'
+             AND childRun."proposalId" = latest."proposalId")
+         )
        WHERE parent.kind = 'discovery' AND parent.url = $1::text
          AND parent.enabled = true
          AND parent."parserConfig"->>'seed' = $2::text
