@@ -2713,7 +2713,7 @@ describe('CrawlService manual runs and snapshots', () => {
             },
           ]
         : sql.includes('RETURNING id')
-          ? [{ id: source.id }]
+          ? [[{ id: source.id }], 1]
           : [],
     );
     dataSource.transaction = jest.fn(async (operation) =>
@@ -2794,53 +2794,59 @@ describe('CrawlService manual runs and snapshots', () => {
     ).toBe(false);
   });
 
-  it('rolls back the Wonderlivet child configuration if parent verification fails', async () => {
-    const { service, source, dataSource } = harness();
-    source.url = 'https://litt.ly/wonderlivet';
-    source.parserConfig = {
-      seed: 'wonderlivet-official-ticket-links',
-      festivalSourceUrl: 'https://www.wonderli.vet/lineup',
-    };
-    const product =
-      'https://ticket.melon.com/performance/index.htm?prodId=214999';
-    const staged: string[] = [];
-    let committed = false;
-    dataSource.transaction = jest.fn(async (operation) => {
-      const result = await operation({
-        query: jest.fn((sql: string) => {
-          if (sql.includes('SELECT "parserConfig", enabled'))
-            return [
-              {
-                enabled: true,
-                parserConfig: {
-                  seed: 'wonderlivet-official-ticket-detail',
-                  festivalSourceUrl: 'https://www.wonderli.vet/lineup',
-                  festivalSourceUrls: [
-                    product,
-                    'https://www.wonderli.vet/lineup',
-                  ],
+  it.each([
+    ['zero rows', [[], 0]],
+    ['multiple rows', [[{ id: 'source-1' }, { id: 'source-1' }], 2]],
+  ])(
+    'rolls back the Wonderlivet child configuration if parent verification returns %s',
+    async (_case, updateResult) => {
+      const { service, source, dataSource } = harness();
+      source.url = 'https://litt.ly/wonderlivet';
+      source.parserConfig = {
+        seed: 'wonderlivet-official-ticket-links',
+        festivalSourceUrl: 'https://www.wonderli.vet/lineup',
+      };
+      const product =
+        'https://ticket.melon.com/performance/index.htm?prodId=214999';
+      const staged: string[] = [];
+      let committed = false;
+      dataSource.transaction = jest.fn(async (operation) => {
+        const result = await operation({
+          query: jest.fn((sql: string) => {
+            if (sql.includes('SELECT "parserConfig", enabled'))
+              return [
+                {
+                  enabled: true,
+                  parserConfig: {
+                    seed: 'wonderlivet-official-ticket-detail',
+                    festivalSourceUrl: 'https://www.wonderli.vet/lineup',
+                    festivalSourceUrls: [
+                      product,
+                      'https://www.wonderli.vet/lineup',
+                    ],
+                  },
                 },
-              },
-            ];
-          if (sql.includes("'verifiedTicketUrl'")) return [];
-          staged.push(sql);
-          return [];
-        }),
+              ];
+            if (sql.includes("'verifiedTicketUrl'")) return updateResult;
+            staged.push(sql);
+            return [];
+          }),
+        });
+        committed = true;
+        return result;
       });
-      committed = true;
-      return result;
-    });
-    await expect(
-      service.reconcileWonderlivetTicketLink(
-        source,
-        [{ name: 'WONDERLIVET 2026', url: product }],
-        'run-1',
-      ),
-    ).rejects.toThrow('부모 소스 설정');
-    expect(staged.length).toBeGreaterThan(0);
-    expect(committed).toBe(false);
-    expect(dataSource.query).not.toHaveBeenCalled();
-  });
+      await expect(
+        service.reconcileWonderlivetTicketLink(
+          source,
+          [{ name: 'WONDERLIVET 2026', url: product }],
+          'run-1',
+        ),
+      ).rejects.toThrow('부모 소스 설정');
+      expect(staged.length).toBeGreaterThan(0);
+      expect(committed).toBe(false);
+      expect(dataSource.query).not.toHaveBeenCalled();
+    },
+  );
 
   it('registers an official Mint Paper NOL link without a duplicate festival proposal', async () => {
     const { service, source, run, dataSource, runsRepo, execute } = harness();
@@ -2864,7 +2870,7 @@ describe('CrawlService manual runs and snapshots', () => {
     });
     dataSource.query.mockImplementation((sql: string) =>
       sql.includes('RETURNING id')
-        ? [{ id: source.id }]
+        ? [[{ id: source.id }], 1]
         : sql.includes('SELECT "parserConfig"')
           ? [
               {
@@ -2925,38 +2931,49 @@ describe('CrawlService manual runs and snapshots', () => {
     ]);
   });
 
-  it('fails when the official parent changes before the verified URL set is saved', async () => {
-    const { service, source, dataSource } = harness();
-    source.parserConfig = {
-      seed: 'official-ticket-links',
-      festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
-    };
-    dataSource.query.mockImplementation((sql: string) =>
-      sql.includes('SELECT "parserConfig"')
-        ? [
-            {
-              parserConfig: {
-                seed: 'official-ticket-link-detail',
-                festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
-              },
-            },
-          ]
-        : [],
-    );
-    await expect(
-      service.reconcileOfficialTicketLinks(source, [
-        { url: 'https://nol.yanolja.com/ticket/products/26014568' },
-      ]),
-    ).rejects.toThrow('부모 소스 설정이 변경');
-    expect(dataSource.query).toHaveBeenCalledWith(
-      expect.stringContaining("'verifiedTicketUrls'"),
-      [
-        source.id,
-        '["https://nol.yanolja.com/ticket/products/26014568"]',
-        'https://mintpaper.co.kr/festivals/178',
-      ],
-    );
-  });
+  it.each([
+    ['zero rows', [[], 0]],
+    ['multiple rows', [[{ id: 'source-1' }, { id: 'source-1' }], 2]],
+  ])(
+    'rolls back the official child configuration if parent verification returns %s',
+    async (_case, updateResult) => {
+      const { service, source, dataSource } = harness();
+      source.parserConfig = {
+        seed: 'official-ticket-links',
+        festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
+      };
+      const staged: string[] = [];
+      let committed = false;
+      dataSource.transaction = jest.fn(async (operation) => {
+        const result = await operation({
+          query: jest.fn((sql: string) => {
+            if (sql.includes('SELECT "parserConfig"'))
+              return [
+                {
+                  parserConfig: {
+                    seed: 'official-ticket-link-detail',
+                    festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
+                  },
+                },
+              ];
+            if (sql.includes("'verifiedTicketUrls'")) return updateResult;
+            staged.push(sql);
+            return [];
+          }),
+        });
+        committed = true;
+        return result;
+      });
+      await expect(
+        service.reconcileOfficialTicketLinks(source, [
+          { url: 'https://nol.yanolja.com/ticket/products/26014568' },
+        ]),
+      ).rejects.toThrow('부모 소스 설정이 변경');
+      expect(staged).toHaveLength(2);
+      expect(committed).toBe(false);
+      expect(dataSource.query).not.toHaveBeenCalled();
+    },
+  );
 
   it('reconciles an official NOL link even when the notice content is unchanged', async () => {
     const { service, source, run, dataSource, runsRepo, execute } = harness();
@@ -2981,7 +2998,7 @@ describe('CrawlService manual runs and snapshots', () => {
     }));
     dataSource.query.mockImplementation((sql: string) =>
       sql.includes('RETURNING id')
-        ? [{ id: source.id }]
+        ? [[{ id: source.id }], 1]
         : sql.includes('SELECT "parserConfig"')
           ? [
               {

@@ -1541,7 +1541,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         )
           throw new Error(`기존 예매처 크롤 소스 설정이 다릅니다: ${url}`);
       }
-      const updated = await manager.query<{ id: string }[]>(
+      const updated = await manager.query<[{ id: string }[], number]>(
         `UPDATE crawl_sources SET "parserConfig" = "parserConfig" ||
          jsonb_build_object('verifiedTicketUrls', $2::text), "updatedAt" = now()
        WHERE id = $1 AND "parserConfig"->>'seed' = 'official-ticket-links'
@@ -1549,7 +1549,11 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
        RETURNING id`,
         [source.id, JSON.stringify(urls), festivalSourceUrl],
       );
-      if (!updated.length)
+      if (
+        updated[1] !== 1 ||
+        updated[0]?.length !== 1 ||
+        updated[0][0]?.id !== source.id
+      )
         throw new Error('공식 예매 링크 부모 소스 설정이 변경되었습니다.');
     });
   }
@@ -1624,7 +1628,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
           JSON.stringify([candidate.url, WONDERLIVET_FESTIVAL_URL])
       )
         throw new Error('멜론 상품 소스가 다른 축제에 연결되어 있습니다.');
-      const updated = await manager.query<{ id: string }[]>(
+      const updated = await manager.query<[{ id: string }[], number]>(
         `UPDATE crawl_sources SET "parserConfig" = "parserConfig" ||
          jsonb_build_object('verifiedTicketUrl', $2::text,
            'verifiedRunId', $6::text), "updatedAt" = now()
@@ -1641,7 +1645,11 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
           runId,
         ],
       );
-      if (updated.length !== 1)
+      if (
+        updated[1] !== 1 ||
+        updated[0]?.length !== 1 ||
+        updated[0][0]?.id !== source.id
+      )
         throw new Error('공식 링크 부모 소스 설정이 변경되었습니다.');
     });
   }
