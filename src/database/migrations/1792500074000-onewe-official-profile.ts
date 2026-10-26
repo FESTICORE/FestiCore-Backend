@@ -56,15 +56,12 @@ export class OneweOfficialProfile1792500074000 implements MigrationInterface {
     );
   }
 
-  async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(
-      `UPDATE crawl_sources SET url = $1::text, "updatedAt" = now()
-       WHERE kind = 'artist-image' AND url = $2::text
-         AND "parserConfig"->>'seed' = 'cdf-official-profile'
-         AND "parserConfig"->>'festivalSourceUrl' = $3::text
-         AND "parserConfig"->>'artistName' = $4::text
-         AND "parserConfig"->>'officialHandle' = $5::text`,
-      [OLD_URL, NEW_URL, FESTIVAL_URL, ARTIST, HANDLE],
+  down(): Promise<void> {
+    // 기존 행의 전환과 새 행 삽입을 구분할 수 없어 자동 롤백을 차단한다.
+    return Promise.reject(
+      new Error(
+        'ONEWE 공식 프로필 소스는 수집 이력을 확인한 뒤 수동으로 되돌려야 합니다.',
+      ),
     );
   }
 }

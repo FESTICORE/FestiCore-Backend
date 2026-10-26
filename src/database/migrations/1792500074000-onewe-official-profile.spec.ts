@@ -37,4 +37,10 @@ describe('ONEWE official profile source migration', () => {
     ).rejects.toThrow('충돌하는 기존 소스');
     expect(query).toHaveBeenCalledTimes(1);
   });
+
+  it('rejects rollback without changing source rows or crawl history', async () => {
+    await expect(
+      new OneweOfficialProfile1792500074000().down(),
+    ).rejects.toThrow('수동으로 되돌려야');
+  });
 });
