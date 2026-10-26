@@ -526,6 +526,7 @@ describe('AuthService 회원 탈퇴의 크루 소유권', () => {
     admin?: { id: string; role: string },
     hiddenFlag = false,
     alreadyHidden = false,
+    memberCrews = [{ crewId: 'crew-1', festivalId: 'fst_test' }],
   ) {
     const query = jest.fn().mockImplementation((sql: string) => {
       if (sql.includes('FROM "users"') && sql.includes('FOR UPDATE'))
@@ -533,8 +534,7 @@ describe('AuthService 회원 탈퇴의 크루 소유권', () => {
       if (sql.includes('FROM "admin_accounts"') && sql.includes('"userId"'))
         return admin ? [admin] : [];
       if (sql.includes('FROM "crews"')) return [{ id: 'crew-1' }];
-      if (sql.includes('SELECT "crewId", "festivalId"'))
-        return [{ crewId: 'crew-1', festivalId: 'fst_test' }];
+      if (sql.includes('SELECT "crewId", "festivalId"')) return memberCrews;
       if (sql.includes('SELECT "id", "ownerId", "festivalId", "hidden"'))
         return hiddenFlag
           ? [
@@ -641,6 +641,33 @@ describe('AuthService 회원 탈퇴의 크루 소유권', () => {
     expect(query.mock.invocationCallOrder[deviceDelete]).toBeLessThan(
       liveActivity.enqueueWithdrawalImpact.mock.invocationCallOrder[0],
     );
+  });
+
+  it('영향받는 축제를 정렬해 중복 없이 기기 삭제 전에 잠그고 삭제 후 깃발을 집계한다', async () => {
+    const { service, query } = setup('successor', undefined, true, false, [
+      { crewId: 'crew-z', festivalId: 'fst_z' },
+      { crewId: 'crew-a', festivalId: 'fst_a' },
+      { crewId: 'crew-z2', festivalId: 'fst_z' },
+    ]);
+    await service.withdraw(userId);
+
+    const festivalLock = query.mock.calls.findIndex(
+      ([sql]: [string]) =>
+        sql.includes('FROM "admin_festivals"') && sql.includes('FOR UPDATE'),
+    );
+    const deviceDelete = query.mock.calls.findIndex(([sql]: [string]) =>
+      sql.includes('DELETE FROM "devices" WHERE "userId" = $1'),
+    );
+    const flagRecount = query.mock.calls.findIndex(([sql]: [string]) =>
+      sql.includes('"followerCount" = ('),
+    );
+    expect(festivalLock).toBeGreaterThanOrEqual(0);
+    expect(query.mock.calls[festivalLock]).toEqual([
+      expect.stringContaining('ORDER BY "id" FOR UPDATE'),
+      [['fst_a', 'fst_test', 'fst_z']],
+    ]);
+    expect(festivalLock).toBeLessThan(deviceDelete);
+    expect(deviceDelete).toBeLessThan(flagRecount);
   });
 
   it('이미 숨겨진 깃발은 탈퇴 때 축제 갱신을 다시 예약하지 않는다', async () => {

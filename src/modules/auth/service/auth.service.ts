@@ -361,6 +361,21 @@ export class AuthService {
          ) ORDER BY "id" FOR UPDATE`,
           [userId],
         );
+        // 탈퇴로 재계산하거나 갱신할 축제 행을 동일한 순서로 먼저 잠근다.
+        // 기기/사용자 삭제보다 앞서 잡아 아래 팩 동기화까지 잠금을 유지한다.
+        const affectedFestivalIds = [
+          ...new Set([
+            ...memberCrews.map((crew) => crew.festivalId),
+            ...affectedFlags.map((flag) => flag.festivalId),
+          ]),
+        ].sort();
+        if (affectedFestivalIds.length) {
+          await manager.query(
+            `SELECT "id" FROM "admin_festivals"
+             WHERE "id" = ANY($1::varchar[]) ORDER BY "id" FOR UPDATE`,
+            [affectedFestivalIds],
+          );
+        }
         const hiddenFestivals = new Set<string>();
         for (const flag of affectedFlags) {
           if (flag.ownerId !== userId) continue;
