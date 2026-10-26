@@ -114,9 +114,12 @@ export const PUBLIC_CRAWL_IMAGE_SQL = `(
       OR image."originUrl" LIKE 'https://stkfile.yes24.com/%'))
   OR (source.url = 'https://ticket.yes24.com/English/Genre/Concert'
     AND image."originUrl" LIKE 'https://stkfile.yes24.com/upload2/PerfBlog/%')
-  OR ((source.url = 'https://nol.yanolja.com/ticket'
-      OR source.url ~ '^https://nol[.]yanolja[.]com/ticket/products/[0-9]+$')
+  OR (source.url = 'https://nol.yanolja.com/ticket'
     AND image."originUrl" ~* '^https://ticketimage[.]interpark[.]com/Play/image/large/[0-9]+/[0-9]+_p[.](gif|jpe?g|png|webp)$')
   OR (source.url ~ '^https://nol[.]yanolja[.]com/ticket/(products/[0-9]+|meta/performance/[A-Za-z0-9_.%-]+)$'
-    AND image."originUrl" LIKE 'https://ticketimage.interpark.com/%')
+    AND image."originUrl" LIKE 'https://ticketimage.interpark.com/%'
+    AND (source.url !~ '^https://nol[.]yanolja[.]com/ticket/products/[0-9]+$'
+      OR image."originUrl" !~* '^https://ticketimage[.]interpark[.]com/Play/image/large/'
+      OR substring(image."originUrl" from '^https://ticketimage[.]interpark[.]com/Play/image/large/[0-9]+/([0-9]+)_p[.](?:gif|jpe?g|png|webp)$') =
+        substring(source.url from '^https://nol[.]yanolja[.]com/ticket/products/([0-9]+)$')))
 )`;

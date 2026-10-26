@@ -1133,11 +1133,8 @@ function nolDetailCandidates(
 }
 
 export function nolPosterUrl(body: string, source: URL): string | null {
-  if (
-    source.hostname !== 'nol.yanolja.com' ||
-    !/^\/ticket\/products\/\d+$/.test(source.pathname)
-  )
-    return null;
+  const productId = /^\/ticket\/products\/(\d+)$/.exec(source.pathname)?.[1];
+  if (source.hostname !== 'nol.yanolja.com' || !productId) return null;
   const event = yes24EventJson(body);
   const poster =
     (typeof event?.image === 'string' ? event.image : null) ??
@@ -1147,12 +1144,14 @@ export function nolPosterUrl(body: string, source: URL): string | null {
   if (poster) {
     try {
       const image = new URL(poster, source);
+      const posterProductId =
+        /^\/Play\/image\/large\/\d+\/(\d+)_p\.(?:gif|jpe?g|png|webp)$/i.exec(
+          image.pathname,
+        )?.[1];
       if (
         image.protocol === 'https:' &&
         image.hostname === 'ticketimage.interpark.com' &&
-        /^\/Play\/image\/large\/\d+\/\d+_p\.(?:gif|jpe?g|png|webp)$/i.test(
-          image.pathname,
-        )
+        posterProductId === productId
       )
         return image.toString();
     } catch {

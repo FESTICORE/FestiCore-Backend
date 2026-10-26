@@ -13,6 +13,18 @@ import {
 } from '../admin/crawl/service/wonderlivet-profile';
 
 describe('public crawl image policy', () => {
+  it('binds a NOL detail poster to its source product ID', () => {
+    expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(
+      "source.url = 'https://nol.yanolja.com/ticket'",
+    );
+    expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(
+      "substring(source.url from '^https://nol[.]yanolja[.]com/ticket/products/([0-9]+)$')",
+    );
+    expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(
+      'substring(image."originUrl" from',
+    );
+  });
+
   it('serves official gallery portraits only when an enabled gallery owns the same source and festival', () => {
     const branch = PUBLIC_CRAWL_IMAGE_SQL.match(
       /source\."parserConfig"->>'seed' IS DISTINCT FROM 'official-artist-gallery'[\s\S]*?AND image\."originUrl" LIKE 'https:\/\/%'/,

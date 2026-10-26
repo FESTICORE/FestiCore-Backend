@@ -195,6 +195,22 @@ describe('crawl parsers', () => {
     ]);
   });
 
+  it('rejects a NOL detail poster belonging to another product', async () => {
+    const nol = source('ticket-list', 'discovery');
+    nol.url = 'https://nol.yanolja.com/ticket/products/26013406';
+    const html = `<meta property="og:image" content="https://ticketimage.interpark.com/Play/image/large/26/99999999_p.gif" />
+      <h1>NOL FESTIVAL 2026</h1><div>장소 킨텍스 일시 2026.10.17</div>`;
+
+    expect(await parseCrawl(nol, html)).toEqual([
+      {
+        name: 'NOL FESTIVAL 2026',
+        url: nol.url,
+        date: '2026.10.17',
+        venue: '킨텍스',
+      },
+    ]);
+  });
+
   it('reads a NOL performance page only when its event date and venue are valid', async () => {
     const nol = source('ticket-list', 'discovery');
     nol.url = 'https://nol.yanolja.com/ticket/products/26014568';

@@ -24,7 +24,7 @@
 
 아티스트 사진 대체는 소스별 `artist-image` 크롤로 처리한다. 관리자 소스 생성 API에 `kind: "artist-image"`, `parser: "html-text"`, 공식 프로필 페이지 `url`, `parserConfig: { "festivalSourceUrl": "예매 상세 URL", "artistName": "출연진 이름", "imageHint": "프로필 이미지 경로의 고유 부분" }`을 등록한다. 수집기는 매일 원본 HTML에서 힌트와 일치하는 HTTPS 이미지 주소를 다시 찾고 robots 정책·응답 MIME·디코딩·크기 제한을 통과한 파일만 WebP로 보관한다. 공개 상세 API는 축제 원본 URL과 출연진 이름이 모두 일치하는 저장 이미지를 선택한다. 코드에 특정 아티스트 사진 URL을 추가하지 않는다. 원더리벳 7팀의 후보 출처는 [CHiCO 공식 사이트](https://www.chicoxxx.com/), [hololive 프로필](https://hololive.hololivepro.com/talents/hoshimachi-suisei/), [Humbreaders 프로필](https://humbreaders.com/profile/), [Avex Chevon 프로필](https://avexnet.jp/contents/CHEVO-WORK-0001), [Brandy Senki 프로필](https://brandysenki.com/biography), [Conton Candy 공식 뉴스](https://contoncandy.fanpla.jp/news/2/), [CLAN QUEEN 공식 사이트](https://www.clanqueen.jp/)다. 소스 등록·배포·실제 이미지 보관은 별도 운영 검증이 필요하며, 외부 재배포 허락은 확인되지 않았다.
 
-NOL의 공개 상품·공연정보 상세 HTML이 입력되면 공연명과 명시된 `기간`/`일시`, `장소`를 축제 발견 후보로 읽는다. 별도 티켓 오픈 날짜는 행사 날짜로 사용하지 않으며 유효하지 않은 날짜·장소는 거부한다. 2026-10-22 서버 직접 요청에서 콘서트 목록과 상품 상세가 각각 HTTP 403이었으므로 이 파서의 테스트 통과는 운영 수집 성공을 뜻하지 않는다. `robots.txt`의 `/discovery/` 제외 경로는 수집하지 않고, 비활성화된 NOL 예약 소스를 접근 가능성이 검증되기 전에 켜지 않는다.
+NOL의 공개 상품·공연정보 상세 HTML이 입력되면 공연명과 명시된 `기간`/`일시`, `장소`를 축제 발견 후보로 읽는다. 상품 상세 포스터는 Interpark 이미지 URL의 상품 ID가 상세 URL의 상품 ID와 일치할 때만 수집·공개한다. 별도 티켓 오픈 날짜는 행사 날짜로 사용하지 않으며 유효하지 않은 날짜·장소는 거부한다. 2026-10-22 서버 직접 요청에서 콘서트 목록과 상품 상세가 각각 HTTP 403이었으므로 이 파서의 테스트 통과는 운영 수집 성공을 뜻하지 않는다. `robots.txt`의 `/discovery/` 제외 경로는 수집하지 않고, 비활성화된 NOL 예약 소스를 접근 가능성이 검증되기 전에 켜지 않는다.
 
 새 소스 마이그레이션은 URL이 이미 있으면 중복 등록하지 않는다. 기존 NOL·YES24 소스와 멜론 대체 소스는 `createdAt`을 전날로 등록해 배포 후 첫 예약 점검에서 실행한다. 멜론의 기존 `v=1` 소스는 대체 소스가 존재할 때 비활성화해 같은 목록의 중복 실행을 막는다.
 

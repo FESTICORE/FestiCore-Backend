@@ -635,7 +635,7 @@ describe('NOL festival poster', () => {
     expect(query).toHaveBeenCalledTimes(3);
     expect(query).toHaveBeenLastCalledWith(
       expect.stringContaining(
-        "source.url ~ '^https://nol[.]yanolja[.]com/ticket/products/[0-9]+$'",
+        "substring(source.url from '^https://nol[.]yanolja[.]com/ticket/products/([0-9]+)$')",
       ),
       [[poster]],
     );
