@@ -11,9 +11,16 @@ describe('additional Seoul Music official photo source migration', () => {
     await new AdditionalFestivalOfficialProfiles1792500080000().up({
       query,
     } as unknown as QueryRunner);
-    expect(Object.keys(ADDITIONAL_FESTIVAL_PROFILES)).toHaveLength(2);
+    const originalPages = Object.keys(ADDITIONAL_FESTIVAL_PROFILES).filter(
+      (page) =>
+        page === 'https://antenna.co.kr/KwonJinAh' ||
+        page ===
+          'https://poclanos.com/artist/%EC%98%A5%EC%83%81%EB%8B%AC%EB%B9%9B/',
+    );
+    expect(originalPages).toHaveLength(2);
     expect(query).toHaveBeenCalledTimes(6);
-    for (const [page, profile] of Object.entries(ADDITIONAL_FESTIVAL_PROFILES))
+    for (const page of originalPages) {
+      const profile = ADDITIONAL_FESTIVAL_PROFILES[page];
       expect(query).toHaveBeenCalledWith(
         expect.stringContaining('INSERT INTO crawl_sources'),
         [
@@ -23,6 +30,7 @@ describe('additional Seoul Music official photo source migration', () => {
           ADDITIONAL_FESTIVAL_PROFILE_SEED,
         ],
       );
+    }
     expect(
       query.mock.calls.map((call: unknown[]) => String(call[0])).join(' '),
     ).not.toMatch(/imageUrl|imageHint/);

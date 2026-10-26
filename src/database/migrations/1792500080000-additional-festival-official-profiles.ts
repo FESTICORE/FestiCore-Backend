@@ -4,11 +4,18 @@ import {
   ADDITIONAL_FESTIVAL_PROFILES,
 } from '../../modules/admin/crawl/service/additional-festival-profile';
 
+// Keep the original migration's two sources stable as the profile registry grows.
+const originalProfiles = Object.entries(ADDITIONAL_FESTIVAL_PROFILES).filter(
+  ([url]) =>
+    url === 'https://antenna.co.kr/KwonJinAh' ||
+    url === 'https://poclanos.com/artist/%EC%98%A5%EC%83%81%EB%8B%AC%EB%B9%9B/',
+);
+
 export class AdditionalFestivalOfficialProfiles1792500080000 implements MigrationInterface {
   name = 'AdditionalFestivalOfficialProfiles1792500080000';
 
   async up(queryRunner: QueryRunner): Promise<void> {
-    for (const [url, profile] of Object.entries(ADDITIONAL_FESTIVAL_PROFILES)) {
+    for (const [url, profile] of originalProfiles) {
       const conflicts = (await queryRunner.query(
         `SELECT id FROM crawl_sources
          WHERE kind = 'artist-image' AND enabled = true
@@ -64,7 +71,7 @@ export class AdditionalFestivalOfficialProfiles1792500080000 implements Migratio
   }
 
   async down(queryRunner: QueryRunner): Promise<void> {
-    for (const [url, profile] of Object.entries(ADDITIONAL_FESTIVAL_PROFILES)) {
+    for (const [url, profile] of originalProfiles) {
       await queryRunner.query(
         `DELETE FROM crawl_sources source
          WHERE source.kind = 'artist-image' AND source.url = $1

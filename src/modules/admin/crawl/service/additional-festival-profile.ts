@@ -8,7 +8,7 @@ export const SEOUL_MUSIC_SOURCE_URL = 'https://ticket.yes24.com/Perf/60368';
 interface Profile {
   artistName: string;
   festivalSourceUrl: string;
-  rule: 'antenna' | 'poclanos';
+  rule: 'antenna' | 'poclanos' | 'paulkim' | 'nerd-connection';
   imageHost: string;
   imagePath: RegExp;
 }
@@ -30,6 +30,21 @@ export const ADDITIONAL_FESTIVAL_PROFILES: Readonly<Record<string, Profile>> = {
     imageHost: 'poclanos.com',
     imagePath:
       /^\/drmvsn\/wp-content\/uploads\/[0-9]{4}\/[0-9]{2}\/[^/?#]+[.]jpe?g$/i,
+  },
+  'https://paulkim.co.kr/': {
+    artistName: '폴킴',
+    festivalSourceUrl: SEOUL_MUSIC_SOURCE_URL,
+    rule: 'paulkim',
+    imageHost: 'image.static.bstage.in',
+    imagePath:
+      /^\/cdn-cgi\/image\/metadata=none\/paulkim\/[0-9a-f-]{36}\/[0-9a-f-]{36}\/ori[.]jpe?g$/i,
+  },
+  'https://www.yoursummer.net/artist/nerd-connection': {
+    artistName: '너드커넥션',
+    festivalSourceUrl: SEOUL_MUSIC_SOURCE_URL,
+    rule: 'nerd-connection',
+    imageHost: 'cdn.prod.website-files.com',
+    imagePath: /^\/6649fa6f24368d5b7f0e9bc1\/[0-9a-f]{24}_[^/?#]+[.]jpe?g$/i,
   },
 };
 
@@ -104,6 +119,35 @@ function antennaImageCandidates(html: string, pageUrl: string): string[] {
     .filter((value): value is string => Boolean(value));
 }
 
+function paulkimImageCandidates(html: string): string[] {
+  if (
+    !html.includes(
+      '<title>폴킴 공식 홈페이지ㅣPaul Kim Official Homepage</title>',
+    )
+  )
+    return [];
+  return [...html.matchAll(/<meta\b[^>]*>/gi)]
+    .map((match) => match[0])
+    .filter((tag) => attr(tag, 'property') === 'og:image')
+    .map((tag) => attr(tag, 'content'))
+    .filter((value): value is string => Boolean(value));
+}
+
+function nerdConnectionImageCandidates(html: string): string[] {
+  if (
+    !html.includes('<title>너드커넥션 Nerd Connection</title>') ||
+    !/<span\b[^>]*class=["']artist-name-bold["'][^>]*>너드커넥션<\/span>/i.test(
+      html,
+    )
+  )
+    return [];
+  return [...html.matchAll(/<img\b[^>]*>/gi)]
+    .map((match) => match[0])
+    .filter((tag) => attr(tag, 'class')?.split(/\s+/).includes('image-43'))
+    .map((tag) => attr(tag, 'src'))
+    .filter((value): value is string => Boolean(value));
+}
+
 export function additionalFestivalProfileImageUrl(
   html: string,
   pageUrl: string,
@@ -114,7 +158,11 @@ export function additionalFestivalProfileImageUrl(
   const candidates =
     profile.rule === 'antenna'
       ? antennaImageCandidates(html, pageUrl)
-      : poclanosProfileImageCandidates(html, '옥상달빛');
+      : profile.rule === 'poclanos'
+        ? poclanosProfileImageCandidates(html, '옥상달빛')
+        : profile.rule === 'paulkim'
+          ? paulkimImageCandidates(html)
+          : nerdConnectionImageCandidates(html);
   if (candidates.length !== 1) return null;
   try {
     const image = checkedUrl(new URL(candidates[0], pageUrl).toString());
