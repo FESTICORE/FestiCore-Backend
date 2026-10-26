@@ -28,6 +28,18 @@ export class AdditionalFestivalOfficialProfiles1792500080000 implements Migratio
         throw new Error(
           `공식 프로필과 충돌하는 기존 소스: ${profile.artistName}`,
         );
+      const disabled = (await queryRunner.query(
+        `SELECT id FROM crawl_sources
+         WHERE kind = 'artist-image' AND enabled = false AND url = $1
+           AND "parserConfig"->>'festivalSourceUrl' = $2
+           AND "parserConfig"->>'artistName' = $3
+         LIMIT 1`,
+        [url, profile.festivalSourceUrl, profile.artistName],
+      )) as { id: string }[];
+      if (disabled.length)
+        throw new Error(
+          `비활성 공식 프로필 소스를 먼저 검토해야 합니다: ${profile.artistName}`,
+        );
       await queryRunner.query(
         `INSERT INTO crawl_sources
            (kind, url, parser, "parserConfig", "intervalMinutes", "createdAt")

@@ -12,7 +12,7 @@ describe('additional Seoul Music official photo source migration', () => {
       query,
     } as unknown as QueryRunner);
     expect(Object.keys(ADDITIONAL_FESTIVAL_PROFILES)).toHaveLength(2);
-    expect(query).toHaveBeenCalledTimes(4);
+    expect(query).toHaveBeenCalledTimes(6);
     for (const [page, profile] of Object.entries(ADDITIONAL_FESTIVAL_PROFILES))
       expect(query).toHaveBeenCalledWith(
         expect.stringContaining('INSERT INTO crawl_sources'),
@@ -36,5 +36,22 @@ describe('additional Seoul Music official photo source migration', () => {
       } as unknown as QueryRunner),
     ).rejects.toThrow('충돌하는 기존 소스');
     expect(query).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails instead of silently skipping a disabled matching source', async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ id: 'disabled-source' }]);
+    await expect(
+      new AdditionalFestivalOfficialProfiles1792500080000().up({
+        query,
+      } as unknown as QueryRunner),
+    ).rejects.toThrow('비활성 공식 프로필 소스');
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(query).not.toHaveBeenCalledWith(
+      expect.stringContaining('INSERT INTO crawl_sources'),
+      expect.anything(),
+    );
   });
 });
