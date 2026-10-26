@@ -688,6 +688,38 @@ describe('DRDR official profile sources', () => {
 });
 
 describe('CDF official profile sources', () => {
+  it('checks both ONEWE profile and selected image against robots rules', async () => {
+    const { service, source } = harness();
+    const page = 'https://oneweofficial.jp/profile';
+    const photo =
+      'https://storage.googleapis.com/image.fanicon.net/cms/12345_group.jpg';
+    source.kind = 'artist-image';
+    source.url = page;
+    source.parser = 'html-text';
+    source.parserConfig = {
+      seed: 'cdf-official-profile',
+      festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
+      artistName: 'ONEWE(원위)',
+      officialHandle: 'official_onewe',
+    };
+    const robots = jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({
+      status: 200,
+      body: `<title>profile | ONEWE</title><ul class="members__list"><li class="member"><div class="member__avatar"><img src="${photo}"></div><div class="member__name">ONEWE</div></li></ul>`,
+    });
+
+    const result = await (
+      service as unknown as {
+        testSource(id: string): Promise<{ parsed: unknown }>;
+      }
+    ).testSource(source.id);
+    expect(result.parsed).toEqual({
+      artistName: 'ONEWE(원위)',
+      imageUrl: photo,
+    });
+    expect(robots.mock.calls.map(([url]) => url)).toEqual([page, photo]);
+  });
+
   it('rejects a forged seed on an unlisted page', async () => {
     const { service, dataSource } = harness();
     await expect(

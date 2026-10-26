@@ -13,11 +13,17 @@ describe('CDF official profile source migration', () => {
       sql.includes('INSERT INTO crawl_sources'),
     );
     expect(inserts).toHaveLength(9);
+    const originalOneweUrl = 'https://rbwjapan.jp/artist/onewe.php';
+    const currentOneweUrl = 'https://oneweofficial.jp/profile';
     expect(inserts.map(([, params]) => params[0]).sort()).toEqual(
-      Object.keys(CDF_PROFILES).sort(),
+      Object.keys(CDF_PROFILES)
+        .map((url) => (url === currentOneweUrl ? originalOneweUrl : url))
+        .sort(),
     );
     for (const [sql, [url, festival, artistName, handle]] of inserts) {
-      expect(CDF_PROFILES[url]).toMatchObject({
+      expect(
+        CDF_PROFILES[url === originalOneweUrl ? currentOneweUrl : url],
+      ).toMatchObject({
         artistName,
         officialHandle: handle,
       });

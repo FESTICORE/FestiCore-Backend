@@ -15,9 +15,9 @@ const cases: [string, string, string][] = [
     'https://www.bandkardi.com/_next/static/media/home_hero_pc.e0cb8389.webp',
   ],
   [
-    'https://rbwjapan.jp/artist/onewe.php',
-    '<h2 class="jpn">ONEWE</h2><div class="column02 detail-text"><img src="/img/artist/ARTIST_ONEWE_202608.jpg?1" alt="ONEWE"></div>',
-    'https://rbwjapan.jp/img/artist/ARTIST_ONEWE_202608.jpg?1',
+    'https://oneweofficial.jp/profile',
+    '<title>profile | ONEWE</title><ul class="members__list"><li class="member"><div class="member__avatar"><img src="https://storage.googleapis.com/image.fanicon.net/cms/1787193539269_IU8r7cOZH6.jpg"></div><div class="member__info"><div class="member__name">ONEWE</div></div></li><li class="member"><div class="member__avatar"><img src="https://storage.googleapis.com/image.fanicon.net/cms/1787193598570_qDlNTcO6EZ.jpg"></div><div class="member__name">YONG HOON</div></li></ul>',
+    'https://storage.googleapis.com/image.fanicon.net/cms/1787193539269_IU8r7cOZH6.jpg',
   ],
   [
     'https://www.fncent.com/c/2/9',
@@ -106,6 +106,42 @@ describe('CDF official profile photos', () => {
       cdfProfileImageUrl(
         html.replace('>AxMxP</div>', '>Other</div>'),
         page,
+        config(page),
+      ),
+    ).toBeNull();
+  });
+
+  it('rejects missing, ambiguous and spoofed ONEWE group cards', () => {
+    const [page, html, image] = cases[1];
+    const group = /<li class="member">.*?<\/li>/.exec(html)?.[0] ?? '';
+    expect(group).not.toBe('');
+    for (const invalid of [
+      html.replace('>ONEWE</div>', '>YONG HOON</div>'),
+      html.replace('</ul>', group + '</ul>'),
+      html.replace('class="member__avatar"', 'class="member__social-icons"'),
+      html.replace(
+        image,
+        image.replace('storage.googleapis.com', 'evil.example'),
+      ),
+      html.replace(image, image + '?version=1'),
+      html.replace(
+        image,
+        image.replace('/image.fanicon.net/cms/', '/other/cms/'),
+      ),
+      html.replace(
+        '<title>profile | ONEWE</title>',
+        '<title>profile | OTHER</title>',
+      ),
+    ]) {
+      expect(cdfProfileImageUrl(invalid, page, config(page))).toBeNull();
+    }
+    expect(
+      cdfProfileImageUrl(html, page, { ...config(page), artistName: 'OTHER' }),
+    ).toBeNull();
+    expect(
+      cdfProfileImageUrl(
+        html,
+        'https://rbwjapan.jp/artist/onewe.php',
         config(page),
       ),
     ).toBeNull();

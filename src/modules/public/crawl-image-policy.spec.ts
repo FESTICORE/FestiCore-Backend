@@ -92,7 +92,7 @@ describe('public crawl image policy', () => {
         (profile.rule === 'kardi'
           ? '/_next/static/media/group.abc.webp'
           : profile.rule === 'onewe'
-            ? '/img/artist/ARTIST_ONEWE_202608.jpg?1'
+            ? '/image.fanicon.net/cms/1787193539269_IU8r7cOZH6.jpg'
             : profile.rule === 'axmxp' || profile.rule === 'ftisland'
               ? '/files/2026/08/06/abcdef.jpg'
               : profile.rule === 'solutions'

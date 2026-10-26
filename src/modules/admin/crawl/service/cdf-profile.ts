@@ -29,13 +29,12 @@ export const CDF_PROFILES: Readonly<Record<string, Profile>> = {
     imageHost: 'www.bandkardi.com',
     imagePath: /^\/_next\/static\/media\/[^/]+\.webp$/,
   },
-  'https://rbwjapan.jp/artist/onewe.php': {
+  'https://oneweofficial.jp/profile': {
     artistName: 'ONEWE(원위)',
     officialHandle: 'official_onewe',
     rule: 'onewe',
-    imageHost: 'rbwjapan.jp',
-    imagePath: /^\/img\/artist\/ARTIST_ONEWE_[^/]+\.jpe?g$/i,
-    query: '?1',
+    imageHost: 'storage.googleapis.com',
+    imagePath: /^\/image\.fanicon\.net\/cms\/[0-9]+_[a-z0-9]+\.jpe?g$/i,
   },
   'https://www.fncent.com/c/2/9': {
     artistName: 'AxMxP',
@@ -194,15 +193,40 @@ function profileImageCandidates(html: string, profile: Profile): string[] {
       );
     }
     case 'onewe': {
-      if (!exactTagText(html, 'h2', 'class', 'jpn', 'ONEWE')) return [];
-      const profileBody =
-        /<div\b[^>]*class=["'][^"']*\bcolumn02\b[^"']*\bdetail-text\b[^"']*["'][^>]*>([\s\S]*?)<\/div>/i.exec(
-          html,
-        )?.[1];
-      return imageAttributes(
-        profileBody ?? '',
-        (tag) => attr(tag, 'alt') === 'ONEWE',
+      const groupName = profile.artistName.split('(')[0].trim();
+      const titles = [...html.matchAll(/<title\b[^>]*>([^<]*)<\/title>/gi)].map(
+        (match) => match[1].trim(),
       );
+      if (titles.length !== 1 || titles[0] !== `profile | ${groupName}`)
+        return [];
+      const lists = [
+        ...html.matchAll(/<ul\b([^>]*)>([\s\S]*?)<\/ul>/gi),
+      ].filter((match) =>
+        attr(match[1], 'class')?.split(/\s+/).includes('members__list'),
+      );
+      if (lists.length !== 1) return [];
+      const cards = [
+        ...lists[0][2].matchAll(/<li\b([^>]*)>([\s\S]*?)<\/li>/gi),
+      ].filter((match) =>
+        attr(match[1], 'class')?.split(/\s+/).includes('member'),
+      );
+      const group = cards.filter((card) => {
+        const names = [...card[2].matchAll(/<div\b([^>]*)>\s*([^<]*)<\/div>/gi)]
+          .filter((match) =>
+            attr(match[1], 'class')?.split(/\s+/).includes('member__name'),
+          )
+          .map((match) => match[2].trim());
+        return names.length === 1 && names[0] === groupName;
+      });
+      if (group.length !== 1) return [];
+      const avatars = [
+        ...group[0][2].matchAll(/<div\b([^>]*)>([\s\S]*?)<\/div>/gi),
+      ].filter((match) =>
+        attr(match[1], 'class')?.split(/\s+/).includes('member__avatar'),
+      );
+      return avatars.length === 1
+        ? imageAttributes(avatars[0][2], () => true)
+        : [];
     }
     case 'axmxp': {
       const titles = [
