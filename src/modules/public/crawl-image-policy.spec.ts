@@ -7,6 +7,10 @@ import {
   DRDR_PROFILES,
   DRDR_PUBLIC_IMAGE_SQL,
 } from '../admin/crawl/service/drdr-profile';
+import {
+  WONDERLIVET_PROFILES,
+  WONDERLIVET_PUBLIC_IMAGE_SQL,
+} from '../admin/crawl/service/wonderlivet-profile';
 
 describe('public crawl image policy', () => {
   it('serves official gallery portraits only when an enabled gallery owns the same source and festival', () => {
@@ -125,5 +129,21 @@ describe('public crawl image policy', () => {
     expect(DRDR_PUBLIC_IMAGE_SQL).toContain(
       'image."originUrl" ~* \'^https://drdr[.]ac/wordpress/wp-content/uploads/',
     );
+  });
+
+  it('limits Wonderlivet profile portraits to the six reviewed sources and origins', () => {
+    expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(
+      "source.\"parserConfig\"->>'seed' IS DISTINCT FROM 'wonderlivet-official-profile'",
+    );
+    expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(WONDERLIVET_PUBLIC_IMAGE_SQL);
+    expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(
+      "source.\"parserConfig\"->>'festivalSourceUrl' = 'https://www.wonderli.vet/lineup'",
+    );
+    for (const [page, profile] of Object.entries(WONDERLIVET_PROFILES)) {
+      expect(WONDERLIVET_PUBLIC_IMAGE_SQL).toContain(`source.url = '${page}'`);
+      expect(WONDERLIVET_PUBLIC_IMAGE_SQL).toContain(
+        `source."parserConfig"->>'artistName' = '${profile.artistName}'`,
+      );
+    }
   });
 });
