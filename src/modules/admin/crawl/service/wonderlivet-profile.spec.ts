@@ -26,7 +26,7 @@ function html(page: string, image: string) {
   if (page === hololive)
     return `<title>${profile.pageName} | 所属タレント一覧 | hololive（ホロライブ）公式サイト</title><meta property="og:url" content="${page}"><meta property="og:image" content="${image}"><meta property="og:image" content="${image}">`;
   if (page === avex)
-    return `<title>PROFILE | ${profile.pageName} - Avex</title><div class="profGroup__mainImg"><img data-src="${image}" src="/ai/assets/img/common/lazyload.png"></div><h2 class="profGroup__name">${profile.pageName}</h2>`;
+    return `<title>PROFILE | ${profile.pageName} - Avex</title><div class="profGroup"><div class="profGroup__mainImg"><img data-src="${image}" src="/ai/assets/img/common/lazyload.png"></div><div class="profGroup__dataWrap"><h2 class="profGroup__name">${profile.pageName}</h2></div></div>`;
   return `<title>${profile.pageName} | POCLANOS</title><main class="site-main artist-single"><div class="content-detail"><span class="artist-img-wrap"><img src="${image}" /></span><div class="album-icons"><img src="https://poclanos.com/icon.png"></div></div><h1 class="page-title">${profile.pageName}</h1></main>`;
 }
 
