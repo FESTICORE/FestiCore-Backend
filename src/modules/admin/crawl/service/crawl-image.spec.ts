@@ -46,6 +46,19 @@ describe('crawl image safety', () => {
     ).toEqual([]);
   });
 
+  it('selects only the same-product poster on a NOL World detail', () => {
+    const page = 'https://world.nol.com/en/ticket/products/26015253';
+    const body = (id: string) =>
+      `<script type="application/ld+json">${JSON.stringify({
+        '@type': 'Event',
+        image: `https://ticketimage.interpark.com/Play/image/large/26/${id}_p.gif`,
+      })}</script><img src="https://evil.example/unrelated.jpg">`;
+    expect(discoverImageUrls(body('26015253'), page).map(String)).toEqual([
+      'https://ticketimage.interpark.com/Play/image/large/26/26015253_p.gif',
+    ]);
+    expect(discoverImageUrls(body('26015254'), page)).toEqual([]);
+  });
+
   it('uses only festival posters from Melon listing JSON', () => {
     const json = JSON.stringify({
       data: [

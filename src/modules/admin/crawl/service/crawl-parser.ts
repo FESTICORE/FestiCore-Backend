@@ -991,7 +991,7 @@ export function eventPerformers(
             ['tkfile.yes24.com', 'stkfile.yes24.com'].includes(
               image.hostname,
             )) ||
-          (page.hostname === 'nol.yanolja.com' &&
+          (['nol.yanolja.com', 'world.nol.com'].includes(page.hostname) &&
             image.hostname === 'ticketimage.interpark.com');
         if (
           image.protocol === 'https:' &&
@@ -1137,9 +1137,121 @@ function nolDetailCandidates(
   return [candidate];
 }
 
+const NOL_WORLD_LIST = 'https://world.nol.com/en/ticket/genre/CONCERT/products';
+const NOL_WORLD_HOME = 'https://world.nol.com/en/ticket';
+const NOL_WORLD_SEARCH = 'https://world.nol.com/en/search?q=festival';
+
+function isNolWorldFestivalTitle(name: string): boolean {
+  return (
+    isFestivalTitle(name) ||
+    VERIFIED_FESTIVAL_BRAND.test(name) ||
+    (/\bfesta\b/i.test(name) && name.length <= 160)
+  );
+}
+
+function nolWorldCandidates(
+  body: string,
+  base: string,
+): FestivalCandidate[] | null {
+  const source = new URL(base);
+  if (source.origin !== 'https://world.nol.com') return null;
+  if (body.length > 2_000_000) return [];
+  if (
+    [NOL_WORLD_LIST, NOL_WORLD_HOME, NOL_WORLD_SEARCH].includes(
+      source.toString(),
+    )
+  ) {
+    const candidates = new Map<string, FestivalCandidate>();
+    for (const match of body.matchAll(
+      /<a\b[^>]*\bhref=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi,
+    )) {
+      let url: URL;
+      try {
+        url = new URL(match[1], source);
+      } catch {
+        continue;
+      }
+      if (
+        url.origin !== source.origin ||
+        url.username ||
+        url.password ||
+        url.search ||
+        url.hash ||
+        !/^\/en\/ticket\/products\/\d+$/.test(url.pathname)
+      )
+        continue;
+      const heading = /<(h2|h3|p)\b[^>]*>([\s\S]*?)<\/\1>/i.exec(match[2])?.[2];
+      if (!heading) continue;
+      const name = plainText(heading);
+      if (
+        CONCERT_TITLE.test(name) ||
+        /^\[(?:early|blind|play\s*&\s*stay)\]/i.test(name) ||
+        !isNolWorldFestivalTitle(name)
+      )
+        continue;
+      candidates.set(url.toString(), { name, url: url.toString() });
+      if (candidates.size >= 100) break;
+    }
+    return [...candidates.values()];
+  }
+  if (
+    !/^\/en\/ticket\/products\/\d+$/.test(source.pathname) ||
+    source.search ||
+    source.hash
+  )
+    return null;
+  const event = yes24EventJson(body);
+  const name = event?.name;
+  const start = event?.startDate;
+  const end = event?.endDate ?? start;
+  const location = event?.location;
+  const venue =
+    location && typeof location === 'object' && 'name' in location
+      ? location.name
+      : null;
+  if (
+    typeof name !== 'string' ||
+    CONCERT_TITLE.test(name) ||
+    /^\[(?:early|blind|play\s*&\s*stay)\]/i.test(name) ||
+    !isNolWorldFestivalTitle(name) ||
+    typeof start !== 'string' ||
+    typeof end !== 'string' ||
+    !/^20\d{2}-\d{2}-\d{2}$/.test(start) ||
+    !/^20\d{2}-\d{2}-\d{2}$/.test(end) ||
+    typeof venue !== 'string' ||
+    !venue.trim() ||
+    venue.length > 160 ||
+    /[<>\\]/.test(venue)
+  )
+    return [];
+  const date = nolEventDate(
+    start === end
+      ? start.replaceAll('-', '.')
+      : `${start.replaceAll('-', '.')} ~ ${end.replaceAll('-', '.')}`,
+  );
+  if (!date) return [];
+  const candidate: FestivalCandidate = {
+    name,
+    url: source.toString(),
+    date,
+    venue: venue.trim(),
+  };
+  const artists = eventPerformers(event, base);
+  if (artists.length) candidate.artists = artists;
+  const poster = nolPosterUrl(body, source);
+  if (poster) candidate.posterUrl = poster;
+  return [candidate];
+}
+
 export function nolPosterUrl(body: string, source: URL): string | null {
-  const productId = /^\/ticket\/products\/(\d+)$/.exec(source.pathname)?.[1];
-  if (source.hostname !== 'nol.yanolja.com' || !productId) return null;
+  const productId = (
+    source.hostname === 'nol.yanolja.com'
+      ? /^\/ticket\/products\/(\d+)$/.exec(source.pathname)
+      : source.hostname === 'world.nol.com'
+        ? /^\/en\/ticket\/products\/(\d+)$/.exec(source.pathname)
+        : null
+  )?.[1];
+  if (!productId) return null;
   const event = yes24EventJson(body);
   const poster =
     (typeof event?.image === 'string' ? event.image : null) ??
@@ -1270,6 +1382,8 @@ export function ticketCandidates(
   if (yes24Detail) return yes24Detail;
   const nolDetail = nolDetailCandidates(body, base);
   if (nolDetail) return nolDetail;
+  const nolWorld = nolWorldCandidates(body, base);
+  if (nolWorld) return nolWorld;
   const melon = melonFestivalCandidates(body, base);
   if (melon) return melon;
   const yes24 = yes24FestivalCandidates(body, base);

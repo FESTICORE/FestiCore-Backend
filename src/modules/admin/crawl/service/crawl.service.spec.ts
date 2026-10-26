@@ -3156,6 +3156,44 @@ describe('CrawlService manual runs and snapshots', () => {
     ]);
   });
 
+  it('registers only NOL World festival details from its public concert list', async () => {
+    const { service, source, run, dataSource, runsRepo, execute } = harness();
+    execute.mockRestore();
+    source.url = 'https://world.nol.com/en/ticket/genre/CONCERT/products';
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({
+      status: 200,
+      body: '<a href="/en/ticket/products/26015253"><h2>STILL ROLLING FEST 2026</h2></a><a href="/en/ticket/products/26014833"><h2>단독 콘서트</h2></a>',
+    });
+    jest
+      .spyOn(
+        service as unknown as {
+          captureImages(
+            source: CrawlSource,
+            run: CrawlRun,
+            urls: URL[],
+          ): Promise<string[]>;
+        },
+        'captureImages',
+      )
+      .mockResolvedValue([]);
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(null),
+    }));
+    jest
+      .spyOn(service, 'proposalItems')
+      .mockResolvedValue({ kind: 'discovery', items: [] });
+    await service.execute(run, source);
+    expect(run.result).toBe('nochange-parsed');
+    expect(
+      dataSource.query.mock.calls
+        .filter(([sql]: [string]) => sql.includes('INSERT INTO crawl_sources'))
+        .map(([, params]: [string, string[]]) => params[0]),
+    ).toEqual(['https://world.nol.com/en/ticket/products/26015253']);
+  });
+
   it('reparses unchanged Wonderlivet detail and records its matching pending proposal', async () => {
     const { service, source, run, runsRepo, proposalsRepo, execute } =
       harness();

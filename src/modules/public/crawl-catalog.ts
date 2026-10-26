@@ -56,6 +56,7 @@ function ticketLabel(hostname: string): string {
       'ticket.melon.com': '멜론티켓',
       'ticket.yes24.com': '예스24',
       'nol.yanolja.com': 'NOL',
+      'world.nol.com': 'NOL World',
       'mintpaper.co.kr': '공식 사이트',
     }[hostname] ?? '공식 사이트'
   );
@@ -84,10 +85,14 @@ function officialPosterUrl(raw: unknown, sourceUrl: string): string | null {
   try {
     const url = new URL(raw);
     const source = new URL(sourceUrl);
-    const nolProductId =
+    const nolProductId = (
       source.hostname === 'nol.yanolja.com'
-        ? /^\/ticket\/products\/(\d+)$/.exec(source.pathname)?.[1]
-        : null;
+        ? /^\/ticket\/products\/(\d+)$/.exec(source.pathname)
+        : source.hostname === 'world.nol.com'
+          ? /^\/en\/ticket\/products\/(\d+)$/.exec(source.pathname)
+          : null
+    )?.[1];
+    if (source.hostname === 'world.nol.com' && !nolProductId) return null;
     const posterProductId =
       /^\/Play\/image\/large\/\d+\/(\d+)_p\.(?:gif|jpe?g|png|webp)$/i.exec(
         url.pathname,
@@ -162,7 +167,7 @@ function verifiedArtists(
             url.hostname === 'cdnimg.melon.co.kr') ||
           (sourceHost === 'ticket.yes24.com' &&
             ['tkfile.yes24.com', 'stkfile.yes24.com'].includes(url.hostname)) ||
-          (sourceHost === 'nol.yanolja.com' &&
+          (['nol.yanolja.com', 'world.nol.com'].includes(sourceHost) &&
             url.hostname === 'ticketimage.interpark.com');
         if (
           url.protocol === 'https:' &&
@@ -359,6 +364,7 @@ export function discoverySummaries(
         'ticket.melon.com',
         'ticket.yes24.com',
         'nol.yanolja.com',
+        'world.nol.com',
         'mintpaper.co.kr',
       ].includes(url.hostname)
     )
