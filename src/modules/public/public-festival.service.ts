@@ -17,11 +17,16 @@ import {
   PUBLIC_PACK_PROJECTION_VERSION,
 } from '../redis/service/cache.service';
 import {
+  attachPrugioLineup,
   discoverySummaries,
   DiscoveryRow,
   DiscoverySummary,
   PublishedDiscoveryRow,
 } from './crawl-catalog';
+import {
+  PRUGIO_LINEUP_SEED,
+  PRUGIO_LINEUP_URL,
+} from '../admin/crawl/service/prugio-lineup';
 import {
   WONDERLIVET_DETAIL_SEED,
   WONDERLIVET_LINK_PAGE,
@@ -329,8 +334,20 @@ export class PublicFestivalService {
            'officialProfileArtists', details."officialProfileArtists"
          )) AS candidate,
          latest.decision,
-         latest."proposalStatus"
+         latest."proposalStatus",
+         (SELECT item->'after'
+          FROM crawl_proposals proposal
+          JOIN crawl_sources source ON source.id = proposal."sourceId"
+          CROSS JOIN LATERAL jsonb_array_elements(proposal.items) item
+          WHERE source.kind = 'discovery' AND source.url = $1::text
+            AND source."parserConfig"->>'seed' = $2::text
+            AND proposal.kind = 'festival.new'
+            AND proposal.status <> 'rejected'
+            AND item->>'decision' <> 'rejected'
+          ORDER BY proposal."createdAt" DESC, proposal.id DESC
+          LIMIT 1) AS "prugioCandidate"
        FROM latest JOIN details USING (url)`,
+      [PRUGIO_LINEUP_URL, PRUGIO_LINEUP_SEED],
     );
     const publishedRows = await this.dataSource.query<PublishedDiscoveryRow[]>(
       `SELECT published->>'name' AS name,
@@ -342,6 +359,7 @@ export class PublicFestivalService {
        WHERE published IS NOT NULL AND "publishedVersion" > 0`,
     );
     const summaries = discoverySummaries(discoveryRows, publishedRows);
+    attachPrugioLineup(summaries, discoveryRows[0]?.prugioCandidate);
     await this.attachVerifiedWonderlivetTicket(summaries);
     const festivalSourceUrl = 'https://mintpaper.co.kr/festivals/178';
     const related = summaries.filter(

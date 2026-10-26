@@ -31,6 +31,7 @@
 - [crawl-catalog.md](./crawl-catalog.md) — 수집된 축제의 공개 목록과 오프라인 갱신 계약
 - [festival-discovery.md](./festival-discovery.md) — 판매처별 축제 발견과 원더리벳 수집 기준
 - [mintpaper-discovery.md](./mintpaper-discovery.md) — Mint Paper 공식 축제·이미지·계정 수집
+- [prugio-official-lineup.md](./prugio-official-lineup.md) — 푸르지오아트홀 공식 날짜별 출연진 수집
 
 ## 작성 규칙
 

@@ -36,6 +36,7 @@ import { extractTimetableImageCandidates } from './timetable-image-ocr';
 import { crawlArtistGallery } from './artist-gallery';
 import { timetableSourceConfig } from './timetable-source-config';
 import { normalizeArtistName } from '../../../../common/artist-name';
+import { PRUGIO_LINEUP_SEED, PRUGIO_LINEUP_URL } from './prugio-lineup';
 import {
   parseWonderlivetLineup,
   WONDERLIVET_FESTIVAL_URL,
@@ -1390,9 +1391,13 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       const imageUrls = await this.captureImages(
         source,
         run,
-        profileImage
-          ? [profileImage]
-          : discoverImageUrls(response.body, source.url),
+        source.kind === 'discovery' &&
+          source.url === PRUGIO_LINEUP_URL &&
+          source.parserConfig.seed === PRUGIO_LINEUP_SEED
+          ? []
+          : profileImage
+            ? [profileImage]
+            : discoverImageUrls(response.body, source.url),
       );
       if (source.kind === 'artist-image' && !imageUrls.length)
         throw new Error('프로필 이미지를 저장하지 못했습니다.');

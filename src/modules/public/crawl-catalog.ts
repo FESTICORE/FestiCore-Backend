@@ -1,5 +1,9 @@
 import { createHash } from 'node:crypto';
 import { artistNameKeys } from '../../common/artist-name';
+import {
+  PRUGIO_FESTIVAL_ID,
+  PRUGIO_LINEUP_URL,
+} from '../admin/crawl/service/prugio-lineup';
 
 interface DateRange {
   firstDate: string;
@@ -8,6 +12,7 @@ interface DateRange {
 
 export interface DiscoveryRow {
   candidate: unknown;
+  prugioCandidate?: unknown;
   decision?: string;
   proposalStatus?: string;
 }
@@ -40,6 +45,7 @@ export interface DiscoverySummary {
     sourceUrl?: string;
     profileUrl?: string;
     imageUrl?: string | null;
+    dates?: string[];
   }[];
   sortAt: string;
 }
@@ -476,4 +482,62 @@ export function discoverySummaries(
     }
   }
   return [...found.values()];
+}
+
+export function attachPrugioLineup(
+  summaries: DiscoverySummary[],
+  candidate: unknown,
+): void {
+  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate))
+    return;
+  const value = candidate as Record<string, unknown>;
+  const summary = summaries.find((item) => item.id === PRUGIO_FESTIVAL_ID);
+  if (
+    !summary ||
+    summary.name.replace(/\s/g, '') !== '제4회푸르지오아트홀뮤직페스티벌' ||
+    summary.venue.replace(/\s/g, '') !== '푸르지오아트홀' ||
+    summary.firstDate !== '2026-10-02' ||
+    summary.lastDate !== '2026-10-04' ||
+    value.festivalId !== PRUGIO_FESTIVAL_ID ||
+    value.name !== '제4회 푸르지오아트홀 뮤직페스티벌' ||
+    value.venue !== '푸르지오아트홀' ||
+    value.date !== '2026.10.02 - 2026.10.04' ||
+    value.url !== PRUGIO_LINEUP_URL ||
+    !Array.isArray(value.artists)
+  )
+    return;
+  const allowedDates = new Set(['2026-10-02', '2026-10-03', '2026-10-04']);
+  const artists = value.artists as unknown[];
+  if (artists.length < 1 || artists.length > 90) return;
+  const dated: { name: string; dates: string[] }[] = [];
+  const seen = new Set<string>();
+  for (const artist of artists) {
+    if (!artist || typeof artist !== 'object' || Array.isArray(artist)) return;
+    const entry = artist as Record<string, unknown>;
+    if (
+      typeof entry.name !== 'string' ||
+      !/^[가-힣]{2,12}$/.test(entry.name) ||
+      seen.has(entry.name) ||
+      !Array.isArray(entry.dates) ||
+      !entry.dates.length ||
+      entry.dates.some(
+        (date) => typeof date !== 'string' || !allowedDates.has(date),
+      ) ||
+      new Set(entry.dates).size !== entry.dates.length
+    )
+      return;
+    seen.add(entry.name);
+    dated.push({ name: entry.name, dates: entry.dates as string[] });
+  }
+  const merged = new Map(
+    summary.artists?.map((artist) => [artist.name, artist]) ?? [],
+  );
+  for (const artist of dated) {
+    const current = merged.get(artist.name);
+    merged.set(
+      artist.name,
+      current ? { ...current, dates: artist.dates } : artist,
+    );
+  }
+  summary.artists = [...merged.values()];
 }
