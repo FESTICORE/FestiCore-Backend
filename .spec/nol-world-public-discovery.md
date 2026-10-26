@@ -12,6 +12,14 @@
 - 포스터는 `ticketimage.interpark.com/Play/image/large/.../{상품ID}_p.{gif,jpg,png,webp}` 중 상세 URL의 상품 ID와 일치할 때만 다운로드하고 공개한다. 이미지 다운로드에도 기존 HTTPS, robots, 응답 크기, MIME 및 WebP 변환 검사를 적용한다. 구조화된 출연진과 개별 이미지가 없으면 아티스트 정보나 사진을 생성하지 않는다.
 - 상세 HTML에 같은 상품 ID의 `ticketimage.interpark.com/Play/image/etc/...` 이미지가 있으면 최대 3개를 robots·HTTPS·응답 크기·MIME·디코딩 검증 후 OCR한다. 원본 URL, 이미지 SHA-256, 파서 버전, OCR 원문 줄과 상태를 `crawl_runs.lineupEvidence`에 실행별 비공개 기록으로 남긴다. 같은 HTML이라도 이미지를 다시 확인하며 이미지 해시와 파서 버전이 모두 같을 때만 이전 OCR을 재사용한다. 실패 원인은 robots·network·http·invalid-image·ocr·missing-image 중 하나로 기록하고 이전 원문을 복사하지 않는다. 부분 실패 실행은 `error=LINEUP_EVIDENCE_PARTIAL`로 표시하되 공개 후보 파싱은 계속한다.
 - `lineupEvidence`는 관리자 `GET /api/v1/admin/crawl/runs`에서 검토한다. OCR 텍스트만으로 `festival.new.artists`, 공개 축제 API, 공연 시간표 또는 출연진 사진을 자동 생성하지 않는다. 공식 원본과 사람의 검토가 필요한 자료다.
+
+## 공식 이미지 출연진 검토 계약
+
+- `GET /api/v1/admin/crawl/lineup-revisions?sourceId=&status=`는 viewer 이상의 검토본 목록이다. 원본 실행의 `lineupEvidence`는 기존 `GET /api/v1/admin/crawl/runs`에서 확인한다.
+- editor는 `POST /api/v1/admin/crawl/lineup-revisions/from-run`에 `{ "runId": "UUID", "imageUrl": "https://...", "imageHash": "64자리 SHA-256" }`를 보낸다. 서버는 해당 NOL World 상품 소스의 최신 완료 실행·원본 이미지 URL·해시·파서 버전·OCR 원문을 직접 확인한다. 동일 증거를 재수집해도 검토본을 중복 생성하지 않는다.
+- `POST /api/v1/admin/crawl/lineup-revisions/{id}/approve`에는 `{ "imageHash": "...", "artists": [{ "name": "DASUT", "lineIndex": 0 }] }`를 보낸다. 이름은 최대 80개, 각 이름은 OCR 원문 행 인덱스와 연결하며 한글·영문 별칭을 포함한 중복을 거절한다. 증거에 없는 날짜·공연 시각·사진은 입력받지 않는다. editor는 사람이 공식 이미지를 확인하고 오인식 이름을 교정한다. `POST .../{id}/reject`에는 이미지 해시만 보낸다.
+- 승인·거절은 행 잠금으로 한 번만 처리한다. 해시·이미지 URL·OCR 원문·파서 버전이 최신 실행과 다르면 409로 거절하고 감사 기록에 결정과 이름을 남긴다. 요청에서 이미지 URL, 공연 시작 시각, 무대, 프로필 이미지를 직접 지정할 수 없다.
+- 발견 축제 상세는 최신 실행에 같은 증거가 남아 있는 `approved` 이름만 기존 출연진에 중복 없이 병합한다. 추가 이름의 사진은 `null`이다. 발행 축제는 오프라인 팩 버전과 상세 응답의 일치를 위해 자동 병합하지 않으며, 출연진을 반영할 때는 관리자 초안에 추가하고 새 팩 버전으로 발행한다. 개인별 공연 시각과 타임테이블은 생성하지 않는다. 대기·거절본과 OCR 원문은 공개 응답에 포함하지 않는다. 출연진이 없는 공식 이미지는 승인하지 않는다.
 - 새 목록 소스는 중복 등록하지 않고 KST 예약 크롤러에서 매일 실행한다. 발견 상세 소스도 기존 소스 중복 방지 규칙을 따른다. 제안은 관리자 검토 전 초안·공개 팩을 변경하지 않는다.
 
 ## 검증
