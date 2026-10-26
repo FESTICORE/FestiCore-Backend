@@ -261,6 +261,105 @@ describe('LiveActivityService durable queue', () => {
     expect(finish?.[1]?.[5]).toEqual(new Date('2099-01-01T10:00:00Z'));
   });
 
+  it('refreshes one hour before a published day ends without repeating a delayed boundary', async () => {
+    const prepare = () => {
+      query.mockReset();
+      query
+        .mockResolvedValueOnce([
+          {
+            userId: 'user-one',
+            liveActivityFestivalId: 'fst_one',
+            liveActivityId: 'activity-one',
+            liveActivityPushToken: 'a'.repeat(64),
+            apnsEnvironment: 'sandbox',
+          },
+        ])
+        .mockResolvedValueOnce([{ revision: job.revision }])
+        .mockResolvedValueOnce([
+          {
+            published: {
+              flagsEnabled: true,
+              days: [
+                {
+                  startsAt: '2026-11-20T09:00:00+09:00',
+                  endsAt: '2026-11-20T11:00:00+09:00',
+                },
+              ],
+              sets: [
+                {
+                  id: 'set_current',
+                  stageId: 'stage_one',
+                  artist: 'Current',
+                  startsAt: '2026-11-20T09:30:00+09:00',
+                  endsAt: '2026-11-20T10:45:00+09:00',
+                },
+                {
+                  id: 'set_future',
+                  stageId: 'stage_two',
+                  artist: 'Mine',
+                  startsAt: '2026-11-20T10:30:00+09:00',
+                  endsAt: '2026-11-20T11:00:00+09:00',
+                },
+              ],
+            },
+          },
+        ])
+        .mockResolvedValueOnce([
+          {
+            id: 'flag-one',
+            festivalId: 'fst_one',
+            status: 'active',
+            visibility: 'public',
+            hidden: false,
+            zoneId: 'zone-one',
+            activity: null,
+          },
+        ])
+        .mockResolvedValueOnce([{ id: 'user-one' }])
+        .mockResolvedValueOnce([{ setIds: ['set_future'] }])
+        .mockResolvedValueOnce([{ flagId: 'flag-one' }])
+        .mockResolvedValueOnce([{ flagId: 'flag-one' }])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ canSend: true }]);
+    };
+
+    jest.useFakeTimers().setSystemTime(new Date('2026-11-20T00:45:00Z'));
+    try {
+      prepare();
+      await service.deliver(job);
+      expect(query.mock.calls.at(-1)?.[1]?.[5]).toEqual(
+        new Date('2026-11-20T01:00:00Z'),
+      );
+      const [token, environment, sentState] = apns.sendLiveActivityUpdate.mock
+        .calls[0] as [
+        string,
+        string,
+        {
+          nextMine: { setId: string } | null;
+          pinnedFlag: { flagId: string } | null;
+          leaveAt: null;
+        },
+      ];
+      expect(token).toBe('a'.repeat(64));
+      expect(environment).toBe('sandbox');
+      expect(sentState.nextMine?.setId).toBe('set_future');
+      expect(sentState.pinnedFlag?.flagId).toBe('flag-one');
+      expect(sentState.leaveAt).toBeNull();
+
+      // A worker delayed past the boundary still sends current personal state;
+      // the next due time advances instead of replaying the one-hour trigger.
+      jest.setSystemTime(new Date('2026-11-20T01:05:00Z'));
+      prepare();
+      await service.deliver(job);
+      expect(query.mock.calls.at(-1)?.[1]?.[5]).toEqual(
+        new Date('2026-11-20T01:30:00Z'),
+      );
+      expect(apns.sendLiveActivityUpdate).toHaveBeenCalledTimes(2);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('clears only the exact failed activity token on a permanent APNs rejection', async () => {
     query
       .mockResolvedValueOnce([

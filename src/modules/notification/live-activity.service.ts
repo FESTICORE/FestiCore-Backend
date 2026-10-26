@@ -80,12 +80,26 @@ function publishedSets(
 function nextBoundary(
   sets: LiveActivitySet[],
   member: LiveActivityMember | null,
+  days: Record<string, unknown>[],
   now: Date,
 ): Date | null {
   const future = sets
     .flatMap((set) => [set.startsAt, set.endsAt])
     .filter((value): value is string => value !== null)
     .map((value) => Date.parse(value));
+  for (const day of days) {
+    if (typeof day.startsAt !== 'string' || typeof day.endsAt !== 'string')
+      continue;
+    const start = Date.parse(day.startsAt);
+    const end = Date.parse(day.endsAt);
+    if (
+      Number.isFinite(start) &&
+      Number.isFinite(end) &&
+      end - start > 60 * 60_000
+    ) {
+      future.push(end - 60 * 60_000);
+    }
+  }
   if (member?.crew?.gather && !member.crew.archived) {
     future.push(Date.parse(member.crew.gather.at) + 10 * 60_000);
   }
@@ -418,7 +432,7 @@ export class LiveActivityService implements OnModuleInit, OnModuleDestroy {
         flags,
         member,
       });
-      const boundary = nextBoundary(sets, member, now);
+      const boundary = nextBoundary(sets, member, records(pack.days), now);
 
       // A late send could approach lease expiry and defeat crash recovery's
       // persisted 90-second reservation. Requeue instead of attempting it.

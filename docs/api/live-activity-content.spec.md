@@ -2,7 +2,7 @@
 
 ## 범위
 
-`buildLiveActivityContentState`는 공개된 축제 공연 세트와 해당 기기에 연결된 인증 계정의 데이터를 입력받아 APNs `aps.content-state`를 계산하는 순수 함수입니다. DB 조회, 기기 토큰 검증, APNs 발송, 재시도와 분당 전송 제한은 호출 측의 별도 책임입니다. 현재 코드에는 호출 측 연결이 없습니다.
+`buildLiveActivityContentState`는 공개된 축제 공연 세트와 해당 기기에 연결된 인증 계정의 데이터를 입력받아 APNs `aps.content-state`를 계산하는 순수 함수입니다. DB 조회, 기기 토큰 검증, APNs 발송, 재시도와 분당 전송 제한은 `LiveActivityService`와 `ApnsService`가 처리합니다.
 
 ## 입력
 
@@ -27,4 +27,4 @@
 
 ## 후속 작업
 
-사용자별 DB 조회, 무대·깃발·크루 변경 이벤트, 중복 및 빈도 제한, 실패 재시도, 종료 이벤트와 iOS ActivityKit 상태 연동은 #152의 후속 구현입니다.
+발행 축제의 행사일 종료 60분 전 갱신은 `LiveActivityService`가 예약합니다. 개인 출발 시각 저장과 iOS ActivityKit 표시 검증은 별도로 확인해야 합니다.
