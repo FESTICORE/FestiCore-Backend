@@ -360,6 +360,45 @@ describe('LiveActivityService durable queue', () => {
     }
   });
 
+  it('keeps the end-minus-hour boundary for a published day shorter than one hour', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-11-19T23:55:00Z'));
+    try {
+      query
+        .mockResolvedValueOnce([
+          {
+            userId: null,
+            liveActivityFestivalId: 'fst_one',
+            liveActivityId: 'activity-one',
+            liveActivityPushToken: 'a'.repeat(64),
+            apnsEnvironment: 'sandbox',
+          },
+        ])
+        .mockResolvedValueOnce([{ revision: job.revision }])
+        .mockResolvedValueOnce([
+          {
+            published: {
+              flagsEnabled: false,
+              days: [
+                {
+                  startsAt: '2026-11-20T09:30:00+09:00',
+                  endsAt: '2026-11-20T10:00:00+09:00',
+                },
+              ],
+              sets: [],
+            },
+          },
+        ])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ canSend: true }]);
+      await service.deliver(job);
+      expect(query.mock.calls.at(-1)?.[1]?.[5]).toEqual(
+        new Date('2026-11-20T00:00:00Z'),
+      );
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('clears only the exact failed activity token on a permanent APNs rejection', async () => {
     query
       .mockResolvedValueOnce([

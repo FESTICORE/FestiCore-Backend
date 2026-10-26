@@ -92,11 +92,7 @@ function nextBoundary(
       continue;
     const start = Date.parse(day.startsAt);
     const end = Date.parse(day.endsAt);
-    if (
-      Number.isFinite(start) &&
-      Number.isFinite(end) &&
-      end - start > 60 * 60_000
-    ) {
+    if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
       future.push(end - 60 * 60_000);
     }
   }
