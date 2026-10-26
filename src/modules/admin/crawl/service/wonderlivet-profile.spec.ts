@@ -1,4 +1,6 @@
 import {
+  SUKIMASWITCH_PROFILE,
+  SUKIMASWITCH_PROFILE_URL,
   WONDERLIVET_PROFILE_FESTIVAL_URL,
   WONDERLIVET_PROFILE_SEED,
   WONDERLIVET_PROFILES,
@@ -43,6 +45,38 @@ const images: Record<string, string> = {
 };
 
 describe('Wonderlivet official profile photos', () => {
+  it('selects Sony Music official duo portrait only from the named profile', () => {
+    const page = SUKIMASWITCH_PROFILE_URL;
+    const image =
+      'https://www.sonymusic.co.jp/adm_image/common/artist_image/80007000/80007594/artist_photo/41746.jpg';
+    const body = `<title>プロフィール | スキマスイッチ | ソニーミュージックオフィシャルサイト</title><meta property="og:url" content="${page}"><meta property="og:image" content="${image}"><artist-header-component name="スキマスイッチ" folder="sukimaswitch" image="${new URL(image).pathname}"></artist-header-component>`;
+    const source = {
+      seed: WONDERLIVET_PROFILE_SEED,
+      festivalSourceUrl: WONDERLIVET_PROFILE_FESTIVAL_URL,
+      artistName: SUKIMASWITCH_PROFILE.artistName,
+    };
+    expect(wonderlivetProfileImageUrl(body, page, source)?.toString()).toBe(
+      image,
+    );
+    for (const changed of [
+      body.replace('name="スキマスイッチ"', 'name="other"'),
+      body.replace(`content="${page}"`, 'content="https://other.example/"'),
+      body.replace('artist_photo/41746.jpg', 'album_cover/41746.jpg'),
+      body +
+        '<artist-header-component name="スキマスイッチ" folder="sukimaswitch" image="other.jpg">',
+    ])
+      expect(wonderlivetProfileImageUrl(changed, page, source)).toBeNull();
+    expect(
+      wonderlivetProfileImageUrl(body, page, {
+        ...source,
+        artistName: 'other',
+      }),
+    ).toBeNull();
+    expect(WONDERLIVET_PUBLIC_IMAGE_SQL).toContain(`source.url = '${page}'`);
+    expect(WONDERLIVET_PUBLIC_IMAGE_SQL).toContain(
+      `source."parserConfig"->>'artistName' = '${source.artistName}'`,
+    );
+  });
   it.each(Object.keys(WONDERLIVET_PROFILES))(
     'extracts only the fresh official portrait from %s',
     (page) => {
