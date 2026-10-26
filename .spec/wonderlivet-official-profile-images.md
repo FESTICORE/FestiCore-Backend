@@ -2,6 +2,8 @@
 
 원더리벳 상세·시간표에 사진이 없는 6명의 공식 프로필을 하루 간격의 `artist-image` 소스로 수집한다. 축제 키는 `https://www.wonderli.vet/lineup`이며, 출연진 이름은 저장된 시간표 표기와 일치해야 한다.
 
+SUKIMASWITCH는 [Sony Music 공식 프로필](https://www.sonymusic.co.jp/artist/sukimaswitch/profile/)을 별도 소스로 추가한다. 페이지의 아티스트 이름과 프로필 이미지 속성을 확인한 뒤 현재 HTML에서 사진 주소를 추출한다. Sony Music의 `robots.txt`는 200으로 제공되며 FestiCore 크롤러 차단 규칙이 없다. [Office Augusta의 원더리벳 출연 공지](https://www.office-augusta.com/sukimaswitch/news/inffast?id=856)는 공연·시간 증거로만 사용한다. Office Augusta의 `robots.txt`는 홈페이지로 302 이동해 현재 크롤러의 robots 검사를 통과하지 못하므로 그 사이트의 사진을 수집하지 않는다. 사진 URL은 코드나 DB 소스 설정에 고정하지 않는다.
+
 | 출연진 | 공식 페이지 | 사진 선택 근거 |
 | --- | --- | --- |
 | Hoshimachi Suisei | `https://hololive.hololivepro.com/talents/hoshimachi-suisei/` | 페이지 제목, `og:url`, 단일 `og:image` |

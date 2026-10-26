@@ -7,7 +7,7 @@ export const WONDERLIVET_PROFILE_FESTIVAL_URL =
 interface Profile {
   artistName: string;
   pageName: string;
-  rule: 'hololive' | 'avex' | 'poclanos';
+  rule: 'hololive' | 'avex' | 'poclanos' | 'sony';
   imageHost: string;
   imagePath: RegExp;
 }
@@ -63,9 +63,25 @@ export const WONDERLIVET_PROFILES: Readonly<Record<string, Profile>> = {
     },
 };
 
+export const SUKIMASWITCH_PROFILE_URL =
+  'https://www.sonymusic.co.jp/artist/sukimaswitch/profile/';
+export const SUKIMASWITCH_PROFILE: Profile = {
+  artistName: 'SUKIMASWITCH',
+  pageName: 'スキマスイッチ',
+  rule: 'sony',
+  imageHost: 'www.sonymusic.co.jp',
+  imagePath:
+    /^\/adm_image\/common\/artist_image\/80007000\/80007594\/artist_photo\/[0-9]+[.]jpe?g$/i,
+};
+
+const approvedProfiles: Readonly<Record<string, Profile>> = {
+  ...WONDERLIVET_PROFILES,
+  [SUKIMASWITCH_PROFILE_URL]: SUKIMASWITCH_PROFILE,
+};
+
 const sqlLiteral = (value: string) => "'" + value.replace(/'/g, "''") + "'";
 
-export const WONDERLIVET_PUBLIC_IMAGE_SQL = Object.entries(WONDERLIVET_PROFILES)
+export const WONDERLIVET_PUBLIC_IMAGE_SQL = Object.entries(approvedProfiles)
   .map(([pageUrl, profile]) => {
     const origin =
       '^https://' +
@@ -94,7 +110,7 @@ export function wonderlivetProfileFor(
   } catch {
     return null;
   }
-  const profile = WONDERLIVET_PROFILES[normalized];
+  const profile = approvedProfiles[normalized];
   return config.seed === WONDERLIVET_PROFILE_SEED &&
     config.festivalSourceUrl === WONDERLIVET_PROFILE_FESTIVAL_URL &&
     config.artistName === profile?.artistName
@@ -211,6 +227,50 @@ function profileImageCandidates(
     }
     case 'poclanos': {
       return poclanosProfileImageCandidates(html, profile.pageName);
+    }
+    case 'sony': {
+      const title = onlyOne(
+        [...html.matchAll(/<title\b[^>]*>([^<]*)<\/title>/gi)].map((match) =>
+          match[1].trim(),
+        ),
+      );
+      if (
+        title !==
+        `プロフィール | ${profile.pageName} | ソニーミュージックオフィシャルサイト`
+      )
+        return [];
+      const metadata = [...html.matchAll(/<meta\b[^>]*>/gi)].map(
+        (match) => match[0],
+      );
+      const pageClaim = onlyOne(
+        metadata
+          .filter((tag) => attr(tag, 'property') === 'og:url')
+          .map((tag) => attr(tag, 'content')),
+      );
+      if (pageClaim !== pageUrl) return [];
+      const header = onlyOne(
+        [...html.matchAll(/<artist-header-component\b[^>]*>/gi)].map(
+          (match) => match[0],
+        ),
+      );
+      if (
+        !header ||
+        attr(header, 'name') !== profile.pageName ||
+        attr(header, 'folder') !== 'sukimaswitch'
+      )
+        return [];
+      const image = attr(header, 'image');
+      const ogImage = onlyOne(
+        metadata
+          .filter((tag) => attr(tag, 'property') === 'og:image')
+          .map((tag) => attr(tag, 'content')),
+      );
+      if (!image) return [];
+      try {
+        return ogImage === new URL(image, pageUrl).toString() ? [image] : [];
+      } catch {
+        return [];
+      }
     }
   }
 }
