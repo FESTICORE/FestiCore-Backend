@@ -1006,6 +1006,7 @@ export class PublicFestivalService {
         {
           imageUrl: artistImage(artist.name),
           ...(artist.profileUrl ? { profileUrl: artist.profileUrl } : {}),
+          ...(artist.dates ? { dates: artist.dates } : {}),
         },
       ]),
     );
