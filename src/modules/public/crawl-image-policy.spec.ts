@@ -12,8 +12,20 @@ import {
   WONDERLIVET_PUBLIC_IMAGE_SQL,
 } from '../admin/crawl/service/wonderlivet-profile';
 import { FESTIVAL_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/festival-profile';
+import { ADDITIONAL_FESTIVAL_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/additional-festival-profile';
 
 describe('public crawl image policy', () => {
+  it('publishes additional Seoul portraits only through the verified profile branch', () => {
+    expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(
+      "source.\"parserConfig\"->>'seed' IS DISTINCT FROM 'additional-festival-official-profile'",
+    );
+    expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(
+      "source.\"parserConfig\"->>'seed' = 'additional-festival-official-profile'",
+    );
+    expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(
+      ADDITIONAL_FESTIVAL_PUBLIC_IMAGE_SQL,
+    );
+  });
   it('serves the three festival profiles only through their reviewed source and image origin pairs', () => {
     expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(
       "source.\"parserConfig\"->>'seed' IS DISTINCT FROM 'festival-official-profile'",
