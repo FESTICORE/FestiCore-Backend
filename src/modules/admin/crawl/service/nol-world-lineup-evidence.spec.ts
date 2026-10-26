@@ -41,6 +41,13 @@ describe('NOL World private lineup evidence', () => {
     ]);
   });
 
+  it('upgrades the official http data-original-src to HTTPS without accepting another product', () => {
+    const html = `<img data-original-src="http://ticketimage.interpark.com/Play/image/etc/26/26013510-e01.jpg">
+      <img data-original-src="http://ticketimage.interpark.com/Play/image/etc/26/26013511-e01.jpg">
+      <img data-original-src="http://evil.example/Play/image/etc/26/26013510-e01.jpg">`;
+    expect(nolWorldDetailImageUrls(html, page).map(String)).toEqual([image]);
+  });
+
   it('keeps raw OCR lines in run evidence, reuses only matching bytes and version', async () => {
     const firstBytes = await sharp({
       create: { width: 2, height: 2, channels: 3, background: '#fff' },
