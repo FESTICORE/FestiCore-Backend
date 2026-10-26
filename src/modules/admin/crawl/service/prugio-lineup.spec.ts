@@ -65,12 +65,12 @@ describe('parsePrugioLineup', () => {
 
 describe('Prugio scheduled crawl source', () => {
   it('dispatches the exact MCST discovery source to the dated parser', async () => {
-    const source = {
+    const source = Object.assign(new CrawlSource(), {
       kind: 'discovery',
       parser: 'ticket-list',
       url: PRUGIO_LINEUP_URL,
       parserConfig: { seed: PRUGIO_LINEUP_SEED },
-    } as CrawlSource;
+    });
     const parsed = (await parseCrawl(source, page())) as PrugioLineup[];
     expect(parsed).toHaveLength(1);
     expect(parsed[0].artists[0]).toEqual({
