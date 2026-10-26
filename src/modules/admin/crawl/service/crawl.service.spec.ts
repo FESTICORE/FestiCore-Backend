@@ -24,6 +24,10 @@ import {
 } from '../dto/crawl-source.dto';
 import { CDF_FESTIVAL_URL, CDF_PROFILE_SEED } from './cdf-profile';
 import { DRDR_PROFILE_SEED } from './drdr-profile';
+import {
+  WONDERLIVET_PROFILE_FESTIVAL_URL,
+  WONDERLIVET_PROFILE_SEED,
+} from './wonderlivet-profile';
 
 type PrivateCrawl = {
   onModuleInit(): void;
@@ -683,6 +687,81 @@ describe('DRDR official profile sources', () => {
     }));
     await service.execute(run, source);
     expect(capture.mock.calls[0][2]).toEqual([new URL(DRDR_PHOTO)]);
+    expect(run.result).toBe('nochange-parsed');
+  });
+});
+
+describe('Wonderlivet official profile sources', () => {
+  const page =
+    'https://poclanos.com/artist/%ED%86%A0%EB%A7%88%ED%86%A0%EB%A7%9B/';
+  const photo =
+    'https://poclanos.com/drmvsn/wp-content/uploads/2026/10/new-portrait.jpeg';
+  const config = {
+    seed: WONDERLIVET_PROFILE_SEED,
+    festivalSourceUrl: WONDERLIVET_PROFILE_FESTIVAL_URL,
+    artistName: 'Tomatomat',
+  };
+  const body = `<title>토마토맛 | POCLANOS</title><main class="artist-single"><span class="artist-img-wrap"><img src="${photo}"></span><h1 class="page-title">토마토맛</h1></main>`;
+
+  it('checks both the source and selected photo against robots rules', async () => {
+    const { service, source } = harness();
+    source.kind = 'artist-image';
+    source.url = page;
+    source.parser = 'html-text';
+    source.parserConfig = config;
+    const robots = jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({ status: 200, body });
+
+    const result = await (
+      service as unknown as {
+        testSource(id: string): Promise<{ parsed: unknown }>;
+      }
+    ).testSource(source.id);
+    expect(result.parsed).toEqual({ artistName: 'Tomatomat', imageUrl: photo });
+    expect(robots.mock.calls.map(([url]) => url)).toEqual([page, photo]);
+  });
+
+  it('rejects an unregistered profile page or spoofed source ownership', async () => {
+    const { service, dataSource } = harness();
+    for (const [url, parserConfig] of [
+      ['https://poclanos.com/artist/other/', config],
+      [page, { ...config, festivalSourceUrl: CDF_FESTIVAL_URL }],
+      [page, { ...config, imageHint: 'other.jpg' }],
+    ] as const)
+      await expect(
+        service.createSource(
+          { kind: 'artist-image', url, parser: 'html-text', parserConfig },
+          'admin-1',
+        ),
+      ).rejects.toMatchObject({ status: 422 });
+    expect(dataSource.transaction).not.toHaveBeenCalled();
+  });
+
+  it('captures the current verified photo when executing the source', async () => {
+    const { service, source, run, execute, runsRepo } = harness();
+    execute.mockRestore();
+    source.kind = 'artist-image';
+    source.url = page;
+    source.parser = 'html-text';
+    source.parserConfig = config;
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({ status: 200, body });
+    const capture = jest
+      .spyOn(
+        service as unknown as {
+          captureImages: (...args: unknown[]) => Promise<string[]>;
+        },
+        'captureImages',
+      )
+      .mockResolvedValue(['/api/v1/admin/crawl/images/image-1']);
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(null),
+    }));
+
+    await service.execute(run, source);
+    expect(capture.mock.calls[0][2]).toEqual([new URL(photo)]);
     expect(run.result).toBe('nochange-parsed');
   });
 });
