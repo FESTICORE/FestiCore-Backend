@@ -132,6 +132,34 @@ function exactElementText(
   return onlyOne(values) === expected;
 }
 
+export function poclanosProfileImageCandidates(
+  html: string,
+  pageName: string,
+): string[] {
+  if (
+    !html.includes(`<title>${pageName} | POCLANOS</title>`) ||
+    !exactElementText(html, 'h1', 'page-title', pageName)
+  )
+    return [];
+  const main = onlyOne(
+    [...html.matchAll(/<main\b([^>]*)>([\s\S]*?)<\/main>/gi)].filter((match) =>
+      attr(match[1], 'class')?.split(/\s+/).includes('artist-single'),
+    ),
+  )?.[2];
+  if (!main) return [];
+  const wrappers = [
+    ...main.matchAll(/<span\b([^>]*)>([\s\S]*?)<\/span>/gi),
+  ].filter((match) =>
+    attr(match[1], 'class')?.split(/\s+/).includes('artist-img-wrap'),
+  );
+  const image = onlyOne(wrappers)?.[2];
+  return image
+    ? [...image.matchAll(/<img\b[^>]*>/gi)]
+        .map((match) => attr(match[0], 'src'))
+        .filter((value): value is string => Boolean(value))
+    : [];
+}
+
 function profileImageCandidates(
   html: string,
   pageUrl: string,
@@ -182,29 +210,7 @@ function profileImageCandidates(
         : [];
     }
     case 'poclanos': {
-      if (
-        !html.includes(`<title>${profile.pageName} | POCLANOS</title>`) ||
-        !exactElementText(html, 'h1', 'page-title', profile.pageName)
-      )
-        return [];
-      const main = onlyOne(
-        [...html.matchAll(/<main\b([^>]*)>([\s\S]*?)<\/main>/gi)].filter(
-          (match) =>
-            attr(match[1], 'class')?.split(/\s+/).includes('artist-single'),
-        ),
-      )?.[2];
-      if (!main) return [];
-      const wrappers = [
-        ...main.matchAll(/<span\b([^>]*)>([\s\S]*?)<\/span>/gi),
-      ].filter((match) =>
-        attr(match[1], 'class')?.split(/\s+/).includes('artist-img-wrap'),
-      );
-      const image = onlyOne(wrappers)?.[2];
-      return image
-        ? [...image.matchAll(/<img\b[^>]*>/gi)]
-            .map((match) => attr(match[0], 'src'))
-            .filter((value): value is string => Boolean(value))
-        : [];
+      return poclanosProfileImageCandidates(html, profile.pageName);
     }
   }
 }
