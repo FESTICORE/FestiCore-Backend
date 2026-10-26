@@ -4,6 +4,6 @@
 
 축제, 일정, 깃발, 크루, 탈퇴에 따른 갱신 예약은 `live_activity_refresh_intents`에 기기 ID와 현재 활동·축제 ID를 append-only로 기록합니다. 이 행은 비즈니스 트랜잭션의 커밋과 함께 보이거나 롤백과 함께 사라집니다. 갱신 예약 단계에서는 APNs 발송 중 잠길 수 있는 `live_activity_deliveries`를 갱신하지 않습니다.
 
-materializer는 커밋된 의도 하나를 `FOR UPDATE SKIP LOCKED`로 선점하고, 기기 행을 먼저 잠근 뒤 활동·축제 ID와 유효한 푸시 토큰을 재검사합니다. 같은 활동이면 delivery revision과 pending 상태를 갱신하고, 중지되거나 교체된 활동이면 갱신 없이 버립니다. 어느 경우나 해당 의도 삭제는 같은 트랜잭션에서 완료합니다. `lastAttemptAt`은 변경하지 않아 APNs 시도 간격을 유지합니다. 기기 시작·중지는 기존 기기→delivery 잠금 순서와 직접 갱신을 유지합니다.
+갱신 예약은 기기 행을 `FOR KEY SHARE SKIP LOCKED`로 확인해 APNs 발송과 병행하며 삭제 중인 기기를 건너뜁니다. materializer는 의도 식별자를 읽고 기기→의도→delivery 순서로 잠근 뒤 활동·축제 ID와 유효한 푸시 토큰을 재검사합니다. 같은 활동이면 delivery revision과 pending 상태를 갱신하고, 중지되거나 교체된 활동이면 갱신 없이 버립니다. 어느 경우나 해당 의도 삭제는 같은 트랜잭션에서 완료합니다. `lastAttemptAt`은 변경하지 않아 APNs 시도 간격을 유지합니다. 기기 시작·중지는 기존 기기→delivery 잠금 순서와 직접 갱신을 유지합니다.
 
 이 잠금 순서는 탈퇴 중 축제 팩 갱신과 기기 삭제가 겹칠 때의 P1 경쟁을 좁히기 위한 것입니다. APNs 발송 지연은 갱신 예약을 막지 않지만, 기기 시작·중지·삭제와 같은 기기 의도의 materializer 처리는 발송 잠금이 풀릴 때까지 기다립니다. 탈퇴자의 마지막 활동 종료 보장은 별도 과제입니다.

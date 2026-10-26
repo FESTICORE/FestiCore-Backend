@@ -46,6 +46,8 @@ describe('LiveActivityService durable queue', () => {
     expect(query.mock.calls[1][1]).toEqual(['user-one', 'fst_one']);
     expect(query.mock.calls[1][0]).toContain('ORDER BY "id"');
     expect(query.mock.calls[2][0]).toContain('ORDER BY "id"');
+    expect(query.mock.calls[1][0]).toContain('FOR KEY SHARE SKIP LOCKED');
+    expect(query.mock.calls[2][0]).toContain('FOR KEY SHARE SKIP LOCKED');
   });
 
   it('enqueues only active festival devices belonging to crew members', async () => {
@@ -56,6 +58,7 @@ describe('LiveActivityService durable queue', () => {
     expect(query.mock.calls[0][0]).toContain('d."liveActivityFestivalId" = $2');
     expect(query.mock.calls[0][0]).not.toContain('"lastAttemptAt" =');
     expect(query.mock.calls[0][0]).toContain('ORDER BY d."id"');
+    expect(query.mock.calls[0][0]).toContain('FOR KEY SHARE OF d SKIP LOCKED');
     expect(query.mock.calls[0][1]).toEqual(['crew-1', 'fst_one']);
   });
 
@@ -98,42 +101,45 @@ describe('LiveActivityService durable queue', () => {
 
   it('materializes a matching intent without resetting the attempt clock', async () => {
     query
-      .mockResolvedValueOnce([
-        { id: '1', deviceId, activityId: 'one', festivalId: 'fst_one' },
-      ])
+      .mockResolvedValueOnce([{ id: '1', deviceId }])
       .mockResolvedValueOnce([
         {
           liveActivityId: 'one',
           liveActivityFestivalId: 'fst_one',
           liveActivityPushToken: 'token',
         },
+      ])
+      .mockResolvedValueOnce([
+        { id: '1', deviceId, activityId: 'one', festivalId: 'fst_one' },
       ]);
     expect(await service.materializeRefreshIntent()).toBe(true);
     expect(query.mock.calls[1][0]).toContain('FOR NO KEY UPDATE');
-    expect(query.mock.calls[2][0]).toContain(
+    expect(query.mock.calls[2][0]).toContain('FOR UPDATE SKIP LOCKED');
+    expect(query.mock.calls[3][0]).toContain(
       '"revision" = "live_activity_deliveries"."revision" + 1',
     );
-    expect(query.mock.calls[2][0]).not.toContain('"lastAttemptAt" =');
-    expect(query.mock.calls[3][0]).toContain(
+    expect(query.mock.calls[3][0]).not.toContain('"lastAttemptAt" =');
+    expect(query.mock.calls[4][0]).toContain(
       'DELETE FROM "live_activity_refresh_intents"',
     );
   });
 
   it('discards an intent for a stopped or replaced activity', async () => {
     query
-      .mockResolvedValueOnce([
-        { id: '1', deviceId, activityId: 'old', festivalId: 'fst_one' },
-      ])
+      .mockResolvedValueOnce([{ id: '1', deviceId }])
       .mockResolvedValueOnce([
         {
           liveActivityId: 'new',
           liveActivityFestivalId: 'fst_one',
           liveActivityPushToken: 'token',
         },
+      ])
+      .mockResolvedValueOnce([
+        { id: '1', deviceId, activityId: 'old', festivalId: 'fst_one' },
       ]);
     expect(await service.materializeRefreshIntent()).toBe(true);
-    expect(query).toHaveBeenCalledTimes(3);
-    expect(query.mock.calls[2][0]).toContain(
+    expect(query).toHaveBeenCalledTimes(4);
+    expect(query.mock.calls[3][0]).toContain(
       'DELETE FROM "live_activity_refresh_intents"',
     );
   });

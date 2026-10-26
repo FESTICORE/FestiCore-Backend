@@ -144,7 +144,7 @@ export class LiveActivityService implements OnModuleInit, OnModuleDestroy {
       `INSERT INTO "live_activity_refresh_intents" ("deviceId", "activityId", "festivalId")
       SELECT "id", "liveActivityId", "liveActivityFestivalId" FROM "devices" WHERE "liveActivityFestivalId" = $1
         AND "liveActivityPushToken" IS NOT NULL AND "liveActivityId" IS NOT NULL
-      ORDER BY "id"`,
+      ORDER BY "id" FOR KEY SHARE SKIP LOCKED`,
       [festivalId],
     );
   }
@@ -160,7 +160,7 @@ export class LiveActivityService implements OnModuleInit, OnModuleDestroy {
         AND ($2::varchar IS NULL OR "liveActivityFestivalId" = $2)
         AND "liveActivityPushToken" IS NOT NULL
         AND "liveActivityFestivalId" IS NOT NULL AND "liveActivityId" IS NOT NULL
-      ORDER BY "id"`,
+      ORDER BY "id" FOR KEY SHARE SKIP LOCKED`,
       [userId, festivalId ?? null],
     );
   }
@@ -178,7 +178,7 @@ export class LiveActivityService implements OnModuleInit, OnModuleDestroy {
         AND d."liveActivityFestivalId" = $2
         AND d."liveActivityPushToken" IS NOT NULL
         AND d."liveActivityId" IS NOT NULL
-      ORDER BY d."id"`,
+      ORDER BY d."id" FOR KEY SHARE OF d SKIP LOCKED`,
       [crewId, festivalId],
     );
   }
@@ -204,7 +204,7 @@ export class LiveActivityService implements OnModuleInit, OnModuleDestroy {
               AND m."crewId" = ANY($1::varchar[])
           )
         )
-      ORDER BY d."id"`,
+      ORDER BY d."id" FOR KEY SHARE OF d SKIP LOCKED`,
       [crewIds, festivalIds],
     );
   }
@@ -229,7 +229,7 @@ export class LiveActivityService implements OnModuleInit, OnModuleDestroy {
               AND m."userId" = d."userId"
           )
         )
-      ORDER BY d."id"`,
+      ORDER BY d."id" FOR KEY SHARE OF d SKIP LOCKED`,
       [crewId, removedUserId, festivalId],
     );
   }
@@ -281,15 +281,17 @@ export class LiveActivityService implements OnModuleInit, OnModuleDestroy {
   /** An intent is removed only in the transaction that updates its delivery. */
   async materializeRefreshIntent(): Promise<boolean> {
     return this.db.transaction(async (manager) => {
-      const intents = await manager.query<RefreshIntent[]>(
-        `SELECT "id", "deviceId", "activityId", "festivalId"
-         FROM "live_activity_refresh_intents" ORDER BY "id"
-         LIMIT 1 FOR UPDATE SKIP LOCKED`,
+      const candidates = await manager.query<
+        Array<Pick<RefreshIntent, 'id' | 'deviceId'>>
+      >(
+        `SELECT "id", "deviceId" FROM "live_activity_refresh_intents"
+         ORDER BY "id" LIMIT 1`,
       );
-      const intent = intents[0];
-      if (!intent) return false;
+      const candidate = candidates[0];
+      if (!candidate) return false;
 
-      // Registration and stop update the device before its delivery row.
+      // Device deletion cascades to intents. Lock the device first so the
+      // materializer never holds an intent while waiting for that deletion.
       const devices = await manager.query<
         Array<{
           liveActivityId: string | null;
@@ -299,8 +301,16 @@ export class LiveActivityService implements OnModuleInit, OnModuleDestroy {
       >(
         `SELECT "liveActivityId", "liveActivityFestivalId", "liveActivityPushToken"
          FROM "devices" WHERE "id" = $1 FOR NO KEY UPDATE`,
-        [intent.deviceId],
+        [candidate.deviceId],
       );
+      const intents = await manager.query<RefreshIntent[]>(
+        `SELECT "id", "deviceId", "activityId", "festivalId"
+         FROM "live_activity_refresh_intents" WHERE "id" = $1
+         FOR UPDATE SKIP LOCKED`,
+        [candidate.id],
+      );
+      const intent = intents[0];
+      if (!intent) return false;
       const device = devices[0];
       if (
         device?.liveActivityId === intent.activityId &&

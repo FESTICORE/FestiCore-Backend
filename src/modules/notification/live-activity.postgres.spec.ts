@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { DataSource } from 'typeorm';
 import { LiveActivityDeliveries1792500064000 } from '../../database/migrations/1792500064000-live-activity-deliveries';
-import { LiveActivityRefreshIntents1792500068000 } from '../../database/migrations/1792500068000-live-activity-refresh-intents';
+import { LiveActivityRefreshIntents1792500076000 } from '../../database/migrations/1792500076000-live-activity-refresh-intents';
 import { LiveActivityService } from './live-activity.service';
 
 const url = process.env.LIVE_ACTIVITY_PG_URL;
@@ -53,7 +53,7 @@ describePostgres('Live Activity refresh intents (PostgreSQL)', () => {
       "liveActivityPushToken" varchar(256)
     )`);
     await new LiveActivityDeliveries1792500064000().up(db.createQueryRunner());
-    await new LiveActivityRefreshIntents1792500068000().up(
+    await new LiveActivityRefreshIntents1792500076000().up(
       db.createQueryRunner(),
     );
     service = new LiveActivityService(db, {
@@ -140,6 +140,71 @@ describePostgres('Live Activity refresh intents (PostgreSQL)', () => {
     expect((await row())?.revision).toBe('1');
   });
 
+  it('does not invert device deletion and intent locks during materialization', async () => {
+    await service.enqueueFestival('fst_one');
+    let materializing!: Promise<boolean>;
+    await db.transaction(async (manager) => {
+      await manager.query(
+        'SELECT "id" FROM "devices" WHERE "id" = $1 FOR UPDATE',
+        [deviceId],
+      );
+      materializing = service.materializeRefreshIntent();
+      void materializing.catch(() => undefined);
+
+      let waiting = false;
+      for (let attempt = 0; attempt < 100; attempt++) {
+        const sessions = await admin.query<Array<{ count: string }>>(
+          `SELECT count(*) AS count FROM pg_stat_activity
+           WHERE pid <> pg_backend_pid() AND wait_event_type = 'Lock'
+             AND query LIKE '%FOR NO KEY UPDATE%'`,
+        );
+        if (Number(sessions[0].count) > 0) {
+          waiting = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      expect(waiting).toBe(true);
+      // A materializer holding the intent before the device makes NOWAIT fail.
+      await db.transaction((probe) =>
+        probe.query(
+          'SELECT "id" FROM "live_activity_refresh_intents" FOR UPDATE NOWAIT',
+        ),
+      );
+      await manager.query('DELETE FROM "devices" WHERE "id" = $1', [deviceId]);
+    });
+    expect(await materializing).toBe(false);
+    expect(await intentCount()).toBe(0);
+    expect(await row()).toBeUndefined();
+  });
+
+  it('skips a deleting device instead of failing its business transaction on the FK', async () => {
+    await db.transaction(async (manager) => {
+      await manager.query('DELETE FROM "devices" WHERE "id" = $1', [deviceId]);
+      const enqueuing = service.enqueueFestival('fst_one');
+      void enqueuing.catch(() => undefined);
+      let timeout!: NodeJS.Timeout;
+      try {
+        await Promise.race([
+          enqueuing,
+          new Promise<never>(
+            (_, reject) =>
+              (timeout = setTimeout(
+                () =>
+                  reject(
+                    new Error('refresh enqueue waited for device deletion'),
+                  ),
+                1500,
+              )),
+          ),
+        ]);
+      } finally {
+        clearTimeout(timeout);
+      }
+    });
+    expect(await intentCount()).toBe(0);
+  });
+
   it('discards intents for stopped and replaced activities', async () => {
     await service.enqueueFestival('fst_one');
     await db.transaction(async (manager) => {
@@ -183,6 +248,10 @@ describePostgres('Live Activity refresh intents (PostgreSQL)', () => {
       service.materializeRefreshIntent(),
       service.materializeRefreshIntent(),
     ]);
+    // A competing worker can observe the same candidate and safely yield.
+    while (await service.materializeRefreshIntent()) {
+      // Drain any intent it left for the next polling pass.
+    }
     expect((await row())?.revision).toBe('3');
     expect((await row())?.lastAttemptAt?.toISOString()).toBe(
       '2026-10-25T00:00:00.000Z',
