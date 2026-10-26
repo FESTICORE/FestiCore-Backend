@@ -123,5 +123,6 @@ describe('ScheduleService', () => {
         clientAt: '2026-10-20T02:00:00Z',
       }),
     ).rejects.toBeInstanceOf(ConflictException);
+    expect(liveActivity.enqueueUser).not.toHaveBeenCalled();
   });
 });
