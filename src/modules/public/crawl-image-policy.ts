@@ -119,7 +119,9 @@ export const PUBLIC_CRAWL_IMAGE_SQL = `(
   OR (source.url ~ '^https://nol[.]yanolja[.]com/ticket/(products/[0-9]+|meta/performance/[A-Za-z0-9_.%-]+)$'
     AND image."originUrl" LIKE 'https://ticketimage.interpark.com/%'
     AND (source.url !~ '^https://nol[.]yanolja[.]com/ticket/products/[0-9]+$'
-      OR image."originUrl" !~* '^https://ticketimage[.]interpark[.]com/Play/image/large/'
-      OR substring(image."originUrl" from '^https://ticketimage[.]interpark[.]com/Play/image/large/[0-9]+/([0-9]+)_p[.](?:gif|jpe?g|png|webp)$') =
+      OR coalesce(
+        substring(lower(split_part(split_part(image."originUrl", '?', 1), '#', 1))
+          from '/([0-9]+)_p[.](gif|jpe?g|png|webp)$'),
+        substring(source.url from '^https://nol[.]yanolja[.]com/ticket/products/([0-9]+)$')) =
         substring(source.url from '^https://nol[.]yanolja[.]com/ticket/products/([0-9]+)$')))
 )`;
