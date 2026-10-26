@@ -33,6 +33,8 @@ import {
   ADDITIONAL_FESTIVAL_PROFILE_SEED,
   ADDITIONAL_FESTIVAL_PROFILES,
 } from './additional-festival-profile';
+import { PRUGIO_PROFILE_SEED, PRUGIO_PROFILE_URL } from './prugio-profile';
+import { PRUGIO_LINEUP_URL } from './prugio-lineup';
 
 type PrivateCrawl = {
   onModuleInit(): void;
@@ -939,6 +941,72 @@ describe('additional Seoul Music official photo sources', () => {
       expect(capture.mock.calls[0][2]).toEqual([new URL(image)]);
     },
   );
+});
+
+describe('Prugio official soprano photo source', () => {
+  const config = {
+    seed: PRUGIO_PROFILE_SEED,
+    festivalSourceUrl: PRUGIO_LINEUP_URL,
+    artistName: '서운정',
+  };
+  const image = 'https://www.kiffa.or.kr/images/sub/sub0504_img20.jpg';
+  const body =
+    '<title>한국국제물류주선업협회</title><div class="con3"><h6 class="sub_tit02">홍보대사</h6><ul>' +
+    '<li><div class="img_wrap"><img src="/images/sub/sub0504_img20.jpg"></div>' +
+    '<div class="txt_wrap"><p>소프라노</p><strong>서운정</strong></div></li></ul></div>';
+
+  it('rejects an unregistered page and a fixed image hint', async () => {
+    const { service, dataSource } = harness();
+    for (const [url, parserConfig] of [
+      [PRUGIO_PROFILE_URL + '/other', config],
+      [PRUGIO_PROFILE_URL, { ...config, imageHint: 'fixed.jpg' }],
+    ] as const)
+      await expect(
+        service.createSource(
+          { kind: 'artist-image', url, parser: 'html-text', parserConfig },
+          'admin-1',
+        ),
+      ).rejects.toMatchObject({ status: 422 });
+    expect(dataSource.transaction).not.toHaveBeenCalled();
+  });
+
+  it('uses the same selected image in test and scheduled capture', async () => {
+    const { service, source, run, execute, runsRepo } = harness();
+    execute.mockRestore();
+    Object.assign(source, {
+      kind: 'artist-image',
+      url: PRUGIO_PROFILE_URL,
+      parser: 'html-text',
+      parserConfig: config,
+    });
+    const robots = jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({ status: 200, body });
+    const result = await (
+      service as unknown as {
+        testSource(id: string): Promise<{ parsed: unknown }>;
+      }
+    ).testSource(source.id);
+    expect(result.parsed).toEqual({ artistName: '서운정', imageUrl: image });
+    expect(robots.mock.calls.map(([url]) => url)).toEqual([
+      PRUGIO_PROFILE_URL,
+      image,
+    ]);
+    const capture = jest
+      .spyOn(
+        service as unknown as {
+          captureImages: (...args: unknown[]) => Promise<string[]>;
+        },
+        'captureImages',
+      )
+      .mockResolvedValue(['/api/v1/admin/crawl/images/image-1']);
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(null),
+    }));
+    await service.execute(run, source);
+    expect(capture.mock.calls[0][2]).toEqual([new URL(image)]);
+  });
 });
 
 describe('CDF official profile sources', () => {

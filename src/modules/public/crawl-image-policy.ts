@@ -3,6 +3,7 @@ import { DRDR_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/drdr-profile';
 import { WONDERLIVET_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/wonderlivet-profile';
 import { FESTIVAL_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/festival-profile';
 import { ADDITIONAL_FESTIVAL_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/additional-festival-profile';
+import { PRUGIO_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/prugio-profile';
 
 // Both the image lookup and the download endpoint must apply this condition.
 
@@ -28,6 +29,7 @@ export const PUBLIC_CRAWL_IMAGE_SQL = `(
     AND source."parserConfig"->>'seed' IS DISTINCT FROM 'wonderlivet-official-profile'
     AND source."parserConfig"->>'seed' IS DISTINCT FROM 'festival-official-profile'
     AND source."parserConfig"->>'seed' IS DISTINCT FROM 'additional-festival-official-profile'
+    AND source."parserConfig"->>'seed' IS DISTINCT FROM 'prugio-official-profile'
     AND source."parserConfig"->>'festivalSourceUrl' ~ '^https://(ticket[.]melon[.]com|ticket[.]yes24[.]com|nol[.]yanolja[.]com|mintpaper[.]co[.]kr)/'
     AND (source."parserConfig"->>'seed' IS DISTINCT FROM 'official-artist-gallery'
       OR (split_part(image."originUrl", '?', 1) =
@@ -91,6 +93,12 @@ export const PUBLIC_CRAWL_IMAGE_SQL = `(
     AND source."parserConfig"->>'seed' = 'additional-festival-official-profile'
     AND (
       ${ADDITIONAL_FESTIVAL_PUBLIC_IMAGE_SQL}
+    ))
+  OR (source.kind = 'artist-image'
+    AND source.enabled = true
+    AND source."parserConfig"->>'seed' = 'prugio-official-profile'
+    AND (
+      ${PRUGIO_PUBLIC_IMAGE_SQL}
     ))
   OR (source.kind = 'artist-image'
     AND source.enabled = true

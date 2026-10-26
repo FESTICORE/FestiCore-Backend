@@ -540,4 +540,6 @@ export function attachPrugioLineup(
     );
   }
   summary.artists = [...merged.values()];
+  if (!summary.sourceUrls.includes(PRUGIO_LINEUP_URL))
+    summary.sourceUrls.push(PRUGIO_LINEUP_URL);
 }
