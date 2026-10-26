@@ -78,6 +78,11 @@ import {
   additionalFestivalProfileFor,
   additionalFestivalProfileImageUrl,
 } from './additional-festival-profile';
+import {
+  PRUGIO_PROFILE_SEED,
+  prugioProfileFor,
+  prugioProfileImageUrl,
+} from './prugio-profile';
 
 const kstDay = (date = new Date()) =>
   new Intl.DateTimeFormat('en-CA', {
@@ -91,6 +96,18 @@ const YES24_PAGE_LIMIT = 4;
 
 function artistImageConfig(url: string, config: Record<string, string>) {
   const { artistName, artistAlias, festivalSourceUrl, imageHint } = config;
+  if (config.seed === PRUGIO_PROFILE_SEED) {
+    if (
+      !prugioProfileFor(url, config) ||
+      Object.keys(config).some(
+        (key) => !['seed', 'festivalSourceUrl', 'artistName'].includes(key),
+      )
+    )
+      throw new UnprocessableEntityException(
+        '검증된 푸르지오 공식 프로필 소스 설정이 필요합니다.',
+      );
+    return { ...config };
+  }
   if (config.seed === ADDITIONAL_FESTIVAL_PROFILE_SEED) {
     if (
       !additionalFestivalProfileFor(url, config) ||
@@ -543,6 +560,28 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     const response = await this.getListing(source);
     if (response.status !== 200)
       throw new UnprocessableEntityException(`HTTP ${response.status}`);
+    if (
+      source.kind === 'artist-image' &&
+      source.parserConfig.seed === PRUGIO_PROFILE_SEED
+    ) {
+      const image = prugioProfileImageUrl(
+        response.body,
+        source.url,
+        source.parserConfig,
+      );
+      if (!image)
+        throw new UnprocessableEntityException(
+          '푸르지오 공식 프로필 이미지를 확인하지 못했습니다.',
+        );
+      await this.checkRobots(image.toString());
+      return {
+        parsed: {
+          artistName: source.parserConfig.artistName,
+          imageUrl: image.toString(),
+        },
+        excerpt: source.parserConfig.artistName,
+      };
+    }
     if (
       source.kind === 'artist-image' &&
       source.parserConfig.seed === ADDITIONAL_FESTIVAL_PROFILE_SEED
@@ -1383,51 +1422,57 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
           ? source.parserConfig.seed === 'official-gmf-lineup' &&
             source.url === GMF_LINEUP_URL
             ? verifiedGmfImage
-            : source.parserConfig.seed === FESTIVAL_PROFILE_SEED
-              ? festivalProfileImageUrl(
+            : source.parserConfig.seed === PRUGIO_PROFILE_SEED
+              ? prugioProfileImageUrl(
                   response.body,
                   source.url,
                   source.parserConfig,
                 )
-              : source.parserConfig.seed === ADDITIONAL_FESTIVAL_PROFILE_SEED
-                ? additionalFestivalProfileImageUrl(
+              : source.parserConfig.seed === FESTIVAL_PROFILE_SEED
+                ? festivalProfileImageUrl(
                     response.body,
                     source.url,
                     source.parserConfig,
                   )
-                : source.parserConfig.seed === WONDERLIVET_PROFILE_SEED
-                  ? wonderlivetProfileImageUrl(
+                : source.parserConfig.seed === ADDITIONAL_FESTIVAL_PROFILE_SEED
+                  ? additionalFestivalProfileImageUrl(
                       response.body,
                       source.url,
                       source.parserConfig,
                     )
-                  : source.parserConfig.seed === CDF_PROFILE_SEED
-                    ? cdfProfileImageUrl(
+                  : source.parserConfig.seed === WONDERLIVET_PROFILE_SEED
+                    ? wonderlivetProfileImageUrl(
                         response.body,
                         source.url,
                         source.parserConfig,
                       )
-                    : source.parserConfig.seed === DRDR_PROFILE_SEED
-                      ? drdrProfileImageUrl(
+                    : source.parserConfig.seed === CDF_PROFILE_SEED
+                      ? cdfProfileImageUrl(
                           response.body,
                           source.url,
                           source.parserConfig,
                         )
-                      : source.parserConfig.seed ===
-                            'official-wonderlivet-lineup' &&
-                          source.url === WONDERLIVET_LINEUP_URL
-                        ? (parseWonderlivetLineup(response.body).find(
-                            (entry) =>
-                              entry.artistName ===
-                                source.parserConfig.artistName &&
-                              entry.imageUrl.pathname ===
-                                source.parserConfig.imageHint,
-                          )?.imageUrl ?? null)
-                        : artistProfileImageUrl(
+                      : source.parserConfig.seed === DRDR_PROFILE_SEED
+                        ? drdrProfileImageUrl(
                             response.body,
                             source.url,
-                            source.parserConfig.imageHint,
+                            source.parserConfig,
                           )
+                        : source.parserConfig.seed ===
+                              'official-wonderlivet-lineup' &&
+                            source.url === WONDERLIVET_LINEUP_URL
+                          ? (parseWonderlivetLineup(response.body).find(
+                              (entry) =>
+                                entry.artistName ===
+                                  source.parserConfig.artistName &&
+                                entry.imageUrl.pathname ===
+                                  source.parserConfig.imageHint,
+                            )?.imageUrl ?? null)
+                          : artistProfileImageUrl(
+                              response.body,
+                              source.url,
+                              source.parserConfig.imageHint,
+                            )
           : null;
       if (source.kind === 'artist-image' && !profileImage)
         throw new Error('프로필 이미지가 공식 페이지에서 확인되지 않았습니다.');

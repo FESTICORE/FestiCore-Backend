@@ -13,8 +13,18 @@ import {
 } from '../admin/crawl/service/wonderlivet-profile';
 import { FESTIVAL_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/festival-profile';
 import { ADDITIONAL_FESTIVAL_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/additional-festival-profile';
+import { PRUGIO_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/prugio-profile';
 
 describe('public crawl image policy', () => {
+  it('serves the Prugio portrait only from its verified source and origin', () => {
+    expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(
+      "source.\"parserConfig\"->>'seed' IS DISTINCT FROM 'prugio-official-profile'",
+    );
+    expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(
+      "source.\"parserConfig\"->>'seed' = 'prugio-official-profile'",
+    );
+    expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(PRUGIO_PUBLIC_IMAGE_SQL);
+  });
   it('publishes additional Seoul portraits only through the verified profile branch', () => {
     expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(
       "source.\"parserConfig\"->>'seed' IS DISTINCT FROM 'additional-festival-official-profile'",
