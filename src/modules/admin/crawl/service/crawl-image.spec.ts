@@ -346,4 +346,25 @@ describe('crawl image safety', () => {
       prepareCrawlImage(Buffer.from('<script>x</script>'), 'image/png'),
     ).rejects.toThrow('디코딩');
   });
+
+  it('keeps the default 5MB limit while allowing bounded official lineup input', async () => {
+    const png = await sharp({
+      create: { width: 16, height: 16, channels: 3, background: '#ff0000' },
+    })
+      .png()
+      .toBuffer();
+    const officialDetail = Buffer.concat([png, Buffer.alloc(6 * 1024 * 1024)]);
+    await expect(
+      prepareCrawlImage(officialDetail, 'image/png'),
+    ).rejects.toThrow('크기 제한');
+    const prepared = await prepareCrawlImage(
+      officialDetail,
+      'image/png',
+      8 * 1024 * 1024,
+    );
+    expect((await sharp(prepared.body).metadata()).format).toBe('webp');
+    await expect(
+      prepareCrawlImage(officialDetail, 'image/png', 6 * 1024 * 1024),
+    ).rejects.toThrow('크기 제한');
+  });
 });

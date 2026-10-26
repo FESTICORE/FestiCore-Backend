@@ -383,12 +383,13 @@ export function discoverImageUrls(html: string, pageUrl: string): URL[] {
 export async function prepareCrawlImage(
   bytes: Buffer,
   declaredType: string,
+  maxInputBytes = MAX_INPUT_BYTES,
 ): Promise<{
   body: Buffer;
   hash: string;
   key: string;
 }> {
-  if (!bytes.length || bytes.length > MAX_INPUT_BYTES)
+  if (!bytes.length || bytes.length > maxInputBytes)
     throw new Error('이미지 입력 크기 제한을 초과했습니다.');
   const types: Record<string, string> = {
     jpeg: 'image/jpeg',

@@ -22,7 +22,13 @@ import { CrawlImage } from '../entity/crawl-image.entity';
 import { CrawlSnapshot } from '../entity/crawl-snapshot.entity';
 import { CrawlSource } from '../entity/crawl-source.entity';
 import { Proposal, ProposalItem } from '../entity/proposal.entity';
-import { checkedUrl, robotsAllows, safeGet, safeGetImage } from './crawl-fetch';
+import {
+  checkedUrl,
+  robotsAllows,
+  safeGet,
+  safeGetBytes,
+  safeGetImage,
+} from './crawl-fetch';
 import {
   artistProfileImageUrl,
   discoverImageUrls,
@@ -35,7 +41,10 @@ import { CrawlTimetableRevisionService } from './crawl-timetable-revision.servic
 import { extractTimetableImageCandidates } from './timetable-image-ocr';
 import { crawlArtistGallery } from './artist-gallery';
 import { timetableSourceConfig } from './timetable-source-config';
-import { collectNolWorldLineupEvidence } from './nol-world-lineup-evidence';
+import {
+  collectNolWorldLineupEvidence,
+  MAX_NOL_LINEUP_IMAGE_BYTES,
+} from './nol-world-lineup-evidence';
 import { normalizeArtistName } from '../../../../common/artist-name';
 import { PRUGIO_LINEUP_SEED, PRUGIO_LINEUP_URL } from './prugio-lineup';
 import {
@@ -1529,7 +1538,14 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
           previous?.lineupEvidence ?? null,
           {
             checkRobots: (url) => this.checkRobots(url),
-            getImage: (url) => this.limitedGetImage(url),
+            getImage: (url) =>
+              this.withHostLock(url, () =>
+                safeGetBytes(
+                  url,
+                  'image/jpeg,image/png,image/webp',
+                  MAX_NOL_LINEUP_IMAGE_BYTES,
+                ),
+              ),
           },
         );
       }
