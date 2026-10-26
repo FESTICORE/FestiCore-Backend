@@ -166,7 +166,9 @@ describe('Public festival API', () => {
         ticketLinks: pack.ticketLinks,
       }),
     ]);
-    expect(first.headers['cache-control']).toBe('public, max-age=3600');
+    expect(first.headers['cache-control']).toBe(
+      'public, no-cache, must-revalidate',
+    );
     expect(first.headers.vary).toBe('Origin, Authorization, X-Device-Id');
     expect(first.headers['access-control-allow-origin']).toBe(
       'https://festicoreadmin-dev.up.railway.app',
@@ -183,9 +185,40 @@ describe('Public festival API', () => {
       .set('If-None-Match', first.headers.etag)
       .set('Cache-Control', 'no-cache')
       .expect(304);
-    expect(notModified.headers['cache-control']).toBe('public, max-age=3600');
+    expect(notModified.headers['cache-control']).toBe(
+      'public, no-cache, must-revalidate',
+    );
     expect(notModified.headers['access-control-allow-origin']).toBe(
       'https://festicoreadmin-dev.up.railway.app',
+    );
+  });
+
+  it('returns an updated list when the previous ETag no longer matches', async () => {
+    queryBuilder.getMany
+      .mockResolvedValueOnce([published])
+      .mockResolvedValueOnce([
+        published,
+        {
+          id: 'fst_87654321',
+          published: { ...pack, id: 'fst_87654321', name: 'New Festival' },
+          publishedVersion: 7,
+        },
+      ]);
+    const first = await request(server).get('/api/v1/festivals').expect(200);
+    const refreshed = await request(server)
+      .get('/api/v1/festivals')
+      .set('If-None-Match', first.headers.etag)
+      .expect(200);
+    expect(refreshed.headers.etag).not.toBe(first.headers.etag);
+    expect(refreshed.headers['cache-control']).toBe(
+      'public, no-cache, must-revalidate',
+    );
+    expect(
+      successData<{ items: { name: string }[] }>(refreshed.body).items,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'New Festival' }),
+      ]),
     );
   });
 
@@ -230,7 +263,9 @@ describe('Public festival API', () => {
     expect(
       successData<{ items: { pinned?: boolean }[] }>(response.body).items[0],
     ).not.toHaveProperty('pinned');
-    expect(response.headers['cache-control']).toBe('public, max-age=3600');
+    expect(response.headers['cache-control']).toBe(
+      'public, no-cache, must-revalidate',
+    );
     expect(response.headers.vary).toBe('Origin, Authorization, X-Device-Id');
   });
 

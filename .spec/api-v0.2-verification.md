@@ -42,6 +42,8 @@ PDF의 명시 경로와 현재 컨트롤러를 대조한 결과, 위의 사용�
 3. 관리자 축제 출처의 `source.verifiedAt`이 7일을 초과하면 초안 조회·수정·발행 응답에 경고를 포함하고 발행은 허용하도록 로컬 코드를 수정했다. 조회의 7일 경계와 발행 허용 단위 테스트는 통과했고 배포 검증은 남아 있다.
 4. 개발 Railway의 공개 축제 목록은 공유 캐시 적중 응답에서 `Access-Control-Allow-Origin`이 빠져 AdminWeb 브라우저 요청이 차단될 수 있었다. 개인화된 `pinned` 응답만 private 캐시로 두고, 공개 목록은 명세의 `Cache-Control: public, max-age=3600`을 유지하며 `Vary: Origin, Authorization, X-Device-Id`로 변형을 구분한다. 공개 API E2E에서 허용된 Origin의 200·304 응답 헤더를 확인했다. 배포 후 실제 공유 캐시 적중 응답의 Origin 헤더는 별도로 확인해야 한다.
 
+2026-10-26 후속 검증: NOL World 수집 뒤 개발 API의 새 쿼리는 28건을 반환했으나, 기존 `?limit=50`의 Railway CDN은 `Cache-Control: no-cache`와 이전 ETag를 보낸 요청에도 오래된 19건의 ETag로 `304`, `x-cache: HIT`, `age: 725`를 반환했다. 목록 응답을 `public, no-cache, must-revalidate`로 변경하고 기존 조건부 응답 테스트를 갱신했다. 배포 후 동일 URL에서 새 데이터와 CDN 재검증을 확인해야 한다.
+
 ## 수정·증명 계획
 
 - 닉네임은 기존 소셜 이름의 앞뒤 공백을 제거하고 12문자 이하로 제한한다. 비어 있으면 충돌 방지용 임의 4자리 코드로 `관객-{4자}`를 발급한다. 최초 응답과 재로그인 유지 단위/E2E 검증을 추가한다.
