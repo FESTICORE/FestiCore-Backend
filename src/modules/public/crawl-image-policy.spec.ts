@@ -11,8 +11,18 @@ import {
   WONDERLIVET_PROFILES,
   WONDERLIVET_PUBLIC_IMAGE_SQL,
 } from '../admin/crawl/service/wonderlivet-profile';
+import { FESTIVAL_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/festival-profile';
 
 describe('public crawl image policy', () => {
+  it('serves the three festival profiles only through their reviewed source and image origin pairs', () => {
+    expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(
+      "source.\"parserConfig\"->>'seed' IS DISTINCT FROM 'festival-official-profile'",
+    );
+    expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(
+      "source.\"parserConfig\"->>'seed' = 'festival-official-profile'",
+    );
+    expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(FESTIVAL_PUBLIC_IMAGE_SQL);
+  });
   it('serves official gallery portraits only when an enabled gallery owns the same source and festival', () => {
     const branch = PUBLIC_CRAWL_IMAGE_SQL.match(
       /source\."parserConfig"->>'seed' IS DISTINCT FROM 'official-artist-gallery'[\s\S]*?AND image\."originUrl" LIKE 'https:\/\/%'/,

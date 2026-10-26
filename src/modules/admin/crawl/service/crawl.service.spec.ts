@@ -28,6 +28,7 @@ import {
   WONDERLIVET_PROFILE_FESTIVAL_URL,
   WONDERLIVET_PROFILE_SEED,
 } from './wonderlivet-profile';
+import { FESTIVAL_PROFILE_SEED, FESTIVAL_PROFILES } from './festival-profile';
 
 type PrivateCrawl = {
   onModuleInit(): void;
@@ -763,6 +764,90 @@ describe('Wonderlivet official profile sources', () => {
     await service.execute(run, source);
     expect(capture.mock.calls[0][2]).toEqual([new URL(photo)]);
     expect(run.result).toBe('nochange-parsed');
+  });
+});
+
+describe('Seoul Music and Oneway official profile sources', () => {
+  const pages = Object.keys(FESTIVAL_PROFILES);
+  const photos = [
+    'https://poclanos.com/drmvsn/wp-content/uploads/2026/10/new-group-photo.jpeg',
+    'https://images.squarespace-cdn.com/content/v1/6752a80810127d336fce8328/2c2c201c-2ce0-49ee-84eb-db4fba1c8f4b/new-group-photo.jpeg',
+    'https://www.inhisplan.com/assets/photo/promo/new-team-photo.jpg',
+  ];
+  const bodies = [
+    `<title>추다혜차지스 | POCLANOS</title><main class="artist-single"><span class="artist-img-wrap"><img src="${photos[0]}"></span><h1 class="page-title">추다혜차지스</h1></main>`,
+    `<title>About &mdash; LEVISTANCE</title><section data-test="page-section"><img data-sqsp-image-block-image src="${photos[1]}"><strong>WE ARE LEVISTANCE.</strong><strong>안녕하세요 레비스탕스입니다.</strong></section>`,
+    `<title>HISPLAN | 히스플랜</title><p>히스플랜은 노래로 하나님을 노래하는 사람들.</p><div class="promo-photo-banner"><img src="${photos[2]}" alt="히스플랜 팀"><div class="promo-photo-fade"></div></div>`,
+  ];
+
+  it.each([0, 1, 2])(
+    'checks source and group photo robots rules, then captures photo %i',
+    async (index) => {
+      const { service, source, run, execute, runsRepo } = harness();
+      execute.mockRestore();
+      const page = pages[index];
+      source.kind = 'artist-image';
+      source.url = page;
+      source.parser = 'html-text';
+      source.parserConfig = {
+        seed: FESTIVAL_PROFILE_SEED,
+        festivalSourceUrl: FESTIVAL_PROFILES[page].festivalSourceUrl,
+        artistName: FESTIVAL_PROFILES[page].artistName,
+      };
+      const robots = jest.spyOn(service, 'checkRobots').mockResolvedValue();
+      jest
+        .spyOn(service, 'getListing')
+        .mockResolvedValue({ status: 200, body: bodies[index] });
+      const result = await (
+        service as unknown as {
+          testSource(id: string): Promise<{ parsed: unknown }>;
+        }
+      ).testSource(source.id);
+      expect(result.parsed).toEqual({
+        artistName: source.parserConfig.artistName,
+        imageUrl: photos[index],
+      });
+      expect(robots.mock.calls.map(([url]) => url)).toEqual([
+        page,
+        photos[index],
+      ]);
+      const capture = jest
+        .spyOn(
+          service as unknown as {
+            captureImages: (...args: unknown[]) => Promise<string[]>;
+          },
+          'captureImages',
+        )
+        .mockResolvedValue(['/api/v1/admin/crawl/images/image-1']);
+      runsRepo.createQueryBuilder = jest.fn(() => ({
+        where: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        getOne: jest.fn().mockResolvedValue(null),
+      }));
+      await service.execute(run, source);
+      expect(capture.mock.calls[0][2]).toEqual([new URL(photos[index])]);
+    },
+  );
+
+  it('rejects an unregistered page and extra source config', async () => {
+    const { service, dataSource } = harness();
+    const page = pages[0];
+    const config = {
+      seed: FESTIVAL_PROFILE_SEED,
+      festivalSourceUrl: FESTIVAL_PROFILES[page].festivalSourceUrl,
+      artistName: FESTIVAL_PROFILES[page].artistName,
+    };
+    for (const [url, parserConfig] of [
+      [page + 'other', config],
+      [page, { ...config, imageHint: 'fixed-photo.jpg' }],
+    ] as const)
+      await expect(
+        service.createSource(
+          { kind: 'artist-image', url, parser: 'html-text', parserConfig },
+          'admin-1',
+        ),
+      ).rejects.toMatchObject({ status: 422 });
+    expect(dataSource.transaction).not.toHaveBeenCalled();
   });
 });
 
