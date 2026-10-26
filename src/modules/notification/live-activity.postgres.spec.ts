@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { DataSource } from 'typeorm';
 import { LiveActivityDeliveries1792500064000 } from '../../database/migrations/1792500064000-live-activity-deliveries';
-import { LiveActivityRefreshIntents1792500076000 } from '../../database/migrations/1792500076000-live-activity-refresh-intents';
+import { LiveActivityRefreshIntents1792500078000 } from '../../database/migrations/1792500078000-live-activity-refresh-intents';
 import { LiveActivityService } from './live-activity.service';
 
 const url = process.env.LIVE_ACTIVITY_PG_URL;
@@ -53,7 +53,7 @@ describePostgres('Live Activity refresh intents (PostgreSQL)', () => {
       "liveActivityPushToken" varchar(256)
     )`);
     await new LiveActivityDeliveries1792500064000().up(db.createQueryRunner());
-    await new LiveActivityRefreshIntents1792500076000().up(
+    await new LiveActivityRefreshIntents1792500078000().up(
       db.createQueryRunner(),
     );
     service = new LiveActivityService(db, {
