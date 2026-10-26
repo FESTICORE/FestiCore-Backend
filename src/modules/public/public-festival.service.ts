@@ -871,6 +871,55 @@ export class PublicFestivalService {
     return profileImageByArtist;
   }
 
+  private async reviewedLineup(
+    sourceUrls: string[],
+  ): Promise<{ name: string; date?: string }[]> {
+    const products = sourceUrls.filter((url) =>
+      /^https:\/\/world\.nol\.com\/en\/ticket\/products\/\d+$/.test(url),
+    );
+    if (!products.length) return [];
+    const rows = await this.dataSource.query<
+      { artists: { name: string; date?: string }[] }[]
+    >(
+      `SELECT revision.artists FROM crawl_lineup_revisions revision
+       JOIN crawl_sources lineup_source ON lineup_source.id = revision."sourceId"
+       WHERE revision.status = 'approved' AND revision."productUrl" = ANY($1::text[])
+         AND lineup_source.url = revision."productUrl"
+         AND lineup_source.kind = 'discovery' AND lineup_source.parser = 'ticket-list'
+         AND lineup_source.enabled = TRUE
+         AND EXISTS (
+           SELECT 1 FROM crawl_runs run
+           WHERE run."sourceId" = revision."sourceId"
+             AND run.id = (
+               SELECT newest.id FROM crawl_runs newest
+               WHERE newest."sourceId" = revision."sourceId"
+               ORDER BY newest."startedAt" DESC LIMIT 1
+             )
+             AND run.result <> 'failed' AND run."finishedAt" IS NOT NULL
+             AND EXISTS (
+               SELECT 1 FROM jsonb_array_elements(COALESCE(run."lineupEvidence", '[]'::jsonb)) evidence
+               WHERE evidence->>'sourceUrl' = revision."productUrl"
+                 AND evidence->>'imageUrl' = revision."imageUrl"
+                 AND evidence->>'imageHash' = revision."imageHash"
+                 AND evidence->>'parserVersion' = revision."parserVersion"
+                 AND evidence->>'status' = 'ok'
+                 AND evidence->'rawLines' = revision."rawLines"
+             )
+         )
+       ORDER BY revision."reviewedAt" DESC, revision.id DESC`,
+      [products],
+    );
+    const names = new Set<string>();
+    return rows
+      .flatMap((row) => row.artists ?? [])
+      .filter((artist) => {
+        const keys = artistNameKeys(artist.name);
+        if (keys.some((key) => names.has(key))) return false;
+        keys.forEach((key) => names.add(key));
+        return true;
+      });
+  }
+
   async detail(id: string) {
     if (!/^fst_[0-9a-z]+$/.test(id))
       throw new NotFoundException({
@@ -878,8 +927,10 @@ export class PublicFestivalService {
         message: '축제를 찾을 수 없습니다.',
       });
     const published = await this.festivals.findOne({ where: { id } });
-    if (published?.published && published.publishedVersion > 0)
-      return projectPack(published.published);
+    if (published?.published && published.publishedVersion > 0) {
+      const pack = projectPack(published.published);
+      return pack;
+    }
     const entry = (await this.discoveryCatalog()).find(
       (item) => item.id === id,
     );
@@ -888,6 +939,16 @@ export class PublicFestivalService {
         code: 'FESTIVAL_NOT_FOUND',
         message: '축제를 찾을 수 없습니다.',
       });
+    const reviewed = await this.reviewedLineup(entry.sourceUrls);
+    const knownArtists = new Set(
+      (entry.artists ?? []).flatMap((artist) => artistNameKeys(artist.name)),
+    );
+    for (const artist of reviewed) {
+      const keys = artistNameKeys(artist.name);
+      if (keys.some((key) => knownArtists.has(key))) continue;
+      entry.artists = [...(entry.artists ?? []), { name: artist.name }];
+      keys.forEach((key) => knownArtists.add(key));
+    }
     const profileImages = await this.attachStoredImages([entry], true);
     const revisions = await this.dataSource.query<
       {
