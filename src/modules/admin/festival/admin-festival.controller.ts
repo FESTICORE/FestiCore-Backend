@@ -262,6 +262,7 @@ export class AdminFestivalController {
     example: 'fst_0123456789abcdef',
   })
   @ApiBody({
+    required: false,
     schema: {
       type: 'object',
       properties: {
@@ -328,7 +329,7 @@ export class AdminFestivalController {
   @ApiHeader(draftHeader)
   @ApiBody({
     description:
-      '수정할 필드만 보냅니다. 허용 필드: name, venue, timezone, days, thumbUrl, ticketLinks, flagsEnabled, source, stages, sets, zones, flags, directions, checklist, rules, mapImageUrl, mapAspect. 발행하려면 무대가 1개 이상 필요합니다.',
+      '수정할 필드만 보냅니다. 허용 필드: name, venue, timezone, days, thumbUrl, ticketLinks, flagsEnabled, source, stages, sets, zones, flags, directions, checklist, rules, mapImageUrl, mapAspect. 날짜 전용 초안은 days=[]를 유지할 수 있고, 발행하려면 검증된 시각·무대·세트가 필요합니다. eventPeriod는 수정할 수 없습니다.',
     schema: {
       type: 'object',
       minProperties: 1,
@@ -338,8 +339,10 @@ export class AdminFestivalController {
         timezone: { type: 'string', enum: ['Asia/Seoul'] },
         days: {
           type: 'array',
-          minItems: 1,
-          maxItems: 7,
+          minItems: 0,
+          maxItems: 32,
+          description:
+            '날짜 전용 eventPeriod 초안은 빈 배열을 허용합니다. 시각이 있는 날짜는 최대 32개입니다.',
           items: { type: 'object' },
         },
         thumbUrl: { type: 'string', nullable: true, format: 'uri' },

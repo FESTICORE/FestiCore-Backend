@@ -179,6 +179,72 @@ describe('ProposalService festival discovery', () => {
     expect(saved.publishedVersion).toBe(0);
   });
 
+  it('requires reviewed timed days to include both source period endpoints', async () => {
+    const candidate = {
+      name: '함평 겨울 행사',
+      venue: '함평',
+      date: '2026.10.23 - 2026.11.08',
+      url: 'https://world.nol.com/en/ticket/products/26014860',
+    };
+    const firstDay = {
+      date: '2026-10-23',
+      startsAt: '2026-10-23T12:00:00+09:00',
+      endsAt: '2026-10-23T20:00:00+09:00',
+    };
+    const lastDay = {
+      date: '2026-11-08',
+      startsAt: '2026-11-08T12:00:00+09:00',
+      endsAt: '2026-11-08T20:00:00+09:00',
+    };
+    const partial = harness(candidate);
+    const rejected = await partial.service.decide(
+      'proposal-1',
+      [{ itemId: '0', decision: 'accepted', after: { days: [firstDay] } }],
+      'admin-1',
+    );
+    expect(rejected.conflicts[0]?.reason).toContain('첫날과 마지막 날');
+    expect(partial.item.decision).toBe('pending');
+    expect(partial.festivalRepo.save).not.toHaveBeenCalled();
+
+    const complete = harness(candidate);
+    const accepted = await complete.service.decide(
+      'proposal-1',
+      [
+        {
+          itemId: '0',
+          decision: 'accepted',
+          after: { days: [firstDay, lastDay] },
+        },
+      ],
+      'admin-1',
+    );
+    expect(accepted.conflicts).toEqual([]);
+    const saved = complete.festivalRepo.save.mock
+      .calls[0]?.[0] as AdminFestival;
+    expect(saved.draft.days).toEqual([firstDay, lastDay]);
+    expect(saved.draft.eventPeriod).toEqual({
+      firstDate: firstDay.date,
+      lastDate: lastDay.date,
+    });
+  });
+
+  it('does not treat an explicitly null day list as a date-only draft', async () => {
+    const { service, item, festivalRepo } = harness({
+      name: '함평 겨울 행사',
+      venue: '함평',
+      date: '2026.10.23 - 2026.11.08',
+      url: 'https://world.nol.com/en/ticket/products/26014860',
+    });
+    const result = await service.decide(
+      'proposal-1',
+      [{ itemId: '0', decision: 'accepted', after: { days: null } }],
+      'admin-1',
+    );
+    expect(result.conflicts[0]?.reason).toContain('days');
+    expect(item.decision).toBe('pending');
+    expect(festivalRepo.save).not.toHaveBeenCalled();
+  });
+
   it('keeps an overlong NOL World period pending', async () => {
     const { service, item, festivalRepo } = harness({
       name: '장기 행사',

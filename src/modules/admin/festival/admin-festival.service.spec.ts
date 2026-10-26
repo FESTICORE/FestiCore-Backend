@@ -253,6 +253,18 @@ describe('discovered festival import', () => {
     expect(query).not.toHaveBeenCalled();
   });
 
+  it('rejects an explicitly null day list', async () => {
+    const { service, query } = fixture();
+    await expect(
+      service.importDiscovered(
+        id,
+        { days: null as unknown as unknown[] },
+        null,
+      ),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(query).not.toHaveBeenCalled();
+  });
+
   it('maps a concurrent insert collision to 409', async () => {
     const error = Object.assign(new Error('duplicate key'), {
       driverError: { code: '23505' },

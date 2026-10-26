@@ -143,7 +143,20 @@ function discoveryDraft(
     throw new Error(
       'NOL World 발견 날짜 범위가 유효하지 않거나 32일을 초과합니다.',
     );
-  const days = entry.days ?? (eventPeriod ? [] : undefined);
+  const days =
+    entry.days === undefined ? (eventPeriod ? [] : undefined) : entry.days;
+  if (
+    eventPeriod &&
+    Array.isArray(days) &&
+    days.length > 0 &&
+    ((days[0] as { date?: unknown } | undefined)?.date !==
+      eventPeriod.firstDate ||
+      (days[days.length - 1] as { date?: unknown } | undefined)?.date !==
+        eventPeriod.lastDate)
+  )
+    throw new Error(
+      'days의 첫날과 마지막 날은 발견된 축제 날짜 범위와 같아야 합니다.',
+    );
   const provenance = {
     name: source.parserConfig.sourceName || new URL(source.url).hostname,
     url: url.toString(),
