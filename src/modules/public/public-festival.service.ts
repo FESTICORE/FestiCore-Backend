@@ -741,19 +741,23 @@ export class PublicFestivalService {
           [festivalSourceUrls],
         )
       : [];
-    const profileImageByArtist = new Map(
-      profileImages.map((image) => [
-        `${image.festivalSourceUrl}\u0000${image.artistName}`,
-        image.id,
-      ]),
-    );
+    const profileImageIdsByArtist = new Map<string, Set<string>>();
     for (const image of profileImages) {
-      for (const name of [image.artistAlias, image.artistOfficialName]) {
+      for (const name of [
+        image.artistName,
+        image.artistAlias,
+        image.artistOfficialName,
+      ]) {
         if (!name) continue;
         const key = `${image.festivalSourceUrl}\u0000${name}`;
-        if (!profileImageByArtist.has(key))
-          profileImageByArtist.set(key, image.id);
+        const ids = profileImageIdsByArtist.get(key) ?? new Set<string>();
+        ids.add(image.id);
+        profileImageIdsByArtist.set(key, ids);
       }
+    }
+    const profileImageByArtist = new Map<string, string>();
+    for (const [key, ids] of profileImageIdsByArtist) {
+      if (ids.size === 1) profileImageByArtist.set(key, [...ids][0]);
     }
     const profileImageByName = new Map<string, Set<string>>();
     for (const image of profileImages) {

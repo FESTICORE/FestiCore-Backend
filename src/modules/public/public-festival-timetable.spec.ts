@@ -339,4 +339,52 @@ describe('discovered festival timetable', () => {
       expect.objectContaining({ artist: '에이', imageUrl: null }),
     ]);
   });
+
+  it('keeps colliding explicit artist aliases without an image', async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([{ candidate }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          festivalSourceUrl: sourceUrl,
+          artistName: 'Artist A',
+          artistAlias: '에이',
+          id: '00000000-0000-4000-8000-000000000021',
+        },
+        {
+          festivalSourceUrl: sourceUrl,
+          artistName: 'Artist B',
+          artistAlias: '에이',
+          id: '00000000-0000-4000-8000-000000000022',
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: 'revision-1',
+          sourceUrl: 'https://official.example/timetable',
+          sourceImageId: null,
+          verifiedAt: new Date('2026-10-10T00:00:00Z'),
+          sets: [
+            {
+              artist: '에이',
+              date: '2026-10-17',
+              stageName: 'Main Stage',
+              startsAt: '2026-10-17T20:00:00+09:00',
+              endsAt: null,
+            },
+          ],
+        },
+      ]);
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    const result = await service.detail(id);
+    expect(result.timetable).toEqual([
+      expect.objectContaining({ artist: '에이', imageUrl: null }),
+    ]);
+  });
 });
