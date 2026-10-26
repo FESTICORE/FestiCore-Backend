@@ -29,6 +29,10 @@ import {
   WONDERLIVET_PROFILE_SEED,
 } from './wonderlivet-profile';
 import { FESTIVAL_PROFILE_SEED, FESTIVAL_PROFILES } from './festival-profile';
+import {
+  ADDITIONAL_FESTIVAL_PROFILE_SEED,
+  ADDITIONAL_FESTIVAL_PROFILES,
+} from './additional-festival-profile';
 
 type PrivateCrawl = {
   onModuleInit(): void;
@@ -849,6 +853,84 @@ describe('Seoul Music and Oneway official profile sources', () => {
       ).rejects.toMatchObject({ status: 422 });
     expect(dataSource.transaction).not.toHaveBeenCalled();
   });
+});
+
+describe('additional Seoul Music official photo sources', () => {
+  it('rejects an unregistered page and a fixed image hint', async () => {
+    const { service, dataSource } = harness();
+    const page = Object.keys(ADDITIONAL_FESTIVAL_PROFILES)[0];
+    const profile = ADDITIONAL_FESTIVAL_PROFILES[page];
+    const config = {
+      seed: ADDITIONAL_FESTIVAL_PROFILE_SEED,
+      festivalSourceUrl: profile.festivalSourceUrl,
+      artistName: profile.artistName,
+    };
+    for (const [url, parserConfig] of [
+      [page + 'other', config],
+      [page, { ...config, imageHint: 'fixed-photo.jpg' }],
+    ] as const)
+      await expect(
+        service.createSource(
+          { kind: 'artist-image', url, parser: 'html-text', parserConfig },
+          'admin-1',
+        ),
+      ).rejects.toMatchObject({ status: 422 });
+    expect(dataSource.transaction).not.toHaveBeenCalled();
+  });
+
+  it.each(Object.keys(ADDITIONAL_FESTIVAL_PROFILES))(
+    'checks both official page and image robots, then captures %s',
+    async (page) => {
+      const { service, source, run, execute, runsRepo } = harness();
+      execute.mockRestore();
+      const profile = ADDITIONAL_FESTIVAL_PROFILES[page];
+      const image =
+        profile.rule === 'antenna'
+          ? 'https://cdn.imweb.me/thumbnail/20261026/abc123.jpg'
+          : 'https://poclanos.com/drmvsn/wp-content/uploads/2026/10/okdal.jpg';
+      const body =
+        profile.rule === 'antenna'
+          ? `<meta property="og:url" content="${page}"><h3>권진아<img src="/logo.png"></h3><h6>Kwon Jin Ah</h6><img class="org_image" src="${image}">`
+          : `<title>옥상달빛 | POCLANOS</title><main class="artist-single"><span class="artist-img-wrap"><img src="${image}"></span></main><h1 class="page-title">옥상달빛</h1>`;
+      source.kind = 'artist-image';
+      source.url = page;
+      source.parser = 'html-text';
+      source.parserConfig = {
+        seed: ADDITIONAL_FESTIVAL_PROFILE_SEED,
+        festivalSourceUrl: profile.festivalSourceUrl,
+        artistName: profile.artistName,
+      };
+      const robots = jest.spyOn(service, 'checkRobots').mockResolvedValue();
+      jest
+        .spyOn(service, 'getListing')
+        .mockResolvedValue({ status: 200, body });
+      const result = await (
+        service as unknown as {
+          testSource(id: string): Promise<{ parsed: unknown }>;
+        }
+      ).testSource(source.id);
+      expect(result.parsed).toEqual({
+        artistName: profile.artistName,
+        imageUrl: image,
+      });
+      expect(robots.mock.calls.map(([url]) => url)).toEqual([page, image]);
+      const capture = jest
+        .spyOn(
+          service as unknown as {
+            captureImages: (...args: unknown[]) => Promise<string[]>;
+          },
+          'captureImages',
+        )
+        .mockResolvedValue(['/api/v1/admin/crawl/images/image-1']);
+      runsRepo.createQueryBuilder = jest.fn(() => ({
+        where: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        getOne: jest.fn().mockResolvedValue(null),
+      }));
+      await service.execute(run, source);
+      expect(capture.mock.calls[0][2]).toEqual([new URL(image)]);
+    },
+  );
 });
 
 describe('CDF official profile sources', () => {
