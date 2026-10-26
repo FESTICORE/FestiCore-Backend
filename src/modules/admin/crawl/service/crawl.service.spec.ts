@@ -6,6 +6,8 @@ import { In } from 'typeorm';
 import { createHash } from 'crypto';
 import sharp from 'sharp';
 import * as imageOcr from './timetable-image-ocr';
+import * as nolEvidence from './nol-world-lineup-evidence';
+import * as crawlParser from './crawl-parser';
 import * as artistGallery from './artist-gallery';
 import {
   GMF_FESTIVAL_URL,
@@ -3192,6 +3194,129 @@ describe('CrawlService manual runs and snapshots', () => {
         .filter(([sql]: [string]) => sql.includes('INSERT INTO crawl_sources'))
         .map(([, params]: [string, string[]]) => params[0]),
     ).toEqual(['https://world.nol.com/en/ticket/products/26015253']);
+  });
+
+  it('keeps NOL World detail OCR private and rechecks images when HTML is unchanged', async () => {
+    const { service, source, run, runsRepo, proposalsRepo, execute } =
+      harness();
+    execute.mockRestore();
+    source.url = 'https://world.nol.com/en/ticket/products/26013510';
+    const body = `<script type="application/ld+json">${JSON.stringify({
+      '@type': 'Event',
+      name: 'ROUND in Korea 2026',
+      startDate: '2026-11-07',
+      endDate: '2026-11-08',
+      location: { '@type': 'Place', name: 'Seoul' },
+    })}</script>`;
+    const prior = [
+      {
+        sourceUrl: source.url,
+        imageUrl:
+          'https://ticketimage.interpark.com/Play/image/etc/26/26013510-e01.jpg',
+        imageHash: 'old',
+        parserVersion: 'nol-world-detail-ocr:v1',
+        status: 'ok' as const,
+        failureReason: null,
+        rawLines: ['old'],
+      },
+    ];
+    const updated = [{ ...prior[0], imageHash: 'new', rawLines: ['new'] }];
+    const collect = jest
+      .spyOn(nolEvidence, 'collectNolWorldLineupEvidence')
+      .mockResolvedValue(updated);
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({ status: 200, body });
+    jest
+      .spyOn(
+        service as unknown as { captureImages(): Promise<string[]> },
+        'captureImages',
+      )
+      .mockResolvedValue([]);
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue({
+        contentHash: createHash('sha256')
+          .update(body)
+          .update('ticket-list:v5')
+          .digest('hex'),
+        lineupEvidence: prior,
+      }),
+    }));
+    const proposalItems = jest
+      .spyOn(service, 'proposalItems')
+      .mockResolvedValue({ kind: 'festival.new', items: [] });
+    await service.execute(run, source);
+    expect(collect).toHaveBeenCalledWith(
+      body,
+      source.url,
+      prior,
+      expect.any(Object),
+    );
+    expect(run.lineupEvidence).toEqual(updated);
+    expect(run.result).toBe('nochange-parsed');
+    expect(proposalsRepo.save).not.toHaveBeenCalled();
+    expect(proposalItems).not.toHaveBeenCalled();
+    collect.mockRestore();
+  });
+
+  it('reports partial NOL OCR failure while still creating a public discovery proposal', async () => {
+    const { service, source, run, runsRepo, proposalsRepo, execute } =
+      harness();
+    execute.mockRestore();
+    source.url = 'https://world.nol.com/en/ticket/products/26013510';
+    const evidence = [
+      {
+        sourceUrl: source.url,
+        imageUrl:
+          'https://ticketimage.interpark.com/Play/image/etc/26/26013510-e01.jpg',
+        imageHash: null,
+        parserVersion: 'nol-world-detail-ocr:v1',
+        status: 'failed' as const,
+        failureReason: 'robots' as const,
+        rawLines: [],
+      },
+    ];
+    const collect = jest
+      .spyOn(nolEvidence, 'collectNolWorldLineupEvidence')
+      .mockResolvedValue(evidence);
+    const parse = jest.spyOn(crawlParser, 'parseCrawl').mockResolvedValue([]);
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest
+      .spyOn(service, 'getListing')
+      .mockResolvedValue({ status: 200, body: '<html>official event</html>' });
+    jest
+      .spyOn(
+        service as unknown as { captureImages(): Promise<string[]> },
+        'captureImages',
+      )
+      .mockResolvedValue([]);
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(null),
+    }));
+    jest.spyOn(service, 'proposalItems').mockResolvedValue({
+      kind: 'festival.new',
+      items: [
+        {
+          id: 'candidate',
+          op: 'add',
+          path: '/festivals/-',
+          after: { name: 'ROUND in Korea' },
+        },
+      ],
+    });
+    await service.execute(run, source);
+    expect(run.result).toBe('proposed');
+    expect(run.error).toBe('LINEUP_EVIDENCE_PARTIAL');
+    expect(run.lineupEvidence).toEqual(evidence);
+    expect(proposalsRepo.save).toHaveBeenCalledTimes(1);
+    expect(proposalsRepo.save.mock.calls[0][0]).not.toHaveProperty(
+      'lineupEvidence',
+    );
+    collect.mockRestore();
+    parse.mockRestore();
   });
 
   it('reparses unchanged Wonderlivet detail and records its matching pending proposal', async () => {

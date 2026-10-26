@@ -35,6 +35,7 @@ import { CrawlTimetableRevisionService } from './crawl-timetable-revision.servic
 import { extractTimetableImageCandidates } from './timetable-image-ocr';
 import { crawlArtistGallery } from './artist-gallery';
 import { timetableSourceConfig } from './timetable-source-config';
+import { collectNolWorldLineupEvidence } from './nol-world-lineup-evidence';
 import { normalizeArtistName } from '../../../../common/artist-name';
 import { PRUGIO_LINEUP_SEED, PRUGIO_LINEUP_URL } from './prugio-lineup';
 import {
@@ -1515,6 +1516,23 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         )
         .orderBy('run.startedAt', 'DESC')
         .getOne();
+      if (
+        source.kind === 'discovery' &&
+        source.parser === 'ticket-list' &&
+        /^https:\/\/world\.nol\.com\/en\/ticket\/products\/\d+$/.test(
+          source.url,
+        )
+      ) {
+        run.lineupEvidence = await collectNolWorldLineupEvidence(
+          response.body,
+          source.url,
+          previous?.lineupEvidence ?? null,
+          {
+            checkRobots: (url) => this.checkRobots(url),
+            getImage: (url) => this.limitedGetImage(url),
+          },
+        );
+      }
       await this.syncXmfArtistAliases(source, response.body);
       const officialTicketLinks =
         source.url === 'https://www.mintpaper.co.kr/posts/4821' ||
@@ -1538,7 +1556,18 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
             : 'nochange-parsed';
         if (run.result !== 'unchanged') source.lastChangedAt = new Date();
       } else if (
+        run.lineupEvidence &&
         previous?.contentHash === run.contentHash &&
+        !isDeepStrictEqual(previous?.lineupEvidence ?? null, run.lineupEvidence)
+      ) {
+        // Changed private OCR evidence must not reopen a public festival proposal.
+        run.result = 'nochange-parsed';
+      } else if (
+        previous?.contentHash === run.contentHash &&
+        isDeepStrictEqual(
+          previous?.lineupEvidence ?? null,
+          run.lineupEvidence ?? null,
+        ) &&
         !(
           source.kind === 'discovery' &&
           source.parser === 'ticket-list' &&
@@ -1661,6 +1690,11 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       source.consecutiveFailures += 1;
       if (source.consecutiveFailures >= 3) source.status = 'broken';
     } finally {
+      if (
+        run.result !== 'failed' &&
+        run.lineupEvidence?.some((entry) => entry.status === 'failed')
+      )
+        run.error = 'LINEUP_EVIDENCE_PARTIAL';
       run.finishedAt = new Date();
       source.lastRunAt = run.finishedAt;
       await this.runsRepo.save(run);
