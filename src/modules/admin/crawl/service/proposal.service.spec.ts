@@ -156,6 +156,46 @@ describe('ProposalService festival discovery', () => {
     });
   });
 
+  it('accepts a 17-day NOL World date range without inventing show times', async () => {
+    const { service, item, festivalRepo } = harness({
+      name: '함평 겨울 행사',
+      venue: '함평',
+      date: '2026.10.23 - 2026.11.08',
+      url: 'https://world.nol.com/en/ticket/products/26014860',
+    });
+    const result = await service.decide(
+      'proposal-1',
+      [{ itemId: '0', decision: 'accepted' }],
+      'admin-1',
+    );
+    expect(result.conflicts).toEqual([]);
+    expect(item.decision).toBe('accepted');
+    const saved = festivalRepo.save.mock.calls[0]?.[0] as AdminFestival;
+    expect(saved.draft.days).toEqual([]);
+    expect(saved.draft.eventPeriod).toEqual({
+      firstDate: '2026-10-23',
+      lastDate: '2026-11-08',
+    });
+    expect(saved.publishedVersion).toBe(0);
+  });
+
+  it('keeps an overlong NOL World period pending', async () => {
+    const { service, item, festivalRepo } = harness({
+      name: '장기 행사',
+      venue: '함평',
+      date: '2026.10.23 - 2026.11.24',
+      url: 'https://world.nol.com/en/ticket/products/26014860',
+    });
+    const result = await service.decide(
+      'proposal-1',
+      [{ itemId: '0', decision: 'accepted', after: { days: [day] } }],
+      'admin-1',
+    );
+    expect(result.conflicts).toHaveLength(1);
+    expect(item.decision).toBe('pending');
+    expect(festivalRepo.save).not.toHaveBeenCalled();
+  });
+
   it('keeps an incomplete discovery entry pending for review', async () => {
     const { service, item, festivalRepo } = harness({
       name: '가을 페스티벌',

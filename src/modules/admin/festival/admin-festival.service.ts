@@ -48,6 +48,7 @@ function draftFor(
   source: { name: string; url: string | null; verifiedAt: string },
   thumbUrl: string | null = null,
   ticketLinks: { label: string; url: string }[] = [],
+  eventPeriod?: { firstDate: string; lastDate: string },
 ): FestivalDocument {
   return {
     id,
@@ -55,6 +56,7 @@ function draftFor(
     venue: input?.venue,
     timezone: 'Asia/Seoul',
     days: input?.days,
+    ...(eventPeriod ? { eventPeriod } : {}),
     thumbUrl,
     ticketLinks,
     flagsEnabled: false,
@@ -135,6 +137,7 @@ export class AdminFestivalService {
         name: f.draft.name,
         venue: f.draft.venue,
         days: f.draft.days,
+        eventPeriod: f.draft.eventPeriod ?? null,
         thumbUrl: f.draft.thumbUrl ?? null,
         draftVersion: f.draftVersion,
         publishedVersion: f.publishedVersion,
@@ -176,7 +179,7 @@ export class AdminFestivalService {
 
   async importDiscovered(
     id: string,
-    input: { days: unknown[] },
+    input: { days?: unknown[] } | undefined,
     actor: string | null,
   ) {
     if (!/^fst_[0-9a-f]{16}$/.test(id))
@@ -186,12 +189,14 @@ export class AdminFestivalService {
     const entry: DiscoverySummary | null =
       await this.publicFestivals.discovered(id);
     if (!entry) throw new NotFoundException('발견된 축제를 찾을 수 없습니다.');
-    const days = input?.days;
+    const days = input?.days === undefined ? [] : input.days;
     if (
       !Array.isArray(days) ||
-      (days[0] as { date?: unknown } | undefined)?.date !== entry.firstDate ||
-      (days[days.length - 1] as { date?: unknown } | undefined)?.date !==
-        entry.lastDate
+      (days.length > 0 &&
+        ((days[0] as { date?: unknown } | undefined)?.date !==
+          entry.firstDate ||
+          (days[days.length - 1] as { date?: unknown } | undefined)?.date !==
+            entry.lastDate))
     )
       throw new BadRequestException({
         code: 'VALIDATION',
@@ -208,6 +213,7 @@ export class AdminFestivalService {
       },
       entry.thumbUrl ?? entry.posterUrl ?? null,
       entry.ticketLinks,
+      { firstDate: entry.firstDate, lastDate: entry.lastDate },
     );
     draftErrors(draft);
     const row = this.festivals.create({

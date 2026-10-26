@@ -189,7 +189,7 @@ export class AdminFestivalController {
   @ApiOperation({
     summary: '축제 초안 생성',
     description:
-      'editor 이상이 이름·장소·1~7일의 일정을 입력합니다. `Asia/Seoul` 시간대와 빈 무대·공연·존을 가진 초안 버전 1을 생성합니다.',
+      'editor 이상이 이름·장소·1~32일의 일정을 입력합니다. `Asia/Seoul` 시간대와 빈 무대·공연·존을 가진 초안 버전 1을 생성합니다.',
   })
   @ApiBody({
     description:
@@ -213,7 +213,7 @@ export class AdminFestivalController {
         days: {
           type: 'array',
           minItems: 1,
-          maxItems: 7,
+          maxItems: 32,
           items: {
             type: 'object',
             required: ['date', 'startsAt', 'endsAt'],
@@ -254,7 +254,7 @@ export class AdminFestivalController {
   @ApiOperation({
     summary: '발견된 축제를 관리 초안으로 가져오기',
     description:
-      '공개 발견 카탈로그의 축제 ID·이름·장소·출처·이미지·티켓 링크를 서버에서 확인해 같은 ID의 관리 초안을 만듭니다. 발견 데이터에는 공연 시각이 없으므로 관리자가 날짜별 시작·종료 시각을 입력해야 합니다. 이 요청은 축제를 공개하지 않습니다.',
+      '공개 발견 카탈로그의 축제 ID·이름·장소·출처·이미지·티켓 링크와 eventPeriod를 서버에서 확인해 같은 ID의 비공개 관리 초안을 만듭니다. 요청 본문 생략 또는 {}·{ "days": [] }는 시각이 없는 미완성 초안입니다. 검증된 공연 시각을 알고 있으면 기존 { "days": [{ "date", "startsAt", "endsAt" }] }도 허용합니다. eventPeriod는 서버 원본 기준이며 요청으로 수정할 수 없습니다. 발행에는 검증된 시각·무대·세트가 필요합니다.',
   })
   @ApiParam({
     name: 'id',
@@ -264,14 +264,13 @@ export class AdminFestivalController {
   @ApiBody({
     schema: {
       type: 'object',
-      required: ['days'],
       properties: {
         days: {
           type: 'array',
-          minItems: 1,
-          maxItems: 7,
+          minItems: 0,
+          maxItems: 32,
           description:
-            '첫날과 마지막 날은 발견 축제의 날짜 범위와 같아야 합니다. 공연 시각은 공식 정보를 확인해 입력하세요.',
+            '생략/빈 배열은 날짜만 저장합니다. 시각을 입력할 때 첫날과 마지막 날은 발견 축제의 날짜 범위와 같아야 합니다.',
           items: {
             type: 'object',
             required: ['date', 'startsAt', 'endsAt'],
@@ -283,7 +282,7 @@ export class AdminFestivalController {
           },
         },
       },
-      example: { days: [festivalDay] },
+      example: {},
     },
   })
   @ApiResponse({
@@ -299,7 +298,7 @@ export class AdminFestivalController {
   })
   importDiscovered(
     @Param('id') id: string,
-    @Body() body: { days: unknown[] },
+    @Body() body: { days?: unknown[] } | undefined,
     @Req() request: AdminRequest,
   ) {
     return this.service.importDiscovered(id, body, request.admin?.id ?? null);

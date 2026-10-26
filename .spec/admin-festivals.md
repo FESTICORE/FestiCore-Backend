@@ -13,6 +13,7 @@
 | ------ | ------------------------ | ----------------------------------------------------------------------- | ----------------------------------------------------------------- |
 | GET    | `/`                      | 없음                                                                    | 축제 목록, 초안/발행 버전, 열린 크롤 제안 수                      |
 | POST   | `/`                      | `{ name, venue, days }`                                                 | 기본 필드를 채운 초안(`draftVersion=1`)                           |
+| POST   | `/discovered/:id/import` | 본문 생략, `{}`, `{ "days": [] }` 또는 검증된 `{ "days": [{ "date", "startsAt", "endsAt" }] }` | 동일 공개 ID의 비공개 초안(`draftVersion=1`) |
 | GET    | `/:id/draft`             | ID                                                                      | 현재 초안·버전                                                    |
 | PATCH  | `/:id/draft`             | `If-Match: "d{draftVersion}"`, JSON 병합 패치                           | 검증된 새 초안·버전                                               |
 | PUT    | `/:id/draft/sets`        | 같은 `If-Match`, 배열                                                   | 공연 목록 전체 교체                                               |
@@ -24,6 +25,8 @@
 | POST   | `/:id/pack/import-image` | multipart `image` (JPEG/PNG/WebP, 최대 10MB), `date` (등록된 축제 날짜) | HTTP 200 `{ draft: Set[], confidence: 0..1, unparsed: string[] }` |
 
 공연 `Set`의 선택 필드 `imageUrl`에는 서버가 보관한 `/api/v1/festivals/images/{imageId}.webp` 경로만 넣는다. 외부 URL은 거부한다. 발행 후 공개 상세의 `sets`와 `timetable`에 이 경로가 전달되며, 사진이 없는 공연은 `imageUrl: null`이다. `timetable`의 각 항목에는 `date`와 `stageName`도 포함된다. 공연별 공식 시작·종료 시각이 없으면 공연을 임의 생성하지 않는다.
+
+발견 항목 가져오기는 서버의 원본 `firstDate`·`lastDate`를 읽기 전용 `eventPeriod`로 저장한다. 날짜만 확인된 항목은 `days: []`로 승인하고 발행본은 만들지 않는다. 기존 시각 포함 `days` 입력도 유지한다. 입력한 첫날·마지막 날은 원본 기간과 같아야 하며, 최장 32일(양끝 포함)까지 허용한다. 날짜만 알려진 후보에서 매일 운영한다고 추정해 `days`를 채우지 않는다. `PATCH`로 `eventPeriod`를 수정할 수 없다. 발행 전에는 검증된 시작·종료 시각, 무대와 공연 세트가 필요하다. 기존 발행 팩에 `eventPeriod`가 없더라도 조회와 롤백 계약은 유지한다.
 
 ## 실패와 보안
 
