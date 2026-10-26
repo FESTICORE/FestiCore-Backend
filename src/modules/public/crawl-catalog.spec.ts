@@ -577,6 +577,7 @@ describe('ticket discovery catalog', () => {
     for (const untrusted of [
       'https://evil.example/Play/image/large/26/26013406_p.gif',
       'https://ticketimage.interpark.com/Play/image/large/26/other.gif',
+      'https://ticketimage.interpark.com/Play/image/large/26/99999999_p.gif',
       'http://ticketimage.interpark.com/Play/image/large/26/26013406_p.gif',
     ]) {
       expect(

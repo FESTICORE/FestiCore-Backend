@@ -73,22 +73,29 @@ function officialInstagramUrl(raw: unknown): string | null {
   }
 }
 
-function officialPosterUrl(raw: unknown): string | null {
+function officialPosterUrl(raw: unknown, sourceUrl: string): string | null {
   if (typeof raw !== 'string') return null;
   try {
     const url = new URL(raw);
+    const source = new URL(sourceUrl);
+    const nolProductId =
+      source.hostname === 'nol.yanolja.com'
+        ? /^\/ticket\/products\/(\d+)$/.exec(source.pathname)?.[1]
+        : null;
+    const posterProductId =
+      /^\/Play\/image\/large\/\d+\/(\d+)_p\.(?:gif|jpe?g|png|webp)$/i.exec(
+        url.pathname,
+      )?.[1];
     const trusted =
       url.hostname === 'mintpaper.s3.ap-northeast-2.amazonaws.com' ||
       (url.hostname === 'tkfile.yes24.com' &&
         url.pathname.startsWith('/upload2/PerfBlog/')) ||
       (url.hostname === 'cdnticket.melon.co.kr' &&
         url.pathname.startsWith('/resource/image/upload/product/')) ||
-      (url.hostname === 'ticketimage.interpark.com' &&
-        /^\/Play\/image\/large\/\d+\/\d+_p\.(?:gif|jpe?g|png|webp)$/i.test(
-          url.pathname,
-        ));
+      (url.hostname === 'ticketimage.interpark.com' && posterProductId);
     return url.protocol === 'https:' &&
       trusted &&
+      (!nolProductId || posterProductId === nolProductId) &&
       !url.username &&
       !url.password
       ? url.toString()
@@ -269,6 +276,7 @@ export function discoverySummaries(
     );
     const poster = officialPosterUrl(
       (row.candidate as Record<string, unknown>).posterUrl,
+      url,
     );
     if (existing.candidate && typeof existing.candidate === 'object') {
       const first = existing.candidate as Record<string, unknown>;
@@ -276,7 +284,7 @@ export function discoverySummaries(
         ...(account && !officialInstagramUrl(first.officialInstagramUrl)
           ? { officialInstagramUrl: account }
           : {}),
-        ...(poster && !officialPosterUrl(first.posterUrl)
+        ...(poster && !officialPosterUrl(first.posterUrl, url)
           ? { posterUrl: poster }
           : {}),
       };
@@ -353,7 +361,7 @@ export function discoverySummaries(
     const key = candidateKey(name, value.venue, dates);
     if (publishedKeys.has(key)) continue;
     const instagramUrl = officialInstagramUrl(value.officialInstagramUrl);
-    const posterUrl = officialPosterUrl(value.posterUrl);
+    const posterUrl = officialPosterUrl(value.posterUrl, url.toString());
     const artists = verifiedArtists(
       value.artists,
       typeof value.artistSourceUrl === 'string'
