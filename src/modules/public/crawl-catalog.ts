@@ -56,6 +56,7 @@ function ticketLabel(hostname: string): string {
       'ticket.melon.com': '멜론티켓',
       'ticket.yes24.com': '예스24',
       'nol.yanolja.com': 'NOL',
+      'world.nol.com': 'NOL World',
       'mintpaper.co.kr': '공식 사이트',
     }[hostname] ?? '공식 사이트'
   );
@@ -84,10 +85,14 @@ function officialPosterUrl(raw: unknown, sourceUrl: string): string | null {
   try {
     const url = new URL(raw);
     const source = new URL(sourceUrl);
-    const nolProductId =
+    const nolProductId = (
       source.hostname === 'nol.yanolja.com'
-        ? /^\/ticket\/products\/(\d+)$/.exec(source.pathname)?.[1]
-        : null;
+        ? /^\/ticket\/products\/(\d+)$/.exec(source.pathname)
+        : source.hostname === 'world.nol.com'
+          ? /^\/en\/ticket\/products\/(\d+)$/.exec(source.pathname)
+          : null
+    )?.[1];
+    if (source.hostname === 'world.nol.com' && !nolProductId) return null;
     const posterProductId =
       /^\/Play\/image\/large\/\d+\/(\d+)_p\.(?:gif|jpe?g|png|webp)$/i.exec(
         url.pathname,
@@ -162,7 +167,7 @@ function verifiedArtists(
             url.hostname === 'cdnimg.melon.co.kr') ||
           (sourceHost === 'ticket.yes24.com' &&
             ['tkfile.yes24.com', 'stkfile.yes24.com'].includes(url.hostname)) ||
-          (sourceHost === 'nol.yanolja.com' &&
+          (['nol.yanolja.com', 'world.nol.com'].includes(sourceHost) &&
             url.hostname === 'ticketimage.interpark.com');
         if (
           url.protocol === 'https:' &&
@@ -207,7 +212,10 @@ function date(year: number, month: number, day: number): string | null {
   return parsed.toISOString().slice(0, 10);
 }
 
-export function ticketDateRange(raw: unknown): DateRange | null {
+export function ticketDateRange(
+  raw: unknown,
+  maxSpanDays = 6,
+): DateRange | null {
   if (typeof raw !== 'string') return null;
   const korean = raw
     .trim()
@@ -243,8 +251,15 @@ export function ticketDateRange(raw: unknown): DateRange | null {
   const span =
     (Date.parse(`${last}T00:00:00Z`) - Date.parse(`${first}T00:00:00Z`)) /
     86_400_000;
-  if (span > 6) return null;
+  if (span > maxSpanDays) return null;
   return { firstDate: first, lastDate: last };
+}
+
+function ticketDateSpanLimit(url: unknown): number {
+  return typeof url === 'string' &&
+    /^https:\/\/world\.nol\.com\/en\/ticket\/products\/\d+$/.test(url)
+    ? 31
+    : 6;
 }
 
 function cleanName(name: string): string {
@@ -314,7 +329,7 @@ export function discoverySummaries(
     const source = row.sourceUrl ? byUrl.get(row.sourceUrl)?.candidate : null;
     if (source && typeof source === 'object' && !Array.isArray(source)) {
       const value = source as Record<string, unknown>;
-      const dates = ticketDateRange(value.date);
+      const dates = ticketDateRange(value.date, ticketDateSpanLimit(value.url));
       if (
         typeof value.name === 'string' &&
         typeof value.venue === 'string' &&
@@ -343,7 +358,7 @@ export function discoverySummaries(
       value.venue.length > 160
     )
       continue;
-    const dates = ticketDateRange(value.date);
+    const dates = ticketDateRange(value.date, ticketDateSpanLimit(value.url));
     if (!dates) continue;
     let url: URL;
     try {
@@ -359,6 +374,7 @@ export function discoverySummaries(
         'ticket.melon.com',
         'ticket.yes24.com',
         'nol.yanolja.com',
+        'world.nol.com',
         'mintpaper.co.kr',
       ].includes(url.hostname)
     )

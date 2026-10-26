@@ -12,6 +12,7 @@
 기본 발견 소스는 다음 공개 목록이다. 초기 배포 때 한 번 수집한 뒤 매일 갱신한다. 수집 페이지에서 확정할 수 없는 개최 시각은 추측하지 않고 관리자 검토 입력으로 남긴다.
 
 - [NOL 티켓 콘서트 장르](https://nol.yanolja.com/ticket/genre/concert): 목록의 직렬화된 공연 URL 중 페스티벌 제목만 후보로 삼는다. 카드에 행사 날짜 전체와 장소가 있을 때만 저장 후보에 포함하고, 예매 오픈 시각을 행사 날짜로 쓰지 않는다. 파서 버전을 갱신해 기존 목록도 다시 처리한다. 식별 가능한 크롤러 요청에 403이 반환되고 격리된 일반 Chrome에도 차단 화면이 표시되어 운영 수집 성공은 확인되지 않았다. 실행 이력에 실패로 기록하고 연속 3회 실패 시 관리자 알림을 만든다.
+- [NOL World 공개 콘서트 목록](https://world.nol.com/en/ticket/genre/CONCERT/products), [홈](https://world.nol.com/en/ticket), [축제 검색](https://world.nol.com/en/search?q=festival): 숫자 상품 링크 중 축제 제목만 상세 소스로 등록한다. 상세의 `Event` JSON-LD에서 공연 날짜·장소·상품 ID와 일치하는 포스터를 읽는다. 목록에 축제 제목이 없는 날은 기존의 빈 결과 실패로 기록한다. [상세 계약](nol-world-public-discovery.md)을 따른다.
 - [멜론티켓 페스티벌 목록](https://ticket.melon.com/concert/index.htm): 페이지가 사용하는 공개 `prodList.json?perfGenreCode=GENRE_CON_FESTIVAL` 목록 응답을 수집한다. 이 장르에도 일반 공연이 섞여 있어 제목에 축제 표시가 필요하다. 공식 정보로 확인한 `WONDERLIVET`과 `COUNTDOWN FANTASY`는 예외로 삼고, 콘서트·오케스트라 제목은 제외한다.
 - [멜론티켓 원더리벳 검색 결과](https://ticket.melon.com/search/index.htm?q=WONDERLIVET): 페스티벌 장르 목록에서 누락되는 원더리벳을 검색 결과의 공연 행에서 수집한다. 행의 공연 ID·날짜·장소·포스터를 함께 읽으며 날짜 없는 결과는 공개 목록에서 제외한다. 지난 행사는 일정 그대로 보존한다.
 - [멜론티켓 영문 festival 검색 결과](https://ticket.melon.com/search/index.htm?q=festival): 한글 `페스티벌` 검색과 장르 목록에 잡히지 않는 영문 제목 공연을 같은 검증 파서로 수집한다. 결과에 지난 공연도 포함되므로 일정을 그대로 보존하며, 현재 또는 미래 공연 수 증가를 보장하지 않는다.

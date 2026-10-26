@@ -142,6 +142,129 @@ describe('crawl parsers', () => {
     ]);
   });
 
+  it('discovers only festival product links from the public NOL World concert list', async () => {
+    const nol = source('ticket-list', 'discovery');
+    nol.url = 'https://world.nol.com/en/ticket/genre/CONCERT/products';
+    const card = (href: string, title: string) =>
+      `<a href="${href}"><img alt="${title}"><h2>${title}</h2><span>Nov 21, 2026</span><span>ROLLING HALL</span></a>`;
+    const html =
+      card('/en/ticket/products/26015253', 'STILL ROLLING FEST 2026') +
+      card('/en/ticket/products/26014833', '단독 콘서트') +
+      card(
+        'https://evil.example/en/ticket/products/26015253',
+        '악성 페스티벌',
+      ) +
+      card('/en/ticket/products/26015253?tracking=1', '중복 페스티벌');
+    expect(await parseCrawl(nol, html)).toEqual([
+      {
+        name: 'STILL ROLLING FEST 2026',
+        url: 'https://world.nol.com/en/ticket/products/26015253',
+      },
+    ]);
+  });
+
+  it('discovers festival cards from the official NOL World home and public search', async () => {
+    const nol = source('ticket-list', 'discovery');
+    const home =
+      '<a href="/en/ticket/products/26013822"><p>2026 Incheon Airport SKY FESTIVAL</p></a>' +
+      '<a href="/en/ticket/products/26014246"><p>MINT FESTA vol.88</p></a>';
+    nol.url = 'https://world.nol.com/en/ticket';
+    expect(await parseCrawl(nol, home)).toEqual([
+      {
+        name: '2026 Incheon Airport SKY FESTIVAL',
+        url: 'https://world.nol.com/en/ticket/products/26013822',
+      },
+      {
+        name: 'MINT FESTA vol.88',
+        url: 'https://world.nol.com/en/ticket/products/26014246',
+      },
+    ]);
+    nol.url = 'https://world.nol.com/en/search?q=festival';
+    expect(
+      await parseCrawl(
+        nol,
+        '<a href="/en/ticket/products/26014860"><h3>World DJ Festival 2027</h3></a><a href="/en/ticket/products/26011273"><h3>[Early] Sejong Bohemian Music Festival</h3></a><a href="/en/ticket/products/26011889"><h3>[Play&Stay] Busan Fireworks Festival + Hotels</h3></a>',
+      ),
+    ).toEqual([
+      {
+        name: 'World DJ Festival 2027',
+        url: 'https://world.nol.com/en/ticket/products/26014860',
+      },
+    ]);
+  });
+
+  it('reads NOL World Event dates, venue and only the matching product poster', async () => {
+    const nol = source('ticket-list', 'discovery');
+    nol.url = 'https://world.nol.com/en/ticket/products/26015253';
+    const event = (image: string, startDate = '2026-11-21') =>
+      `<script type="application/ld+json">${JSON.stringify({
+        '@type': 'Event',
+        name: 'STILL ROLLING FEST 2026',
+        startDate,
+        endDate: startDate,
+        location: { '@type': 'Place', name: 'ROLLING HALL' },
+        image,
+        performer: {
+          '@type': 'MusicGroup',
+          name: 'THE BAND',
+          image: 'https://ticketimage.interpark.com/artists/band.jpg',
+        },
+      })}</script>`;
+    const poster =
+      'https://ticketimage.interpark.com/Play/image/large/26/26015253_p.gif';
+    expect(await parseCrawl(nol, event(poster))).toEqual([
+      {
+        name: 'STILL ROLLING FEST 2026',
+        url: nol.url,
+        date: '2026.11.21',
+        venue: 'ROLLING HALL',
+        posterUrl: poster,
+        artists: [{ name: 'THE BAND' }],
+      },
+    ]);
+    expect(
+      await parseCrawl(nol, event(poster.replace('26015253', '26015254'))),
+    ).toEqual([
+      {
+        name: 'STILL ROLLING FEST 2026',
+        url: nol.url,
+        date: '2026.11.21',
+        venue: 'ROLLING HALL',
+        artists: [{ name: 'THE BAND' }],
+      },
+    ]);
+    await expect(parseCrawl(nol, event(poster, '2026-02-30'))).rejects.toThrow(
+      '공개 예매 링크',
+    );
+  });
+
+  it('accepts the established COUNTDOWN FANTASY festival brand from a World detail', async () => {
+    const nol = source('ticket-list', 'discovery');
+    nol.url = 'https://world.nol.com/en/ticket/products/26014568';
+    const html = `<script type="application/ld+json">${JSON.stringify({
+      '@type': 'Event',
+      name: 'COUNTDOWN FANTASY 2026-2027',
+      startDate: '2026-12-31',
+      endDate: '2026-12-31',
+      location: {
+        '@type': 'Place',
+        name: 'KINTEX 2 Exhibition Hall 7, Hall 8',
+      },
+      image:
+        'https://ticketimage.interpark.com/Play/image/large/26/26014568_p.gif',
+    })}</script>`;
+    expect(await parseCrawl(nol, html)).toEqual([
+      {
+        name: 'COUNTDOWN FANTASY 2026-2027',
+        url: nol.url,
+        date: '2026.12.31',
+        venue: 'KINTEX 2 Exhibition Hall 7, Hall 8',
+        posterUrl:
+          'https://ticketimage.interpark.com/Play/image/large/26/26014568_p.gif',
+      },
+    ]);
+  });
+
   it('omits invalid NOL dates and does not attach another product’s venue', async () => {
     const nol = source('ticket-list', 'discovery');
     nol.url = 'https://nol.yanolja.com/ticket';

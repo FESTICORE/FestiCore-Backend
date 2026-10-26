@@ -78,4 +78,31 @@ describe('NOL public image SQL policy', () => {
     );
     expect(result.rows[0].allowed).toBe(allowed);
   });
+
+  it.each([
+    [
+      'https://ticketimage.interpark.com/Play/image/large/26/26015253_p.gif',
+      true,
+    ],
+    [
+      'https://ticketimage.interpark.com/Play/image/large/26/26015254_p.gif',
+      false,
+    ],
+    ['https://evil.example/Play/image/large/26/26015253_p.gif', false],
+    [
+      'https://ticketimage.interpark.com/Play/image/small/26/26015253_p.gif',
+      false,
+    ],
+  ])(
+    'permits only the same World product poster: %s',
+    async (originUrl, allowed) => {
+      const result = await client.query<{ allowed: boolean }>(
+        `SELECT (false ${nolPolicy}) AS allowed
+       FROM (SELECT $1::text AS url) source
+       CROSS JOIN (SELECT $2::text AS "originUrl") image`,
+        ['https://world.nol.com/en/ticket/products/26015253', originUrl],
+      );
+      expect(result.rows[0].allowed).toBe(allowed);
+    },
+  );
 });

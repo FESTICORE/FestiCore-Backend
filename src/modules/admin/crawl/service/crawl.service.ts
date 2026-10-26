@@ -1111,7 +1111,8 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
                         ? 'ticket-list:v4'
                         : source.url.startsWith(
                               'https://nol.yanolja.com/ticket',
-                            )
+                            ) ||
+                            source.url.startsWith('https://world.nol.com/en/')
                           ? 'ticket-list:v5'
                           : source.url === 'https://xmfestival.com/notice'
                             ? 'ticket-list:v4'
@@ -1588,7 +1589,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
                 !/^https:\/\/ticket\.yes24\.com\/(?:English\/)?Perf\/\d+$/.test(
                   url,
                 ) &&
-                !/^https:\/\/nol\.yanolja\.com\/ticket\/products\/\d+$/.test(
+                !/^https:\/\/(?:nol\.yanolja\.com\/ticket|world\.nol\.com\/en\/ticket)\/products\/\d+$/.test(
                   url,
                 ))
             )

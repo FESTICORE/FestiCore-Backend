@@ -1,6 +1,68 @@
 import { discoverySummaries, ticketDateRange } from './crawl-catalog';
 
 describe('ticket discovery catalog', () => {
+  it('accepts a bounded multi-week NOL World festival without widening other tickets', () => {
+    const candidate = {
+      name: 'Hampyeong Grand Chrysanthemum Festival 2026',
+      venue: 'Hampyeong Expo Park',
+      date: '2026.10.23 ~ 2026.11.08',
+      url: 'https://world.nol.com/en/ticket/products/26013613',
+    };
+    expect(discoverySummaries([{ candidate }])).toHaveLength(1);
+    expect(
+      discoverySummaries([
+        {
+          candidate: {
+            ...candidate,
+            url: 'https://nol.yanolja.com/ticket/products/26013613',
+          },
+        },
+      ]),
+    ).toHaveLength(0);
+    expect(
+      discoverySummaries([
+        { candidate: { ...candidate, date: '2026.10.23 ~ 2026.12.01' } },
+      ]),
+    ).toHaveLength(0);
+  });
+
+  it('publishes only the matching official NOL World product poster', () => {
+    const candidate = {
+      name: 'STILL ROLLING FEST 2026',
+      venue: 'ROLLING HALL',
+      date: '2026.11.21',
+      url: 'https://world.nol.com/en/ticket/products/26015253',
+    };
+    const matched = discoverySummaries([
+      {
+        candidate: {
+          ...candidate,
+          posterUrl:
+            'https://ticketimage.interpark.com/Play/image/large/26/26015253_p.gif',
+        },
+      },
+    ])[0];
+    expect(matched.posterUrl).toBe(
+      'https://ticketimage.interpark.com/Play/image/large/26/26015253_p.gif',
+    );
+    expect(matched.ticketLinks).toEqual([
+      {
+        label: 'NOL World',
+        url: candidate.url,
+      },
+    ]);
+    const mismatched = discoverySummaries([
+      {
+        candidate: {
+          ...candidate,
+          posterUrl:
+            'https://ticketimage.interpark.com/Play/image/large/26/26015254_p.gif',
+        },
+      },
+    ])[0];
+    expect(mismatched.posterUrl).toBeUndefined();
+  });
+
   it('retains official CDF performer profiles without treating them as image URLs', () => {
     const base = {
       name: 'COUNTDOWN FANTASY 2026-2027',
