@@ -2,6 +2,11 @@ import { createHash } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
 import type { CrawlSource } from '../entity/crawl-source.entity';
 import {
+  parsePrugioLineup,
+  PRUGIO_LINEUP_SEED,
+  PRUGIO_LINEUP_URL,
+} from './prugio-lineup';
+import {
   WONDERLIVET_LINK_PAGE,
   wonderlivetMelonProduct,
 } from './wonderlivet-ticket-link';
@@ -1402,6 +1407,15 @@ export async function parseCrawl(
   body: string,
 ): Promise<unknown> {
   const config = source.parserConfig;
+  if (config.seed === PRUGIO_LINEUP_SEED) {
+    if (
+      source.kind !== 'discovery' ||
+      source.parser !== 'ticket-list' ||
+      source.url !== PRUGIO_LINEUP_URL
+    )
+      throw new Error('푸르지오 공식 출연진 소스 설정이 잘못되었습니다.');
+    return [parsePrugioLineup(body)];
+  }
   if (source.parser === 'html-text') {
     const text = plainText(body).slice(0, 10000);
     if (!text) throw new Error('파싱 결과가 비었습니다.');
