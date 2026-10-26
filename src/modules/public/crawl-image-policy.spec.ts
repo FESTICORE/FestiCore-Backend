@@ -9,6 +9,19 @@ import {
 } from '../admin/crawl/service/drdr-profile';
 
 describe('public crawl image policy', () => {
+  it('serves official gallery portraits only when an enabled gallery owns the same source and festival', () => {
+    const branch = PUBLIC_CRAWL_IMAGE_SQL.match(
+      /source\."parserConfig"->>'seed' IS DISTINCT FROM 'official-artist-gallery'[\s\S]*?AND image\."originUrl" LIKE 'https:\/\/%'/,
+    )?.[0];
+    expect(branch).toContain("gallery.kind = 'artist-gallery'");
+    expect(branch).toContain('gallery.enabled = true');
+    expect(branch).toContain('gallery.url = source.url');
+    expect(branch).toContain(
+      "gallery.\"parserConfig\"->>'seed' = 'xmf-official-gallery'",
+    );
+    expect(branch).toContain('source."parserConfig"->>\'festivalSourceUrl\'');
+  });
+
   it('honors a timetable source image opt-out before the verified-image check', () => {
     expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(
       `source."parserConfig"->>'publicSourceImage' IS DISTINCT FROM 'false'`,

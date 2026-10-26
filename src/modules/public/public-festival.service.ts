@@ -673,6 +673,18 @@ export class PublicFestivalService {
           .flatMap((entry) => entry.sourceUrls),
       ),
     ];
+    const officialGallerySourceSql = `source."parserConfig"->>'seed' = 'official-artist-gallery'
+      AND source."parserConfig"->>'artistOfficialNameSource' =
+        'official-notice-and-modal-site'
+      AND EXISTS (
+        SELECT 1 FROM crawl_sources gallery
+        WHERE gallery.kind = 'artist-gallery'
+          AND gallery.enabled = true
+          AND gallery.url = source.url
+          AND gallery."parserConfig"->>'seed' = 'xmf-official-gallery'
+          AND gallery."parserConfig"->>'festivalSourceUrl' =
+            source."parserConfig"->>'festivalSourceUrl'
+      )`;
     const profileImages = festivalSourceUrls.length
       ? await this.dataSource.query<
           {
@@ -689,9 +701,7 @@ export class PublicFestivalService {
              source."parserConfig"->>'artistName' AS "artistName",
              source."parserConfig"->>'artistAlias' AS "artistAlias",
              source."parserConfig"->>'seed' AS seed,
-             CASE WHEN source."parserConfig"->>'seed' = 'official-artist-gallery'
-               AND source."parserConfig"->>'artistOfficialNameSource' =
-                 'official-notice-and-modal-site'
+             CASE WHEN ${officialGallerySourceSql}
                THEN source."parserConfig"->>'artistOfficialName'
                ELSE NULL END AS "artistOfficialName", image.id
            FROM crawl_images image
@@ -702,7 +712,9 @@ export class PublicFestivalService {
            ORDER BY source."parserConfig"->>'festivalSourceUrl',
              source."parserConfig"->>'artistName',
              CASE WHEN source."parserConfig"->>'seed' = 'official-gmf-lineup'
-               THEN 0 ELSE 1 END, image."lastSeenAt" DESC`,
+               THEN 0
+               WHEN ${officialGallerySourceSql}
+               THEN 1 ELSE 2 END, image."lastSeenAt" DESC`,
           [festivalSourceUrls],
         )
       : [];
