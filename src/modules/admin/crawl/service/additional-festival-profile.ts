@@ -8,9 +8,10 @@ export const SEOUL_MUSIC_SOURCE_URL = 'https://ticket.yes24.com/Perf/60368';
 interface Profile {
   artistName: string;
   festivalSourceUrl: string;
-  rule: 'antenna' | 'poclanos' | 'paulkim' | 'nerd-connection';
+  rule: 'antenna' | 'poclanos' | 'paulkim' | 'nerd-connection' | 'kimchangwan';
   imageHost: string;
   imagePath: RegExp;
+  imageQuery?: string;
 }
 
 // Only page and artist identities are registered. Image URLs are read from the
@@ -46,6 +47,15 @@ export const ADDITIONAL_FESTIVAL_PROFILES: Readonly<Record<string, Profile>> = {
     imageHost: 'cdn.prod.website-files.com',
     imagePath: /^\/6649fa6f24368d5b7f0e9bc1\/[0-9a-f]{24}_[^/?#]+[.]jpe?g$/i,
   },
+  'https://kr.koreanculture.org/performing-arts/2025/08/06/kmusic-night/kor': {
+    artistName: '김창완밴드',
+    festivalSourceUrl: SEOUL_MUSIC_SOURCE_URL,
+    rule: 'kimchangwan',
+    imageHost: 'images.squarespace-cdn.com',
+    imagePath:
+      /^\/content\/v1\/586ebc34d482e9c69268b69a\/[0-9a-f-]{36}\/[^/?#]+[.]jpe?g$/i,
+    imageQuery: '?format=750w',
+  },
 };
 
 const sqlLiteral = (value: string) => "'" + value.replace(/'/g, "''") + "'";
@@ -58,6 +68,7 @@ export const ADDITIONAL_FESTIVAL_PUBLIC_IMAGE_SQL = Object.entries(
       '^https://' +
       profile.imageHost.replace(/\./g, '[.]') +
       profile.imagePath.source.slice(1, -1).replace(/\\\//g, '/') +
+      (profile.imageQuery ? '[?]format=750w' : '') +
       '$';
     return (
       '(source.url = ' +
@@ -148,6 +159,40 @@ function nerdConnectionImageCandidates(html: string): string[] {
     .filter((value): value is string => Boolean(value));
 }
 
+function kimchangwanImageCandidates(html: string): string[] {
+  if (
+    !/<title>[^<]*K-Music Night: 김창완밴드 &amp; 터치드[^<]*<\/title>/i.test(
+      html,
+    )
+  )
+    return [];
+  const blocks = html.split(/(?=<div class="sqs-block )/i);
+  const candidates: string[] = [];
+  for (let index = 0; index < blocks.length - 1; index++) {
+    if (
+      !/^<div class="[^"]*\bsqs-block-image\b/i.test(blocks[index]) ||
+      !/^<div class="[^"]*\bsqs-block-html\b/i.test(blocks[index + 1]) ||
+      !/<strong>▲ 김창완밴드<\/strong>/.test(blocks[index + 1])
+    )
+      continue;
+    const images = [
+      ...blocks[index].matchAll(
+        /<img\b[^>]*data-sqsp-image-classic-block-image\b[^>]*>/gi,
+      ),
+    ];
+    if (images.length !== 1) return [];
+    const srcset = attr(images[0][0], 'srcset');
+    if (!srcset) return [];
+    const matching = srcset
+      .split(',')
+      .map((entry) => entry.trim().split(/\s+/))
+      .filter((entry) => entry.length === 2 && entry[1] === '750w');
+    if (matching.length !== 1) return [];
+    candidates.push(matching[0][0]);
+  }
+  return candidates;
+}
+
 export function additionalFestivalProfileImageUrl(
   html: string,
   pageUrl: string,
@@ -162,13 +207,15 @@ export function additionalFestivalProfileImageUrl(
         ? poclanosProfileImageCandidates(html, '옥상달빛')
         : profile.rule === 'paulkim'
           ? paulkimImageCandidates(html)
-          : nerdConnectionImageCandidates(html);
+          : profile.rule === 'nerd-connection'
+            ? nerdConnectionImageCandidates(html)
+            : kimchangwanImageCandidates(html);
   if (candidates.length !== 1) return null;
   try {
     const image = checkedUrl(new URL(candidates[0], pageUrl).toString());
     return image.hostname === profile.imageHost &&
       profile.imagePath.test(image.pathname) &&
-      !image.search &&
+      image.search === (profile.imageQuery ?? '') &&
       !image.hash
       ? image
       : null;

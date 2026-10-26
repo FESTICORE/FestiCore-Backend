@@ -18,6 +18,8 @@ const images = {
     'https://image.static.bstage.in/cdn-cgi/image/metadata=none/paulkim/f14d75b4-f328-4832-8fee-9f12fd8bdd7e/d40f80c8-63b1-403b-933a-e898b853778e/ori.jpg',
   'https://www.yoursummer.net/artist/nerd-connection':
     'https://cdn.prod.website-files.com/6649fa6f24368d5b7f0e9bc1/6aa3bcf26a0d432320d3492d_nerd-connection.jpg',
+  'https://kr.koreanculture.org/performing-arts/2025/08/06/kmusic-night/kor':
+    'https://images.squarespace-cdn.com/content/v1/586ebc34d482e9c69268b69a/29d51387-1577-41f8-a74e-c0169ad742df/KakaoTalk_20250519_163031185.jpg?format=750w',
 };
 
 function config(page: string) {
@@ -38,6 +40,11 @@ function html(page: string, image: string): string {
     return `<title>폴킴 공식 홈페이지ㅣPaul Kim Official Homepage</title><meta property="og:image" content="${image}">`;
   if (page === 'https://www.yoursummer.net/artist/nerd-connection')
     return `<title>너드커넥션 Nerd Connection</title><span class="artist-name-bold">너드커넥션</span><img class="image-43" src="${image}">`;
+  if (
+    page ===
+    'https://kr.koreanculture.org/performing-arts/2025/08/06/kmusic-night/kor'
+  )
+    return `<title>K-Music Night: 김창완밴드 &amp; 터치드 &mdash; 뉴욕한국문화원</title><div class="sqs-block sqs-block-image"><img data-sqsp-image-classic-block-image srcset="${image.replace('?format=750w', '?format=500w')} 500w, ${image} 750w"></div><div class="sqs-block sqs-block-html"><strong>▲ 김창완밴드</strong></div>`;
   throw new Error(`Unsupported official profile: ${page}`);
 }
 
@@ -138,6 +145,37 @@ describe('additional official festival performer photos', () => {
         config(page),
       ),
     ).toBeNull();
+  });
+
+  it('takes only the image block immediately before the exact Kim Chang Wan Band caption', () => {
+    const page =
+      'https://kr.koreanculture.org/performing-arts/2025/08/06/kmusic-night/kor';
+    const body = html(page, images[page]);
+    for (const altered of [
+      body.replace('▲ 김창완밴드', '▲ 터치드'),
+      body.replace('sqs-block-image', 'sqs-block-other'),
+      body.replace('sqs-block-html', 'sqs-block-other'),
+      body.replace(
+        '</div><div class="sqs-block sqs-block-html">',
+        '</div><div class="sqs-block sqs-block-html">다른 사진</div><div class="sqs-block sqs-block-html">',
+      ),
+      body.replace(' 750w', ' 1000w'),
+      body + body,
+    ])
+      expect(
+        additionalFestivalProfileImageUrl(altered, page, config(page)),
+      ).toBeNull();
+    expect(
+      additionalFestivalProfileImageUrl(body, page, config(page))?.toString(),
+    ).toBe(images[page]);
+    const origin = ADDITIONAL_FESTIVAL_PUBLIC_IMAGE_SQL.match(
+      /source\.url = 'https:\/\/kr\.koreanculture\.org[^]*?image\."originUrl" ~\* '([^']+)'/,
+    )?.[1];
+    expect(origin).toBeDefined();
+    expect(new RegExp(origin!, 'i').test(images[page])).toBe(true);
+    expect(new RegExp(origin!, 'i').test(images[page] + '&other=1')).toBe(
+      false,
+    );
   });
 
   it('publishes only registered source, festival, artist and origin pairs', () => {
