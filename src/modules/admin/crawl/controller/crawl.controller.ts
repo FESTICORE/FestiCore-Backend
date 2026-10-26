@@ -141,7 +141,8 @@ export class CrawlController {
   @AdminRoles('viewer')
   @ApiOperation({
     summary: '크롤 실행 이력',
-    description: 'viewer 이상. 최신순이며 기본 50개, 최대 100개입니다.',
+    description:
+      'viewer 이상. 최신순이며 기본 50개, 최대 100개입니다. NOL World 상세 수집의 lineupEvidence는 공식 이미지 URL·해시·OCR 원문·상태를 담은 관리자 검토용 비공개 자료이며 출연진이나 공연 시간으로 자동 발행되지 않습니다.',
   })
   @ApiQuery({ name: 'sourceId', required: false, format: 'uuid' })
   @ApiQuery({
