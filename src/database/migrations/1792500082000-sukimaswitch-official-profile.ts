@@ -35,7 +35,7 @@ export class SukimaswitchOfficialProfile1792500082000 implements MigrationInterf
          AND "parserConfig"->>'festivalSourceUrl' = $2
          AND "parserConfig"->>'artistName' = $3
        LIMIT 1`,
-      values,
+      values.slice(0, 3),
     )) as { id: string }[];
     if (disabled.length)
       throw new Error(

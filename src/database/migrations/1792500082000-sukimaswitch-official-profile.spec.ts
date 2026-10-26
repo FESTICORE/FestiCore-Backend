@@ -21,11 +21,22 @@ describe('SUKIMASWITCH official profile source migration', () => {
       query,
     } as unknown as QueryRunner);
     expect(query).toHaveBeenCalledTimes(3);
+    expect(query).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('enabled = false'),
+      values.slice(0, 3),
+    );
     expect(query).toHaveBeenLastCalledWith(
       expect.stringContaining('INSERT INTO crawl_sources'),
       values,
     );
     const statements = query.mock.calls as [string, unknown[]][];
+    for (const [sql, parameters] of statements) {
+      const placeholders = [...sql.matchAll(/\$(\d+)/g)].map((match) =>
+        Number(match[1]),
+      );
+      expect(Math.max(...placeholders)).toBe(parameters.length);
+    }
     expect(statements[2][0]).toContain('1440');
     expect(statements[2][0]).not.toMatch(/imageUrl|imageHint/);
   });
