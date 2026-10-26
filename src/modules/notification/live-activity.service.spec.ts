@@ -34,16 +34,14 @@ describe('LiveActivityService durable queue', () => {
     });
   });
 
-  it('coalesces revisions without resetting the device attempt clock', async () => {
+  it('records business refreshes without touching delivery rows', async () => {
     await service.enqueueDevice(deviceId);
     await service.enqueueUser('user-one', 'fst_one');
     await service.enqueueFestival('fst_one');
-    for (const [sql] of query.mock.calls as Array<[string]>) {
-      expect(sql).toContain('ON CONFLICT ("deviceId") DO UPDATE');
-      expect(sql).toContain(
-        '"revision" = "live_activity_deliveries"."revision" + 1',
-      );
-      expect(sql).not.toContain('"lastAttemptAt" =');
+    expect(query.mock.calls[0][0]).toContain('"live_activity_deliveries"');
+    for (const [sql] of query.mock.calls.slice(1) as Array<[string]>) {
+      expect(sql).toContain('"live_activity_refresh_intents"');
+      expect(sql).not.toContain('"live_activity_deliveries"');
     }
     expect(query.mock.calls[1][1]).toEqual(['user-one', 'fst_one']);
     expect(query.mock.calls[1][0]).toContain('ORDER BY "id"');
@@ -98,6 +96,48 @@ describe('LiveActivityService durable queue', () => {
     expect(query.mock.calls[0][0]).not.toContain('"lastAttemptAt" =');
   });
 
+  it('materializes a matching intent without resetting the attempt clock', async () => {
+    query
+      .mockResolvedValueOnce([
+        { id: '1', deviceId, activityId: 'one', festivalId: 'fst_one' },
+      ])
+      .mockResolvedValueOnce([
+        {
+          liveActivityId: 'one',
+          liveActivityFestivalId: 'fst_one',
+          liveActivityPushToken: 'token',
+        },
+      ]);
+    expect(await service.materializeRefreshIntent()).toBe(true);
+    expect(query.mock.calls[1][0]).toContain('FOR NO KEY UPDATE');
+    expect(query.mock.calls[2][0]).toContain(
+      '"revision" = "live_activity_deliveries"."revision" + 1',
+    );
+    expect(query.mock.calls[2][0]).not.toContain('"lastAttemptAt" =');
+    expect(query.mock.calls[3][0]).toContain(
+      'DELETE FROM "live_activity_refresh_intents"',
+    );
+  });
+
+  it('discards an intent for a stopped or replaced activity', async () => {
+    query
+      .mockResolvedValueOnce([
+        { id: '1', deviceId, activityId: 'old', festivalId: 'fst_one' },
+      ])
+      .mockResolvedValueOnce([
+        {
+          liveActivityId: 'new',
+          liveActivityFestivalId: 'fst_one',
+          liveActivityPushToken: 'token',
+        },
+      ]);
+    expect(await service.materializeRefreshIntent()).toBe(true);
+    expect(query).toHaveBeenCalledTimes(3);
+    expect(query.mock.calls[2][0]).toContain(
+      'DELETE FROM "live_activity_refresh_intents"',
+    );
+  });
+
   it('claims with a lease and preserves a 90-second reservation for a 60-second attempt gap', async () => {
     query.mockResolvedValueOnce([job]);
     expect(await service.claim()).toEqual(job);
@@ -141,6 +181,9 @@ describe('LiveActivityService durable queue', () => {
   });
 
   it('recovers a failed delivery and continues with the next claimed device', async () => {
+    const materialize = jest
+      .spyOn(service, 'materializeRefreshIntent')
+      .mockResolvedValue(false);
     const second = { ...job, deviceId: 'cc9ad155-9145-46e7-9dd4-eb172dc522d1' };
     const claim = jest
       .spyOn(service, 'claim')
@@ -164,6 +207,7 @@ describe('LiveActivityService durable queue', () => {
     ]);
     claim.mockRestore();
     deliver.mockRestore();
+    materialize.mockRestore();
   });
 
   it('sends anonymous devices only public content and schedules the next set boundary', async () => {

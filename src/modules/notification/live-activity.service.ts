@@ -27,6 +27,13 @@ interface Job {
   leaseUntil: Date;
 }
 
+interface RefreshIntent {
+  id: string;
+  deviceId: string;
+  activityId: string;
+  festivalId: string;
+}
+
 interface DeviceTarget {
   userId: string | null;
   liveActivityFestivalId: string | null;
@@ -88,7 +95,7 @@ function nextBoundary(
   return Number.isFinite(next) ? new Date(next) : null;
 }
 
-/** A single durable row per device coalesces updates and preserves its attempt clock. */
+/** Committed refresh intents are materialized into one durable delivery per device. */
 @Injectable()
 export class LiveActivityService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(LiveActivityService.name);
@@ -134,15 +141,10 @@ export class LiveActivityService implements OnModuleInit, OnModuleDestroy {
     manager: EntityManager = this.db.manager,
   ): Promise<void> {
     await manager.query(
-      `INSERT INTO "live_activity_deliveries" ("deviceId")
-      SELECT "id" FROM "devices" WHERE "liveActivityFestivalId" = $1
+      `INSERT INTO "live_activity_refresh_intents" ("deviceId", "activityId", "festivalId")
+      SELECT "id", "liveActivityId", "liveActivityFestivalId" FROM "devices" WHERE "liveActivityFestivalId" = $1
         AND "liveActivityPushToken" IS NOT NULL AND "liveActivityId" IS NOT NULL
-      ORDER BY "id"
-      ON CONFLICT ("deviceId") DO UPDATE SET
-        "revision" = "live_activity_deliveries"."revision" + 1,
-        "active" = true, "status" = 'pending', "leaseId" = NULL,
-        "leaseUntil" = NULL, "nextAttemptAt" = now(), "attempts" = 0,
-        "lastErrorCode" = NULL, "updatedAt" = now()`,
+      ORDER BY "id"`,
       [festivalId],
     );
   }
@@ -153,17 +155,12 @@ export class LiveActivityService implements OnModuleInit, OnModuleDestroy {
     manager: EntityManager = this.db.manager,
   ): Promise<void> {
     await manager.query(
-      `INSERT INTO "live_activity_deliveries" ("deviceId")
-      SELECT "id" FROM "devices" WHERE "userId" = $1
+      `INSERT INTO "live_activity_refresh_intents" ("deviceId", "activityId", "festivalId")
+      SELECT "id", "liveActivityId", "liveActivityFestivalId" FROM "devices" WHERE "userId" = $1
         AND ($2::varchar IS NULL OR "liveActivityFestivalId" = $2)
         AND "liveActivityPushToken" IS NOT NULL
         AND "liveActivityFestivalId" IS NOT NULL AND "liveActivityId" IS NOT NULL
-      ORDER BY "id"
-      ON CONFLICT ("deviceId") DO UPDATE SET
-        "revision" = "live_activity_deliveries"."revision" + 1,
-        "active" = true, "status" = 'pending', "leaseId" = NULL,
-        "leaseUntil" = NULL, "nextAttemptAt" = now(), "attempts" = 0,
-        "lastErrorCode" = NULL, "updatedAt" = now()`,
+      ORDER BY "id"`,
       [userId, festivalId ?? null],
     );
   }
@@ -174,19 +171,14 @@ export class LiveActivityService implements OnModuleInit, OnModuleDestroy {
     manager: EntityManager = this.db.manager,
   ): Promise<void> {
     await manager.query(
-      `INSERT INTO "live_activity_deliveries" ("deviceId")
-      SELECT d."id" FROM "crew_members" m
+      `INSERT INTO "live_activity_refresh_intents" ("deviceId", "activityId", "festivalId")
+      SELECT d."id", d."liveActivityId", d."liveActivityFestivalId" FROM "crew_members" m
       JOIN "devices" d ON d."userId" = m."userId"
       WHERE m."crewId" = $1 AND m."festivalId" = $2
         AND d."liveActivityFestivalId" = $2
         AND d."liveActivityPushToken" IS NOT NULL
         AND d."liveActivityId" IS NOT NULL
-      ORDER BY d."id"
-      ON CONFLICT ("deviceId") DO UPDATE SET
-        "revision" = "live_activity_deliveries"."revision" + 1,
-        "active" = true, "status" = 'pending', "leaseId" = NULL,
-        "leaseUntil" = NULL, "nextAttemptAt" = now(), "attempts" = 0,
-        "lastErrorCode" = NULL, "updatedAt" = now()`,
+      ORDER BY d."id"`,
       [crewId, festivalId],
     );
   }
@@ -198,8 +190,8 @@ export class LiveActivityService implements OnModuleInit, OnModuleDestroy {
   ): Promise<void> {
     if (!crewIds.length && !festivalIds.length) return;
     await manager.query(
-      `INSERT INTO "live_activity_deliveries" ("deviceId")
-      SELECT d."id" FROM "devices" d
+      `INSERT INTO "live_activity_refresh_intents" ("deviceId", "activityId", "festivalId")
+      SELECT d."id", d."liveActivityId", d."liveActivityFestivalId" FROM "devices" d
       WHERE d."liveActivityPushToken" IS NOT NULL
         AND d."liveActivityId" IS NOT NULL
         AND d."liveActivityFestivalId" IS NOT NULL
@@ -212,12 +204,7 @@ export class LiveActivityService implements OnModuleInit, OnModuleDestroy {
               AND m."crewId" = ANY($1::varchar[])
           )
         )
-      ORDER BY d."id"
-      ON CONFLICT ("deviceId") DO UPDATE SET
-        "revision" = "live_activity_deliveries"."revision" + 1,
-        "active" = true, "status" = 'pending', "leaseId" = NULL,
-        "leaseUntil" = NULL, "nextAttemptAt" = now(), "attempts" = 0,
-        "lastErrorCode" = NULL, "updatedAt" = now()`,
+      ORDER BY d."id"`,
       [crewIds, festivalIds],
     );
   }
@@ -229,8 +216,8 @@ export class LiveActivityService implements OnModuleInit, OnModuleDestroy {
     manager: EntityManager,
   ): Promise<void> {
     await manager.query(
-      `INSERT INTO "live_activity_deliveries" ("deviceId")
-      SELECT d."id" FROM "devices" d
+      `INSERT INTO "live_activity_refresh_intents" ("deviceId", "activityId", "festivalId")
+      SELECT d."id", d."liveActivityId", d."liveActivityFestivalId" FROM "devices" d
       WHERE d."liveActivityFestivalId" = $3
         AND d."liveActivityPushToken" IS NOT NULL
         AND d."liveActivityId" IS NOT NULL
@@ -242,12 +229,7 @@ export class LiveActivityService implements OnModuleInit, OnModuleDestroy {
               AND m."userId" = d."userId"
           )
         )
-      ORDER BY d."id"
-      ON CONFLICT ("deviceId") DO UPDATE SET
-        "revision" = "live_activity_deliveries"."revision" + 1,
-        "active" = true, "status" = 'pending', "leaseId" = NULL,
-        "leaseUntil" = NULL, "nextAttemptAt" = now(), "attempts" = 0,
-        "lastErrorCode" = NULL, "updatedAt" = now()`,
+      ORDER BY d."id"`,
       [crewId, removedUserId, festivalId],
     );
   }
@@ -266,9 +248,13 @@ export class LiveActivityService implements OnModuleInit, OnModuleDestroy {
   }
 
   async tick(): Promise<void> {
-    if (this.running || !this.apns.isConfigured()) return;
+    if (this.running) return;
     this.running = true;
     try {
+      for (let i = 0; i < BATCH_SIZE; i++) {
+        if (!(await this.materializeRefreshIntent())) break;
+      }
+      if (!this.apns.isConfigured()) return;
       for (let i = 0; i < BATCH_SIZE; i++) {
         const job = await this.claim();
         if (!job) break;
@@ -290,6 +276,53 @@ export class LiveActivityService implements OnModuleInit, OnModuleDestroy {
     } finally {
       this.running = false;
     }
+  }
+
+  /** An intent is removed only in the transaction that updates its delivery. */
+  async materializeRefreshIntent(): Promise<boolean> {
+    return this.db.transaction(async (manager) => {
+      const intents = await manager.query<RefreshIntent[]>(
+        `SELECT "id", "deviceId", "activityId", "festivalId"
+         FROM "live_activity_refresh_intents" ORDER BY "id"
+         LIMIT 1 FOR UPDATE SKIP LOCKED`,
+      );
+      const intent = intents[0];
+      if (!intent) return false;
+
+      // Registration and stop update the device before its delivery row.
+      const devices = await manager.query<
+        Array<{
+          liveActivityId: string | null;
+          liveActivityFestivalId: string | null;
+          liveActivityPushToken: string | null;
+        }>
+      >(
+        `SELECT "liveActivityId", "liveActivityFestivalId", "liveActivityPushToken"
+         FROM "devices" WHERE "id" = $1 FOR NO KEY UPDATE`,
+        [intent.deviceId],
+      );
+      const device = devices[0];
+      if (
+        device?.liveActivityId === intent.activityId &&
+        device.liveActivityFestivalId === intent.festivalId &&
+        device.liveActivityPushToken
+      ) {
+        await manager.query(
+          `INSERT INTO "live_activity_deliveries" ("deviceId") VALUES ($1)
+           ON CONFLICT ("deviceId") DO UPDATE SET
+             "revision" = "live_activity_deliveries"."revision" + 1,
+             "active" = true, "status" = 'pending', "leaseId" = NULL,
+             "leaseUntil" = NULL, "nextAttemptAt" = now(), "attempts" = 0,
+             "lastErrorCode" = NULL, "updatedAt" = now()`,
+          [intent.deviceId],
+        );
+      }
+      await manager.query(
+        `DELETE FROM "live_activity_refresh_intents" WHERE "id" = $1`,
+        [intent.id],
+      );
+      return true;
+    });
   }
 
   /** 90 seconds between reservations covers up to 30 seconds before APNs begins. */
