@@ -40,10 +40,12 @@ export function nolWorldDetailImageUrls(html: string, pageUrl: string): URL[] {
     .replace(/\\\//g, '/')
     .replace(/&amp;/gi, '&');
   for (const match of normalized.matchAll(
-    /https:\/\/ticketimage\.interpark\.com\/Play\/image\/etc\/[\w./-]+\.(?:jpe?g|png|webp)/gi,
+    /https?:\/\/ticketimage\.interpark\.com\/Play\/image\/etc\/[\w./-]+\.(?:jpe?g|png|webp)/gi,
   )) {
     try {
-      const image = checkedUrl(match[0]);
+      // The official detail HTML uses http in data-original-src. Fetch only
+      // the same known image host over HTTPS after product/path validation.
+      const image = checkedUrl(match[0].replace(/^http:/i, 'https:'));
       if (
         image.hostname !== 'ticketimage.interpark.com' ||
         !new RegExp(
