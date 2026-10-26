@@ -34,18 +34,62 @@ describe('LiveActivityService durable queue', () => {
     });
   });
 
-  it('coalesces revisions without resetting the device attempt clock', async () => {
+  it('records business refreshes without touching delivery rows', async () => {
     await service.enqueueDevice(deviceId);
     await service.enqueueUser('user-one', 'fst_one');
     await service.enqueueFestival('fst_one');
-    for (const [sql] of query.mock.calls as Array<[string]>) {
-      expect(sql).toContain('ON CONFLICT ("deviceId") DO UPDATE');
-      expect(sql).toContain(
-        '"revision" = "live_activity_deliveries"."revision" + 1',
-      );
-      expect(sql).not.toContain('"lastAttemptAt" =');
+    expect(query.mock.calls[0][0]).toContain('"live_activity_deliveries"');
+    for (const [sql] of query.mock.calls.slice(1) as Array<[string]>) {
+      expect(sql).toContain('"live_activity_refresh_intents"');
+      expect(sql).not.toContain('"live_activity_deliveries"');
     }
     expect(query.mock.calls[1][1]).toEqual(['user-one', 'fst_one']);
+    expect(query.mock.calls[1][0]).toContain('ORDER BY "id"');
+    expect(query.mock.calls[2][0]).toContain('ORDER BY "id"');
+    expect(query.mock.calls[1][0]).toContain('FOR KEY SHARE SKIP LOCKED');
+    expect(query.mock.calls[2][0]).toContain('FOR KEY SHARE SKIP LOCKED');
+  });
+
+  it('enqueues only active festival devices belonging to crew members', async () => {
+    await service.enqueueCrewMembers('crew-1', 'fst_one');
+    expect(query.mock.calls[0][0]).toContain(
+      'JOIN "devices" d ON d."userId" = m."userId"',
+    );
+    expect(query.mock.calls[0][0]).toContain('d."liveActivityFestivalId" = $2');
+    expect(query.mock.calls[0][0]).not.toContain('"lastAttemptAt" =');
+    expect(query.mock.calls[0][0]).toContain('ORDER BY d."id"');
+    expect(query.mock.calls[0][0]).toContain('FOR KEY SHARE OF d SKIP LOCKED');
+    expect(query.mock.calls[0][1]).toEqual(['crew-1', 'fst_one']);
+  });
+
+  it('coalesces withdrawal impact into one ordered enqueue', async () => {
+    await service.enqueueWithdrawalImpact(
+      ['crew-1'],
+      ['fst_one'],
+      manager as never,
+    );
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(query.mock.calls[0][0]).toContain('ORDER BY d."id"');
+    expect(query.mock.calls[0][0]).toContain('m."crewId" = ANY($1::varchar[])');
+    expect(query.mock.calls[0][1]).toEqual([['crew-1'], ['fst_one']]);
+  });
+
+  it('coalesces crew removal targets into one ordered enqueue', async () => {
+    await service.enqueueCrewRemoval(
+      'crew-1',
+      'removed-user',
+      'fst_one',
+      manager as never,
+    );
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(query.mock.calls[0][0]).toContain('ORDER BY d."id"');
+    expect(query.mock.calls[0][0]).toContain('d."userId" = $2');
+    expect(query.mock.calls[0][0]).toContain('m."crewId" = $1');
+    expect(query.mock.calls[0][1]).toEqual([
+      'crew-1',
+      'removed-user',
+      'fst_one',
+    ]);
   });
 
   it('keeps the attempt clock when an activity stops', async () => {
@@ -53,6 +97,51 @@ describe('LiveActivityService durable queue', () => {
     expect(query.mock.calls[0][0]).toContain('"active" = false');
     expect(query.mock.calls[0][0]).not.toContain('DELETE');
     expect(query.mock.calls[0][0]).not.toContain('"lastAttemptAt" =');
+  });
+
+  it('materializes a matching intent without resetting the attempt clock', async () => {
+    query
+      .mockResolvedValueOnce([{ id: '1', deviceId }])
+      .mockResolvedValueOnce([
+        {
+          liveActivityId: 'one',
+          liveActivityFestivalId: 'fst_one',
+          liveActivityPushToken: 'token',
+        },
+      ])
+      .mockResolvedValueOnce([
+        { id: '1', deviceId, activityId: 'one', festivalId: 'fst_one' },
+      ]);
+    expect(await service.materializeRefreshIntent()).toBe(true);
+    expect(query.mock.calls[1][0]).toContain('FOR NO KEY UPDATE');
+    expect(query.mock.calls[2][0]).toContain('FOR UPDATE SKIP LOCKED');
+    expect(query.mock.calls[3][0]).toContain(
+      '"revision" = "live_activity_deliveries"."revision" + 1',
+    );
+    expect(query.mock.calls[3][0]).not.toContain('"lastAttemptAt" =');
+    expect(query.mock.calls[4][0]).toContain(
+      'DELETE FROM "live_activity_refresh_intents"',
+    );
+  });
+
+  it('discards an intent for a stopped or replaced activity', async () => {
+    query
+      .mockResolvedValueOnce([{ id: '1', deviceId }])
+      .mockResolvedValueOnce([
+        {
+          liveActivityId: 'new',
+          liveActivityFestivalId: 'fst_one',
+          liveActivityPushToken: 'token',
+        },
+      ])
+      .mockResolvedValueOnce([
+        { id: '1', deviceId, activityId: 'old', festivalId: 'fst_one' },
+      ]);
+    expect(await service.materializeRefreshIntent()).toBe(true);
+    expect(query).toHaveBeenCalledTimes(4);
+    expect(query.mock.calls[3][0]).toContain(
+      'DELETE FROM "live_activity_refresh_intents"',
+    );
   });
 
   it('claims with a lease and preserves a 90-second reservation for a 60-second attempt gap', async () => {
@@ -98,6 +187,9 @@ describe('LiveActivityService durable queue', () => {
   });
 
   it('recovers a failed delivery and continues with the next claimed device', async () => {
+    const materialize = jest
+      .spyOn(service, 'materializeRefreshIntent')
+      .mockResolvedValue(false);
     const second = { ...job, deviceId: 'cc9ad155-9145-46e7-9dd4-eb172dc522d1' };
     const claim = jest
       .spyOn(service, 'claim')
@@ -121,6 +213,7 @@ describe('LiveActivityService durable queue', () => {
     ]);
     claim.mockRestore();
     deliver.mockRestore();
+    materialize.mockRestore();
   });
 
   it('sends anonymous devices only public content and schedules the next set boundary', async () => {
@@ -166,6 +259,144 @@ describe('LiveActivityService durable queue', () => {
     const finish = query.mock.calls.at(-1);
     expect(finish?.[1]?.[3]).toBe('pending');
     expect(finish?.[1]?.[5]).toEqual(new Date('2099-01-01T10:00:00Z'));
+  });
+
+  it('refreshes one hour before a published day ends without repeating a delayed boundary', async () => {
+    const prepare = () => {
+      query.mockReset();
+      query
+        .mockResolvedValueOnce([
+          {
+            userId: 'user-one',
+            liveActivityFestivalId: 'fst_one',
+            liveActivityId: 'activity-one',
+            liveActivityPushToken: 'a'.repeat(64),
+            apnsEnvironment: 'sandbox',
+          },
+        ])
+        .mockResolvedValueOnce([{ revision: job.revision }])
+        .mockResolvedValueOnce([
+          {
+            published: {
+              flagsEnabled: true,
+              days: [
+                {
+                  startsAt: '2026-11-20T09:00:00+09:00',
+                  endsAt: '2026-11-20T11:00:00+09:00',
+                },
+              ],
+              sets: [
+                {
+                  id: 'set_current',
+                  stageId: 'stage_one',
+                  artist: 'Current',
+                  startsAt: '2026-11-20T09:30:00+09:00',
+                  endsAt: '2026-11-20T10:45:00+09:00',
+                },
+                {
+                  id: 'set_future',
+                  stageId: 'stage_two',
+                  artist: 'Mine',
+                  startsAt: '2026-11-20T10:30:00+09:00',
+                  endsAt: '2026-11-20T11:00:00+09:00',
+                },
+              ],
+            },
+          },
+        ])
+        .mockResolvedValueOnce([
+          {
+            id: 'flag-one',
+            festivalId: 'fst_one',
+            status: 'active',
+            visibility: 'public',
+            hidden: false,
+            zoneId: 'zone-one',
+            activity: null,
+          },
+        ])
+        .mockResolvedValueOnce([{ id: 'user-one' }])
+        .mockResolvedValueOnce([{ setIds: ['set_future'] }])
+        .mockResolvedValueOnce([{ flagId: 'flag-one' }])
+        .mockResolvedValueOnce([{ flagId: 'flag-one' }])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ canSend: true }]);
+    };
+
+    jest.useFakeTimers().setSystemTime(new Date('2026-11-20T00:45:00Z'));
+    try {
+      prepare();
+      await service.deliver(job);
+      expect(query.mock.calls.at(-1)?.[1]?.[5]).toEqual(
+        new Date('2026-11-20T01:00:00Z'),
+      );
+      const [token, environment, sentState] = apns.sendLiveActivityUpdate.mock
+        .calls[0] as [
+        string,
+        string,
+        {
+          nextMine: { setId: string } | null;
+          pinnedFlag: { flagId: string } | null;
+          leaveAt: null;
+        },
+      ];
+      expect(token).toBe('a'.repeat(64));
+      expect(environment).toBe('sandbox');
+      expect(sentState.nextMine?.setId).toBe('set_future');
+      expect(sentState.pinnedFlag?.flagId).toBe('flag-one');
+      expect(sentState.leaveAt).toBeNull();
+
+      // A worker delayed past the boundary still sends current personal state;
+      // the next due time advances instead of replaying the one-hour trigger.
+      jest.setSystemTime(new Date('2026-11-20T01:05:00Z'));
+      prepare();
+      await service.deliver(job);
+      expect(query.mock.calls.at(-1)?.[1]?.[5]).toEqual(
+        new Date('2026-11-20T01:30:00Z'),
+      );
+      expect(apns.sendLiveActivityUpdate).toHaveBeenCalledTimes(2);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('keeps the end-minus-hour boundary for a published day shorter than one hour', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-11-19T23:55:00Z'));
+    try {
+      query
+        .mockResolvedValueOnce([
+          {
+            userId: null,
+            liveActivityFestivalId: 'fst_one',
+            liveActivityId: 'activity-one',
+            liveActivityPushToken: 'a'.repeat(64),
+            apnsEnvironment: 'sandbox',
+          },
+        ])
+        .mockResolvedValueOnce([{ revision: job.revision }])
+        .mockResolvedValueOnce([
+          {
+            published: {
+              flagsEnabled: false,
+              days: [
+                {
+                  startsAt: '2026-11-20T09:30:00+09:00',
+                  endsAt: '2026-11-20T10:00:00+09:00',
+                },
+              ],
+              sets: [],
+            },
+          },
+        ])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ canSend: true }]);
+      await service.deliver(job);
+      expect(query.mock.calls.at(-1)?.[1]?.[5]).toEqual(
+        new Date('2026-11-20T00:00:00Z'),
+      );
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('clears only the exact failed activity token on a permanent APNs rejection', async () => {

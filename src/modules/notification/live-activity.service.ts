@@ -27,6 +27,13 @@ interface Job {
   leaseUntil: Date;
 }
 
+interface RefreshIntent {
+  id: string;
+  deviceId: string;
+  activityId: string;
+  festivalId: string;
+}
+
 interface DeviceTarget {
   userId: string | null;
   liveActivityFestivalId: string | null;
@@ -73,12 +80,22 @@ function publishedSets(
 function nextBoundary(
   sets: LiveActivitySet[],
   member: LiveActivityMember | null,
+  days: Record<string, unknown>[],
   now: Date,
 ): Date | null {
   const future = sets
     .flatMap((set) => [set.startsAt, set.endsAt])
     .filter((value): value is string => value !== null)
     .map((value) => Date.parse(value));
+  for (const day of days) {
+    if (typeof day.startsAt !== 'string' || typeof day.endsAt !== 'string')
+      continue;
+    const start = Date.parse(day.startsAt);
+    const end = Date.parse(day.endsAt);
+    if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+      future.push(end - 60 * 60_000);
+    }
+  }
   if (member?.crew?.gather && !member.crew.archived) {
     future.push(Date.parse(member.crew.gather.at) + 10 * 60_000);
   }
@@ -88,7 +105,7 @@ function nextBoundary(
   return Number.isFinite(next) ? new Date(next) : null;
 }
 
-/** A single durable row per device coalesces updates and preserves its attempt clock. */
+/** Committed refresh intents are materialized into one durable delivery per device. */
 @Injectable()
 export class LiveActivityService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(LiveActivityService.name);
@@ -134,14 +151,10 @@ export class LiveActivityService implements OnModuleInit, OnModuleDestroy {
     manager: EntityManager = this.db.manager,
   ): Promise<void> {
     await manager.query(
-      `INSERT INTO "live_activity_deliveries" ("deviceId")
-      SELECT "id" FROM "devices" WHERE "liveActivityFestivalId" = $1
+      `INSERT INTO "live_activity_refresh_intents" ("deviceId", "activityId", "festivalId")
+      SELECT "id", "liveActivityId", "liveActivityFestivalId" FROM "devices" WHERE "liveActivityFestivalId" = $1
         AND "liveActivityPushToken" IS NOT NULL AND "liveActivityId" IS NOT NULL
-      ON CONFLICT ("deviceId") DO UPDATE SET
-        "revision" = "live_activity_deliveries"."revision" + 1,
-        "active" = true, "status" = 'pending', "leaseId" = NULL,
-        "leaseUntil" = NULL, "nextAttemptAt" = now(), "attempts" = 0,
-        "lastErrorCode" = NULL, "updatedAt" = now()`,
+      ORDER BY "id" FOR KEY SHARE SKIP LOCKED`,
       [festivalId],
     );
   }
@@ -152,17 +165,82 @@ export class LiveActivityService implements OnModuleInit, OnModuleDestroy {
     manager: EntityManager = this.db.manager,
   ): Promise<void> {
     await manager.query(
-      `INSERT INTO "live_activity_deliveries" ("deviceId")
-      SELECT "id" FROM "devices" WHERE "userId" = $1
+      `INSERT INTO "live_activity_refresh_intents" ("deviceId", "activityId", "festivalId")
+      SELECT "id", "liveActivityId", "liveActivityFestivalId" FROM "devices" WHERE "userId" = $1
         AND ($2::varchar IS NULL OR "liveActivityFestivalId" = $2)
         AND "liveActivityPushToken" IS NOT NULL
         AND "liveActivityFestivalId" IS NOT NULL AND "liveActivityId" IS NOT NULL
-      ON CONFLICT ("deviceId") DO UPDATE SET
-        "revision" = "live_activity_deliveries"."revision" + 1,
-        "active" = true, "status" = 'pending', "leaseId" = NULL,
-        "leaseUntil" = NULL, "nextAttemptAt" = now(), "attempts" = 0,
-        "lastErrorCode" = NULL, "updatedAt" = now()`,
+      ORDER BY "id" FOR KEY SHARE SKIP LOCKED`,
       [userId, festivalId ?? null],
+    );
+  }
+
+  async enqueueCrewMembers(
+    crewId: string,
+    festivalId: string,
+    manager: EntityManager = this.db.manager,
+  ): Promise<void> {
+    await manager.query(
+      `INSERT INTO "live_activity_refresh_intents" ("deviceId", "activityId", "festivalId")
+      SELECT d."id", d."liveActivityId", d."liveActivityFestivalId" FROM "crew_members" m
+      JOIN "devices" d ON d."userId" = m."userId"
+      WHERE m."crewId" = $1 AND m."festivalId" = $2
+        AND d."liveActivityFestivalId" = $2
+        AND d."liveActivityPushToken" IS NOT NULL
+        AND d."liveActivityId" IS NOT NULL
+      ORDER BY d."id" FOR KEY SHARE OF d SKIP LOCKED`,
+      [crewId, festivalId],
+    );
+  }
+
+  async enqueueWithdrawalImpact(
+    crewIds: string[],
+    festivalIds: string[],
+    manager: EntityManager,
+  ): Promise<void> {
+    if (!crewIds.length && !festivalIds.length) return;
+    await manager.query(
+      `INSERT INTO "live_activity_refresh_intents" ("deviceId", "activityId", "festivalId")
+      SELECT d."id", d."liveActivityId", d."liveActivityFestivalId" FROM "devices" d
+      WHERE d."liveActivityPushToken" IS NOT NULL
+        AND d."liveActivityId" IS NOT NULL
+        AND d."liveActivityFestivalId" IS NOT NULL
+        AND (
+          d."liveActivityFestivalId" = ANY($2::varchar[])
+          OR EXISTS (
+            SELECT 1 FROM "crew_members" m
+            WHERE m."userId" = d."userId"
+              AND m."festivalId" = d."liveActivityFestivalId"
+              AND m."crewId" = ANY($1::varchar[])
+          )
+        )
+      ORDER BY d."id" FOR KEY SHARE OF d SKIP LOCKED`,
+      [crewIds, festivalIds],
+    );
+  }
+
+  async enqueueCrewRemoval(
+    crewId: string,
+    removedUserId: string,
+    festivalId: string,
+    manager: EntityManager,
+  ): Promise<void> {
+    await manager.query(
+      `INSERT INTO "live_activity_refresh_intents" ("deviceId", "activityId", "festivalId")
+      SELECT d."id", d."liveActivityId", d."liveActivityFestivalId" FROM "devices" d
+      WHERE d."liveActivityFestivalId" = $3
+        AND d."liveActivityPushToken" IS NOT NULL
+        AND d."liveActivityId" IS NOT NULL
+        AND (
+          d."userId" = $2
+          OR EXISTS (
+            SELECT 1 FROM "crew_members" m
+            WHERE m."crewId" = $1 AND m."festivalId" = $3
+              AND m."userId" = d."userId"
+          )
+        )
+      ORDER BY d."id" FOR KEY SHARE OF d SKIP LOCKED`,
+      [crewId, removedUserId, festivalId],
     );
   }
 
@@ -180,9 +258,13 @@ export class LiveActivityService implements OnModuleInit, OnModuleDestroy {
   }
 
   async tick(): Promise<void> {
-    if (this.running || !this.apns.isConfigured()) return;
+    if (this.running) return;
     this.running = true;
     try {
+      for (let i = 0; i < BATCH_SIZE; i++) {
+        if (!(await this.materializeRefreshIntent())) break;
+      }
+      if (!this.apns.isConfigured()) return;
       for (let i = 0; i < BATCH_SIZE; i++) {
         const job = await this.claim();
         if (!job) break;
@@ -204,6 +286,63 @@ export class LiveActivityService implements OnModuleInit, OnModuleDestroy {
     } finally {
       this.running = false;
     }
+  }
+
+  /** An intent is removed only in the transaction that updates its delivery. */
+  async materializeRefreshIntent(): Promise<boolean> {
+    return this.db.transaction(async (manager) => {
+      const candidates = await manager.query<
+        Array<Pick<RefreshIntent, 'id' | 'deviceId'>>
+      >(
+        `SELECT "id", "deviceId" FROM "live_activity_refresh_intents"
+         ORDER BY "id" LIMIT 1`,
+      );
+      const candidate = candidates[0];
+      if (!candidate) return false;
+
+      // Device deletion cascades to intents. Lock the device first so the
+      // materializer never holds an intent while waiting for that deletion.
+      const devices = await manager.query<
+        Array<{
+          liveActivityId: string | null;
+          liveActivityFestivalId: string | null;
+          liveActivityPushToken: string | null;
+        }>
+      >(
+        `SELECT "liveActivityId", "liveActivityFestivalId", "liveActivityPushToken"
+         FROM "devices" WHERE "id" = $1 FOR NO KEY UPDATE`,
+        [candidate.deviceId],
+      );
+      const intents = await manager.query<RefreshIntent[]>(
+        `SELECT "id", "deviceId", "activityId", "festivalId"
+         FROM "live_activity_refresh_intents" WHERE "id" = $1
+         FOR UPDATE SKIP LOCKED`,
+        [candidate.id],
+      );
+      const intent = intents[0];
+      if (!intent) return false;
+      const device = devices[0];
+      if (
+        device?.liveActivityId === intent.activityId &&
+        device.liveActivityFestivalId === intent.festivalId &&
+        device.liveActivityPushToken
+      ) {
+        await manager.query(
+          `INSERT INTO "live_activity_deliveries" ("deviceId") VALUES ($1)
+           ON CONFLICT ("deviceId") DO UPDATE SET
+             "revision" = "live_activity_deliveries"."revision" + 1,
+             "active" = true, "status" = 'pending', "leaseId" = NULL,
+             "leaseUntil" = NULL, "nextAttemptAt" = now(), "attempts" = 0,
+             "lastErrorCode" = NULL, "updatedAt" = now()`,
+          [intent.deviceId],
+        );
+      }
+      await manager.query(
+        `DELETE FROM "live_activity_refresh_intents" WHERE "id" = $1`,
+        [intent.id],
+      );
+      return true;
+    });
   }
 
   /** 90 seconds between reservations covers up to 30 seconds before APNs begins. */
@@ -289,7 +428,7 @@ export class LiveActivityService implements OnModuleInit, OnModuleDestroy {
         flags,
         member,
       });
-      const boundary = nextBoundary(sets, member, now);
+      const boundary = nextBoundary(sets, member, records(pack.days), now);
 
       // A late send could approach lease expiry and defeat crash recovery's
       // persisted 90-second reservation. Requeue instead of attempting it.

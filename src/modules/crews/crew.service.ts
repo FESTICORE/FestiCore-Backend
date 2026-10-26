@@ -9,10 +9,11 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash, randomBytes, randomUUID } from 'crypto';
-import { EntityManager, Repository } from 'typeorm';
+import { EntityManager, IsNull, Repository } from 'typeorm';
 import { AdminFestival } from '../admin/festival/festival.entity';
 import { User } from '../auth/entity/user.entity';
 import { SocialNotificationService } from '../notification/social-notification.service';
+import { LiveActivityService } from '../notification/live-activity.service';
 import {
   Crew,
   CrewGather,
@@ -75,6 +76,7 @@ export class CrewService {
     private readonly festivals: Repository<AdminFestival>,
     @InjectRepository(User) private readonly users: Repository<User>,
     private readonly socialNotifications: SocialNotificationService,
+    private readonly liveActivity: LiveActivityService,
   ) {}
 
   private async festival(id: string): Promise<AdminFestival> {
@@ -99,8 +101,21 @@ export class CrewService {
   private async active(crew: Crew): Promise<void> {
     const festival = await this.festival(crew.festivalId);
     if (!crew.archivedAt && Date.now() >= this.archiveTime(festival)) {
-      crew.archivedAt = new Date();
-      await this.crews.save(crew);
+      await this.crews.manager.transaction(async (manager) => {
+        const archived = await manager
+          .getRepository(Crew)
+          .update(
+            { id: crew.id, archivedAt: IsNull() },
+            { archivedAt: new Date() },
+          );
+        if (archived.affected)
+          await this.liveActivity.enqueueCrewMembers(
+            crew.id,
+            crew.festivalId,
+            manager,
+          );
+      });
+      throw new GoneException(error('CREW_ARCHIVED', '보관된 크루입니다.'));
     }
     if (crew.archivedAt)
       throw new GoneException(error('CREW_ARCHIVED', '보관된 크루입니다.'));
@@ -293,6 +308,11 @@ export class CrewService {
             statusUpdatedAt: null,
           }),
         );
+        await this.liveActivity.enqueueCrewMembers(
+          row.id,
+          row.festivalId,
+          manager,
+        );
         return row;
       });
       return this.display(crew, userId);
@@ -419,6 +439,11 @@ export class CrewService {
             state: null,
             statusUpdatedAt: null,
           }),
+        );
+        await this.liveActivity.enqueueCrewMembers(
+          row.id,
+          row.festivalId,
+          manager,
         );
         return row;
       });
@@ -575,6 +600,7 @@ export class CrewService {
           },
         });
       }
+      const previousState = member.state;
       member.zoneId =
         body.state === 'leaving' ? null : (body.zoneId ?? member.zoneId);
       member.state = body.state ?? member.state;
@@ -587,6 +613,12 @@ export class CrewService {
         updatedAt: member.statusUpdatedAt,
       };
       await this.socialNotifications.enqueueCrewStatus(manager, crew, userId);
+      if (previousState !== member.state)
+        await this.liveActivity.enqueueCrewMembers(
+          id,
+          crew.festivalId,
+          manager,
+        );
       return remember(response);
     });
   }
@@ -623,6 +655,7 @@ export class CrewService {
         userId,
         saved,
       );
+      await this.liveActivity.enqueueCrewMembers(id, crew.festivalId, manager);
       return {
         zoneId: saved.zoneId,
         byUserId: saved.byUserId,
@@ -639,8 +672,16 @@ export class CrewService {
     const updated = await this.crews.manager.transaction(async (manager) => {
       const locked = await this.lockedCrew(manager, id, userId);
       this.owner(locked, userId);
+      const changed = locked.name !== nextName;
       locked.name = nextName;
-      return manager.getRepository(Crew).save(locked);
+      const saved = await manager.getRepository(Crew).save(locked);
+      if (changed)
+        await this.liveActivity.enqueueCrewMembers(
+          id,
+          crew.festivalId,
+          manager,
+        );
+      return saved;
     });
     return this.display(updated, userId);
   }
@@ -678,6 +719,12 @@ export class CrewService {
           error('NOT_FOUND', '멤버를 찾을 수 없습니다.'),
         );
       await members.delete({ crewId: id, userId });
+      await this.liveActivity.enqueueCrewRemoval(
+        id,
+        userId,
+        crew.festivalId,
+        manager,
+      );
     });
   }
 
@@ -715,6 +762,7 @@ export class CrewService {
         locked,
         callerId,
       );
+      await this.liveActivity.enqueueCrewMembers(id, crew.festivalId, manager);
       await manager.getRepository(Crew).delete({ id });
     });
   }

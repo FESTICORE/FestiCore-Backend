@@ -13,6 +13,7 @@ import { SocialLoginDto } from '../dto/social-login.dto';
 import { RefreshToken } from '../entity/refresh-token.entity';
 import { User } from '../entity/user.entity';
 import { FlagPackSyncService } from '../../flags/flag-pack-sync.service';
+import { LiveActivityService } from '../../notification/live-activity.service';
 import type { SocialProfile } from '../types/social-profile';
 import type { OauthGrant } from '../types/social-profile';
 import { AppleService } from './apple.service';
@@ -70,6 +71,7 @@ export class AuthService {
     private readonly dataSource: DataSource,
     private readonly appleRetry: AppleRevokeRetryService,
     private readonly flagPackSync: FlagPackSyncService,
+    private readonly liveActivity: LiveActivityService,
   ) {}
 
   async login(dto: SocialLoginDto): Promise<LoginResult> {
@@ -317,6 +319,13 @@ export class AuthService {
           `SELECT "id" FROM "crews" WHERE "ownerId" = $1 ORDER BY "id" FOR UPDATE`,
           [userId],
         );
+        const memberCrews = await manager.query<
+          { crewId: string; festivalId: string }[]
+        >(
+          `SELECT "crewId", "festivalId" FROM "crew_members"
+           WHERE "userId" = $1 ORDER BY "crewId"`,
+          [userId],
+        );
         for (const crew of ownedCrews) {
           const successors = await manager.query<{ userId: string }[]>(
             `SELECT "userId" FROM "crew_members"
@@ -337,9 +346,14 @@ export class AuthService {
         }
         // 소유 깃발과 팔로우 중인 깃발을 ID 순서로 잠가 기수 변경/팔로워 수 갱신을 직렬화한다.
         const affectedFlags = await manager.query<
-          { id: string; ownerId: string | null }[]
+          {
+            id: string;
+            ownerId: string | null;
+            festivalId: string;
+            hidden: boolean;
+          }[]
         >(
-          `SELECT "id", "ownerId" FROM "flags"
+          `SELECT "id", "ownerId", "festivalId", "hidden" FROM "flags"
          WHERE "ownerId" = $1 OR "id" IN (
            SELECT "flagId" FROM "flag_follows" WHERE "userId" = $1
          ) OR "id" IN (
@@ -347,6 +361,22 @@ export class AuthService {
          ) ORDER BY "id" FOR UPDATE`,
           [userId],
         );
+        // 탈퇴로 재계산하거나 갱신할 축제 행을 동일한 순서로 먼저 잠근다.
+        // 기기/사용자 삭제보다 앞서 잡아 아래 팩 동기화까지 잠금을 유지한다.
+        const affectedFestivalIds = [
+          ...new Set([
+            ...memberCrews.map((crew) => crew.festivalId),
+            ...affectedFlags.map((flag) => flag.festivalId),
+          ]),
+        ].sort();
+        if (affectedFestivalIds.length) {
+          await manager.query(
+            `SELECT "id" FROM "admin_festivals"
+             WHERE "id" = ANY($1::varchar[]) ORDER BY "id" FOR UPDATE`,
+            [affectedFestivalIds],
+          );
+        }
+        const hiddenFestivals = new Set<string>();
         for (const flag of affectedFlags) {
           if (flag.ownerId !== userId) continue;
           const successors = await manager.query<{ userId: string }[]>(
@@ -365,6 +395,7 @@ export class AuthService {
               [flag.id, successors[0].userId],
             );
           } else {
+            if (!flag.hidden) hiddenFestivals.add(flag.festivalId);
             await manager.query(
               `UPDATE "flags" SET "ownerId" = NULL, "hidden" = true, "updatedAt" = now() WHERE "id" = $1`,
               [flag.id],
@@ -430,12 +461,18 @@ export class AuthService {
             [flag.id],
           );
         }
-        if (affectedFlags.length)
-          return this.flagPackSync.syncMany(
-            affectedFlags.map((flag) => flag.id),
-            manager,
-          );
-        return [];
+        const changedFestivals = affectedFlags.length
+          ? await this.flagPackSync.syncMany(
+              affectedFlags.map((flag) => flag.id),
+              manager,
+            )
+          : [];
+        await this.liveActivity.enqueueWithdrawalImpact(
+          memberCrews.map((crew) => crew.crewId),
+          [...hiddenFestivals],
+          manager,
+        );
+        return changedFestivals;
       },
     );
     if (changedFestivals?.length)

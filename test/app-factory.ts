@@ -18,6 +18,7 @@ import { AuthService } from '../src/modules/auth/service/auth.service';
 import { GoogleService } from '../src/modules/auth/service/google.service';
 import { TokenService } from '../src/modules/auth/service/token.service';
 import { FlagPackSyncService } from '../src/modules/flags/flag-pack-sync.service';
+import { LiveActivityService } from '../src/modules/notification/live-activity.service';
 import { HealthController } from '../src/modules/health/controller/health.controller';
 import { HealthService } from '../src/modules/health/service/health.service';
 import { LegalController } from '../src/modules/legal/legal.controller';
@@ -69,6 +70,9 @@ export async function createTestApp(): Promise<TestContext> {
   const flagPackSync = {
     syncMany: jest.fn().mockResolvedValue(undefined),
     invalidatePacks: jest.fn().mockResolvedValue(undefined),
+  };
+  const liveActivity = {
+    enqueueWithdrawalImpact: jest.fn().mockResolvedValue(undefined),
   };
   const dataSource = {
     query: jest.fn().mockResolvedValue([{ '?column?': 1 }]),
@@ -196,6 +200,7 @@ export async function createTestApp(): Promise<TestContext> {
       { provide: AppleService, useValue: apple },
       { provide: AppleRevokeRetryService, useValue: appleRetry },
       { provide: FlagPackSyncService, useValue: flagPackSync },
+      { provide: LiveActivityService, useValue: liveActivity },
       { provide: DataSource, useValue: dataSource },
       { provide: CacheService, useValue: cache },
       { provide: getRepositoryToken(User), useValue: users },

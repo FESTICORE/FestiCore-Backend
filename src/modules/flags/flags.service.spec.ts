@@ -7,6 +7,7 @@ import { User } from '../auth/entity/user.entity';
 import { ImageStorageService } from '../storage/image-storage.service';
 import { FlagPackSyncService } from './flag-pack-sync.service';
 import { SocialNotificationService } from '../notification/social-notification.service';
+import { LiveActivityService } from '../notification/live-activity.service';
 import {
   Flag,
   FlagBearer,
@@ -63,11 +64,31 @@ describe('FlagsService security boundaries', () => {
   const transactionalFlags = {
     findOne: jest.fn().mockResolvedValue(flag),
     save: jest.fn().mockImplementation((value: Flag) => Promise.resolve(value)),
+    createQueryBuilder: jest.fn(() => ({
+      setLock: () => ({
+        where: () => ({ getOne: () => Promise.resolve(flag) }),
+      }),
+    })),
+  };
+  const transactionalFollows = { exists: jest.fn().mockResolvedValue(true) };
+  const transactionalPins = {
+    findOne: jest.fn(),
+    create: (value: unknown) => value,
+    save: jest.fn().mockResolvedValue(undefined),
+  };
+  const transactionalReports = {
+    exists: jest.fn().mockResolvedValue(false),
+    create: (value: unknown) => value,
+    save: jest.fn().mockResolvedValue({ id: 'report-1' }),
   };
   const manager = {
+    query: jest.fn().mockResolvedValue([{ id: 'user' }]),
     getRepository: jest.fn((entity: unknown) => {
       if (entity === FlagBearerCode) return codes;
       if (entity === Flag) return transactionalFlags;
+      if (entity === FlagFollow) return transactionalFollows;
+      if (entity === FlagPin) return transactionalPins;
+      if (entity === FlagReport) return transactionalReports;
       throw new Error('Unexpected repository');
     }),
   };
@@ -77,6 +98,10 @@ describe('FlagsService security boundaries', () => {
     ),
   };
   const audit = { record: jest.fn().mockResolvedValue(undefined) };
+  const liveActivity = {
+    enqueueUser: jest.fn().mockResolvedValue(undefined),
+    enqueueFestival: jest.fn().mockResolvedValue(undefined),
+  };
   const sync = jest.fn().mockResolvedValue(['fest_1']);
   const invalidatePacks = jest.fn().mockResolvedValue(undefined);
   const service = new FlagsService(
@@ -98,14 +123,42 @@ describe('FlagsService security boundaries', () => {
     {
       enqueueFlagStatus: jest.fn().mockResolvedValue(undefined),
     } as unknown as SocialNotificationService,
+    liveActivity as unknown as LiveActivityService,
   );
 
   beforeEach(() => {
     jest.clearAllMocks();
     savedCodes.length = 0;
     flag.hidden = false;
+    flag.reportCount = 0;
+    transactionalPins.findOne.mockResolvedValue(null);
+    transactionalFollows.exists.mockResolvedValue(true);
     audit.record.mockResolvedValue(undefined);
     festivals.findOne.mockResolvedValue({ published: { zones: [], sets: [] } });
+  });
+
+  it('enqueues every festival device when a global pin moves, but not for the same pin', async () => {
+    transactionalPins.findOne.mockResolvedValue({ flagId: 'flg_old' });
+    await service.pin('user', { flagId: 'flg_1' });
+    expect(liveActivity.enqueueUser).toHaveBeenCalledWith(
+      'user',
+      undefined,
+      manager,
+    );
+    liveActivity.enqueueUser.mockClear();
+    transactionalPins.findOne.mockResolvedValue({ flagId: 'flg_1' });
+    await service.pin('user', { flagId: 'flg_1' });
+    expect(liveActivity.enqueueUser).not.toHaveBeenCalled();
+  });
+
+  it('enqueues the festival when a third report hides a flag', async () => {
+    flag.reportCount = 2;
+    await service.report('flg_1', 'user', { reason: 'fake' });
+    expect(flag.hidden).toBe(true);
+    expect(liveActivity.enqueueFestival).toHaveBeenCalledWith(
+      'fest_1',
+      manager,
+    );
   });
 
   it('encrypts generated codes at rest and returns retrievable codes to admin', async () => {
@@ -312,6 +365,7 @@ describe('FlagsService security boundaries', () => {
       {
         enqueueFlagStatus: jest.fn().mockResolvedValue(undefined),
       } as unknown as SocialNotificationService,
+      liveActivity as unknown as LiveActivityService,
     );
     await expect(
       guarded.follow('flg_1', 'departed', 'key-1'),
