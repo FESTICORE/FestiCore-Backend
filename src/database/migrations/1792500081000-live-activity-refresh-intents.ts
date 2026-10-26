@@ -1,7 +1,7 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class LiveActivityRefreshIntents1792500078000 implements MigrationInterface {
-  name = 'LiveActivityRefreshIntents1792500078000';
+export class LiveActivityRefreshIntents1792500081000 implements MigrationInterface {
+  name = 'LiveActivityRefreshIntents1792500081000';
 
   async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`CREATE TABLE "live_activity_refresh_intents" (
