@@ -193,6 +193,35 @@ describe('Public festival API', () => {
     );
   });
 
+  it('returns an updated list when the previous ETag no longer matches', async () => {
+    queryBuilder.getMany
+      .mockResolvedValueOnce([published])
+      .mockResolvedValueOnce([
+        published,
+        {
+          id: 'fst_87654321',
+          published: { ...pack, id: 'fst_87654321', name: 'New Festival' },
+          publishedVersion: 7,
+        },
+      ]);
+    const first = await request(server).get('/api/v1/festivals').expect(200);
+    const refreshed = await request(server)
+      .get('/api/v1/festivals')
+      .set('If-None-Match', first.headers.etag)
+      .expect(200);
+    expect(refreshed.headers.etag).not.toBe(first.headers.etag);
+    expect(refreshed.headers['cache-control']).toBe(
+      'public, no-cache, must-revalidate',
+    );
+    expect(
+      successData<{ items: { name: string }[] }>(refreshed.body).items,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'New Festival' }),
+      ]),
+    );
+  });
+
   it('includes pinned only for an authenticated device and uses a private cache', async () => {
     deviceAuth.resolveOptionalPrincipal.mockResolvedValueOnce({
       kind: 'device',
