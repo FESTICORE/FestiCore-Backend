@@ -25,7 +25,7 @@
 
 목록·상세·발행 팩은 `thumbUrl`과 `ticketLinks`를 제공한다. `thumbUrl`은 HTTPS 썸네일, 서버에 보관한 `/api/v1/festivals/images/…` 경로 또는 `null`이다. `ticketLinks`는 최대 5개의 `{label, url}` 항목이며 `label`은 1~20자, `url`은 HTTPS 주소다. 발견 축제의 예매처 링크는 중복 제거해 합치고, 공식 행사 페이지에서 확인된 Instagram 계정 링크를 포함할 수 있다. 발행 팩의 링크는 관리자 초안에서 검증한 값만 공개한다.
 
-`/pack`의 ETag는 JSON 응답 형식 변경을 구분하는 `"cdm2-v{packVersion}"`이다. `/pack/version`의 응답 헤더와 본문 `etag`도 같은 값을 반환한다. 두 경로 모두 `If-None-Match`가 일치하면 본문 없이 304를 반환한다. 이전 형식의 ETag는 일치하지 않아 새 본문을 다시 받는다. 압축별 응답은 `Vary: Accept-Encoding`으로 구분한다. 목록과 라이브도 조건부 조회를 지원한다. 목록 캐시는 API 명세대로 3600초다. 새 목록을 즉시 확인하려는 클라이언트는 `If-None-Match`와 `Cache-Control: no-cache`를 함께 보내 공유 캐시가 원본을 재검증하게 해야 한다. 그렇지 않으면 발행·수집 변경이나 자정의 `status` 변화가 최대 1시간 늦게 보일 수 있다. `live`의 `X-Poll-After: 30`은 최소 권장 폴링 간격이며, 기기당 분당 4회 초과 시 429와 `Retry-After`를 보낸다. 지난 요청 제한 기록 정리가 실패하면 새 제한 기록을 만들지 않고 503을 반환하며, 5분 간격으로 정리를 재시도한다.
+`/pack`의 ETag는 JSON 응답 형식 변경을 구분하는 `"cdm2-v{packVersion}"`이다. `/pack/version`의 응답 헤더와 본문 `etag`도 같은 값을 반환한다. 두 경로 모두 `If-None-Match`가 일치하면 본문 없이 304를 반환한다. 이전 형식의 ETag는 일치하지 않아 새 본문을 다시 받는다. 압축별 응답은 `Vary: Accept-Encoding`으로 구분한다. 목록과 라이브도 조건부 조회를 지원한다. 축제 목록은 `public, no-cache, must-revalidate`로 저장을 허용하되 매 요청 공유 캐시 재검증을 요구한다. 이전 `max-age=3600` 응답은 Railway CDN이 요청의 `Cache-Control: no-cache`를 무시하고 오래된 304를 반환했다. 앱은 이전 목록 ETag를 `If-None-Match`로 보내 변경이 없을 때 304를 받을 수 있다. `live`의 `X-Poll-After: 30`은 최소 권장 폴링 간격이며, 기기당 분당 4회 초과 시 429와 `Retry-After`를 보낸다. 지난 요청 제한 기록 정리가 실패하면 새 제한 기록을 만들지 않고 503을 반환하며, 5분 간격으로 정리를 재시도한다.
 
 ## 오류와 보안
 
