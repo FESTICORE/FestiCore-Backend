@@ -71,7 +71,7 @@ export class ProposalController {
   @ApiOperation({
     summary: '크롤 제안 항목 수락 또는 거절',
     description:
-      'editor 이상. 기존 축제 변경은 초안에 적용합니다. festival.new 수락 시 검토한 name, venue, days로 비공개 축제 초안을 생성합니다. URL은 발견 원본을 유지합니다. 검증·동시 수정 충돌 항목은 pending으로 유지하며 발행은 별도 관리자 API가 필요합니다.',
+      'editor 이상. 기존 축제 변경은 초안에 적용합니다. festival.new 원본에 유효한 날짜 범위가 있으면 시각 없이 수락해 eventPeriod와 빈 days를 가진 비공개 초안을 만들 수 있습니다. after로 name, venue, 검증된 days를 선택적으로 보완하며 URL·eventPeriod는 발견 원본을 유지합니다. 검증·동시 수정 충돌 항목은 pending으로 유지합니다. 발행에는 검증된 시각·무대·공연 세트가 필요합니다.',
   })
   @ApiParam({ name: 'id', format: 'uuid', description: '제안 ID' })
   @ApiBody({
@@ -91,12 +91,13 @@ export class ProposalController {
               after: {
                 type: 'object',
                 description:
-                  'festival.new 수락 시 검토한 값. 발견 URL은 수정할 수 없습니다.',
+                  'festival.new 수락 시 선택적으로 보완할 값. 원본 날짜 범위만 확인된 경우 after를 생략하면 days=[] 초안이 됩니다. 발견 URL·eventPeriod는 수정할 수 없습니다.',
                 properties: {
                   name: { type: 'string', example: '샘플 뮤직 페스티벌' },
                   venue: { type: 'string', example: '서울 올림픽공원' },
                   days: {
                     type: 'array',
+                    maxItems: 32,
                     items: {
                       type: 'object',
                       properties: {
@@ -130,7 +131,7 @@ export class ProposalController {
         },
       },
       discovery: {
-        summary: '발견한 축제의 초안 생성',
+        summary: '발견한 축제의 시각 포함 초안 생성',
         value: {
           decisions: [
             {
@@ -149,6 +150,12 @@ export class ProposalController {
               },
             },
           ],
+        },
+      },
+      discoveryDateOnly: {
+        summary: '날짜만 확인된 축제를 비공개 미완성 초안으로 승인',
+        value: {
+          decisions: [{ itemId: '0', decision: 'accepted' }],
         },
       },
     },

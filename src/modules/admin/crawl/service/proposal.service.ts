@@ -14,6 +14,7 @@ import { validateDraft } from '../../festival/festival-validation';
 import { AdminAuditService } from '../../audit/admin-audit.service';
 import { Proposal, ProposalItem } from '../entity/proposal.entity';
 import { CrawlSource } from '../entity/crawl-source.entity';
+import { ticketDateRange } from '../../../public/crawl-catalog';
 
 function segments(pointer: string): string[] {
   if (!pointer.startsWith('/'))
@@ -133,6 +134,29 @@ function discoveryDraft(
   }
   if (url.protocol !== 'https:' || url.username || url.password)
     throw new Error('축제 URL은 인증 정보가 없는 HTTPS 주소여야 합니다.');
+  const isWorldNol =
+    /^https:\/\/world\.nol\.com\/en\/ticket\/products\/\d+$/.test(
+      url.toString(),
+    );
+  const eventPeriod = ticketDateRange(entry.date, isWorldNol ? 31 : 6);
+  if (isWorldNol && !eventPeriod)
+    throw new Error(
+      'NOL World 발견 날짜 범위가 유효하지 않거나 32일을 초과합니다.',
+    );
+  const days =
+    entry.days === undefined ? (eventPeriod ? [] : undefined) : entry.days;
+  if (
+    eventPeriod &&
+    Array.isArray(days) &&
+    days.length > 0 &&
+    ((days[0] as { date?: unknown } | undefined)?.date !==
+      eventPeriod.firstDate ||
+      (days[days.length - 1] as { date?: unknown } | undefined)?.date !==
+        eventPeriod.lastDate)
+  )
+    throw new Error(
+      'days의 첫날과 마지막 날은 발견된 축제 날짜 범위와 같아야 합니다.',
+    );
   const provenance = {
     name: source.parserConfig.sourceName || new URL(source.url).hostname,
     url: url.toString(),
@@ -143,7 +167,8 @@ function discoveryDraft(
     name: entry.name,
     venue: entry.venue,
     timezone: 'Asia/Seoul',
-    days: entry.days,
+    days,
+    ...(eventPeriod ? { eventPeriod } : {}),
     flagsEnabled: false,
     stages: [],
     sets: [],

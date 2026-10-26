@@ -42,6 +42,7 @@ describe('AdminFestivalService optimistic edits', () => {
           name: 'Festival',
           venue: 'Seoul',
           days: [],
+          eventPeriod: null,
           thumbUrl: 'https://example.com/poster.webp',
           draftVersion: 1,
           publishedVersion: 0,
@@ -52,6 +53,7 @@ describe('AdminFestivalService optimistic edits', () => {
           name: 'Second',
           venue: 'Busan',
           days: [],
+          eventPeriod: null,
           thumbUrl: null,
           draftVersion: 2,
           publishedVersion: 1,
@@ -209,6 +211,31 @@ describe('discovered festival import', () => {
     });
   });
 
+  it('imports a discovered date range without inventing daily operating hours', async () => {
+    const { service, query, record } = fixture();
+    const response = await service.importDiscovered(id, {}, 'adm_1');
+    expect(response).toMatchObject({
+      id,
+      days: [],
+      eventPeriod: {
+        firstDate: discovered.firstDate,
+        lastDate: discovered.lastDate,
+      },
+      source: { url: discovered.sourceUrl },
+      draftVersion: 1,
+    });
+    const calls = query.mock.calls as unknown[][];
+    const values = calls[0][1] as [string, string, string];
+    expect(JSON.parse(values[1])).toMatchObject({
+      days: [],
+      eventPeriod: {
+        firstDate: discovered.firstDate,
+        lastDate: discovered.lastDate,
+      },
+    });
+    expect(record).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects a duplicate before fetching the discovery catalog', async () => {
     const { service, discoveredLookup, query } = fixture({ existing: true });
     await expect(
@@ -222,6 +249,18 @@ describe('discovered festival import', () => {
     const { service, query } = fixture();
     await expect(
       service.importDiscovered(id, { days: days.slice(0, 1) }, null),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('rejects an explicitly null day list', async () => {
+    const { service, query } = fixture();
+    await expect(
+      service.importDiscovered(
+        id,
+        { days: null as unknown as unknown[] },
+        null,
+      ),
     ).rejects.toMatchObject({ status: 400 });
     expect(query).not.toHaveBeenCalled();
   });
@@ -241,6 +280,64 @@ describe('discovered festival import', () => {
     await expect(service.importDiscovered(id, { days }, null)).rejects.toThrow(
       'audit unavailable',
     );
+  });
+});
+
+describe('date-only draft publication', () => {
+  it('rejects publication before a verified timetable and leaves the pack untouched', async () => {
+    const row = {
+      id: 'fst_0123456789abcdef',
+      draft: {
+        id: 'fst_0123456789abcdef',
+        name: '함평 겨울 행사',
+        venue: '함평',
+        timezone: 'Asia/Seoul',
+        eventPeriod: { firstDate: '2026-10-23', lastDate: '2026-11-08' },
+        days: [],
+        flagsEnabled: false,
+        stages: [],
+        sets: [],
+        zones: [],
+        flags: [],
+        checklist: [],
+        rules: [],
+        mapImageUrl: null,
+        mapAspect: null,
+        source: { name: 'NOL World', verifiedAt: '2026-10-23T12:00:00Z' },
+      },
+      draftVersion: 1,
+      published: null,
+      publishedVersion: 0,
+    };
+    const save = jest.fn();
+    const enqueueFestival = jest.fn();
+    const audit = jest.fn();
+    const service = new AdminFestivalService(
+      {} as never,
+      {} as never,
+      {
+        transaction: (callback: (manager: unknown) => Promise<unknown>) =>
+          callback({
+            getRepository: () => ({
+              findOne: () => Promise.resolve(row),
+              save,
+            }),
+          }),
+      } as never,
+      { record: audit } as never,
+      {} as never,
+      {} as never,
+      { enqueueFestival } as never,
+    );
+    await expect(
+      service.publish(row.id, '', '"d1"', 'adm_1'),
+    ).rejects.toMatchObject({
+      status: 400,
+    });
+    expect(save).not.toHaveBeenCalled();
+    expect(enqueueFestival).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
+    expect(row.published).toBeNull();
   });
 });
 
