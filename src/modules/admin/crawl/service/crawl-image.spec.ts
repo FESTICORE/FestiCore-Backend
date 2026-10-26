@@ -52,6 +52,11 @@ describe('crawl image safety', () => {
       `<script type="application/ld+json">${JSON.stringify({
         '@type': 'Event',
         image: `https://ticketimage.interpark.com/Play/image/large/26/${id}_p.gif`,
+        performer: {
+          '@type': 'MusicGroup',
+          name: 'THE BAND',
+          image: 'https://ticketimage.interpark.com/artists/band.jpg',
+        },
       })}</script><img src="https://evil.example/unrelated.jpg">`;
     expect(discoverImageUrls(body('26015253'), page).map(String)).toEqual([
       'https://ticketimage.interpark.com/Play/image/large/26/26015253_p.gif',

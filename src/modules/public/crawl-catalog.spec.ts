@@ -1,6 +1,31 @@
 import { discoverySummaries, ticketDateRange } from './crawl-catalog';
 
 describe('ticket discovery catalog', () => {
+  it('accepts a bounded multi-week NOL World festival without widening other tickets', () => {
+    const candidate = {
+      name: 'Hampyeong Grand Chrysanthemum Festival 2026',
+      venue: 'Hampyeong Expo Park',
+      date: '2026.10.23 ~ 2026.11.08',
+      url: 'https://world.nol.com/en/ticket/products/26013613',
+    };
+    expect(discoverySummaries([{ candidate }])).toHaveLength(1);
+    expect(
+      discoverySummaries([
+        {
+          candidate: {
+            ...candidate,
+            url: 'https://nol.yanolja.com/ticket/products/26013613',
+          },
+        },
+      ]),
+    ).toHaveLength(0);
+    expect(
+      discoverySummaries([
+        { candidate: { ...candidate, date: '2026.10.23 ~ 2026.12.01' } },
+      ]),
+    ).toHaveLength(0);
+  });
+
   it('publishes only the matching official NOL World product poster', () => {
     const candidate = {
       name: 'STILL ROLLING FEST 2026',

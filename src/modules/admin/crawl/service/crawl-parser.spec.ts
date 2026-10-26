@@ -204,6 +204,11 @@ describe('crawl parsers', () => {
         endDate: startDate,
         location: { '@type': 'Place', name: 'ROLLING HALL' },
         image,
+        performer: {
+          '@type': 'MusicGroup',
+          name: 'THE BAND',
+          image: 'https://ticketimage.interpark.com/artists/band.jpg',
+        },
       })}</script>`;
     const poster =
       'https://ticketimage.interpark.com/Play/image/large/26/26015253_p.gif';
@@ -214,6 +219,7 @@ describe('crawl parsers', () => {
         date: '2026.11.21',
         venue: 'ROLLING HALL',
         posterUrl: poster,
+        artists: [{ name: 'THE BAND' }],
       },
     ]);
     expect(
@@ -224,6 +230,7 @@ describe('crawl parsers', () => {
         url: nol.url,
         date: '2026.11.21',
         venue: 'ROLLING HALL',
+        artists: [{ name: 'THE BAND' }],
       },
     ]);
     await expect(parseCrawl(nol, event(poster, '2026-02-30'))).rejects.toThrow(

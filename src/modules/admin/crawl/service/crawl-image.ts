@@ -180,8 +180,10 @@ function nolDetailImages(html: string, pageUrl: string): URL[] | null {
       /^\/en\/ticket\/products\/\d+$/.test(page.pathname))
   ))
     return null;
-  const event = yes24EventJson(html);
   const poster = nolPosterUrl(html, page);
+  if (page.hostname === 'world.nol.com')
+    return poster ? [checkedUrl(poster)] : [];
+  const event = yes24EventJson(html);
   return [
     ...new Map(
       [

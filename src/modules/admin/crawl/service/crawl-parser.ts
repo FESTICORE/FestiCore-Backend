@@ -991,7 +991,7 @@ export function eventPerformers(
             ['tkfile.yes24.com', 'stkfile.yes24.com'].includes(
               image.hostname,
             )) ||
-          (['nol.yanolja.com', 'world.nol.com'].includes(page.hostname) &&
+          (page.hostname === 'nol.yanolja.com' &&
             image.hostname === 'ticketimage.interpark.com');
         if (
           image.protocol === 'https:' &&

@@ -212,7 +212,10 @@ function date(year: number, month: number, day: number): string | null {
   return parsed.toISOString().slice(0, 10);
 }
 
-export function ticketDateRange(raw: unknown): DateRange | null {
+export function ticketDateRange(
+  raw: unknown,
+  maxSpanDays = 6,
+): DateRange | null {
   if (typeof raw !== 'string') return null;
   const korean = raw
     .trim()
@@ -248,8 +251,15 @@ export function ticketDateRange(raw: unknown): DateRange | null {
   const span =
     (Date.parse(`${last}T00:00:00Z`) - Date.parse(`${first}T00:00:00Z`)) /
     86_400_000;
-  if (span > 6) return null;
+  if (span > maxSpanDays) return null;
   return { firstDate: first, lastDate: last };
+}
+
+function ticketDateSpanLimit(url: unknown): number {
+  return typeof url === 'string' &&
+    /^https:\/\/world\.nol\.com\/en\/ticket\/products\/\d+$/.test(url)
+    ? 31
+    : 6;
 }
 
 function cleanName(name: string): string {
@@ -319,7 +329,7 @@ export function discoverySummaries(
     const source = row.sourceUrl ? byUrl.get(row.sourceUrl)?.candidate : null;
     if (source && typeof source === 'object' && !Array.isArray(source)) {
       const value = source as Record<string, unknown>;
-      const dates = ticketDateRange(value.date);
+      const dates = ticketDateRange(value.date, ticketDateSpanLimit(value.url));
       if (
         typeof value.name === 'string' &&
         typeof value.venue === 'string' &&
@@ -348,7 +358,7 @@ export function discoverySummaries(
       value.venue.length > 160
     )
       continue;
-    const dates = ticketDateRange(value.date);
+    const dates = ticketDateRange(value.date, ticketDateSpanLimit(value.url));
     if (!dates) continue;
     let url: URL;
     try {
