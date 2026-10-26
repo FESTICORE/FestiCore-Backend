@@ -887,11 +887,19 @@ describe('additional Seoul Music official photo sources', () => {
       const image =
         profile.rule === 'antenna'
           ? 'https://cdn.imweb.me/thumbnail/20261026/abc123.jpg'
-          : 'https://poclanos.com/drmvsn/wp-content/uploads/2026/10/okdal.jpg';
+          : profile.rule === 'poclanos'
+            ? 'https://poclanos.com/drmvsn/wp-content/uploads/2026/10/okdal.jpg'
+            : profile.rule === 'paulkim'
+              ? 'https://image.static.bstage.in/cdn-cgi/image/metadata=none/paulkim/f14d75b4-f328-4832-8fee-9f12fd8bdd7e/d40f80c8-63b1-403b-933a-e898b853778e/ori.jpg'
+              : 'https://cdn.prod.website-files.com/6649fa6f24368d5b7f0e9bc1/6aa3bcf26a0d432320d3492d_nerd-connection.jpg';
       const body =
         profile.rule === 'antenna'
           ? `<meta property="og:url" content="${page}"><h3>권진아<img src="/logo.png"></h3><h6>Kwon Jin Ah</h6><img class="org_image" src="${image}">`
-          : `<title>옥상달빛 | POCLANOS</title><main class="artist-single"><span class="artist-img-wrap"><img src="${image}"></span></main><h1 class="page-title">옥상달빛</h1>`;
+          : profile.rule === 'poclanos'
+            ? `<title>옥상달빛 | POCLANOS</title><main class="artist-single"><span class="artist-img-wrap"><img src="${image}"></span></main><h1 class="page-title">옥상달빛</h1>`
+            : profile.rule === 'paulkim'
+              ? `<title>폴킴 공식 홈페이지ㅣPaul Kim Official Homepage</title><meta property="og:image" content="${image}">`
+              : `<title>너드커넥션 Nerd Connection</title><span class="artist-name-bold">너드커넥션</span><img class="image-43" src="${image}">`;
       source.kind = 'artist-image';
       source.url = page;
       source.parser = 'html-text';

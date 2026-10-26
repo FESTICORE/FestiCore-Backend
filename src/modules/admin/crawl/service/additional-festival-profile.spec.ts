@@ -14,6 +14,10 @@ const images = {
   [antenna]: 'https://cdn.imweb.me/thumbnail/20261026/abc123def456.jpg',
   [poclanos]:
     'https://poclanos.com/drmvsn/wp-content/uploads/2026/10/okdal-portrait.jpg',
+  'https://paulkim.co.kr/':
+    'https://image.static.bstage.in/cdn-cgi/image/metadata=none/paulkim/f14d75b4-f328-4832-8fee-9f12fd8bdd7e/d40f80c8-63b1-403b-933a-e898b853778e/ori.jpg',
+  'https://www.yoursummer.net/artist/nerd-connection':
+    'https://cdn.prod.website-files.com/6649fa6f24368d5b7f0e9bc1/6aa3bcf26a0d432320d3492d_nerd-connection.jpg',
 };
 
 function config(page: string) {
@@ -30,6 +34,10 @@ function html(page: string, image: string): string {
     return `<meta property="og:url" content="${page}"><h3>권진아<img src="https://cdn.imweb.me/upload/logo.png"></h3><h6>Kwon Jin Ah</h6><div data-widget-name="이미지"><img class="org_image" src="${image}"></div>`;
   if (page === poclanos)
     return `<title>옥상달빛 | POCLANOS</title><main class="artist-single"><span class="artist-img-wrap"><img src="${image}"></span></main><h1 class="page-title">옥상달빛</h1>`;
+  if (page === 'https://paulkim.co.kr/')
+    return `<title>폴킴 공식 홈페이지ㅣPaul Kim Official Homepage</title><meta property="og:image" content="${image}">`;
+  if (page === 'https://www.yoursummer.net/artist/nerd-connection')
+    return `<title>너드커넥션 Nerd Connection</title><span class="artist-name-bold">너드커넥션</span><img class="image-43" src="${image}">`;
   throw new Error(`Unsupported official profile: ${page}`);
 }
 
@@ -101,6 +109,33 @@ describe('additional official festival performer photos', () => {
         body.replace('class="org_image"', 'class="logo"'),
         antenna,
         config(antenna),
+      ),
+    ).toBeNull();
+  });
+
+  it('requires the official artist title and a single portrait candidate', () => {
+    for (const page of [
+      'https://paulkim.co.kr/',
+      'https://www.yoursummer.net/artist/nerd-connection',
+    ]) {
+      const body = html(page, images[page]);
+      expect(
+        additionalFestivalProfileImageUrl(
+          body.replace(/<title>[^<]+<\/title>/, '<title>다른 가수</title>'),
+          page,
+          config(page),
+        ),
+      ).toBeNull();
+      expect(
+        additionalFestivalProfileImageUrl(body + body, page, config(page)),
+      ).toBeNull();
+    }
+    const page = 'https://www.yoursummer.net/artist/nerd-connection';
+    expect(
+      additionalFestivalProfileImageUrl(
+        html(page, images[page]).replace('artist-name-bold', 'other'),
+        page,
+        config(page),
       ),
     ).toBeNull();
   });
