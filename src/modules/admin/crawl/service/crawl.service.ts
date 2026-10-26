@@ -1349,7 +1349,15 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
             ? 'unchanged'
             : 'nochange-parsed';
         if (run.result !== 'unchanged') source.lastChangedAt = new Date();
-      } else if (previous?.contentHash === run.contentHash) {
+      } else if (
+        previous?.contentHash === run.contentHash &&
+        !(
+          source.kind === 'discovery' &&
+          source.parser === 'ticket-list' &&
+          source.parserConfig.seed === WONDERLIVET_DETAIL_SEED &&
+          source.parserConfig.festivalSourceUrl === WONDERLIVET_FESTIVAL_URL
+        )
+      ) {
         run.result = 'unchanged';
       } else {
         phase = 'PARSE';
@@ -1430,8 +1438,14 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
           run.result = 'proposed';
         } else {
           run.result = 'nochange-parsed';
+          if (
+            source.parserConfig.seed === WONDERLIVET_DETAIL_SEED &&
+            'matchedProposalId' in candidate
+          )
+            run.proposalId = candidate.matchedProposalId ?? null;
         }
-        source.lastChangedAt = new Date();
+        if (previous?.contentHash !== run.contentHash)
+          source.lastChangedAt = new Date();
       }
       source.consecutiveFailures = 0;
       source.status = 'ok';
@@ -2066,6 +2080,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
   ): Promise<{
     kind: Proposal['kind'];
     items: ProposalItem[];
+    matchedProposalId?: string;
   }> {
     const item = (
       id: string,
@@ -2085,34 +2100,49 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     });
     if (source.kind === 'discovery' && Array.isArray(parsed)) {
       const known = await this.dataSource.query<
-        { url: string | null; value: unknown }[]
+        { url: string | null; value: unknown; proposalId: string | null }[]
       >(
-        `SELECT item->'after'->>'url' AS url, item->'after' AS value
-         FROM crawl_proposals, jsonb_array_elements(items) item
+        `SELECT item->'after'->>'url' AS url, item->'after' AS value,
+           p.id AS "proposalId"
+         FROM crawl_proposals p, jsonb_array_elements(p.items) item
          WHERE "sourceId" = $1 AND kind = 'festival.new'
            AND status IN ('open', 'partial')
            AND item->>'decision' = 'pending'
          UNION ALL
-         SELECT draft->'source'->>'url' AS url, NULL::jsonb AS value FROM admin_festivals
+         SELECT draft->'source'->>'url' AS url, NULL::jsonb AS value,
+           NULL::uuid AS "proposalId" FROM admin_festivals
          WHERE draft->'source'->>'url' IS NOT NULL`,
         [source.id],
       );
+      const items = parsed.flatMap((entry, index) => {
+        const url =
+          entry && typeof entry === 'object'
+            ? (entry as Record<string, unknown>).url
+            : null;
+        const duplicate = known.some(
+          (row) =>
+            row.url === url &&
+            (row.value === null || isDeepStrictEqual(row.value, entry)),
+        );
+        return typeof url === 'string' && !duplicate
+          ? [item(String(index), 'add', '/', null, entry)]
+          : [];
+      });
+      const entry: unknown = parsed.length === 1 ? parsed[0] : null;
+      const matchedProposal =
+        items.length === 0 && entry && typeof entry === 'object'
+          ? known.find(
+              (row) =>
+                typeof row.proposalId === 'string' &&
+                row.value !== null &&
+                row.url === (entry as Record<string, unknown>).url &&
+                isDeepStrictEqual(row.value, entry),
+            )
+          : null;
       return {
         kind: 'festival.new',
-        items: parsed.flatMap((entry, index) => {
-          const url =
-            entry && typeof entry === 'object'
-              ? (entry as Record<string, unknown>).url
-              : null;
-          const duplicate = known.some(
-            (row) =>
-              row.url === url &&
-              (row.value === null || isDeepStrictEqual(row.value, entry)),
-          );
-          return typeof url === 'string' && !duplicate
-            ? [item(String(index), 'add', '/', null, entry)]
-            : [];
-        }),
+        items,
+        matchedProposalId: matchedProposal?.proposalId ?? undefined,
       };
     }
     if (source.kind === 'notice' && typeof parsed === 'string') {
