@@ -77,6 +77,9 @@ describe('Seoul Music and Oneway official profile photos', () => {
 
   it('retains the Seoul lineup spelling while checking the official H1 spelling', () => {
     expect(FESTIVAL_PROFILES[seoul].artistName).toBe('추다해차지스');
+    expect(FESTIVAL_PROFILES[seoul].festivalSourceUrl).toBe(
+      'https://ticket.yes24.com/Perf/60368',
+    );
     expect(FESTIVAL_PROFILES[seoul].pageName).toBe('추다혜차지스');
     expect(
       festivalProfileImageUrl(

@@ -18,8 +18,7 @@ export const FESTIVAL_PROFILES: Readonly<Record<string, Profile>> = {
   'https://poclanos.com/artist/%EC%B6%94%EB%8B%A4%ED%98%9C%EC%B0%A8%EC%A7%80%EC%8A%A4/':
     {
       artistName: '추다해차지스',
-      festivalSourceUrl:
-        'https://festival.seoul.go.kr/festival/main/festivalView.do?festacode=848',
+      festivalSourceUrl: 'https://ticket.yes24.com/Perf/60368',
       pageName: '추다혜차지스',
       rule: 'poclanos',
       imageHost: 'poclanos.com',

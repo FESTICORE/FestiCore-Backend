@@ -573,6 +573,49 @@ describe('discovered festival artist profile images', () => {
     expect(profileQuery[1][0]).toEqual([sourceUrl]);
   });
 
+  it('attaches the stored Seoul profile to its YES24 catalog festival', async () => {
+    const catalogUrl = 'https://ticket.yes24.com/Perf/60368';
+    const candidate = {
+      name: '2026 서울뮤직페스티벌',
+      venue: '노들섬 잔디마당 야외 특설무대',
+      date: '2026-10-24 ~ 2026-10-24',
+      url: catalogUrl,
+      artists: [{ name: '추다해차지스' }],
+    };
+    const id = discoverySummaries([{ candidate }])[0].id;
+    const imageId = '00000000-0000-4000-8000-000000000848';
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([{ candidate }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          festivalSourceUrl: catalogUrl,
+          artistName: '추다해차지스',
+          id: imageId,
+        },
+      ])
+      .mockResolvedValueOnce([]);
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    await expect(service.detail(id)).resolves.toMatchObject({
+      artists: [
+        {
+          name: '추다해차지스',
+          imageUrl: `/api/v1/festivals/images/${imageId}.webp`,
+        },
+      ],
+    });
+    const profileQuery = (
+      query.mock.calls as unknown as [string, [string[]]][]
+    )[2];
+    expect(profileQuery[1][0]).toEqual([catalogUrl]);
+  });
+
   it('links a stored official artist photo only after the exact Melon product is verified', async () => {
     const melon =
       'https://ticket.melon.com/performance/index.htm?prodId=214999';
