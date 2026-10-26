@@ -5,6 +5,7 @@ import { runTesseract } from './timetable-image-ocr';
 
 export const NOL_LINEUP_PARSER_VERSION = 'nol-world-detail-ocr:v1';
 const MAX_IMAGES = 3;
+export const MAX_NOL_LINEUP_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_LINES = 80;
 
 export interface NolLineupEvidence {
@@ -137,7 +138,11 @@ export async function collectNolWorldLineupEvidence(
     entry.imageHash = createHash('sha256').update(response.body).digest('hex');
     let prepared: Awaited<ReturnType<typeof prepareCrawlImage>>;
     try {
-      prepared = await prepareCrawlImage(response.body, response.contentType);
+      prepared = await prepareCrawlImage(
+        response.body,
+        response.contentType,
+        MAX_NOL_LINEUP_IMAGE_BYTES,
+      );
     } catch {
       entry.failureReason = 'invalid-image';
       continue;
