@@ -58,4 +58,29 @@ describe('GET festival map image', () => {
     expect(result.headers['x-content-type-options']).toBe('nosniff');
     expect(result.headers['cross-origin-resource-policy']).toBe('cross-origin');
   });
+
+  it('does not cache a Commons photo and returns 404 after rights validation removes it', async () => {
+    const path =
+      '/api/v1/festivals/images/123e4567-e89b-42d3-a456-426614174001.webp';
+    const bytes = Buffer.from('RIFF0000WEBPsohyang');
+    const readsBefore = readCrawlImage.mock.calls.length;
+    query.mockResolvedValueOnce([
+      {
+        objectKey: 'crawl/images/sohyang.webp',
+        seed: 'sohyang-commons-profile',
+      },
+    ]);
+    readCrawlImage.mockResolvedValueOnce(bytes);
+    const visible = await request(app.getHttpServer() as import('http').Server)
+      .get(path)
+      .expect(200);
+    expect(visible.headers['cache-control']).toBe('no-store');
+    expect(visible.body).toEqual(bytes);
+
+    query.mockResolvedValueOnce([]);
+    await request(app.getHttpServer() as import('http').Server)
+      .get(path)
+      .expect(404);
+    expect(readCrawlImage).toHaveBeenCalledTimes(readsBefore + 1);
+  });
 });

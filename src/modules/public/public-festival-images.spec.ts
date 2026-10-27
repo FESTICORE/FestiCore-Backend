@@ -2,7 +2,108 @@ import { QueryRunner } from 'typeorm';
 import { ScrubUntrustedGalleryIdentity1792500073000 } from '../../database/migrations/1792500073000-scrub-untrusted-gallery-identity';
 import { discoverySummaries } from './crawl-catalog';
 import { PublicFestivalService } from './public-festival.service';
+import {
+  SOHYANG_COMMONS_CREDIT,
+  SOHYANG_COMMONS_SEED,
+  SOHYANG_FESTIVAL_URL,
+} from '../admin/crawl/service/sohyang-commons-profile';
 describe('discovered festival artist profile images', () => {
+  it('returns Commons photo attribution beside the OneWay artist and timetable', async () => {
+    const candidate = {
+      name: '원웨이 페스티벌 2026',
+      venue: '킨텍스 제2전시장 10홀',
+      date: '2026.12.26 - 2026.12.27',
+      url: SOHYANG_FESTIVAL_URL,
+      artists: [{ name: '소향' }],
+    };
+    let rightsValid = true;
+    const query = jest.fn().mockImplementation((sql: string) => {
+      if (sql.includes('WITH candidates AS')) return [{ candidate }];
+      if (sql.includes('SELECT DISTINCT ON (source."parserConfig"'))
+        return rightsValid
+          ? [
+              {
+                festivalSourceUrl: SOHYANG_FESTIVAL_URL,
+                artistName: '소향',
+                seed: SOHYANG_COMMONS_SEED,
+                id: 'sohyang-photo',
+              },
+            ]
+          : [];
+      if (sql.includes('FROM crawl_timetable_revisions revision'))
+        return [
+          {
+            id: 'oneway-timetable',
+            sourceUrl: SOHYANG_FESTIVAL_URL,
+            sourceImageId: null,
+            verifiedAt: new Date('2026-10-27T00:00:00Z'),
+            sets: [
+              {
+                artist: '소향 (Sohyang)',
+                date: '2026-12-26',
+                stageName: '메인',
+                startsAt: '2026-12-26T12:00:00+09:00',
+                endsAt: null,
+              },
+            ],
+          },
+        ];
+      return [];
+    });
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    const result = await service.detail(
+      discoverySummaries([{ candidate }])[0].id,
+    );
+    expect(result.artists).toEqual(
+      expect.arrayContaining([
+        {
+          name: '소향',
+          imageUrl: '/api/v1/festivals/images/sohyang-photo.webp',
+          imageCredit: SOHYANG_COMMONS_CREDIT,
+        },
+        {
+          name: '소향 (Sohyang)',
+          imageUrl: '/api/v1/festivals/images/sohyang-photo.webp',
+          imageCredit: SOHYANG_COMMONS_CREDIT,
+        },
+      ]),
+    );
+    expect(result.timetable).toEqual([
+      expect.objectContaining({
+        artist: '소향 (Sohyang)',
+        imageCredit: SOHYANG_COMMONS_CREDIT,
+      }),
+    ]);
+    rightsValid = false;
+    const invalid = await service.detail(
+      discoverySummaries([{ candidate }])[0].id,
+    );
+    expect(invalid.artists).toEqual(
+      expect.arrayContaining([{ name: '소향', imageUrl: null }]),
+    );
+    expect(invalid.timetable).toEqual(
+      expect.arrayContaining([expect.objectContaining({ imageUrl: null })]),
+    );
+    expect(JSON.stringify(invalid)).not.toContain('imageCredit');
+    rightsValid = true;
+    const recovered = await service.detail(
+      discoverySummaries([{ candidate }])[0].id,
+    );
+    expect(recovered.artists).toEqual(
+      expect.arrayContaining([
+        {
+          name: '소향',
+          imageUrl: '/api/v1/festivals/images/sohyang-photo.webp',
+          imageCredit: SOHYANG_COMMONS_CREDIT,
+        },
+      ]),
+    );
+  });
   it('adds only saved official GMF child artists when the discovery has no lineup', async () => {
     const gmfUrl = 'https://mintpaper.co.kr/festivals/172';
     const candidate = {

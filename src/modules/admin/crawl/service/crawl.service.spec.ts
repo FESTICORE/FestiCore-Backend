@@ -41,6 +41,11 @@ import {
   CDF_LOW_HIGH_LOW_PROFILE_SEED,
   CDF_LOW_HIGH_LOW_PROFILE_URL,
 } from './cdf-low-high-low-profile';
+import {
+  SOHYANG_COMMONS_PAGE,
+  SOHYANG_COMMONS_SEED,
+  SOHYANG_FESTIVAL_URL,
+} from './sohyang-commons-profile';
 
 type PrivateCrawl = {
   onModuleInit(): void;
@@ -117,6 +122,103 @@ const DRDR_POST = JSON.stringify({
   content: {
     rendered: `<p><strong>MUSICIAN</strong></p><p><img src="${DRDR_PHOTO}"></p><p><strong>ALBUMS</strong></p><p><img src="https://drdr.ac/wordpress/wp-content/uploads/2026/08/album.jpg"></p>`,
   },
+});
+
+describe('소향 Commons 사진 수집', () => {
+  const config = {
+    seed: SOHYANG_COMMONS_SEED,
+    festivalSourceUrl: SOHYANG_FESTIVAL_URL,
+    artistName: '소향',
+  };
+  const image =
+    'https://upload.wikimedia.org/wikipedia/commons/4/49/180212_%EC%86%8C%ED%96%A5.png';
+  const body = `<h1 id="firstHeading">File:180212 소향.png</h1>
+    <div class="fullImageLink" id="file"><a href="${image}"></a></div>
+    <td id="fileinfotpl&#95;aut">Author</td><td>뉴스인스타</td>
+    <span class="licensetpl&#95;link">https://creativecommons.org/licenses/by/3.0</span>
+    <span class="licensetpl&#95;short">CC BY 3.0</span>
+    who confirmed that it was available there under the stated license
+    <a title="Category:Sohyang">Sohyang</a>`;
+
+  it('다른 축제 연결과 고정 이미지 힌트를 거절한다', async () => {
+    const { service } = harness();
+    for (const parserConfig of [
+      {
+        ...config,
+        festivalSourceUrl:
+          'https://ticket.melon.com/performance/index.htm?prodId=1',
+      },
+      { ...config, imageHint: '/untrusted.png' },
+    ])
+      await expect(
+        service.createSource(
+          {
+            kind: 'artist-image',
+            url: SOHYANG_COMMONS_PAGE,
+            parser: 'html-text',
+            parserConfig,
+          },
+          'admin-1',
+        ),
+      ).rejects.toMatchObject({ status: 422 });
+  });
+
+  it('미리보기와 예약 수집이 같은 검증 사진만 사용한다', async () => {
+    const { service, source, run, execute, runsRepo } = harness();
+    execute.mockRestore();
+    Object.assign(source, {
+      kind: 'artist-image',
+      url: SOHYANG_COMMONS_PAGE,
+      parser: 'html-text',
+      parserConfig: config,
+    });
+    const robots = jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({ status: 200, body });
+    const preview = await (
+      service as unknown as {
+        testSource(id: string): Promise<{ parsed: unknown }>;
+      }
+    ).testSource(source.id);
+    expect(preview.parsed).toEqual({ artistName: '소향', imageUrl: image });
+    expect(robots.mock.calls.map(([url]) => url)).toEqual([
+      SOHYANG_COMMONS_PAGE,
+      image,
+    ]);
+    const capture = jest
+      .spyOn(
+        service as unknown as {
+          captureImages: (...args: unknown[]) => Promise<string[]>;
+        },
+        'captureImages',
+      )
+      .mockResolvedValue(['/api/v1/admin/crawl/images/image-1']);
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(null),
+    }));
+    await service.execute(run, source);
+    expect(capture.mock.calls[0][2]).toEqual([new URL(image)]);
+  });
+
+  it('다음 수집에서 라이선스가 바뀌면 검증 실패로 기록한다', async () => {
+    const { service, source, run, execute } = harness();
+    execute.mockRestore();
+    Object.assign(source, {
+      kind: 'artist-image',
+      url: SOHYANG_COMMONS_PAGE,
+      parser: 'html-text',
+      parserConfig: config,
+    });
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({
+      status: 200,
+      body: body.replace('CC BY 3.0', 'All rights reserved'),
+    });
+    await service.execute(run, source);
+    expect(run.result).toBe('failed');
+    expect(run.error).toBe('COMMONS_RIGHTS');
+  });
 });
 
 function wonderlivetBundle(artists: unknown[]) {

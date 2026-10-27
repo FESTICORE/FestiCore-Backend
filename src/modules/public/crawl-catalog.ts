@@ -45,6 +45,13 @@ export interface DiscoverySummary {
     sourceUrl?: string;
     profileUrl?: string;
     imageUrl?: string | null;
+    imageCredit?: {
+      author: string;
+      license: string;
+      licenseUrl: string;
+      sourceUrl: string;
+      changes: string;
+    };
     dates?: string[];
   }[];
   sortAt: string;
