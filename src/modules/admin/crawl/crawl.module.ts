@@ -20,10 +20,12 @@ import { CrawlService } from './service/crawl.service';
 import { CrawlAlertService } from './service/crawl-alert.service';
 import { ProposalService } from './service/proposal.service';
 import { CrawlTimetableRevisionService } from './service/crawl-timetable-revision.service';
+import { PublicFestivalModule } from '../../public/public-festival.module';
 
 @Module({
   imports: [
     AdminAuditModule,
+    PublicFestivalModule,
     TypeOrmModule.forFeature([
       CrawlSource,
       CrawlRun,

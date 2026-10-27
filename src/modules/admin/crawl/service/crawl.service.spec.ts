@@ -46,6 +46,10 @@ import {
   SOHYANG_COMMONS_SEED,
   SOHYANG_FESTIVAL_URL,
 } from './sohyang-commons-profile';
+import {
+  COMMONS_DISCOVERY_SEED,
+  COMMONS_DISCOVERY_URL,
+} from './commons-image-discovery';
 
 type PrivateCrawl = {
   onModuleInit(): void;
@@ -78,6 +82,7 @@ type PrivateCrawl = {
     source: CrawlSource,
     verifiedWonderlivetBundle?: { body: string; snapshotUrl: string } | null,
   ): Promise<{ body: string; snapshotUrl: string } | void>;
+  limitedGetCommonsJson(url: URL): Promise<{ status: number; body: string }>;
   getListing(source: CrawlSource): Promise<{ status: number; body: string }>;
   syncXmfArtistAliases(source: CrawlSource, body: string): Promise<void>;
   syncXmfAliasesFromRecentSnapshot(source: CrawlSource): Promise<void>;
@@ -122,6 +127,147 @@ const DRDR_POST = JSON.stringify({
   content: {
     rendered: `<p><strong>MUSICIAN</strong></p><p><img src="${DRDR_PHOTO}"></p><p><strong>ALBUMS</strong></p><p><img src="https://drdr.ac/wordpress/wp-content/uploads/2026/08/album.jpg"></p>`,
   },
+});
+
+describe('Commons 사진 후보 일일 수집', () => {
+  it('관리자 API에서 탐색 소스 직접 등록과 URL 변경을 거절한다', async () => {
+    const { service, source } = harness();
+    await expect(
+      service.createSource(
+        {
+          kind: 'artist-image-discovery',
+          parser: 'commons-search',
+          url: COMMONS_DISCOVERY_URL,
+          parserConfig: { seed: COMMONS_DISCOVERY_SEED },
+        },
+        null,
+      ),
+    ).rejects.toThrow();
+    source.kind = 'artist-image-discovery';
+    await expect(
+      service.updateSource(
+        source.id,
+        {
+          url: 'https://evil.example/search',
+        },
+        null,
+      ),
+    ).rejects.toThrow();
+  });
+
+  it('이미지를 저장하거나 공개하지 않고 후보 메타데이터만 실행 기록에 남긴다', async () => {
+    const {
+      service,
+      source,
+      run,
+      execute,
+      publicFestivals,
+      runsRepo,
+      imageStorage,
+    } = harness();
+    execute.mockRestore();
+    source.kind = 'artist-image-discovery';
+    source.parser = 'commons-search';
+    source.url = COMMONS_DISCOVERY_URL;
+    source.parserConfig = { seed: COMMONS_DISCOVERY_SEED };
+    publicFestivals.missingArtistImages.mockResolvedValue([
+      {
+        festivalId: 'fst_abc',
+        festivalSourceUrl: 'https://festival.example.com',
+        artistName: '소향',
+      },
+    ]);
+    jest.spyOn(service, 'limitedGetCommonsJson').mockImplementation((url) => {
+      if (url.pathname.endsWith('/search/page'))
+        return Promise.resolve({
+          status: 200,
+          body: JSON.stringify({
+            pages: [
+              {
+                id: 1,
+                key: 'File:소향.png',
+                title: 'File:소향.png',
+                thumbnail: { mimetype: 'image/png' },
+              },
+            ],
+          }),
+        });
+      return Promise.resolve({
+        status: 200,
+        body: JSON.stringify({
+          title: '소향.png',
+          file_description_url:
+            '//commons.wikimedia.org/wiki/File:%EC%86%8C%ED%96%A5.png',
+          original: {
+            mediatype: 'BITMAP',
+            size: 123,
+            url: 'https://upload.wikimedia.org/wikipedia/commons/a/a0/a.png',
+          },
+        }),
+      });
+    });
+
+    await service.execute(run, source);
+
+    expect(run.result).toBe('nochange-parsed');
+    expect(run.artistImageEvidence).toMatchObject({
+      totalMissing: 1,
+      deferredCount: 0,
+      targets: [
+        {
+          status: 'candidates',
+          artistName: '소향',
+          candidates: [{ status: 'pending', license: null }],
+        },
+      ],
+    });
+    expect(imageStorage.saveCrawlImage).not.toHaveBeenCalled();
+    expect(runsRepo.save).toHaveBeenCalledWith(run);
+  });
+
+  it('검색 장애와 실제 0건을 다른 상태로 기록한다', async () => {
+    const { service, source, run, execute, publicFestivals } = harness();
+    execute.mockRestore();
+    source.kind = 'artist-image-discovery';
+    source.parser = 'commons-search';
+    source.url = COMMONS_DISCOVERY_URL;
+    source.parserConfig = { seed: COMMONS_DISCOVERY_SEED };
+    publicFestivals.missingArtistImages.mockResolvedValue([
+      {
+        festivalId: 'fst_one',
+        festivalSourceUrl: 'https://festival.example.com/1',
+        artistName: '첫째',
+      },
+      {
+        festivalId: 'fst_two',
+        festivalSourceUrl: 'https://festival.example.com/2',
+        artistName: '둘째',
+      },
+    ]);
+    jest
+      .spyOn(service, 'limitedGetCommonsJson')
+      .mockImplementation((url) =>
+        Promise.resolve(
+          url.searchParams.get('q')?.startsWith('첫째')
+            ? { status: 429, body: '' }
+            : { status: 200, body: '{"pages":[]}' },
+        ),
+      );
+    await service.execute(run, source);
+    expect(run.result).toBe('nochange-parsed');
+    expect(run.error).toBe('COMMONS_PARTIAL');
+    expect(run.artistImageEvidence?.targets).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          artistName: '첫째',
+          status: 'failed',
+          error: 'SEARCH_HTTP',
+          httpStatus: 429,
+        }),
+        expect.objectContaining({ artistName: '둘째', status: 'no-results' }),
+      ]),
+    );
+  });
 });
 
 describe('소향 Commons 사진 수집', () => {
@@ -345,6 +491,9 @@ function harness() {
         Promise.resolve({ ...candidate, id: 'revision-1' }),
       ),
   };
+  const publicFestivals = {
+    missingArtistImages: jest.fn().mockResolvedValue([]),
+  };
   const service = new CrawlService(
     sourcesRepo as never,
     runsRepo as never,
@@ -356,6 +505,7 @@ function harness() {
     alerts as never,
     audit as never,
     timetableRevisions as never,
+    publicFestivals as never,
   ) as unknown as PrivateCrawl;
   const execute = jest.spyOn(service, 'execute').mockResolvedValue(undefined);
   return {
@@ -371,6 +521,7 @@ function harness() {
     alerts,
     audit,
     timetableRevisions,
+    publicFestivals,
     insertQb,
     insertResult,
     updateQb,
@@ -395,6 +546,25 @@ describe('CrawlService scheduled runs', () => {
       scheduledDate: '2026-10-21',
     });
     expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('defers Commons discovery while another scheduled crawl is still running', async () => {
+    const { service, source, sourcesRepo, dataSource, insertQb, execute } =
+      harness();
+    sourcesRepo.findBy.mockResolvedValueOnce([
+      {
+        ...source,
+        kind: 'artist-image-discovery',
+        url: COMMONS_DISCOVERY_URL,
+        parser: 'commons-search',
+      },
+    ]);
+    dataSource.query.mockResolvedValueOnce([{ active: true }]);
+
+    await service.scheduleDue();
+
+    expect(insertQb.values).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it('reconciles prior XMF HTTP 403 runs once when the server starts', () => {

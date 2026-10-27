@@ -11,6 +11,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, LessThan, Repository } from 'typeorm';
 import { AdminFestival } from '../../festival/festival.entity';
+import { PublicFestivalService } from '../../../public/public-festival.service';
 import { AdminAuditService } from '../../audit/admin-audit.service';
 import { ImageStorageService } from '../../../storage/image-storage.service';
 import {
@@ -105,6 +106,17 @@ import {
   sohyangCommonsImageUrl,
   sohyangCommonsSourceFor,
 } from './sohyang-commons-profile';
+import {
+  COMMONS_DISCOVERY_SEED,
+  COMMONS_DISCOVERY_URL,
+  commonsFileUrl,
+  commonsSearchUrl,
+  dailyCommonsTargets,
+  parseCommonsFile,
+  parseCommonsSearch,
+  type CommonsDiscoveryEvidence,
+  type CommonsDiscoveryTarget,
+} from './commons-image-discovery';
 
 const kstDay = (date = new Date()) =>
   new Intl.DateTimeFormat('en-CA', {
@@ -310,6 +322,17 @@ function artistGalleryConfig(url: string, config: Record<string, string>) {
   return { ...config, festivalSourceUrl: festival.toString() };
 }
 
+function validCommonsDiscoverySource(source: CrawlSource): boolean {
+  return (
+    source.kind === 'artist-image-discovery' &&
+    source.url === COMMONS_DISCOVERY_URL &&
+    source.parser === 'commons-search' &&
+    source.parserConfig.seed === COMMONS_DISCOVERY_SEED &&
+    Object.keys(source.parserConfig).length === 1 &&
+    source.festivalId === null
+  );
+}
+
 function yes24PageCount(sourceUrl: string, body: string): number {
   const url = new URL(sourceUrl);
   if (
@@ -352,6 +375,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     private readonly alerts: CrawlAlertService,
     private readonly audit: AdminAuditService,
     private readonly timetableRevisions: CrawlTimetableRevisionService,
+    private readonly publicFestivals: PublicFestivalService,
   ) {}
 
   onModuleInit() {
@@ -386,6 +410,13 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
 
   async createSource(dto: CreateCrawlSourceDto, actor: string | null) {
     if (
+      dto.kind === 'artist-image-discovery' ||
+      dto.parser === 'commons-search'
+    )
+      throw new UnprocessableEntityException(
+        'Commons 탐색 소스는 서버가 관리합니다.',
+      );
+    if (
       dto.kind === 'artist-image' &&
       (dto.parserConfig.seed === 'official-artist-gallery' ||
         [
@@ -398,6 +429,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         '공식 갤러리 신원 정보는 수집 결과로만 등록할 수 있습니다.',
       );
     const parsers: Record<CrawlSource['kind'], CrawlSource['parser']> = {
+      'artist-image-discovery': 'commons-search',
       discovery: 'ticket-list',
       'artist-gallery': 'html-text',
       'artist-image': 'html-text',
@@ -480,6 +512,13 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     actor: string | null,
   ) {
     const source = await this.getSource(id);
+    if (
+      source.kind === 'artist-image-discovery' &&
+      (dto.url !== undefined || dto.parserConfig !== undefined)
+    )
+      throw new UnprocessableEntityException(
+        'Commons 탐색 URL과 설정은 변경할 수 없습니다.',
+      );
     const aliasOnly =
       source.kind === 'artist-image' &&
       dto.parserConfig !== undefined &&
@@ -591,6 +630,21 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
 
   async testSource(id: string) {
     const source = await this.getSource(id);
+    if (source.kind === 'artist-image-discovery') {
+      if (!validCommonsDiscoverySource(source))
+        throw new UnprocessableEntityException(
+          'Commons 탐색 소스 설정이 잘못되었습니다.',
+        );
+      const targets = await this.publicFestivals.missingArtistImages();
+      const sample = targets[0];
+      return {
+        parsed: {
+          totalMissing: targets.length,
+          sample: sample ? await this.searchCommonsTarget(sample) : null,
+        },
+        excerpt: `${targets.length}개 누락 출연진`,
+      };
+    }
     await this.checkRobots(source.url);
     if (source.parser === 'image-ocr') {
       const config = timetableSourceConfig(source.parserConfig);
@@ -808,6 +862,26 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  async artistImageDiscovery(runId: string) {
+    const run = await this.runsRepo
+      .createQueryBuilder('run')
+      .addSelect('run.artistImageEvidence')
+      .where('run.id = :runId', { runId })
+      .getOne();
+    if (!run) throw new NotFoundException('크롤 실행을 찾을 수 없습니다.');
+    const source = await this.sourcesRepo.findOneBy({ id: run.sourceId });
+    if (source?.kind !== 'artist-image-discovery')
+      throw new NotFoundException('Commons 탐색 실행을 찾을 수 없습니다.');
+    return {
+      runId: run.id,
+      sourceId: source.id,
+      result: run.result,
+      startedAt: run.startedAt,
+      finishedAt: run.finishedAt,
+      evidence: run.artistImageEvidence ?? null,
+    };
+  }
+
   async snapshot(id: string) {
     const row = await this.snapshotsRepo.findOneBy({ id });
     if (!row || row.expiresAt <= new Date()) {
@@ -876,13 +950,15 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     });
     // Official galleries refresh child image hints before the daily child runs.
     const order = (source: CrawlSource) =>
-      ![GMF_LINEUP_URL, WONDERLIVET_LINEUP_URL].includes(source.url)
-        ? 1
-        : source.kind === 'artist-gallery'
-          ? 0
-          : source.kind === 'artist-image'
-            ? 2
-            : 1;
+      source.kind === 'artist-image-discovery'
+        ? 3
+        : ![GMF_LINEUP_URL, WONDERLIVET_LINEUP_URL].includes(source.url)
+          ? 1
+          : source.kind === 'artist-gallery'
+            ? 0
+            : source.kind === 'artist-image'
+              ? 2
+              : 1;
     sources.sort((left, right) => order(left) - order(right));
     const listedIds = new Set(sources.map((source) => source.id));
     let gmfGalleryFailed = false;
@@ -929,6 +1005,21 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
             this.gmfQueuedSources.delete(source.id);
           });
         continue;
+      }
+      if (source.kind === 'artist-image-discovery') {
+        // Other scheduled runs are fire-and-forget. Defer discovery until their
+        // image writes finish; the next minute tick retries without blocking.
+        if (this.gmfQueuedSources.size > 0) continue;
+        const active = await this.dataSource.query<{ active: boolean }[]>(
+          `SELECT EXISTS (
+             SELECT 1 FROM crawl_runs run
+             JOIN crawl_sources crawl_source ON crawl_source.id = run."sourceId"
+             WHERE run.result = 'running'
+               AND run."startedAt" >= NOW() - INTERVAL '15 minutes'
+               AND crawl_source.kind <> 'artist-image-discovery'
+           ) AS active`,
+        );
+        if (active[0]?.active) continue;
       }
       await this.failStaleManualRun(source.id);
       // 일별 유니크 키가 복수 프로세스에서 같은 소스의 중복 예약을 막는다.
@@ -1098,6 +1189,13 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         ? 'GMF_VERIFY'
         : 'ROBOTS';
     try {
+      if (source.kind === 'artist-image-discovery') {
+        phase = 'COMMONS_DISCOVERY';
+        // The fixed Wikimedia Core REST gateway has no robots disallow rule; its
+        // robots.txt redirects to API docs. Commons on-site /w/api.php is forbidden.
+        await this.executeCommonsDiscovery(run, source);
+        return;
+      }
       const verifiedGmfImage =
         source.kind === 'artist-image' &&
         source.url === GMF_LINEUP_URL &&
@@ -1877,6 +1975,131 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         );
       }
     }
+  }
+
+  private async executeCommonsDiscovery(run: CrawlRun, source: CrawlSource) {
+    if (!validCommonsDiscoverySource(source))
+      throw new Error('INVALID_COMMONS_SOURCE');
+    const missing = await this.publicFestivals.missingArtistImages();
+    const { selected, deferredCount: deferredByCount } = dailyCommonsTargets(
+      missing,
+      run.scheduledDate ?? kstDay(),
+    );
+    const targets: CommonsDiscoveryTarget[] = [];
+    const deadline = Date.now() + 10 * 60_000;
+    for (const target of selected) {
+      if (Date.now() >= deadline) break;
+      targets.push(await this.searchCommonsTarget(target));
+    }
+    const evidence: CommonsDiscoveryEvidence = {
+      totalMissing: missing.length,
+      deferredCount: deferredByCount + selected.length - targets.length,
+      targets,
+    };
+    run.artistImageEvidence = evidence;
+    run.contentHash = createHash('sha256')
+      .update(JSON.stringify(evidence))
+      .digest('hex');
+    if (
+      targets.length &&
+      targets.every((target) => target.status === 'failed')
+    ) {
+      run.result = 'failed';
+      run.error = 'COMMONS_ALL_FAILED';
+    } else {
+      run.result = 'nochange-parsed';
+      if (targets.some((target) => target.status === 'failed'))
+        run.error = 'COMMONS_PARTIAL';
+      source.lastChangedAt = new Date();
+    }
+  }
+
+  private async searchCommonsTarget(target: {
+    festivalId: string;
+    festivalSourceUrl: string;
+    artistName: string;
+  }): Promise<CommonsDiscoveryTarget> {
+    const base = {
+      ...target,
+      candidates: [] as CommonsDiscoveryTarget['candidates'],
+    };
+    try {
+      const searchUrl = commonsSearchUrl(target.artistName);
+      const search = await this.limitedGetCommonsJson(searchUrl);
+      if (search.status !== 200)
+        return {
+          ...base,
+          status: 'failed',
+          error: 'SEARCH_HTTP',
+          httpStatus: search.status,
+        };
+      let pages: ReturnType<typeof parseCommonsSearch>;
+      try {
+        pages = parseCommonsSearch(search.body);
+      } catch {
+        return { ...base, status: 'failed', error: 'SEARCH_RESPONSE' };
+      }
+      if (!pages.length) return { ...base, status: 'no-results' };
+      const candidates: CommonsDiscoveryTarget['candidates'] = [];
+      let fileFailure: 'FILE_HTTP' | 'FILE_RESPONSE' | 'NETWORK' | null = null;
+      let fileHttpStatus: number | undefined;
+      for (const page of pages) {
+        let file: { status: number; body: string };
+        try {
+          file = await this.limitedGetCommonsJson(commonsFileUrl(page.key));
+        } catch {
+          fileFailure = 'NETWORK';
+          break;
+        }
+        if (file.status !== 200) {
+          fileFailure = 'FILE_HTTP';
+          fileHttpStatus = file.status;
+          continue;
+        }
+        try {
+          candidates.push(parseCommonsFile(file.body, page));
+        } catch {
+          fileFailure = 'FILE_RESPONSE';
+        }
+      }
+      if (!candidates.length && fileFailure)
+        return {
+          ...base,
+          status: 'failed',
+          error: fileFailure,
+          ...(fileHttpStatus !== undefined
+            ? { httpStatus: fileHttpStatus }
+            : {}),
+        };
+      return {
+        ...base,
+        status: candidates.length ? 'candidates' : 'no-results',
+        candidates,
+        ...(fileFailure ? { error: fileFailure } : {}),
+        ...(fileHttpStatus !== undefined ? { httpStatus: fileHttpStatus } : {}),
+      };
+    } catch {
+      return { ...base, status: 'failed', error: 'NETWORK' };
+    }
+  }
+
+  private async limitedGetCommonsJson(url: URL) {
+    if (
+      url.hostname !== 'api.wikimedia.org' ||
+      !url.pathname.startsWith('/core/v1/commons/')
+    )
+      throw new Error('INVALID_COMMONS_URL');
+    const response = await this.withHostLock(url, () =>
+      safeGetBytes(
+        url,
+        'application/json',
+        512_000,
+        'FestiCoreImageDiscovery/1.0 (+https://github.com/FESTICORE/FestiCore-Backend)',
+      ),
+    );
+    if (response.status === 200 && response.contentType !== 'application/json')
+      throw new Error('COMMONS_CONTENT_TYPE');
+    return { status: response.status, body: response.body.toString('utf8') };
   }
 
   private async reconcileOfficialTicketLinks(
