@@ -64,7 +64,11 @@ type PrivateCrawl = {
     items: { id: string; op: string; path: string; after: unknown }[];
     matchedProposalId?: string;
   }>;
-  execute(run: CrawlRun, source: CrawlSource): Promise<void>;
+  execute(
+    run: CrawlRun,
+    source: CrawlSource,
+    verifiedWonderlivetBundle?: { body: string; snapshotUrl: string } | null,
+  ): Promise<{ body: string; snapshotUrl: string } | void>;
   getListing(source: CrawlSource): Promise<{ status: number; body: string }>;
   syncXmfArtistAliases(source: CrawlSource, body: string): Promise<void>;
   syncXmfAliasesFromRecentSnapshot(source: CrawlSource): Promise<void>;
@@ -110,6 +114,15 @@ const DRDR_POST = JSON.stringify({
     rendered: `<p><strong>MUSICIAN</strong></p><p><img src="${DRDR_PHOTO}"></p><p><strong>ALBUMS</strong></p><p><img src="https://drdr.ac/wordpress/wp-content/uploads/2026/08/album.jpg"></p>`,
   },
 });
+
+function wonderlivetBundle(artists: unknown[]) {
+  const json = JSON.stringify({
+    dataState: 'ready',
+    isComingSoon: false,
+    artists,
+  });
+  return `const $T=JSON.parse('${json.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}')`;
+}
 
 const XMF_NOTICE_HTML = `<div class="acd_row"><h4>[XMF 2026 최종 라인업 공개]</h4>
   <p>10월 3일부터 4일까지 이틀간 인천 파라다이스시티에서 열리는 XMF 2026.</p>
@@ -309,6 +322,95 @@ describe('CrawlService scheduled runs', () => {
       scheduledDate: '2026-10-21',
     });
     expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs Wonderlivet gallery before its new image children on the same scheduled day', async () => {
+    const {
+      service,
+      source,
+      sourcesRepo,
+      runsRepo,
+      updateQb,
+      execute,
+      insertQb,
+    } = harness();
+    source.kind = 'artist-gallery';
+    source.url = WONDERLIVET_LINEUP_URL;
+    source.parserConfig = {
+      seed: 'wonderlivet-official-lineup',
+      festivalSourceUrl: WONDERLIVET_FESTIVAL_URL,
+    };
+    const child = {
+      ...source,
+      id: 'new-wonderlivet-image',
+      kind: 'artist-image',
+      parserConfig: {
+        seed: 'official-wonderlivet-lineup',
+        festivalSourceUrl: WONDERLIVET_FESTIVAL_URL,
+        artistName: 'Official Act',
+        imageHint: '/lineup/artists/production/live/day1/official.webp',
+      },
+    } as CrawlSource;
+    sourcesRepo.findBy
+      .mockResolvedValueOnce([source])
+      .mockResolvedValueOnce([child]);
+    sourcesRepo.findOneBy.mockResolvedValue(child);
+    runsRepo.createQueryBuilder
+      .mockReset()
+      .mockImplementationOnce(() => updateQb)
+      .mockImplementationOnce(() => insertQb)
+      .mockImplementationOnce(() => updateQb)
+      .mockImplementationOnce(() => insertQb);
+    const verifiedBundle = {
+      body: wonderlivetBundle([
+        {
+          id: 1,
+          name: 'Official Act',
+          performanceDay: 'DAY1',
+          imageUrl: `${WONDERLIVET_IMAGE_ORIGIN}/lineup/artists/production/live/day1/official.webp`,
+        },
+      ]),
+      snapshotUrl: '/api/v1/admin/crawl/snapshots/gallery-snapshot',
+    };
+    execute.mockResolvedValueOnce(verifiedBundle);
+
+    await service.scheduleDue();
+
+    expect(execute.mock.calls.map(([, item]) => item.id)).toEqual([
+      source.id,
+      child.id,
+    ]);
+    expect(execute.mock.calls[1][2]).toBe(verifiedBundle);
+    expect(insertQb.values).toHaveBeenCalledWith({
+      sourceId: child.id,
+      scheduledDate: '2026-10-21',
+    });
+  });
+
+  it('does not run Wonderlivet children after a failed gallery refresh', async () => {
+    const { service, source, sourcesRepo, execute, run } = harness();
+    source.kind = 'artist-gallery';
+    source.url = WONDERLIVET_LINEUP_URL;
+    source.parserConfig = {
+      seed: 'wonderlivet-official-lineup',
+      festivalSourceUrl: WONDERLIVET_FESTIVAL_URL,
+    };
+    const child = {
+      ...source,
+      id: 'stale-image',
+      kind: 'artist-image',
+      parserConfig: { seed: 'official-wonderlivet-lineup' },
+    } as CrawlSource;
+    sourcesRepo.findBy.mockResolvedValue([child, source]);
+    execute.mockImplementation(() => {
+      run.result = 'failed';
+      return Promise.resolve();
+    });
+
+    await service.scheduleDue();
+
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute.mock.calls[0][1]).toBe(source);
   });
 
   it('runs the GMF gallery before children and reloads their current image hints', async () => {
@@ -629,6 +731,40 @@ describe('CrawlService scheduled runs', () => {
     await service.scheduleDue();
 
     expect(execute).not.toHaveBeenCalled();
+  });
+});
+
+describe('Wonderlivet public bundle fetch', () => {
+  it('fetches only the module asset linked from the official page after robots checks', async () => {
+    const { service, source } = harness();
+    source.kind = 'artist-gallery';
+    source.url = WONDERLIVET_LINEUP_URL;
+    source.parserConfig = {
+      seed: 'wonderlivet-official-lineup',
+      festivalSourceUrl: WONDERLIVET_FESTIVAL_URL,
+    };
+    const bundleUrl = 'https://www.wonderli.vet/assets/index-8xy3D9hg.js';
+    const limitedGet = jest
+      .spyOn(
+        service as unknown as {
+          limitedGet: (url: URL) => Promise<{ status: number; body: string }>;
+        },
+        'limitedGet',
+      )
+      .mockResolvedValueOnce({
+        status: 200,
+        body: '<script type="module" src="/assets/index-8xy3D9hg.js"></script>',
+      })
+      .mockResolvedValueOnce({ status: 200, body: wonderlivetBundle([]) });
+    const robots = jest.spyOn(service, 'checkRobots').mockResolvedValue();
+
+    await service.getListing(source);
+
+    expect(limitedGet.mock.calls.map(([url]) => url.href)).toEqual([
+      WONDERLIVET_LINEUP_URL,
+      bundleUrl,
+    ]);
+    expect(robots).toHaveBeenCalledWith(bundleUrl);
   });
 });
 
@@ -2340,7 +2476,6 @@ describe('CrawlService manual runs and snapshots', () => {
     ]);
 
     await service.execute(run, source);
-
     const calls = dataSource.query.mock.calls as unknown as [
       string,
       unknown[],
@@ -2706,30 +2841,24 @@ describe('CrawlService manual runs and snapshots', () => {
     jest.spyOn(service, 'checkRobots').mockResolvedValue();
     jest.spyOn(service, 'getListing').mockResolvedValue({
       status: 200,
-      body: JSON.stringify({
-        result: {
-          data: {
-            json: {
-              dataState: 'ready',
-              isComingSoon: false,
-              artists: [
-                {
-                  name: 'Official Act',
-                  performanceDay: 'DAY2',
-                  isPublished: true,
-                  imageUrl: `${WONDERLIVET_IMAGE_ORIGIN}/lineup/artists/production/live/day2/official-123.webp`,
-                },
-              ],
-            },
-          },
+      body: wonderlivetBundle([
+        {
+          id: 1,
+          name: 'Official Act',
+          performanceDay: 'DAY2',
+          imageUrl: `${WONDERLIVET_IMAGE_ORIGIN}/lineup/artists/production/live/day2/official-123.webp`,
         },
-      }),
+      ]),
     });
     dataSource.query.mockImplementation((sql: string) =>
       Promise.resolve(sql.includes('RETURNING id') ? [[], 0] : []),
     );
 
-    await service.execute(run, source);
+    const verifiedBundle = await service.execute(run, source);
+    expect(verifiedBundle).toEqual({
+      body: expect.any(String) as string,
+      snapshotUrl: '/api/v1/admin/crawl/snapshots/snapshot-1',
+    });
 
     const calls = dataSource.query.mock.calls as unknown as [
       string,
@@ -2777,30 +2906,14 @@ describe('CrawlService manual runs and snapshots', () => {
     jest.spyOn(service, 'checkRobots').mockResolvedValue();
     jest.spyOn(service, 'getListing').mockResolvedValue({
       status: 200,
-      body: JSON.stringify({
-        result: {
-          data: {
-            json: {
-              dataState: 'ready',
-              isComingSoon: false,
-              artists: [
-                {
-                  name: 'Former Act',
-                  performanceDay: 'DAY1',
-                  isPublished: false,
-                  imageUrl: null,
-                },
-                {
-                  name: 'Current Act',
-                  performanceDay: 'DAY2',
-                  isPublished: true,
-                  imageUrl: `${WONDERLIVET_IMAGE_ORIGIN}/lineup/artists/production/live/day2/current.webp`,
-                },
-              ],
-            },
-          },
+      body: wonderlivetBundle([
+        {
+          id: 2,
+          name: 'Current Act',
+          performanceDay: 'DAY2',
+          imageUrl: `${WONDERLIVET_IMAGE_ORIGIN}/lineup/artists/production/live/day2/current.webp`,
         },
-      }),
+      ]),
     });
     dataSource.query.mockImplementation((sql: string) =>
       Promise.resolve(
@@ -2840,24 +2953,14 @@ describe('CrawlService manual runs and snapshots', () => {
     jest.spyOn(service, 'checkRobots').mockResolvedValue();
     jest.spyOn(service, 'getListing').mockResolvedValue({
       status: 200,
-      body: JSON.stringify({
-        result: {
-          data: {
-            json: {
-              dataState: 'ready',
-              isComingSoon: false,
-              artists: [
-                {
-                  name: 'ACT A',
-                  performanceDay: 'DAY1',
-                  isPublished: true,
-                  imageUrl: `${WONDERLIVET_IMAGE_ORIGIN}/lineup/artists/production/live/day1/new.webp`,
-                },
-              ],
-            },
-          },
+      body: wonderlivetBundle([
+        {
+          id: 3,
+          name: 'ACT A',
+          performanceDay: 'DAY1',
+          imageUrl: `${WONDERLIVET_IMAGE_ORIGIN}/lineup/artists/production/live/day1/new.webp`,
         },
-      }),
+      ]),
     });
     dataSource.query.mockImplementation((sql: string) =>
       Promise.resolve(
@@ -2894,7 +2997,15 @@ describe('CrawlService manual runs and snapshots', () => {
   });
 
   it('selects only the matching official Wonderlivet image for an artist source', async () => {
-    const { service, source, run, execute, runsRepo, dataSource } = harness();
+    const {
+      service,
+      source,
+      run,
+      execute,
+      runsRepo,
+      dataSource,
+      imageStorage,
+    } = harness();
     execute.mockRestore();
     source.kind = 'artist-image';
     source.url = WONDERLIVET_LINEUP_URL;
@@ -2905,28 +3016,19 @@ describe('CrawlService manual runs and snapshots', () => {
       festivalSourceUrl: WONDERLIVET_FESTIVAL_URL,
       imageHint: '/lineup/artists/production/live/day1/official-123.webp',
     };
-    jest.spyOn(service, 'checkRobots').mockResolvedValue();
-    jest.spyOn(service, 'getListing').mockResolvedValue({
-      status: 200,
-      body: JSON.stringify({
-        result: {
-          data: {
-            json: {
-              dataState: 'ready',
-              isComingSoon: false,
-              artists: [
-                {
-                  name: 'Official Act',
-                  performanceDay: 'DAY1',
-                  isPublished: true,
-                  imageUrl: `${WONDERLIVET_IMAGE_ORIGIN}/lineup/artists/production/live/day1/official-123.webp`,
-                },
-              ],
-            },
-          },
+    const robots = jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    const listing = jest.spyOn(service, 'getListing');
+    const verifiedBundle = {
+      body: wonderlivetBundle([
+        {
+          id: 4,
+          name: 'Official Act',
+          performanceDay: 'DAY1',
+          imageUrl: `${WONDERLIVET_IMAGE_ORIGIN}/lineup/artists/production/live/day1/official-123.webp`,
         },
-      }),
-    });
+      ]),
+      snapshotUrl: '/api/v1/admin/crawl/snapshots/gallery-snapshot',
+    };
     const capture = jest
       .spyOn(
         service as unknown as {
@@ -2941,8 +3043,12 @@ describe('CrawlService manual runs and snapshots', () => {
       getOne: jest.fn().mockResolvedValue(null),
     }));
 
-    await service.execute(run, source);
+    await service.execute(run, source, verifiedBundle);
 
+    expect(listing).not.toHaveBeenCalled();
+    expect(imageStorage.saveCrawlSnapshot).not.toHaveBeenCalled();
+    expect(robots).toHaveBeenCalledWith(WONDERLIVET_LINEUP_URL);
+    expect(run.snapshotUrl).toBe(verifiedBundle.snapshotUrl);
     expect(capture.mock.calls[0][2]).toEqual([
       new URL(
         `${WONDERLIVET_IMAGE_ORIGIN}/lineup/artists/production/live/day1/official-123.webp`,
@@ -2954,6 +3060,21 @@ describe('CrawlService manual runs and snapshots', () => {
         String(sql).includes("- 'previousImageHint'"),
       ),
     ).toBe(true);
+    const originalConfig = source.parserConfig;
+    const changes: Record<string, string>[] = [
+      { artistName: 'Different Act' },
+      { imageHint: '/lineup/artists/production/live/day1/different.webp' },
+    ];
+    for (const changed of changes) {
+      const staleRun = {
+        ...run,
+        id: `stale-${Object.keys(changed)[0]}`,
+      };
+      source.parserConfig = { ...originalConfig, ...changed };
+      await service.execute(staleRun, source, verifiedBundle);
+      expect(staleRun.result).toBe('failed');
+    }
+    expect(capture).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the previous official image path when replacement capture fails', async () => {
@@ -2970,26 +3091,16 @@ describe('CrawlService manual runs and snapshots', () => {
       previousImageHint: '/lineup/artists/production/live/day1/old.webp',
     };
     jest.spyOn(service, 'checkRobots').mockResolvedValue();
-    jest.spyOn(service, 'getListing').mockResolvedValue({
+    const listing = jest.spyOn(service, 'getListing').mockResolvedValue({
       status: 200,
-      body: JSON.stringify({
-        result: {
-          data: {
-            json: {
-              dataState: 'ready',
-              isComingSoon: false,
-              artists: [
-                {
-                  name: 'Official Act',
-                  performanceDay: 'DAY1',
-                  isPublished: true,
-                  imageUrl: `${WONDERLIVET_IMAGE_ORIGIN}/lineup/artists/production/live/day1/new.webp`,
-                },
-              ],
-            },
-          },
+      body: wonderlivetBundle([
+        {
+          id: 5,
+          name: 'Official Act',
+          performanceDay: 'DAY1',
+          imageUrl: `${WONDERLIVET_IMAGE_ORIGIN}/lineup/artists/production/live/day1/new.webp`,
         },
-      }),
+      ]),
     });
     jest
       .spyOn(
@@ -3002,6 +3113,7 @@ describe('CrawlService manual runs and snapshots', () => {
 
     await service.execute(run, source);
 
+    expect(listing).toHaveBeenCalledWith(source);
     expect(run.result).toBe('failed');
     expect(
       dataSource.query.mock.calls.some(([sql]) =>

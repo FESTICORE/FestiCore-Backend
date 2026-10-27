@@ -69,7 +69,7 @@ describe('public crawl image policy', () => {
 
   it('limits Wonderlivet images to the official child source and its exact validated image path', () => {
     expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(
-      "source.url = 'https://www.wonderli.vet/api/trpc/lineup.list'",
+      "source.url = 'https://www.wonderli.vet/lineup'",
     );
     expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(
       "source.\"parserConfig\"->>'festivalSourceUrl' = 'https://www.wonderli.vet/lineup'",

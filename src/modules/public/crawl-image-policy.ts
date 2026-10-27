@@ -102,7 +102,7 @@ export const PUBLIC_CRAWL_IMAGE_SQL = `(
     ))
   OR (source.kind = 'artist-image'
     AND source.enabled = true
-    AND source.url = 'https://www.wonderli.vet/api/trpc/lineup.list'
+    AND source.url = 'https://www.wonderli.vet/lineup'
     AND source."parserConfig"->>'seed' = 'official-wonderlivet-lineup'
     AND source."parserConfig"->>'festivalSourceUrl' = 'https://www.wonderli.vet/lineup'
     AND EXISTS (
