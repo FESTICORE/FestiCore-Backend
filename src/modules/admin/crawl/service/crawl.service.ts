@@ -90,6 +90,11 @@ import {
   additionalFestivalProfileImageUrl,
 } from './additional-festival-profile';
 import {
+  CDF_LOW_HIGH_LOW_PROFILE_SEED,
+  cdfLowHighLowProfileFor,
+  cdfLowHighLowProfileImageUrl,
+} from './cdf-low-high-low-profile';
+import {
   PRUGIO_PROFILE_SEED,
   prugioProfileFor,
   prugioProfileImageUrl,
@@ -107,6 +112,21 @@ const YES24_PAGE_LIMIT = 4;
 
 function artistImageConfig(url: string, config: Record<string, string>) {
   const { artistName, artistAlias, festivalSourceUrl, imageHint } = config;
+  if (config.seed === CDF_LOW_HIGH_LOW_PROFILE_SEED) {
+    if (
+      !cdfLowHighLowProfileFor(url, config) ||
+      Object.keys(config).some(
+        (key) =>
+          !['seed', 'festivalSourceUrl', 'artistName', 'artistAlias'].includes(
+            key,
+          ),
+      )
+    )
+      throw new UnprocessableEntityException(
+        '검증된 CDF 로우하이로우 공식 프로필 소스 설정이 필요합니다.',
+      );
+    return { ...config };
+  }
   if (config.seed === PRUGIO_PROFILE_SEED) {
     if (
       !prugioProfileFor(url, config) ||
@@ -583,6 +603,28 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       if (!image)
         throw new UnprocessableEntityException(
           '푸르지오 공식 프로필 이미지를 확인하지 못했습니다.',
+        );
+      await this.checkRobots(image.toString());
+      return {
+        parsed: {
+          artistName: source.parserConfig.artistName,
+          imageUrl: image.toString(),
+        },
+        excerpt: source.parserConfig.artistName,
+      };
+    }
+    if (
+      source.kind === 'artist-image' &&
+      source.parserConfig.seed === CDF_LOW_HIGH_LOW_PROFILE_SEED
+    ) {
+      const image = cdfLowHighLowProfileImageUrl(
+        response.body,
+        source.url,
+        source.parserConfig,
+      );
+      if (!image)
+        throw new UnprocessableEntityException(
+          '멜론티켓 공식 로우하이로우 프로필 이미지를 확인하지 못했습니다.',
         );
       await this.checkRobots(image.toString());
       return {
@@ -1477,51 +1519,58 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
                   source.url,
                   source.parserConfig,
                 )
-              : source.parserConfig.seed === FESTIVAL_PROFILE_SEED
-                ? festivalProfileImageUrl(
+              : source.parserConfig.seed === CDF_LOW_HIGH_LOW_PROFILE_SEED
+                ? cdfLowHighLowProfileImageUrl(
                     response.body,
                     source.url,
                     source.parserConfig,
                   )
-                : source.parserConfig.seed === ADDITIONAL_FESTIVAL_PROFILE_SEED
-                  ? additionalFestivalProfileImageUrl(
+                : source.parserConfig.seed === FESTIVAL_PROFILE_SEED
+                  ? festivalProfileImageUrl(
                       response.body,
                       source.url,
                       source.parserConfig,
                     )
-                  : source.parserConfig.seed === WONDERLIVET_PROFILE_SEED
-                    ? wonderlivetProfileImageUrl(
+                  : source.parserConfig.seed ===
+                      ADDITIONAL_FESTIVAL_PROFILE_SEED
+                    ? additionalFestivalProfileImageUrl(
                         response.body,
                         source.url,
                         source.parserConfig,
                       )
-                    : source.parserConfig.seed === CDF_PROFILE_SEED
-                      ? cdfProfileImageUrl(
+                    : source.parserConfig.seed === WONDERLIVET_PROFILE_SEED
+                      ? wonderlivetProfileImageUrl(
                           response.body,
                           source.url,
                           source.parserConfig,
                         )
-                      : source.parserConfig.seed === DRDR_PROFILE_SEED
-                        ? drdrProfileImageUrl(
+                      : source.parserConfig.seed === CDF_PROFILE_SEED
+                        ? cdfProfileImageUrl(
                             response.body,
                             source.url,
                             source.parserConfig,
                           )
-                        : source.parserConfig.seed ===
-                              'official-wonderlivet-lineup' &&
-                            source.url === WONDERLIVET_LINEUP_URL
-                          ? (parseWonderlivetBundleLineup(response.body).find(
-                              (entry) =>
-                                entry.artistName ===
-                                  source.parserConfig.artistName &&
-                                entry.imageUrl.pathname ===
-                                  source.parserConfig.imageHint,
-                            )?.imageUrl ?? null)
-                          : artistProfileImageUrl(
+                        : source.parserConfig.seed === DRDR_PROFILE_SEED
+                          ? drdrProfileImageUrl(
                               response.body,
                               source.url,
-                              source.parserConfig.imageHint,
+                              source.parserConfig,
                             )
+                          : source.parserConfig.seed ===
+                                'official-wonderlivet-lineup' &&
+                              source.url === WONDERLIVET_LINEUP_URL
+                            ? (parseWonderlivetBundleLineup(response.body).find(
+                                (entry) =>
+                                  entry.artistName ===
+                                    source.parserConfig.artistName &&
+                                  entry.imageUrl.pathname ===
+                                    source.parserConfig.imageHint,
+                              )?.imageUrl ?? null)
+                            : artistProfileImageUrl(
+                                response.body,
+                                source.url,
+                                source.parserConfig.imageHint,
+                              )
           : null;
       if (source.kind === 'artist-image' && !profileImage)
         throw new Error('프로필 이미지가 공식 페이지에서 확인되지 않았습니다.');

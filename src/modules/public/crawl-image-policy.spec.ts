@@ -14,8 +14,18 @@ import {
 import { FESTIVAL_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/festival-profile';
 import { ADDITIONAL_FESTIVAL_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/additional-festival-profile';
 import { PRUGIO_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/prugio-profile';
+import { CDF_LOW_HIGH_LOW_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/cdf-low-high-low-profile';
 
 describe('public crawl image policy', () => {
+  it('publishes the CDF LOW HIGH LOW portrait only through its exact Melon profile branch', () => {
+    expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(
+      "source.\"parserConfig\"->>'seed' IS DISTINCT FROM 'cdf-low-high-low-profile'",
+    );
+    expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(
+      "source.\"parserConfig\"->>'seed' = 'cdf-low-high-low-profile'",
+    );
+    expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(CDF_LOW_HIGH_LOW_PUBLIC_IMAGE_SQL);
+  });
   it('serves the Prugio portrait only from its verified source and origin', () => {
     expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(
       "source.\"parserConfig\"->>'seed' IS DISTINCT FROM 'prugio-official-profile'",
