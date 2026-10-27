@@ -16,17 +16,20 @@ describe('discovered festival artist profile images', () => {
       url: SOHYANG_FESTIVAL_URL,
       artists: [{ name: '소향' }],
     };
+    let rightsValid = true;
     const query = jest.fn().mockImplementation((sql: string) => {
       if (sql.includes('WITH candidates AS')) return [{ candidate }];
       if (sql.includes('SELECT DISTINCT ON (source."parserConfig"'))
-        return [
-          {
-            festivalSourceUrl: SOHYANG_FESTIVAL_URL,
-            artistName: '소향',
-            seed: SOHYANG_COMMONS_SEED,
-            id: 'sohyang-photo',
-          },
-        ];
+        return rightsValid
+          ? [
+              {
+                festivalSourceUrl: SOHYANG_FESTIVAL_URL,
+                artistName: '소향',
+                seed: SOHYANG_COMMONS_SEED,
+                id: 'sohyang-photo',
+              },
+            ]
+          : [];
       if (sql.includes('FROM crawl_timetable_revisions revision'))
         return [
           {
@@ -76,6 +79,30 @@ describe('discovered festival artist profile images', () => {
         imageCredit: SOHYANG_COMMONS_CREDIT,
       }),
     ]);
+    rightsValid = false;
+    const invalid = await service.detail(
+      discoverySummaries([{ candidate }])[0].id,
+    );
+    expect(invalid.artists).toEqual(
+      expect.arrayContaining([{ name: '소향', imageUrl: null }]),
+    );
+    expect(invalid.timetable).toEqual(
+      expect.arrayContaining([expect.objectContaining({ imageUrl: null })]),
+    );
+    expect(JSON.stringify(invalid)).not.toContain('imageCredit');
+    rightsValid = true;
+    const recovered = await service.detail(
+      discoverySummaries([{ candidate }])[0].id,
+    );
+    expect(recovered.artists).toEqual(
+      expect.arrayContaining([
+        {
+          name: '소향',
+          imageUrl: '/api/v1/festivals/images/sohyang-photo.webp',
+          imageCredit: SOHYANG_COMMONS_CREDIT,
+        },
+      ]),
+    );
   });
   it('adds only saved official GMF child artists when the discovery has no lineup', async () => {
     const gmfUrl = 'https://mintpaper.co.kr/festivals/172';

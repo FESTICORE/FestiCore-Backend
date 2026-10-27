@@ -1617,8 +1617,11 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
                                   source.parserConfig.imageHint,
                                 )
           : null;
-      if (source.kind === 'artist-image' && !profileImage)
+      if (source.kind === 'artist-image' && !profileImage) {
+        if (source.parserConfig.seed === SOHYANG_COMMONS_SEED)
+          run.error = 'COMMONS_RIGHTS';
         throw new Error('프로필 이미지가 공식 페이지에서 확인되지 않았습니다.');
+      }
       if (source.kind === 'artist-image' && source.url === GMF_LINEUP_URL)
         phase = 'IMAGE';
       const imageUrls = await this.captureImages(

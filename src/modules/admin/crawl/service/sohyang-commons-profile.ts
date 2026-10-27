@@ -85,4 +85,18 @@ export const SOHYANG_COMMONS_PUBLIC_IMAGE_SQL = `(
   AND source."parserConfig"->>'festivalSourceUrl' = 'https://ticket.melon.com/performance/index.htm?prodId=213769'
   AND source."parserConfig"->>'artistName' = '소향'
   AND image."originUrl" ~* '^https://upload[.]wikimedia[.]org/wikipedia/commons/[a-f0-9]/[a-f0-9]{2}/180212_%EC%86%8C%ED%96%A5[.]png$'
+  AND EXISTS (
+    SELECT 1 FROM crawl_runs rights_run
+    WHERE rights_run.id = image."runId"
+      AND rights_run."sourceId" = source.id
+      AND rights_run.result IN ('unchanged', 'nochange-parsed')
+      AND rights_run."finishedAt" >= now() - interval '36 hours'
+      AND rights_run.id = (
+        SELECT latest.id FROM crawl_runs latest
+        WHERE latest."sourceId" = source.id
+          AND latest."finishedAt" IS NOT NULL
+        ORDER BY latest."startedAt" DESC, latest.id DESC
+        LIMIT 1
+      )
+  )
 )`;

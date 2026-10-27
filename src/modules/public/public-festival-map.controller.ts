@@ -12,6 +12,7 @@ import { DataSource } from 'typeorm';
 import { ImageStorageService } from '../storage/image-storage.service';
 import { Public } from '../auth/decorator/public.decorator';
 import { PUBLIC_CRAWL_IMAGE_SQL } from './crawl-image-policy';
+import { SOHYANG_COMMONS_SEED } from '../admin/crawl/service/sohyang-commons-profile';
 
 @ApiTags('Public Festivals')
 @Public()
@@ -38,8 +39,10 @@ export class PublicFestivalMapController {
     @Param('imageId', new ParseUUIDPipe()) imageId: string,
     @Res() response: Response,
   ) {
-    const rows = await this.dataSource.query<{ objectKey: string }[]>(
-      `SELECT image."objectKey" FROM crawl_images image
+    const rows = await this.dataSource.query<
+      { objectKey: string; seed: string | null }[]
+    >(
+      `SELECT image."objectKey", source."parserConfig"->>'seed' AS seed FROM crawl_images image
        JOIN crawl_sources source ON source.id = image."sourceId"
        WHERE image.id = $1
          AND ${PUBLIC_CRAWL_IMAGE_SQL}`,
@@ -50,7 +53,10 @@ export class PublicFestivalMapController {
     response
       .set({
         'Content-Type': 'image/webp',
-        'Cache-Control': 'public, max-age=86400',
+        'Cache-Control':
+          rows[0].seed === SOHYANG_COMMONS_SEED
+            ? 'no-store'
+            : 'public, max-age=86400',
         'Cross-Origin-Resource-Policy': 'cross-origin',
         'X-Content-Type-Options': 'nosniff',
       })

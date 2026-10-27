@@ -200,6 +200,25 @@ describe('소향 Commons 사진 수집', () => {
     await service.execute(run, source);
     expect(capture.mock.calls[0][2]).toEqual([new URL(image)]);
   });
+
+  it('다음 수집에서 라이선스가 바뀌면 검증 실패로 기록한다', async () => {
+    const { service, source, run, execute } = harness();
+    execute.mockRestore();
+    Object.assign(source, {
+      kind: 'artist-image',
+      url: SOHYANG_COMMONS_PAGE,
+      parser: 'html-text',
+      parserConfig: config,
+    });
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({
+      status: 200,
+      body: body.replace('CC BY 3.0', 'All rights reserved'),
+    });
+    await service.execute(run, source);
+    expect(run.result).toBe('failed');
+    expect(run.error).toBe('COMMONS_RIGHTS');
+  });
 });
 
 function wonderlivetBundle(artists: unknown[]) {

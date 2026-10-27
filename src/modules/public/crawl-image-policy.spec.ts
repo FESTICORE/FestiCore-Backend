@@ -15,8 +15,30 @@ import { FESTIVAL_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/festival-profi
 import { ADDITIONAL_FESTIVAL_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/additional-festival-profile';
 import { PRUGIO_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/prugio-profile';
 import { CDF_LOW_HIGH_LOW_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/cdf-low-high-low-profile';
+import { SOHYANG_COMMONS_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/sohyang-commons-profile';
 
 describe('public crawl image policy', () => {
+  it('hides the Commons photo after rights drift, stale validation, or a replaced file', () => {
+    expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(
+      "source.\"parserConfig\"->>'seed' IS DISTINCT FROM 'sohyang-commons-profile'",
+    );
+    expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(
+      "source.\"parserConfig\"->>'seed' = 'sohyang-commons-profile'",
+    );
+    expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(SOHYANG_COMMONS_PUBLIC_IMAGE_SQL);
+    expect(SOHYANG_COMMONS_PUBLIC_IMAGE_SQL).toContain(
+      'rights_run.id = image."runId"',
+    );
+    expect(SOHYANG_COMMONS_PUBLIC_IMAGE_SQL).toContain(
+      "rights_run.result IN ('unchanged', 'nochange-parsed')",
+    );
+    expect(SOHYANG_COMMONS_PUBLIC_IMAGE_SQL).toContain(
+      'rights_run."finishedAt" >= now() - interval \'36 hours\'',
+    );
+    expect(SOHYANG_COMMONS_PUBLIC_IMAGE_SQL).toContain(
+      'ORDER BY latest."startedAt" DESC, latest.id DESC',
+    );
+  });
   it('publishes the CDF LOW HIGH LOW portrait only through its exact Melon profile branch', () => {
     expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(
       "source.\"parserConfig\"->>'seed' IS DISTINCT FROM 'cdf-low-high-low-profile'",
