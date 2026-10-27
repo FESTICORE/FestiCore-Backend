@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
 import type { CrawlSource } from '../entity/crawl-source.entity';
+import { imageTagAttributes } from './image-tag-attributes';
 import {
   parsePrugioLineup,
   PRUGIO_LINEUP_SEED,
@@ -908,15 +909,23 @@ function melonDetailCandidates(
       const artistName = classText(row[1], 'singer');
       if (!artistName || artistName.length > 160) continue;
       const artist: { name: string; sourceUrl?: string } = { name: artistName };
-      const rawImage = /<img\b[^>]*\bsrc=["']([^"']+)["']/i.exec(row[1])?.[1];
-      if (rawImage) {
+      const imageTag = /<img\b[^>]*>/i.exec(row[1])?.[0];
+      const imageSources = imageTag
+        ? imageTagAttributes(imageTag, ['data-src', 'src'])
+        : [];
+      for (const rawImage of imageSources) {
+        if (!rawImage) continue;
         try {
           const image = new URL(rawImage, source);
           if (
             image.protocol === 'https:' &&
-            image.hostname === 'cdnimg.melon.co.kr'
-          )
+            image.hostname === 'cdnimg.melon.co.kr' &&
+            !image.username &&
+            !image.password
+          ) {
             artist.sourceUrl = image.toString();
+            break;
+          }
         } catch {
           /* Ignore malformed artist images. */
         }

@@ -589,6 +589,44 @@ describe('crawl parsers', () => {
     ]);
   });
 
+  it('uses each Melon artist lazy image and falls back only to a verified src', async () => {
+    const melon = source('ticket-list', 'discovery');
+    melon.url = 'https://ticket.melon.com/performance/index.htm?prodId=213793';
+    const html = `<strong class="tit">WONDERLIVET 2026 (원더리벳 2026)</strong>
+      <span class="txt_info">2026.11.20 - 2026.11.22</span>
+      <span class="place">KINTEX HALL 7/8/9/10</span>
+      <ul class="list_artist">
+        <li><img src="data:image/gif;base64,placeholder" data-src="//cdnimg.melon.co.kr/artist/a.jpg"><span class="singer">BAND A</span></li>
+        <li><img src="https://cdnimg.melon.co.kr/artist/placeholder.gif" data-src="https://cdnimg.melon.co.kr/artist/b.jpg"><span class="singer">BAND B</span></li>
+        <li><img data-src="https://evil.example/artist/c.jpg" src="https://cdnimg.melon.co.kr/artist/c.jpg"><span class="singer">BAND C</span></li>
+        <li><img data-src="https://cdnimg.melon.co.kr@evil.example/artist/d.jpg" src="data:image/gif;base64,placeholder"><span class="singer">BAND D</span></li>
+        <li><img alt="x data-src='https://cdnimg.melon.co.kr/artist/false.jpg'" src="https://cdnimg.melon.co.kr/artist/e.jpg"><span class="singer">BAND E</span></li>
+      </ul>`;
+    expect(await parseCrawl(melon, html)).toEqual([
+      expect.objectContaining({
+        artists: [
+          {
+            name: 'BAND A',
+            sourceUrl: 'https://cdnimg.melon.co.kr/artist/a.jpg',
+          },
+          {
+            name: 'BAND B',
+            sourceUrl: 'https://cdnimg.melon.co.kr/artist/b.jpg',
+          },
+          {
+            name: 'BAND C',
+            sourceUrl: 'https://cdnimg.melon.co.kr/artist/c.jpg',
+          },
+          { name: 'BAND D' },
+          {
+            name: 'BAND E',
+            sourceUrl: 'https://cdnimg.melon.co.kr/artist/e.jpg',
+          },
+        ],
+      }),
+    ]);
+  });
+
   it('reads only the XMF official final-lineup notice and verifies both day counts', async () => {
     const xmf = source('ticket-list', 'discovery');
     xmf.url = 'https://xmfestival.com/notice';
