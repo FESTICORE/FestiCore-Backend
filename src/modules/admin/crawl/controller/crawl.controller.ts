@@ -168,6 +168,26 @@ export class CrawlController {
     return this.crawl.runs(sourceId, result, limit);
   }
 
+  @Get('runs/:id/artist-image-discovery')
+  @AdminRoles('viewer')
+  @ApiOperation({
+    summary: 'Commons 출연진 사진 후보 증거',
+    description:
+      'viewer 이상. 후보는 모두 검토 대기이며 공개 이미지로 자동 연결되지 않습니다. 저작자와 라이선스가 null이면 권리를 확인하지 못한 상태입니다.',
+  })
+  @ApiParam({ name: 'id', format: 'uuid', description: 'Commons 탐색 실행 ID' })
+  @ApiResponse({
+    status: 200,
+    description: '비공개 후보 증거와 대상별 검색 상태',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Commons 탐색 실행을 찾을 수 없습니다.',
+  })
+  artistImageDiscovery(@Param('id', ParseUUIDPipe) id: string) {
+    return this.crawl.artistImageDiscovery(id);
+  }
+
   @Get('snapshots/:id')
   @AdminRoles('viewer')
   @ApiOperation({

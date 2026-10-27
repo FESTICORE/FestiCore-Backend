@@ -13,9 +13,15 @@ export type CrawlKind =
   | 'days'
   | 'discovery'
   | 'artist-gallery'
-  | 'artist-image';
+  | 'artist-image'
+  | 'artist-image-discovery';
 export type CrawlParser =
-  'html-table' | 'html-text' | 'image-ocr' | 'regex-days' | 'ticket-list';
+  | 'html-table'
+  | 'html-text'
+  | 'image-ocr'
+  | 'regex-days'
+  | 'ticket-list'
+  | 'commons-search';
 
 @Entity('crawl_sources')
 export class CrawlSource {

@@ -65,6 +65,7 @@ export async function safeGetBytes(
   url: URL,
   accept: string,
   maxBytes: number,
+  userAgent = 'FestiCoreCrawler/0.1 (+https://festicore.up.railway.app)',
 ): Promise<{ status: number; body: Buffer; contentType: string }> {
   checkedUrl(url.toString());
   const addresses = await lookup(url.hostname, { all: true, verbatim: true });
@@ -82,8 +83,7 @@ export async function safeGetBytes(
         method: 'GET',
         timeout: 10000,
         headers: {
-          'user-agent':
-            'FestiCoreCrawler/0.1 (+https://festicore.up.railway.app)',
+          'user-agent': userAgent,
           accept,
         },
         lookup: (_hostname, options, callback) => {
