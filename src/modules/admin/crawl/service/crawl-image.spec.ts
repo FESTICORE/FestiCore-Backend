@@ -293,6 +293,38 @@ describe('crawl image safety', () => {
     ).toHaveLength(81);
   });
 
+  it('uses lazy-loaded Melon artist images and ignores unsafe or unrelated images', () => {
+    const html = `<meta property="og:image" content="https://cdnticket.melon.co.kr/poster.jpg">
+      <img src="https://cdnimg.melon.co.kr/unrelated.jpg">
+      <ul class="list_artist">
+        <li><img src="/placeholder.gif" data-src="https://cdnimg.melon.co.kr/artist/first.jpg"></li>
+        <li><img src="https://cdnimg.melon.co.kr/artist/second.jpg"></li>
+        <li><img src="https://cdnimg.melon.co.kr/artist/fallback.jpg" data-src="http://cdnimg.melon.co.kr/artist/unsafe.jpg"></li>
+        <li><img src="https://evil.example/artist/third.jpg" data-src="http://cdnimg.melon.co.kr/artist/third.jpg"></li>
+      </ul>`;
+    expect(
+      discoverImageUrls(
+        html,
+        'https://ticket.melon.com/performance/index.htm?prodId=213793',
+      ).map(String),
+    ).toEqual([
+      'https://cdnticket.melon.co.kr/poster.jpg',
+      'https://cdnimg.melon.co.kr/artist/first.jpg',
+      'https://cdnimg.melon.co.kr/artist/second.jpg',
+      'https://cdnimg.melon.co.kr/artist/fallback.jpg',
+    ]);
+  });
+
+  it('ignores an image URL written inside the artist alt text', () => {
+    const html = `<ul class="list_artist"><li><img alt="x data-src='https://cdnimg.melon.co.kr/artist/false.jpg'" src="https://cdnimg.melon.co.kr/artist/real.jpg"></li></ul>`;
+    expect(
+      discoverImageUrls(
+        html,
+        'https://ticket.melon.com/performance/index.htm?prodId=213793',
+      ).map(String),
+    ).toEqual(['https://cdnimg.melon.co.kr/artist/real.jpg']);
+  });
+
   it('finds a configured profile image on the current official page', () => {
     const page = 'https://artist.example.com/profile';
     const html = `<img src="https://artist.example.com/logo.png">
@@ -327,6 +359,29 @@ describe('crawl image safety', () => {
         '20260811/354f5ae07ab1d.jpg',
       )?.toString(),
     ).toBe('https://cdn.imweb.me/thumbnail/20260811/354f5ae07ab1d.jpg');
+  });
+
+  it('finds a matching lazy-loaded artist image after a placeholder src', () => {
+    const html = `<img src="/placeholder.gif" data-src="https://artist.example.com/photos/main-profile.jpg">`;
+    expect(
+      artistProfileImageUrl(
+        html,
+        'https://artist.example.com/profile',
+        'main-profile.jpg',
+      )?.toString(),
+    ).toBe('https://artist.example.com/photos/main-profile.jpg');
+  });
+
+  it('keeps the XMF image path check when the matching lazy image follows src', () => {
+    const html = `<img src="/placeholder.gif" data-src="https://other.example.com/thumbnail/20260811/card.jpg">
+      <img src="/placeholder.gif" data-src="https://cdn.imweb.me/thumbnail/20260811/card.jpg">`;
+    expect(
+      artistProfileImageUrl(
+        html,
+        'https://xmfestival.com/lineup',
+        '20260811/card.jpg',
+      )?.toString(),
+    ).toBe('https://cdn.imweb.me/thumbnail/20260811/card.jpg');
   });
 
   it('normalizes a valid image to content-addressed WebP without trusting its extension', async () => {

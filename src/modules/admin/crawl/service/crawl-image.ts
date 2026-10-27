@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import sharp from 'sharp';
 import { checkedUrl } from './crawl-fetch';
+import { imageTagAttributes } from './image-tag-attributes';
 import {
   eventPerformers,
   melonSearchCandidates,
@@ -62,16 +63,16 @@ function melonDetailImages(html: string, pageUrl: string): URL[] | null {
   )
     return null;
   const urls: URL[] = [];
-  const add = (raw: string, hostname: string) => {
+  const add = (raw: string, hostname: string): boolean => {
     try {
       const url = checkedUrl(new URL(raw, page).toString());
-      if (
-        url.hostname === hostname &&
-        !urls.some((item) => item.toString() === url.toString())
-      )
+      if (url.hostname !== hostname) return false;
+      if (!urls.some((item) => item.toString() === url.toString()))
         urls.push(url);
+      return true;
     } catch {
       /* Ignore malformed or unsafe image locations. */
+      return false;
     }
   };
   const poster =
@@ -84,8 +85,9 @@ function melonDetailImages(html: string, pageUrl: string): URL[] | null {
       html,
     )?.[1];
   for (const tag of artistList?.match(/<img\b[^>]*>/gi) ?? []) {
-    const image = /\bsrc=["']([^"']+)["']/i.exec(tag)?.[1];
-    if (image) add(image, 'cdnimg.melon.co.kr');
+    for (const image of imageTagAttributes(tag, ['data-src', 'src'])) {
+      if (add(image, 'cdnimg.melon.co.kr')) break;
+    }
     if (urls.length >= 81) break;
   }
   return urls;
@@ -99,8 +101,8 @@ export function artistProfileImageUrl(
   const page = html.slice(0, 2_000_000);
   const tags: string[] = page.match(/<(?:img|meta|a|div)\b[^>]*>/gi) ?? [];
   const candidates = [
-    ...tags.map(
-      (tag) => /\b(?:data-src|src|content)=["']([^"']+)["']/i.exec(tag)?.[1],
+    ...tags.flatMap((tag) =>
+      imageTagAttributes(tag, ['data-src', 'src', 'content']),
     ),
     ...[...page.matchAll(/url\(\s*["']?([^)'"\s]+)["']?\s*\)/gi)].map(
       (match) => match[1],
