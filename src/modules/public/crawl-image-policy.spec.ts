@@ -15,8 +15,21 @@ import { FESTIVAL_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/festival-profi
 import { ADDITIONAL_FESTIVAL_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/additional-festival-profile';
 import { PRUGIO_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/prugio-profile';
 import { CDF_LOW_HIGH_LOW_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/cdf-low-high-low-profile';
+import { ONEWAY_CHANNEL_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/oneway-official-channel';
 
 describe('public crawl image policy', () => {
+  it('publishes OneWay portraits only through the exact artist channel and image host', () => {
+    expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(
+      "source.\"parserConfig\"->>'seed' IS DISTINCT FROM 'oneway-official-channel'",
+    );
+    expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(
+      "source.\"parserConfig\"->>'seed' = 'oneway-official-channel'",
+    );
+    expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(ONEWAY_CHANNEL_PUBLIC_IMAGE_SQL);
+    expect(ONEWAY_CHANNEL_PUBLIC_IMAGE_SQL).toContain(
+      'image."originUrl" ~ \'^https://yt3[.]googleusercontent[.]com/',
+    );
+  });
   it('publishes the CDF LOW HIGH LOW portrait only through its exact Melon profile branch', () => {
     expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(
       "source.\"parserConfig\"->>'seed' IS DISTINCT FROM 'cdf-low-high-low-profile'",

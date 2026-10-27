@@ -41,6 +41,10 @@ import {
   CDF_LOW_HIGH_LOW_PROFILE_SEED,
   CDF_LOW_HIGH_LOW_PROFILE_URL,
 } from './cdf-low-high-low-profile';
+import {
+  ONEWAY_CHANNEL_SEED,
+  ONEWAY_FESTIVAL_URL,
+} from './oneway-official-channel';
 
 type PrivateCrawl = {
   onModuleInit(): void;
@@ -836,6 +840,73 @@ describe('DRDR official profile sources', () => {
     }));
     await service.execute(run, source);
     expect(capture.mock.calls[0][2]).toEqual([new URL(DRDR_PHOTO)]);
+    expect(run.result).toBe('nochange-parsed');
+  });
+});
+
+describe('OneWay official YouTube channel source', () => {
+  const page = 'https://www.youtube.com/@sohyang.official';
+  const photo =
+    'https://yt3.googleusercontent.com/iRoDSnY6DV40Lo2Rwb4vY8K1v6GOQkVIGRicC8Zf4T0cRUORlsKUJ0LxzLY-J2bRIFcQts9toA8=s900-c-k-c0x00ffffff-no-rj';
+  const config = {
+    seed: ONEWAY_CHANNEL_SEED,
+    festivalSourceUrl: ONEWAY_FESTIVAL_URL,
+    artistName: '소향',
+  };
+  const body = `<meta property="og:title" content="Sohyang">
+    <meta property="og:url" content="https://www.youtube.com/channel/UCHEz2Bsd3REidWKYOxA8XrQ">
+    <link rel="canonical" href="https://www.youtube.com/channel/UCHEz2Bsd3REidWKYOxA8XrQ">
+    <meta property="og:image" content="${photo}"><h1>Sohyang</h1>`;
+
+  it('rejects unreviewed channel identities and extra parser fields', async () => {
+    const { service, dataSource } = harness();
+    for (const [url, parserConfig] of [
+      [page, { ...config, artistName: '달빛마을' }],
+      [page, { ...config, imageHint: '/other.jpg' }],
+      ['https://www.youtube.com/@other', config],
+    ] as const) {
+      await expect(
+        service.createSource(
+          { kind: 'artist-image', url, parser: 'html-text', parserConfig },
+          'admin-1',
+        ),
+      ).rejects.toMatchObject({ status: 422 });
+    }
+    expect(dataSource.transaction).not.toHaveBeenCalled();
+  });
+
+  it('tests and stores only the currently verified channel photo', async () => {
+    const { service, source, run, execute, runsRepo } = harness();
+    execute.mockRestore();
+    source.kind = 'artist-image';
+    source.url = page;
+    source.parser = 'html-text';
+    source.parserConfig = config;
+    const robots = jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({ status: 200, body });
+    const test = await (
+      service as unknown as {
+        testSource(id: string): Promise<{ parsed: unknown }>;
+      }
+    ).testSource(source.id);
+    expect(test.parsed).toEqual({ artistName: '소향', imageUrl: photo });
+    expect(robots.mock.calls.map(([url]) => url)).toEqual([page, photo]);
+
+    const capture = jest
+      .spyOn(
+        service as unknown as {
+          captureImages: (...args: unknown[]) => Promise<string[]>;
+        },
+        'captureImages',
+      )
+      .mockResolvedValue(['/api/v1/admin/crawl/images/image-1']);
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(null),
+    }));
+    await service.execute(run, source);
+    expect(capture.mock.calls[0][2]).toEqual([new URL(photo)]);
     expect(run.result).toBe('nochange-parsed');
   });
 });
