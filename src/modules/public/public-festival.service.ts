@@ -689,6 +689,51 @@ export class PublicFestivalService {
     const imageByUrl = new Map(
       images.map((image) => [image.originUrl, image.id]),
     );
+    const domesticProductUrls = [
+      ...new Set(
+        entries.flatMap((entry) =>
+          entry.posterUrl &&
+          !imageByUrl.has(entry.posterUrl) &&
+          /^https:\/\/ticket\.yes24\.com\/Perf\/\d+$/.test(entry.sourceUrl)
+            ? [entry.sourceUrl]
+            : [],
+        ),
+      ),
+    ];
+    const domesticPosterByProduct = new Map<string, string>();
+    if (domesticProductUrls.length) {
+      const posters = await this.dataSource.query<
+        { sourceUrl: string; originUrl: string; id: string }[]
+      >(
+        `SELECT source.url AS "sourceUrl", image."originUrl", image.id
+         FROM crawl_images image
+         JOIN crawl_sources source ON source.id = image."sourceId"
+         WHERE source.kind = 'discovery'
+           AND source.enabled = true
+           AND source.url = ANY($1::text[])
+           AND image."originUrl" ~ (
+             '^https://tkfile[.]yes24[.]com/upload2/PerfBlog/[A-Za-z0-9/_-]+-'
+             || substring(source.url from '^https://ticket[.]yes24[.]com/Perf/([0-9]+)$')
+             || '[.](jpg|jpeg|png|webp)$')
+           AND ${PUBLIC_CRAWL_IMAGE_SQL}
+         ORDER BY image."lastSeenAt" DESC`,
+        [domesticProductUrls],
+      );
+      for (const poster of posters) {
+        const productId = /^https:\/\/ticket\.yes24\.com\/Perf\/(\d+)$/.exec(
+          poster.sourceUrl,
+        )?.[1];
+        if (
+          productId &&
+          domesticProductUrls.includes(poster.sourceUrl) &&
+          new RegExp(
+            `^https://tkfile\\.yes24\\.com/upload2/PerfBlog/[A-Za-z0-9/_-]+-${productId}\\.(?:jpg|jpeg|png|webp)$`,
+          ).test(poster.originUrl) &&
+          !domesticPosterByProduct.has(poster.sourceUrl)
+        )
+          domesticPosterByProduct.set(poster.sourceUrl, poster.id);
+      }
+    }
     const festivalSourceUrls = [
       ...new Set(
         entries
@@ -843,6 +888,7 @@ export class PublicFestivalService {
         )?.[1];
       const posterId =
         (entry.posterUrl && imageByUrl.get(entry.posterUrl)) ||
+        (entry.posterUrl && domesticPosterByProduct.get(entry.sourceUrl)) ||
         (englishProductId && englishPosterByProduct.get(englishProductId));
       if (posterId)
         entry.thumbUrl = `/api/v1/festivals/images/${posterId}.webp`;
