@@ -48,7 +48,8 @@ import {
 import { normalizeArtistName } from '../../../../common/artist-name';
 import { PRUGIO_LINEUP_SEED, PRUGIO_LINEUP_URL } from './prugio-lineup';
 import {
-  parseWonderlivetLineup,
+  parseWonderlivetBundleLineup,
+  wonderlivetBundleUrl,
   WONDERLIVET_FESTIVAL_URL,
   WONDERLIVET_LINEUP_URL,
 } from './wonderlivet-lineup';
@@ -706,7 +707,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       parsed:
         source.kind === 'artist-gallery'
           ? source.url === WONDERLIVET_LINEUP_URL
-            ? parseWonderlivetLineup(response.body)
+            ? parseWonderlivetBundleLineup(response.body)
             : source.url === GMF_LINEUP_URL
               ? parseGmfLineup(response.body, await this.gmfNotice(source))
               : await crawlArtistGallery(response.body, source.url)
@@ -794,9 +795,9 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       enabled: true,
       status: In(['ok', 'broken']),
     });
-    // The GMF gallery refreshes child image hints before the daily child runs.
+    // Official galleries refresh child image hints before the daily child runs.
     const order = (source: CrawlSource) =>
-      source.url !== GMF_LINEUP_URL
+      ![GMF_LINEUP_URL, WONDERLIVET_LINEUP_URL].includes(source.url)
         ? 1
         : source.kind === 'artist-gallery'
           ? 0
@@ -806,16 +807,21 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     sources.sort((left, right) => order(left) - order(right));
     const listedIds = new Set(sources.map((source) => source.id));
     let gmfGalleryFailed = false;
+    let wonderlivetGalleryFailed = false;
     for (const listedSource of sources) {
       if (
-        gmfGalleryFailed &&
+        ((gmfGalleryFailed && listedSource.url === GMF_LINEUP_URL) ||
+          (wonderlivetGalleryFailed &&
+            listedSource.url === WONDERLIVET_LINEUP_URL)) &&
         listedSource.kind === 'artist-image' &&
-        listedSource.url === GMF_LINEUP_URL
+        ['official-gmf-lineup', 'official-wonderlivet-lineup'].includes(
+          listedSource.parserConfig.seed,
+        )
       )
         continue;
       const source =
         listedSource.kind === 'artist-image' &&
-        listedSource.url === GMF_LINEUP_URL
+        [GMF_LINEUP_URL, WONDERLIVET_LINEUP_URL].includes(listedSource.url)
           ? await this.sourcesRepo.findOneBy({ id: listedSource.id })
           : listedSource;
       if (!source?.enabled || !['ok', 'broken'].includes(source.status))
@@ -876,17 +882,22 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       }
       if (!runId) continue;
       const run = await this.runsRepo.findOneByOrFail({ id: runId });
-      if (source.kind === 'artist-gallery' && source.url === GMF_LINEUP_URL) {
+      if (
+        source.kind === 'artist-gallery' &&
+        [GMF_LINEUP_URL, WONDERLIVET_LINEUP_URL].includes(source.url)
+      ) {
         try {
           await this.execute(run, source);
         } catch {
-          this.logger.error('GMF 공식 갤러리 예약 크롤 실패');
+          this.logger.error('공식 갤러리 예약 크롤 실패');
         }
-        gmfGalleryFailed = run.result === 'failed';
-        if (!gmfGalleryFailed) {
+        const failed = run.result === 'failed';
+        if (source.url === GMF_LINEUP_URL) gmfGalleryFailed = failed;
+        else wonderlivetGalleryFailed = failed;
+        if (!failed) {
           const newChildren = await this.sourcesRepo.findBy({
             kind: 'artist-image',
-            url: GMF_LINEUP_URL,
+            url: source.url,
             enabled: true,
             status: In(['ok', 'broken']),
           });
@@ -1253,7 +1264,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
           return;
         }
         if (source.url === WONDERLIVET_LINEUP_URL) {
-          const entries = parseWonderlivetLineup(response.body);
+          const entries = parseWonderlivetBundleLineup(response.body);
           const rows = await this.dataSource.query<
             { id: string; artistName: string }[]
           >(
@@ -1472,7 +1483,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
                         : source.parserConfig.seed ===
                               'official-wonderlivet-lineup' &&
                             source.url === WONDERLIVET_LINEUP_URL
-                          ? (parseWonderlivetLineup(response.body).find(
+                          ? (parseWonderlivetBundleLineup(response.body).find(
                               (entry) =>
                                 entry.artistName ===
                                   source.parserConfig.artistName &&
@@ -2584,6 +2595,16 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
   private async getListing(source: CrawlSource) {
     const response = await this.limitedGet(checkedUrl(source.url));
     if (response.status !== 200) return response;
+    if (
+      source.url === WONDERLIVET_LINEUP_URL &&
+      (source.kind === 'artist-gallery' ||
+        (source.kind === 'artist-image' &&
+          source.parserConfig.seed === 'official-wonderlivet-lineup'))
+    ) {
+      const bundleUrl = wonderlivetBundleUrl(response.body);
+      await this.checkRobots(bundleUrl.href);
+      return this.limitedGet(bundleUrl);
+    }
     const count = yes24PageCount(source.url, response.body);
     if (count === 1) return response;
     const pages = [response.body];
