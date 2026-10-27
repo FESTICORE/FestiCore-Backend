@@ -64,7 +64,11 @@ type PrivateCrawl = {
     items: { id: string; op: string; path: string; after: unknown }[];
     matchedProposalId?: string;
   }>;
-  execute(run: CrawlRun, source: CrawlSource): Promise<void>;
+  execute(
+    run: CrawlRun,
+    source: CrawlSource,
+    verifiedWonderlivetBundle?: { body: string; snapshotUrl: string } | null,
+  ): Promise<{ body: string; snapshotUrl: string } | void>;
   getListing(source: CrawlSource): Promise<{ status: number; body: string }>;
   syncXmfArtistAliases(source: CrawlSource, body: string): Promise<void>;
   syncXmfAliasesFromRecentSnapshot(source: CrawlSource): Promise<void>;
@@ -357,6 +361,18 @@ describe('CrawlService scheduled runs', () => {
       .mockImplementationOnce(() => insertQb)
       .mockImplementationOnce(() => updateQb)
       .mockImplementationOnce(() => insertQb);
+    const verifiedBundle = {
+      body: wonderlivetBundle([
+        {
+          id: 1,
+          name: 'Official Act',
+          performanceDay: 'DAY1',
+          imageUrl: `${WONDERLIVET_IMAGE_ORIGIN}/lineup/artists/production/live/day1/official.webp`,
+        },
+      ]),
+      snapshotUrl: '/api/v1/admin/crawl/snapshots/gallery-snapshot',
+    };
+    execute.mockResolvedValueOnce(verifiedBundle);
 
     await service.scheduleDue();
 
@@ -364,6 +380,7 @@ describe('CrawlService scheduled runs', () => {
       source.id,
       child.id,
     ]);
+    expect(execute.mock.calls[1][2]).toBe(verifiedBundle);
     expect(insertQb.values).toHaveBeenCalledWith({
       sourceId: child.id,
       scheduledDate: '2026-10-21',
@@ -2459,7 +2476,6 @@ describe('CrawlService manual runs and snapshots', () => {
     ]);
 
     await service.execute(run, source);
-
     const calls = dataSource.query.mock.calls as unknown as [
       string,
       unknown[],
@@ -2838,7 +2854,11 @@ describe('CrawlService manual runs and snapshots', () => {
       Promise.resolve(sql.includes('RETURNING id') ? [[], 0] : []),
     );
 
-    await service.execute(run, source);
+    const verifiedBundle = await service.execute(run, source);
+    expect(verifiedBundle).toEqual({
+      body: expect.any(String) as string,
+      snapshotUrl: '/api/v1/admin/crawl/snapshots/snapshot-1',
+    });
 
     const calls = dataSource.query.mock.calls as unknown as [
       string,
@@ -2977,7 +2997,15 @@ describe('CrawlService manual runs and snapshots', () => {
   });
 
   it('selects only the matching official Wonderlivet image for an artist source', async () => {
-    const { service, source, run, execute, runsRepo, dataSource } = harness();
+    const {
+      service,
+      source,
+      run,
+      execute,
+      runsRepo,
+      dataSource,
+      imageStorage,
+    } = harness();
     execute.mockRestore();
     source.kind = 'artist-image';
     source.url = WONDERLIVET_LINEUP_URL;
@@ -2988,9 +3016,9 @@ describe('CrawlService manual runs and snapshots', () => {
       festivalSourceUrl: WONDERLIVET_FESTIVAL_URL,
       imageHint: '/lineup/artists/production/live/day1/official-123.webp',
     };
-    jest.spyOn(service, 'checkRobots').mockResolvedValue();
-    jest.spyOn(service, 'getListing').mockResolvedValue({
-      status: 200,
+    const robots = jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    const listing = jest.spyOn(service, 'getListing');
+    const verifiedBundle = {
       body: wonderlivetBundle([
         {
           id: 4,
@@ -2999,7 +3027,8 @@ describe('CrawlService manual runs and snapshots', () => {
           imageUrl: `${WONDERLIVET_IMAGE_ORIGIN}/lineup/artists/production/live/day1/official-123.webp`,
         },
       ]),
-    });
+      snapshotUrl: '/api/v1/admin/crawl/snapshots/gallery-snapshot',
+    };
     const capture = jest
       .spyOn(
         service as unknown as {
@@ -3014,8 +3043,12 @@ describe('CrawlService manual runs and snapshots', () => {
       getOne: jest.fn().mockResolvedValue(null),
     }));
 
-    await service.execute(run, source);
+    await service.execute(run, source, verifiedBundle);
 
+    expect(listing).not.toHaveBeenCalled();
+    expect(imageStorage.saveCrawlSnapshot).not.toHaveBeenCalled();
+    expect(robots).toHaveBeenCalledWith(WONDERLIVET_LINEUP_URL);
+    expect(run.snapshotUrl).toBe(verifiedBundle.snapshotUrl);
     expect(capture.mock.calls[0][2]).toEqual([
       new URL(
         `${WONDERLIVET_IMAGE_ORIGIN}/lineup/artists/production/live/day1/official-123.webp`,
@@ -3027,6 +3060,21 @@ describe('CrawlService manual runs and snapshots', () => {
         String(sql).includes("- 'previousImageHint'"),
       ),
     ).toBe(true);
+    const originalConfig = source.parserConfig;
+    const changes: Record<string, string>[] = [
+      { artistName: 'Different Act' },
+      { imageHint: '/lineup/artists/production/live/day1/different.webp' },
+    ];
+    for (const changed of changes) {
+      const staleRun = {
+        ...run,
+        id: `stale-${Object.keys(changed)[0]}`,
+      };
+      source.parserConfig = { ...originalConfig, ...changed };
+      await service.execute(staleRun, source, verifiedBundle);
+      expect(staleRun.result).toBe('failed');
+    }
+    expect(capture).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the previous official image path when replacement capture fails', async () => {
@@ -3043,7 +3091,7 @@ describe('CrawlService manual runs and snapshots', () => {
       previousImageHint: '/lineup/artists/production/live/day1/old.webp',
     };
     jest.spyOn(service, 'checkRobots').mockResolvedValue();
-    jest.spyOn(service, 'getListing').mockResolvedValue({
+    const listing = jest.spyOn(service, 'getListing').mockResolvedValue({
       status: 200,
       body: wonderlivetBundle([
         {
@@ -3065,6 +3113,7 @@ describe('CrawlService manual runs and snapshots', () => {
 
     await service.execute(run, source);
 
+    expect(listing).toHaveBeenCalledWith(source);
     expect(run.result).toBe('failed');
     expect(
       dataSource.query.mock.calls.some(([sql]) =>

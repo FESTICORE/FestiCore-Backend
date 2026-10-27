@@ -808,6 +808,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     const listedIds = new Set(sources.map((source) => source.id));
     let gmfGalleryFailed = false;
     let wonderlivetGalleryFailed = false;
+    let wonderlivetBundle: { body: string; snapshotUrl: string } | null = null;
     for (const listedSource of sources) {
       if (
         ((gmfGalleryFailed && listedSource.url === GMF_LINEUP_URL) ||
@@ -887,7 +888,9 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         [GMF_LINEUP_URL, WONDERLIVET_LINEUP_URL].includes(source.url)
       ) {
         try {
-          await this.execute(run, source);
+          const verified = await this.execute(run, source);
+          if (source.url === WONDERLIVET_LINEUP_URL)
+            wonderlivetBundle = verified ?? null;
         } catch {
           this.logger.error('공식 갤러리 예약 크롤 실패');
         }
@@ -908,9 +911,15 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
           }
         }
       } else {
-        void this.execute(run, source).catch(() =>
-          this.logger.error('예약 크롤 실패'),
-        );
+        void this.execute(
+          run,
+          source,
+          source.kind === 'artist-image' &&
+            source.url === WONDERLIVET_LINEUP_URL &&
+            source.parserConfig.seed === 'official-wonderlivet-lineup'
+            ? wonderlivetBundle
+            : null,
+        ).catch(() => this.logger.error('예약 크롤 실패'));
       }
     }
   }
@@ -1000,7 +1009,11 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       .execute();
   }
 
-  private async execute(run: CrawlRun, source: CrawlSource) {
+  private async execute(
+    run: CrawlRun,
+    source: CrawlSource,
+    verifiedWonderlivetBundle?: { body: string; snapshotUrl: string } | null,
+  ): Promise<{ body: string; snapshotUrl: string } | void> {
     let phase =
       source.kind === 'artist-image' && source.url === GMF_LINEUP_URL
         ? 'GMF_VERIFY'
@@ -1091,16 +1104,26 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         source.status = 'ok';
         return;
       }
-      const response = verifiedGmfImage
-        ? {
-            status: 200,
-            body: JSON.stringify({
-              artistName: source.parserConfig.artistName,
-              imageUrl: verifiedGmfImage.href,
-            }),
-          }
-        : await this.getListing(source);
-      run.httpStatus = verifiedGmfImage ? null : response.status;
+      const reusedWonderlivetBundle =
+        verifiedWonderlivetBundle &&
+        source.kind === 'artist-image' &&
+        source.url === WONDERLIVET_LINEUP_URL &&
+        source.parserConfig.seed === 'official-wonderlivet-lineup'
+          ? verifiedWonderlivetBundle
+          : null;
+      const response = reusedWonderlivetBundle
+        ? { status: 200, body: reusedWonderlivetBundle.body }
+        : verifiedGmfImage
+          ? {
+              status: 200,
+              body: JSON.stringify({
+                artistName: source.parserConfig.artistName,
+                imageUrl: verifiedGmfImage.href,
+              }),
+            }
+          : await this.getListing(source);
+      run.httpStatus =
+        verifiedGmfImage || reusedWonderlivetBundle ? null : response.status;
       if (response.status !== 200) throw new Error(`HTTP ${response.status}`);
       phase = 'PROCESS';
       run.contentHash = createHash('sha256')
@@ -1141,19 +1164,23 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
             : '',
         )
         .digest('hex');
-      const objectKey = `crawl/snapshots/${randomUUID()}.txt`;
-      await this.imageStorage.saveCrawlSnapshot(
-        objectKey,
-        Buffer.from(response.body, 'utf8'),
-      );
-      const snapshot = await this.snapshotsRepo.save(
-        this.snapshotsRepo.create({
-          runId: run.id,
+      if (reusedWonderlivetBundle) {
+        run.snapshotUrl = reusedWonderlivetBundle.snapshotUrl;
+      } else {
+        const objectKey = `crawl/snapshots/${randomUUID()}.txt`;
+        await this.imageStorage.saveCrawlSnapshot(
           objectKey,
-          expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-        }),
-      );
-      run.snapshotUrl = `/api/v1/admin/crawl/snapshots/${snapshot.id}`;
+          Buffer.from(response.body, 'utf8'),
+        );
+        const snapshot = await this.snapshotsRepo.save(
+          this.snapshotsRepo.create({
+            runId: run.id,
+            objectKey,
+            expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+          }),
+        );
+        run.snapshotUrl = `/api/v1/admin/crawl/snapshots/${snapshot.id}`;
+      }
       if (source.kind === 'artist-gallery') {
         phase = 'PARSE';
         const config = artistGalleryConfig(source.url, source.parserConfig);
@@ -1343,7 +1370,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
           run.result = 'nochange-parsed';
           source.lastChangedAt = new Date();
           source.status = 'ok';
-          return;
+          return { body: response.body, snapshotUrl: run.snapshotUrl };
         }
         const officialTicketLink = [
           ...response.body.matchAll(/<a\b[^>]*\bhref=["']([^"']+)["']/gi),
