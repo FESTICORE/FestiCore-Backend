@@ -254,7 +254,7 @@ export class PublicFestivalController {
   @ApiResponse({
     status: 200,
     description:
-      '축제 상세와 발행된 타임테이블 또는 발견 출연진. 공식 날짜별 출연진이 확인된 발견 축제에는 artists[].dates(YYYY-MM-DD 배열)가 포함될 수 있습니다. 개별 공연 시각이 검증되지 않았다면 timetable은 빈 배열입니다. 공식 출연진 계정이 검증된 발견 축제에는 artists[].profileUrl이 포함될 수 있습니다. imageUrl은 서버에 저장된 사진에만 부여합니다.',
+      '축제 상세와 발행된 타임테이블 또는 발견 출연진. 공식 날짜별 출연진이 확인된 발견 축제에는 artists[].dates(YYYY-MM-DD 배열)가 포함될 수 있습니다. 개별 공연 시각이 검증되지 않았다면 timetable은 빈 배열입니다. 공식 출연진 계정이 검증된 발견 축제에는 artists[].profileUrl이 포함될 수 있습니다. imageUrl은 서버에 저장된 사진에만 부여하며, Creative Commons 사진에는 imageCredit(저작자·라이선스·원본·변경 사항)을 함께 반환합니다.',
     schema: {
       type: 'object',
       example: {

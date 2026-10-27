@@ -33,6 +33,10 @@ import {
   WONDERLIVET_TICKET_SEED,
 } from '../admin/crawl/service/wonderlivet-ticket-link';
 import { WONDERLIVET_FESTIVAL_URL } from '../admin/crawl/service/wonderlivet-lineup';
+import {
+  SOHYANG_COMMONS_CREDIT,
+  SOHYANG_COMMONS_SEED,
+} from '../admin/crawl/service/sohyang-commons-profile';
 
 type Document = Record<string, unknown>;
 
@@ -805,7 +809,10 @@ export class PublicFestivalService {
       if (ids.size === 1) profileImageByArtist.set(key, [...ids][0]);
     }
     const profileImageByName = new Map<string, Set<string>>();
+    const imageCreditById = new Map<string, typeof SOHYANG_COMMONS_CREDIT>();
     for (const image of profileImages) {
+      if (image.seed === SOHYANG_COMMONS_SEED)
+        imageCreditById.set(image.id, SOHYANG_COMMONS_CREDIT);
       for (const name of [
         image.artistName,
         image.artistAlias,
@@ -915,6 +922,9 @@ export class PublicFestivalService {
         return {
           ...artist,
           imageUrl: imageId ? `/api/v1/festivals/images/${imageId}.webp` : null,
+          ...(imageId && imageCreditById.has(imageId)
+            ? { imageCredit: imageCreditById.get(imageId) }
+            : {}),
         };
       });
     }
@@ -1000,6 +1010,13 @@ export class PublicFestivalService {
       keys.forEach((key) => knownArtists.add(key));
     }
     const profileImages = await this.attachStoredImages([entry], true);
+    const imageCreditByUrl = new Map<string, typeof SOHYANG_COMMONS_CREDIT>();
+    for (const artist of entry.artists ?? []) {
+      if (artist.imageUrl && artist.imageCredit)
+        imageCreditByUrl.set(artist.imageUrl, SOHYANG_COMMONS_CREDIT);
+    }
+    const imageCredit = (imageUrl: string | null) =>
+      imageUrl ? imageCreditByUrl.get(imageUrl) : undefined;
     const revisions = await this.dataSource.query<
       {
         id: string;
@@ -1077,6 +1094,9 @@ export class PublicFestivalService {
         startsAt: set.startsAt,
         endsAt: set.endsAt,
         imageUrl: artistImage(set.artist),
+        ...(imageCredit(artistImage(set.artist))
+          ? { imageCredit: imageCredit(artistImage(set.artist)) }
+          : {}),
         sourceUrl: revision.sourceUrl,
         sourceImageUrl: revision.sourceImageId
           ? `/api/v1/festivals/images/${revision.sourceImageId}.webp`
@@ -1116,6 +1136,9 @@ export class PublicFestivalService {
         artist.name,
         {
           imageUrl: artistImage(artist.name),
+          ...(imageCredit(artistImage(artist.name))
+            ? { imageCredit: imageCredit(artistImage(artist.name)) }
+            : {}),
           ...(artist.profileUrl ? { profileUrl: artist.profileUrl } : {}),
           ...(artist.dates ? { dates: artist.dates } : {}),
         },
@@ -1123,7 +1146,12 @@ export class PublicFestivalService {
     );
     for (const set of uniqueTimetable) {
       if (!artists.has(set.artist))
-        artists.set(set.artist, { imageUrl: set.imageUrl });
+        artists.set(set.artist, {
+          imageUrl: set.imageUrl,
+          ...(imageCredit(set.imageUrl)
+            ? { imageCredit: imageCredit(set.imageUrl) }
+            : {}),
+        });
     }
     return {
       id: entry.id,
