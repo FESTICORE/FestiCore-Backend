@@ -37,6 +37,10 @@ import {
 } from './additional-festival-profile';
 import { PRUGIO_PROFILE_SEED, PRUGIO_PROFILE_URL } from './prugio-profile';
 import { PRUGIO_LINEUP_URL } from './prugio-lineup';
+import {
+  CDF_LOW_HIGH_LOW_PROFILE_SEED,
+  CDF_LOW_HIGH_LOW_PROFILE_URL,
+} from './cdf-low-high-low-profile';
 
 type PrivateCrawl = {
   onModuleInit(): void;
@@ -832,6 +836,86 @@ describe('DRDR official profile sources', () => {
     }));
     await service.execute(run, source);
     expect(capture.mock.calls[0][2]).toEqual([new URL(DRDR_PHOTO)]);
+    expect(run.result).toBe('nochange-parsed');
+  });
+});
+
+describe('CDF LOW HIGH LOW official Melon Ticket profile source', () => {
+  const photo =
+    'https://cdnimg.melon.co.kr/cm2/artistcrop/images/027/54/370/2754370_20250307154851.jpg';
+  const config = {
+    seed: CDF_LOW_HIGH_LOW_PROFILE_SEED,
+    festivalSourceUrl: CDF_FESTIVAL_URL,
+    artistName: '로우하이로우',
+    artistAlias: 'LOW HIGH LOW',
+  };
+  const body = `<div class="wrap_artist_profile"><div class="box_artist_profile">
+    <div class="box_artist_thumb"><img src="${photo}" alt="로우하이로우"></div>
+    <div class="box_artist_txt"><p class="tit_artist">로우하이로우</p></div>
+    </div></div><!--//wrap_artist_profile -->`;
+
+  it('rejects another artist, festival, or source URL', async () => {
+    const { service, dataSource } = harness();
+    for (const [url, parserConfig] of [
+      [CDF_LOW_HIGH_LOW_PROFILE_URL, { ...config, artistAlias: 'Other' }],
+      [
+        CDF_LOW_HIGH_LOW_PROFILE_URL,
+        {
+          ...config,
+          festivalSourceUrl: 'https://mintpaper.co.kr/festivals/172',
+        },
+      ],
+      ['https://ticket.melon.com/artist/index.htm?artistId=9999999', config],
+    ] as const) {
+      await expect(
+        service.createSource(
+          { kind: 'artist-image', url, parser: 'html-text', parserConfig },
+          'admin-1',
+        ),
+      ).rejects.toMatchObject({ status: 422 });
+    }
+    expect(dataSource.transaction).not.toHaveBeenCalled();
+  });
+
+  it('tests and captures only the identified Melon Ticket artist photo', async () => {
+    const { service, source, run, execute, runsRepo } = harness();
+    execute.mockRestore();
+    source.kind = 'artist-image';
+    source.url = CDF_LOW_HIGH_LOW_PROFILE_URL;
+    source.parser = 'html-text';
+    source.parserConfig = config;
+    const robots = jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({ status: 200, body });
+
+    const test = await (
+      service as unknown as {
+        testSource(id: string): Promise<{ parsed: unknown }>;
+      }
+    ).testSource(source.id);
+    expect(test.parsed).toEqual({
+      artistName: '로우하이로우',
+      imageUrl: photo,
+    });
+    expect(robots.mock.calls.map(([url]) => url)).toEqual([
+      CDF_LOW_HIGH_LOW_PROFILE_URL,
+      photo,
+    ]);
+
+    const capture = jest
+      .spyOn(
+        service as unknown as {
+          captureImages: (...args: unknown[]) => Promise<string[]>;
+        },
+        'captureImages',
+      )
+      .mockResolvedValue(['/api/v1/admin/crawl/images/image-1']);
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(null),
+    }));
+    await service.execute(run, source);
+    expect(capture.mock.calls[0][2]).toEqual([new URL(photo)]);
     expect(run.result).toBe('nochange-parsed');
   });
 });
