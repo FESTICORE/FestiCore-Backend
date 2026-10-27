@@ -1009,7 +1009,31 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       if (source.kind === 'artist-image-discovery') {
         // Other scheduled runs are fire-and-forget. Defer discovery until their
         // image writes finish; the next minute tick retries without blocking.
-        if (this.gmfQueuedSources.size > 0) continue;
+        // A completed GMF source can be re-queued on every tick. Block only
+        // sources still due today, including a failed run awaiting its one
+        // allowed unscheduled retry.
+        if (this.gmfQueuedSources.size > 0) {
+          const queued = await this.dataSource.query<{ pending: boolean }[]>(
+            `SELECT EXISTS (
+               SELECT 1 FROM unnest($1::uuid[]) queued(id)
+               WHERE NOT EXISTS (
+                 SELECT 1 FROM crawl_runs run
+                 WHERE run."sourceId" = queued.id
+                   AND run."scheduledDate" = $2::date
+               ) OR EXISTS (
+                 SELECT 1 FROM crawl_runs failed
+                 JOIN crawl_sources queued_source ON queued_source.id = queued.id
+                 WHERE failed."sourceId" = queued.id
+                   AND failed."scheduledDate" = $2::date
+                   AND failed.result = 'failed'
+                   AND failed.error IN ('PROCESS', 'IMAGE_FETCH', 'IMAGE_STORE')
+                   AND queued_source."consecutiveFailures" = 1
+               )
+             ) AS pending`,
+            [[...this.gmfQueuedSources], date],
+          );
+          if (queued[0]?.pending) continue;
+        }
         const active = await this.dataSource.query<{ active: boolean }[]>(
           `SELECT EXISTS (
              SELECT 1 FROM crawl_runs run

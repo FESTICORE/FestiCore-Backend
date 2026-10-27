@@ -56,6 +56,7 @@ type PrivateCrawl = {
   onModuleDestroy(): void;
   scheduleDue(): Promise<void>;
   gmfImageQueue: Promise<void>;
+  gmfQueuedSources: Set<string>;
   reconcileRecentXmf403(): Promise<void>;
   runNow(id: string): Promise<{ runId: string }>;
   createSource(
@@ -565,6 +566,78 @@ describe('CrawlService scheduled runs', () => {
 
     expect(insertQb.values).not.toHaveBeenCalled();
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('does not starve Commons discovery on a completed GMF source re-queued today', async () => {
+    const { service, source, sourcesRepo, dataSource, insertQb, execute } =
+      harness();
+    sourcesRepo.findBy.mockResolvedValueOnce([
+      {
+        ...source,
+        kind: 'artist-image-discovery',
+        url: COMMONS_DISCOVERY_URL,
+        parser: 'commons-search',
+      },
+    ]);
+    service.gmfQueuedSources.add('00000000-0000-4000-8000-000000000001');
+    dataSource.query
+      .mockResolvedValueOnce([{ pending: false }])
+      .mockResolvedValueOnce([{ active: false }]);
+
+    await service.scheduleDue();
+
+    expect(insertQb.values).toHaveBeenCalledWith({
+      sourceId: source.id,
+      scheduledDate: '2026-10-21',
+    });
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('defers Commons discovery while a queued GMF source has no run today', async () => {
+    const { service, source, sourcesRepo, dataSource, insertQb } = harness();
+    sourcesRepo.findBy.mockResolvedValueOnce([
+      {
+        ...source,
+        kind: 'artist-image-discovery',
+        url: COMMONS_DISCOVERY_URL,
+        parser: 'commons-search',
+      },
+    ]);
+    service.gmfQueuedSources.add('00000000-0000-4000-8000-000000000001');
+    dataSource.query.mockResolvedValueOnce([{ pending: true }]);
+
+    await service.scheduleDue();
+
+    expect(insertQb.values).not.toHaveBeenCalled();
+  });
+
+  it('keeps a failed GMF source ahead of discovery until its one retry finishes', async () => {
+    const { service, source, sourcesRepo, dataSource, insertQb } = harness();
+    sourcesRepo.findBy.mockResolvedValueOnce([
+      {
+        ...source,
+        kind: 'artist-image-discovery',
+        url: COMMONS_DISCOVERY_URL,
+        parser: 'commons-search',
+      },
+    ]);
+    const queuedId = '00000000-0000-4000-8000-000000000001';
+    service.gmfQueuedSources.add(queuedId);
+    dataSource.query.mockResolvedValueOnce([{ pending: true }]);
+
+    await service.scheduleDue();
+
+    expect(dataSource.query).toHaveBeenCalledWith(
+      expect.stringContaining(
+        `failed.error IN ('PROCESS', 'IMAGE_FETCH', 'IMAGE_STORE')`,
+      ),
+      [[queuedId], '2026-10-21'],
+    );
+    expect(dataSource.query).toHaveBeenCalledWith(
+      expect.stringContaining('queued_source."consecutiveFailures" = 1'),
+      [[queuedId], '2026-10-21'],
+    );
+    expect(insertQb.values).not.toHaveBeenCalled();
   });
 
   it('reconciles prior XMF HTTP 403 runs once when the server starts', () => {
