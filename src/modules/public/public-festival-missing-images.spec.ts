@@ -67,7 +67,7 @@ describe('private missing artist image discovery input', () => {
       .mockResolvedValue(
         new Map([
           [
-            'https://tickets.example.com/show\u0000가수 F',
+            '*\u0000https://tickets.example.com/show\u0000가수 F',
             '11111111-1111-4111-8111-111111111111',
           ],
         ]) as never,

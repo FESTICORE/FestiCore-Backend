@@ -25,4 +25,10 @@ export class CrawlRun {
     NolLineupEvidence[] | null;
   @Column({ type: 'jsonb', nullable: true, select: false })
   artistImageEvidence!: CommonsDiscoveryEvidence | null;
+  @Column({ type: 'jsonb', nullable: true, select: false })
+  artistImageRightsEvidence!: {
+    imageId: string;
+    originalSha256: string;
+    status: 'ok';
+  } | null;
 }

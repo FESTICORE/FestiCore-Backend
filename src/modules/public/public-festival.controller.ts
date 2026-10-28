@@ -25,11 +25,7 @@ import { apiSuccess } from '../../common/interfaces/api-response.interface';
 import { Public } from '../auth/decorator/public.decorator';
 import { DeviceAuthGuard } from '../device/device-auth.guard';
 import { DeviceService } from '../device/device.service';
-import {
-  envelopeEtag,
-  publicPackEtag,
-  PublicFestivalService,
-} from './public-festival.service';
+import { envelopeEtag, PublicFestivalService } from './public-festival.service';
 import { PublicLiveService } from './public-live.service';
 
 function matchesEtag(header: string | undefined, etag: string): boolean {
@@ -404,11 +400,10 @@ export class PublicFestivalController {
     @Headers('accept-encoding') acceptEncoding: string | undefined,
     @Res() response: Response,
   ) {
-    const body = await this.service.published(id);
+    const { document: body, etag } = await this.service.publishedPack(id);
     response.setHeader('Cache-Control', 'public, no-cache, must-revalidate');
     response.setHeader('Date', new Date().toUTCString());
     response.setHeader('Vary', 'Accept-Encoding');
-    const etag = publicPackEtag(body.packVersion as number);
     response.setHeader('ETag', etag);
     if (matchesEtag(ifNoneMatch, etag)) {
       response.status(304).end();

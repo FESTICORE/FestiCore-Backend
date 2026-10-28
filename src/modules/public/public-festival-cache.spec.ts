@@ -27,13 +27,28 @@ describe('PublicFestivalService published cache', () => {
         return Promise.resolve();
       }),
     };
+    const visibleRows: {
+      id: string;
+      seed: string | null;
+      artistName: string | null;
+      reviewFestivalId: string | null;
+      festivalSourceUrl: string | null;
+      author: string | null;
+      license: string | null;
+      licenseUrl: string | null;
+      sourceUrl: string | null;
+      rightsRunId: string | null;
+    }[] = [];
+    const dataSource = {
+      query: jest.fn().mockImplementation(() => Promise.resolve(visibleRows)),
+    };
     const service = new PublicFestivalService(
       { findOne } as never,
       {} as never,
-      {} as never,
+      dataSource as never,
       cache as never,
     );
-    return { service, cache, findOne };
+    return { service, cache, findOne, visibleRows, dataSource };
   }
 
   it('serves a hit without querying the database', async () => {
@@ -55,7 +70,7 @@ describe('PublicFestivalService published cache', () => {
   });
 
   it('includes each published set artist with a stored image in detail and pack', async () => {
-    const { service, findOne } = setup();
+    const { service, findOne, visibleRows } = setup();
     const imageUrl =
       '/api/v1/festivals/images/00000000-0000-4000-8000-000000000001.webp';
     findOne.mockResolvedValue({
@@ -88,6 +103,18 @@ describe('PublicFestivalService published cache', () => {
         ],
       },
     });
+    visibleRows.push({
+      id: imageUrl.match(/[0-9a-f-]{36}/)![0],
+      seed: null,
+      artistName: null,
+      reviewFestivalId: null,
+      festivalSourceUrl: null,
+      author: null,
+      license: null,
+      licenseUrl: null,
+      sourceUrl: null,
+      rightsRunId: null,
+    });
     await expect(service.detail(id)).resolves.toMatchObject({
       artists: [
         { name: '밴드', imageUrl },
@@ -110,9 +137,10 @@ describe('PublicFestivalService published cache', () => {
         { name: '솔로', imageUrl: null },
       ],
     });
-    await expect(service.version(id)).resolves.toMatchObject({
-      etag: '"cdm2-v1"',
-    });
+    const version = await service.version(id);
+    const packed = await service.publishedPack(id);
+    expect(version.etag).toBe(packed.etag);
+    expect(version.etag).toMatch(/^"[0-9a-f]{64}"$/);
   });
 
   it('an older reader cannot revive a pack after invalidation', async () => {
@@ -130,5 +158,132 @@ describe('PublicFestivalService published cache', () => {
     await expect(service.published(id)).resolves.toMatchObject(newPack);
     expect(cache.getPack).toHaveBeenLastCalledWith(id, 1);
     expect(findOne).toHaveBeenCalledTimes(2);
+  });
+
+  it('requires one exact current artist at the approved festival source', async () => {
+    const { service, findOne } = setup();
+    findOne.mockResolvedValue({
+      publishedVersion: 1,
+      published: {
+        id,
+        packVersion: 1,
+        source: {
+          url: 'https://ticket.melon.com/performance/index.htm?prodId=213769',
+        },
+        sets: [{ artist: '가수 A', startsAt: '2026-11-19T13:00:00+09:00' }],
+      },
+    });
+    const source =
+      'https://ticket.melon.com/performance/index.htm?prodId=213769';
+    await expect(service.hasCurrentArtist(id, source, '가수 A')).resolves.toBe(
+      true,
+    );
+    await expect(service.hasCurrentArtist(id, source, '가수 B')).resolves.toBe(
+      false,
+    );
+    await expect(
+      service.hasCurrentArtist(id, 'https://example.org/other', '가수 A'),
+    ).resolves.toBe(false);
+  });
+
+  it('hides a cached Commons portrait when the current published roster removes its artist', async () => {
+    const { service, findOne, visibleRows } = setup();
+    const source =
+      'https://ticket.melon.com/performance/index.htm?prodId=213769';
+    const imageId = '00000000-0000-4000-8000-000000000003';
+    const published = (artist: string) => ({
+      id,
+      packVersion: 1,
+      source: { url: source },
+      sets: [{ artist, startsAt: '2026-11-19T13:00:00+09:00' }],
+    });
+    findOne.mockResolvedValue({
+      publishedVersion: 1,
+      published: published('가수 A'),
+    });
+    visibleRows.push({
+      id: imageId,
+      seed: 'commons-approved-profile',
+      artistName: '가수 A',
+      reviewFestivalId: id,
+      festivalSourceUrl: source,
+      author: '사진가',
+      license: 'CC BY 4.0',
+      licenseUrl: 'https://creativecommons.org/licenses/by/4.0',
+      sourceUrl: 'https://commons.wikimedia.org/wiki/File:Artist_A.jpg',
+      rightsRunId: 'latest-success',
+    });
+    const before = await service.publishedPack(id);
+    expect(findOne).toHaveBeenCalledTimes(2);
+    expect(before.document.artists).toEqual([
+      expect.objectContaining({
+        imageUrl: `/api/v1/festivals/images/${imageId}.webp`,
+      }),
+    ]);
+
+    findOne.mockResolvedValue({
+      publishedVersion: 1,
+      published: published('가수 B'),
+    });
+    const after = await service.publishedPack(id);
+    expect(after.document.artists).toEqual([
+      expect.objectContaining({ imageUrl: null }),
+    ]);
+    expect(after.etag).not.toBe(before.etag);
+  });
+
+  it('hides a published list thumbnail approved for a different festival ID', async () => {
+    const source =
+      'https://ticket.melon.com/performance/index.htm?prodId=213769';
+    const imageId = '00000000-0000-4000-8000-000000000004';
+    const pack = {
+      id,
+      name: '새 공연',
+      venue: '공연장',
+      source: { url: source },
+      thumbUrl: `/api/v1/festivals/images/${imageId}.webp`,
+      days: [
+        {
+          date: '2026-11-19',
+          startsAt: '2026-11-19T13:00:00+09:00',
+        },
+      ],
+      sets: [{ artist: '가수 A', startsAt: '2026-11-19T13:00:00+09:00' }],
+    };
+    const builder = {
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      getMany: jest
+        .fn()
+        .mockResolvedValue([{ id, publishedVersion: 1, published: pack }]),
+    };
+    const query = jest.fn().mockImplementation((sql: string) => {
+      if (sql.includes('SELECT image.id, source.'))
+        return Promise.resolve([
+          {
+            id: imageId,
+            seed: 'commons-approved-profile',
+            reviewFestivalId: 'fst_previous',
+            festivalSourceUrl: source,
+            artistName: '가수 A',
+          },
+        ]);
+      return Promise.resolve([]);
+    });
+    const service = new PublicFestivalService(
+      { createQueryBuilder: () => builder } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    const result = await service.list(
+      undefined,
+      '20',
+      new Date('2026-10-22T00:00:00Z'),
+    );
+    expect(result.items[0]).toMatchObject({ id, thumbUrl: null });
   });
 });

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import {
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
@@ -20,6 +21,7 @@ import {
 } from '../dto/crawl-source.dto';
 import { CrawlRun } from '../entity/crawl-run.entity';
 import { CrawlImage } from '../entity/crawl-image.entity';
+import { CrawlArtistImageReview } from '../entity/crawl-artist-image-review.entity';
 import { CrawlSnapshot } from '../entity/crawl-snapshot.entity';
 import { CrawlSource } from '../entity/crawl-source.entity';
 import { Proposal, ProposalItem } from '../entity/proposal.entity';
@@ -117,6 +119,7 @@ import {
   type CommonsDiscoveryEvidence,
   type CommonsDiscoveryTarget,
 } from './commons-image-discovery';
+import { parseApprovedCommonsProfile } from './commons-approved-profile';
 
 const kstDay = (date = new Date()) =>
   new Intl.DateTimeFormat('en-CA', {
@@ -125,6 +128,16 @@ const kstDay = (date = new Date()) =>
     month: '2-digit',
     day: '2-digit',
   }).format(date);
+
+function officialPageMentionsArtist(html: string, artistName: string): boolean {
+  const name = normalizeArtistName(artistName);
+  if (!name) return false;
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(
+    `(?<![\\p{L}\\p{N}_])${escaped}(?![\\p{L}\\p{N}_])`,
+    'u',
+  ).test(normalizeArtistName(plainText(html)));
+}
 
 const YES24_PAGE_LIMIT = 4;
 
@@ -411,10 +424,11 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
   async createSource(dto: CreateCrawlSourceDto, actor: string | null) {
     if (
       dto.kind === 'artist-image-discovery' ||
-      dto.parser === 'commons-search'
+      dto.parser === 'commons-search' ||
+      dto.parserConfig?.seed === 'commons-approved-profile'
     )
       throw new UnprocessableEntityException(
-        'Commons 탐색 소스는 서버가 관리합니다.',
+        'Commons 사진 소스는 서버 검토 절차에서 관리합니다.',
       );
     if (
       dto.kind === 'artist-image' &&
@@ -512,6 +526,10 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     actor: string | null,
   ) {
     const source = await this.getSource(id);
+    if (source.parserConfig.seed === 'commons-approved-profile')
+      throw new UnprocessableEntityException(
+        '승인된 Commons 사진 소스는 검토 절차에서만 변경할 수 있습니다.',
+      );
     if (
       source.kind === 'artist-image-discovery' &&
       (dto.url !== undefined || dto.parserConfig !== undefined)
@@ -613,6 +631,72 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       this.logger.error('수동 크롤 실패'),
     );
     return { runId: run.id };
+  }
+
+  async prepareApprovedCommonsImage(reviewId: string) {
+    return this.runApprovedCommonsReview(reviewId);
+  }
+
+  async verifyApprovedCommonsReview(reviewId: string) {
+    return this.runApprovedCommonsReview(reviewId);
+  }
+
+  private async runApprovedCommonsReview(reviewId: string): Promise<{
+    runId: string;
+    imageId: string;
+    originalSha256: string;
+    author: string;
+    license: string;
+    licenseUrl: string;
+  }> {
+    const reviews = await this.dataSource.query<{ sourceId: string }[]>(
+      `SELECT "sourceId" FROM crawl_artist_image_reviews WHERE id = $1::uuid`,
+      [reviewId],
+    );
+    if (!reviews[0])
+      throw new NotFoundException('사진 검토를 찾을 수 없습니다.');
+    const source = await this.getSource(reviews[0].sourceId);
+    await this.failStaleManualRun(source.id);
+    const inserted = await this.runsRepo
+      .createQueryBuilder()
+      .insert()
+      .values({ sourceId: source.id })
+      .orIgnore()
+      .returning('*')
+      .execute();
+    if (!inserted.identifiers.length)
+      throw new ConflictException('Commons 사진 검증이 이미 실행 중입니다.');
+    const run = await this.runsRepo.findOneByOrFail({
+      id: inserted.identifiers[0].id as string,
+    });
+    await this.execute(run, source);
+    const finished = await this.runsRepo
+      .createQueryBuilder('run')
+      .addSelect('run.artistImageRightsEvidence')
+      .where('run.id = :id', { id: run.id })
+      .getOneOrFail();
+    const evidence = finished.artistImageRightsEvidence;
+    if (
+      !['unchanged', 'nochange-parsed'].includes(finished.result) ||
+      evidence?.status !== 'ok'
+    )
+      throw new UnprocessableEntityException(
+        'Commons 사진의 인물·권리·원본을 검증하지 못했습니다.',
+      );
+    const review = await this.dataSource.query<
+      { author: string; license: string; licenseUrl: string }[]
+    >(
+      `SELECT author, license, "licenseUrl" FROM crawl_artist_image_reviews WHERE id = $1::uuid`,
+      [reviewId],
+    );
+    return {
+      runId: run.id,
+      imageId: evidence.imageId,
+      originalSha256: evidence.originalSha256,
+      author: review[0].author,
+      license: review[0].license,
+      licenseUrl: review[0].licenseUrl,
+    };
   }
 
   private sourceAuditSnapshot(source: CrawlSource) {
@@ -1218,6 +1302,14 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         // The fixed Wikimedia Core REST gateway has no robots disallow rule; its
         // robots.txt redirects to API docs. Commons on-site /w/api.php is forbidden.
         await this.executeCommonsDiscovery(run, source);
+        return;
+      }
+      if (
+        source.kind === 'artist-image' &&
+        source.parserConfig.seed === 'commons-approved-profile'
+      ) {
+        phase = 'COMMONS_RIGHTS';
+        await this.executeApprovedCommonsImage(run, source);
         return;
       }
       const verifiedGmfImage =
@@ -1941,6 +2033,21 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       source.status = 'ok';
     } catch (error) {
       run.result = 'failed';
+      if (
+        source.parserConfig.seed === 'commons-approved-profile' &&
+        error instanceof Error &&
+        [
+          'COMMONS_RIGHTS_MISMATCH',
+          'COMMONS_ORIGINAL_CHANGED',
+          'COMMONS_IMAGE_CHANGED',
+          'APPROVED_ORIGINAL_CHANGED',
+          'COMMONS_OFFICIAL_SOURCE_UNLINKED',
+          'COMMONS_FILE_REMOVED',
+        ].includes(error.message)
+      ) {
+        run.error = error.message;
+        await this.revokeChangedApprovedCommonsImage(source.id, error.message);
+      }
       run.error ??=
         run.httpStatus && run.httpStatus !== 200
           ? `HTTP_${run.httpStatus}`
@@ -2036,6 +2143,182 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         run.error = 'COMMONS_PARTIAL';
       source.lastChangedAt = new Date();
     }
+  }
+
+  private async executeApprovedCommonsImage(
+    run: CrawlRun,
+    source: CrawlSource,
+  ): Promise<void> {
+    const reviewId = source.parserConfig.reviewId;
+    if (!reviewId || !/^[0-9a-f-]{36}$/i.test(reviewId))
+      throw new Error('COMMONS_REVIEW_CONFIG');
+    const rows = await this.dataSource.query<
+      {
+        id: string;
+        status: string;
+        festivalId: string;
+        festivalSourceUrl: string;
+        artistName: string;
+        filePageUrl: string;
+        officialEvidenceUrl: string;
+        author: string;
+        license: string;
+        licenseUrl: string;
+        imageId: string | null;
+        originalSha256: string | null;
+      }[]
+    >(
+      `SELECT id, status, "festivalId", "festivalSourceUrl", "artistName",
+         "filePageUrl", "officialEvidenceUrl", author, license, "licenseUrl",
+         "imageId", "originalSha256"
+       FROM crawl_artist_image_reviews
+       WHERE id = $1::uuid AND "sourceId" = $2::uuid`,
+      [reviewId, source.id],
+    );
+    const review = rows[0];
+    if (!review || !['pending', 'approved'].includes(review.status))
+      throw new Error('COMMONS_REVIEW_INACTIVE');
+    if (
+      review.festivalSourceUrl !== source.parserConfig.festivalSourceUrl ||
+      review.artistName !== source.parserConfig.artistName ||
+      review.filePageUrl !== source.url
+    )
+      throw new Error('COMMONS_REVIEW_IDENTITY');
+    if (
+      !(await this.publicFestivals.hasCurrentArtist(
+        review.festivalId,
+        review.festivalSourceUrl,
+        review.artistName,
+      ))
+    )
+      throw new Error('COMMONS_LINEUP_MISMATCH');
+    if (review.officialEvidenceUrl !== review.festivalSourceUrl) {
+      const evidenceHost = checkedUrl(review.officialEvidenceUrl).hostname;
+      if (
+        evidenceHost !== checkedUrl(review.festivalSourceUrl).hostname ||
+        /(?:^|\.)(?:wikimedia|wikipedia)\.org$/i.test(evidenceHost)
+      )
+        throw new Error('COMMONS_OFFICIAL_SOURCE_UNLINKED');
+      const linked = await this.sourcesRepo
+        .createQueryBuilder('source')
+        .where('source.enabled = true')
+        .andWhere('source.kind IN (:...kinds)', {
+          kinds: ['discovery', 'timetable', 'notice', 'artist-gallery'],
+        })
+        .andWhere('source.url = :url', { url: review.officialEvidenceUrl })
+        .andWhere(
+          "source.parserConfig->>'festivalSourceUrl' = :festivalSourceUrl",
+          { festivalSourceUrl: review.festivalSourceUrl },
+        )
+        .getOne();
+      if (!linked) throw new Error('COMMONS_OFFICIAL_SOURCE_UNLINKED');
+    }
+    await this.checkRobots(review.officialEvidenceUrl);
+    const official = await this.limitedGet(
+      checkedUrl(review.officialEvidenceUrl),
+    );
+    if (
+      official.status !== 200 ||
+      !officialPageMentionsArtist(official.body, review.artistName)
+    )
+      throw new Error('COMMONS_OFFICIAL_EVIDENCE_MISMATCH');
+    await this.checkRobots(source.url);
+    const response = await this.getListing(source);
+    run.httpStatus = response.status;
+    if ([404, 410].includes(response.status))
+      throw new Error('COMMONS_FILE_REMOVED');
+    if (response.status !== 200) throw new Error(`HTTP ${response.status}`);
+    const parsed = parseApprovedCommonsProfile(response.body, source.url, {
+      fileKey: decodeURIComponent(
+        new URL(review.filePageUrl).pathname.slice(6),
+      ).replaceAll(' ', '_'),
+      author: review.author,
+      license: review.license,
+      licenseUrl: review.licenseUrl,
+    });
+    if (!parsed) {
+      const heading =
+        /<h1\b(?=[^>]*\bid=["']firstHeading["'])[^>]*>([\s\S]*?)<\/h1>/i.exec(
+          response.body,
+        );
+      const fileName = decodeURIComponent(
+        new URL(review.filePageUrl).pathname.slice(6),
+      ).replaceAll(' ', '_');
+      const displayedName = heading?.[1]
+        .replace(/<[^>]*>/g, '')
+        .replace(/\s*:\s*/, ':')
+        .replaceAll(' ', '_');
+      throw new Error(
+        displayedName === fileName
+          ? 'COMMONS_RIGHTS_MISMATCH'
+          : 'COMMONS_PAGE_UNVERIFIED',
+      );
+    }
+    await this.checkRobots(parsed.imageUrl.href);
+    const imageResponse = await this.limitedGetImage(parsed.imageUrl);
+    if ([404, 410].includes(imageResponse.status))
+      throw new Error('COMMONS_FILE_REMOVED');
+    if (imageResponse.status !== 200)
+      throw new Error(`HTTP ${imageResponse.status}`);
+    const originalSha256 = createHash('sha256')
+      .update(imageResponse.body)
+      .digest('hex');
+    if (review.originalSha256 && review.originalSha256 !== originalSha256)
+      throw new Error('COMMONS_ORIGINAL_CHANGED');
+    const saved = await this.captureImages(
+      source,
+      run,
+      [parsed.imageUrl],
+      new Map([[parsed.imageUrl.href, imageResponse]]),
+    );
+    const imageId = /^\/api\/v1\/admin\/crawl\/images\/([0-9a-f-]{36})$/i.exec(
+      saved[0] ?? '',
+    )?.[1];
+    if (!imageId) throw new Error('COMMONS_IMAGE_UNVERIFIED');
+    if (review.imageId && review.imageId !== imageId)
+      throw new Error('COMMONS_IMAGE_CHANGED');
+    run.artistImageRightsEvidence = {
+      imageId,
+      originalSha256,
+      status: 'ok',
+    };
+    run.result = 'nochange-parsed';
+    source.status = 'ok';
+  }
+
+  private async revokeChangedApprovedCommonsImage(
+    sourceId: string,
+    reason: string,
+  ): Promise<void> {
+    await this.dataSource.transaction(async (manager) => {
+      const reviews = manager.getRepository(CrawlArtistImageReview);
+      const review = await reviews.findOne({
+        where: { sourceId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!review || review.status !== 'approved') return;
+      const sources = manager.getRepository(CrawlSource);
+      const source = await sources.findOne({
+        where: { id: sourceId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!source) throw new Error('COMMONS_REVIEW_SOURCE_MISSING');
+      const wasEnabled = source.enabled;
+      review.status = 'revoked';
+      review.revokedAt = new Date();
+      review.revokedBy = null;
+      source.enabled = false;
+      source.status = 'disabled';
+      await sources.save(source);
+      await reviews.save(review);
+      await this.audit.record(manager, {
+        actor: null,
+        action: 'crawl.artist-image.revoked',
+        target: `crawl-artist-image-review:${review.id}`,
+        before: { status: 'approved', sourceEnabled: wasEnabled },
+        after: { status: 'revoked', sourceEnabled: false, reason },
+      });
+    });
   }
 
   private async searchCommonsTarget(target: {
@@ -3043,6 +3326,9 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         const response =
           preloaded?.get(url.toString()) ?? (await this.limitedGetImage(url));
         if (response.status !== 200) throw new Error(`HTTP ${response.status}`);
+        const originalSha256 = createHash('sha256')
+          .update(response.body)
+          .digest('hex');
         imagePhase = 'PREPARE';
         const prepared = await prepareCrawlImage(
           response.body,
@@ -3058,7 +3344,16 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         const urlHash = createHash('sha256')
           .update(url.toString())
           .digest('hex');
-        let image = await this.imageRepo.findOneBy({
+        const isApprovedCommons =
+          source.parserConfig.seed === 'commons-approved-profile';
+        let image = isApprovedCommons
+          ? await this.imageRepo.findOneBy({
+              sourceId: source.id,
+              urlHash,
+              originalSha256,
+            })
+          : null;
+        image ??= await this.imageRepo.findOneBy({
           sourceId: source.id,
           urlHash,
           contentHash: prepared.hash,
@@ -3078,6 +3373,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
               originUrl: url.toString(),
               urlHash,
               contentHash: prepared.hash,
+              originalSha256,
               objectKey: prepared.key,
             })
             .orIgnore()
@@ -3088,6 +3384,11 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
             contentHash: prepared.hash,
           });
         } else {
+          if (
+            source.parserConfig.seed === 'commons-approved-profile' &&
+            image.originalSha256 !== originalSha256
+          )
+            throw new Error('APPROVED_ORIGINAL_CHANGED');
           image.runId = run.id;
           image.lastSeenAt = new Date();
           await this.imageRepo.save(image);
