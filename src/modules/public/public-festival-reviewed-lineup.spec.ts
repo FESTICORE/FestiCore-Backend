@@ -51,9 +51,19 @@ describe('reviewed NOL World lineup projection', () => {
   });
 
   it('keeps published detail aligned with its versioned offline pack', async () => {
-    const query = jest
-      .fn()
-      .mockResolvedValue([{ artists: [{ name: 'O3ohn' }] }]);
+    const query = jest.fn().mockResolvedValue([
+      {
+        id: '11111111-1111-4111-8111-111111111111',
+        seed: null,
+        artistName: null,
+        reviewFestivalId: null,
+        author: null,
+        license: null,
+        licenseUrl: null,
+        sourceUrl: null,
+        rightsRunId: null,
+      },
+    ]);
     const service = new PublicFestivalService(
       {
         findOne: jest.fn().mockResolvedValue({
@@ -80,7 +90,7 @@ describe('reviewed NOL World lineup projection', () => {
       } as never,
       {} as never,
       { query } as never,
-      {} as never,
+      { packGeneration: jest.fn().mockResolvedValue(null) } as never,
     );
     const detail = await service.detail(id);
     expect(detail.artists).toEqual([
@@ -92,6 +102,6 @@ describe('reviewed NOL World lineup projection', () => {
     ]);
     expect(detail.sets).toHaveLength(1);
     expect(detail.timetable).toHaveLength(1);
-    expect(query).not.toHaveBeenCalled();
+    expect(query).toHaveBeenCalledTimes(1);
   });
 });

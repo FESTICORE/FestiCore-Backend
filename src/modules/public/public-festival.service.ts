@@ -10,6 +10,11 @@ import { AdminFestival } from '../admin/festival/festival.entity';
 import { festivalSetId } from '../admin/festival/festival-set-id';
 import { CrawlTimetableSet } from '../admin/crawl/entity/crawl-timetable-revision.entity';
 import { PUBLIC_CRAWL_IMAGE_SQL } from './crawl-image-policy';
+import {
+  overlayPublishedImages,
+  PublicImageRow,
+  storedImageId,
+} from './published-image-overlay';
 import { Flag } from '../flags/flag.entity';
 import { artistNameKeys, normalizeArtistName } from '../../common/artist-name';
 import {
@@ -253,6 +258,41 @@ export class PublicFestivalService {
     private readonly cache: CacheService,
   ) {}
 
+  /** Require one current catalog artist, without relying on any image source. */
+  async hasCurrentArtist(
+    festivalId: string,
+    festivalSourceUrl: string,
+    artistName: string,
+  ): Promise<boolean> {
+    if (!/^fst_[0-9a-z]+$/.test(festivalId)) return false;
+    const name = normalizeArtistName(artistName);
+    if (!name) return false;
+    const published = await this.festivals.findOne({
+      where: { id: festivalId },
+    });
+    if (published?.published && published.publishedVersion > 0) {
+      const pack = projectPack(published.published);
+      if (!object(pack.source) || pack.source.url !== festivalSourceUrl)
+        return false;
+      return (
+        requiredArray(pack.artists).filter(
+          (artist) =>
+            typeof artist.name === 'string' &&
+            normalizeArtistName(artist.name) === name,
+        ).length === 1
+      );
+    }
+    const entry = (await this.discoveryCatalog()).find(
+      (item) => item.id === festivalId,
+    );
+    return (
+      entry?.sourceUrl === festivalSourceUrl &&
+      (entry.artists ?? []).filter(
+        (artist) => normalizeArtistName(artist.name) === name,
+      ).length === 1
+    );
+  }
+
   /** Private crawl input. Keep the exact displayed name and festival source together. */
   async missingArtistImages(): Promise<
     { festivalId: string; festivalSourceUrl: string; artistName: string }[]
@@ -416,8 +456,12 @@ export class PublicFestivalService {
         if (artist.imageUrl)
           addImage(primaryImages, artist.name, artist.imageUrl);
       for (const [key, imageId] of profileImages) {
-        const [sourceUrl, name] = key.split('\u0000');
-        if (!entry.sourceUrls.includes(sourceUrl)) continue;
+        const [scope, sourceUrl, name] = key.split('\u0000');
+        if (
+          (scope !== '*' && scope !== entry.id) ||
+          !entry.sourceUrls.includes(sourceUrl)
+        )
+          continue;
         const url = `/api/v1/festivals/images/${imageId}.webp`;
         addImage(relatedImages, name, url);
         if (sourceUrl === entry.sourceUrl) addImage(primaryImages, name, url);
@@ -490,7 +534,7 @@ export class PublicFestivalService {
     );
   }
 
-  async published(id: string): Promise<Document> {
+  private async cachedPublished(id: string): Promise<Document> {
     const generation = await this.cache.packGeneration(id);
     if (generation !== null) {
       const cached = await this.cache.getPack<Document>(id, generation);
@@ -505,6 +549,85 @@ export class PublicFestivalService {
     const document = projectPack(row.published);
     if (generation !== null) await this.cache.setPack(id, generation, document);
     return document;
+  }
+
+  private async publishedWithEtag(
+    id: string,
+  ): Promise<{ document: Document; etag: string }> {
+    const pack = await this.cachedPublished(id);
+    const storedIds = [
+      ...new Set(
+        [pack.thumbUrl, ...requiredArray(pack.sets).map((set) => set.imageUrl)]
+          .map(storedImageId)
+          .filter((imageId): imageId is string => imageId !== null),
+      ),
+    ];
+    const rows = await this.dataSource.query<PublicImageRow[]>(
+      `SELECT image.id, source."parserConfig"->>'seed' AS seed,
+         review."artistName" AS "artistName",
+         review."festivalId" AS "reviewFestivalId",
+         review."festivalSourceUrl" AS "festivalSourceUrl",
+         review.author, review.license, review."licenseUrl",
+         review."filePageUrl" AS "sourceUrl",
+         rights_run.id AS "rightsRunId"
+       FROM crawl_images image
+       JOIN crawl_sources source ON source.id = image."sourceId"
+       LEFT JOIN crawl_artist_image_reviews review ON
+         review."sourceId" = source.id AND review."imageId" = image.id
+         AND review.status = 'approved'
+       LEFT JOIN LATERAL (
+         SELECT rights.id FROM crawl_runs rights
+         WHERE rights."sourceId" = source.id
+           AND rights."finishedAt" IS NOT NULL
+         ORDER BY rights."startedAt" DESC, rights.id DESC LIMIT 1
+       ) rights_run ON review.id IS NOT NULL
+       WHERE (image.id = ANY($2::uuid[]) OR review."festivalId" = $1)
+         AND (source."parserConfig"->>'seed' IS DISTINCT FROM 'commons-approved-profile'
+           OR review."festivalId" = $1)
+         AND ${PUBLIC_CRAWL_IMAGE_SQL}`,
+      [id, storedIds],
+    );
+    // Check the current roster once even if Redis still holds an older pack.
+    const hasApprovedImage = rows.some(
+      (row) => row.seed === 'commons-approved-profile',
+    );
+    const currentFestival = hasApprovedImage
+      ? await this.festivals.findOne({ where: { id } })
+      : null;
+    const currentPack =
+      currentFestival?.published && currentFestival.publishedVersion > 0
+        ? projectPack(currentFestival.published)
+        : null;
+    const sourceUrl =
+      currentPack && object(currentPack.source) ? currentPack.source.url : null;
+    const artistCounts = new Map<string, number>();
+    for (const artist of requiredArray(currentPack?.artists)) {
+      if (typeof artist.name !== 'string') continue;
+      const name = normalizeArtistName(artist.name);
+      if (name) artistCounts.set(name, (artistCounts.get(name) ?? 0) + 1);
+    }
+    return overlayPublishedImages(
+      pack,
+      id,
+      rows.filter(
+        (row) =>
+          row.seed !== 'commons-approved-profile' ||
+          (row.reviewFestivalId === id &&
+            row.festivalSourceUrl === sourceUrl &&
+            !!row.artistName &&
+            artistCounts.get(normalizeArtistName(row.artistName)) === 1),
+      ),
+    );
+  }
+
+  async published(id: string): Promise<Document> {
+    return (await this.publishedWithEtag(id)).document;
+  }
+
+  async publishedPack(
+    id: string,
+  ): Promise<{ document: Document; etag: string }> {
+    return this.publishedWithEtag(id);
   }
 
   private async discoveryCatalog(): Promise<DiscoverySummary[]> {
@@ -1002,24 +1125,36 @@ export class PublicFestivalService {
             artistAlias: string | null;
             artistOfficialName: string | null;
             seed: string | null;
+            reviewFestivalId: string | null;
             id: string;
+            author: string | null;
+            license: string | null;
+            licenseUrl: string | null;
+            creditSourceUrl: string | null;
           }[]
         >(
-          `SELECT DISTINCT ON (source."parserConfig"->>'festivalSourceUrl', source."parserConfig"->>'artistName')
+          `SELECT DISTINCT ON (source."parserConfig"->>'festivalSourceUrl', source."parserConfig"->>'artistName', COALESCE(review."festivalId", ''))
              source."parserConfig"->>'festivalSourceUrl' AS "festivalSourceUrl",
              source."parserConfig"->>'artistName' AS "artistName",
              source."parserConfig"->>'artistAlias' AS "artistAlias",
              source."parserConfig"->>'seed' AS seed,
+             review."festivalId" AS "reviewFestivalId",
+             review.author, review.license, review."licenseUrl",
+             review."filePageUrl" AS "creditSourceUrl",
              CASE WHEN ${officialGallerySourceSql}
                THEN source."parserConfig"->>'artistOfficialName'
                ELSE NULL END AS "artistOfficialName", image.id
            FROM crawl_images image
            JOIN crawl_sources source ON source.id = image."sourceId"
+           LEFT JOIN crawl_artist_image_reviews review ON
+             review."sourceId" = source.id AND review."imageId" = image.id
+             AND review.status = 'approved'
            WHERE source.kind = 'artist-image'
              AND source."parserConfig"->>'festivalSourceUrl' = ANY($1::text[])
              AND ${PUBLIC_CRAWL_IMAGE_SQL}
            ORDER BY source."parserConfig"->>'festivalSourceUrl',
              source."parserConfig"->>'artistName',
+             COALESCE(review."festivalId", ''),
              CASE WHEN source."parserConfig"->>'seed' = 'official-gmf-lineup'
                THEN 0
                WHEN ${officialGallerySourceSql}
@@ -1029,13 +1164,18 @@ export class PublicFestivalService {
       : [];
     const profileImageIdsByArtist = new Map<string, Set<string>>();
     for (const image of profileImages) {
+      const scope =
+        image.seed === 'commons-approved-profile'
+          ? image.reviewFestivalId
+          : '*';
+      if (!scope) continue;
       for (const name of [
         image.artistName,
         image.artistAlias,
         image.artistOfficialName,
       ]) {
         if (!name) continue;
-        const key = `${image.festivalSourceUrl}\u0000${name}`;
+        const key = `${scope}\u0000${image.festivalSourceUrl}\u0000${name}`;
         const ids = profileImageIdsByArtist.get(key) ?? new Set<string>();
         ids.add(image.id);
         profileImageIdsByArtist.set(key, ids);
@@ -1046,10 +1186,32 @@ export class PublicFestivalService {
       if (ids.size === 1) profileImageByArtist.set(key, [...ids][0]);
     }
     const profileImageByName = new Map<string, Set<string>>();
-    const imageCreditById = new Map<string, typeof SOHYANG_COMMONS_CREDIT>();
+    const imageCreditById = new Map<
+      string,
+      NonNullable<DiscoverySummary['artists']>[number]['imageCredit']
+    >();
     for (const image of profileImages) {
+      const scope =
+        image.seed === 'commons-approved-profile'
+          ? image.reviewFestivalId
+          : '*';
+      if (!scope) continue;
       if (image.seed === SOHYANG_COMMONS_SEED)
         imageCreditById.set(image.id, SOHYANG_COMMONS_CREDIT);
+      else if (
+        image.seed === 'commons-approved-profile' &&
+        image.author &&
+        image.license &&
+        image.licenseUrl &&
+        image.creditSourceUrl
+      )
+        imageCreditById.set(image.id, {
+          author: image.author,
+          license: image.license,
+          licenseUrl: image.licenseUrl,
+          sourceUrl: image.creditSourceUrl,
+          changes: 'WebP 변환',
+        });
       for (const name of [
         image.artistName,
         image.artistAlias,
@@ -1057,7 +1219,7 @@ export class PublicFestivalService {
       ]) {
         if (!name) continue;
         for (const nameKey of artistNameKeys(name)) {
-          const normalizedKey = `${image.festivalSourceUrl}\u0000${nameKey}`;
+          const normalizedKey = `${scope}\u0000${image.festivalSourceUrl}\u0000${nameKey}`;
           const imageIds =
             profileImageByName.get(normalizedKey) ?? new Set<string>();
           imageIds.add(image.id);
@@ -1137,17 +1299,23 @@ export class PublicFestivalService {
       if (posterId)
         entry.thumbUrl = `/api/v1/festivals/images/${posterId}.webp`;
       entry.artists = entry.artists?.map((artist) => {
+        const profileIds = (sourceUrl: string, nameKey: string) => [
+          ...(profileImageByName.get(
+            `${entry.id}\u0000${sourceUrl}\u0000${nameKey}`,
+          ) ?? []),
+          ...(profileImageByName.get(`*\u0000${sourceUrl}\u0000${nameKey}`) ??
+            []),
+        ];
         const primaryProfileIds = new Set(
-          artistNameKeys(artist.name).flatMap((nameKey) => [
-            ...(profileImageByName.get(`${entry.sourceUrl}\u0000${nameKey}`) ??
-              []),
-          ]),
+          artistNameKeys(artist.name).flatMap((nameKey) =>
+            profileIds(entry.sourceUrl, nameKey),
+          ),
         );
         const matchingProfileIds = new Set(
           entry.sourceUrls.flatMap((sourceUrl) =>
-            artistNameKeys(artist.name).flatMap((nameKey) => [
-              ...(profileImageByName.get(`${sourceUrl}\u0000${nameKey}`) ?? []),
-            ]),
+            artistNameKeys(artist.name).flatMap((nameKey) =>
+              profileIds(sourceUrl, nameKey),
+            ),
           ),
         );
         const imageId =
@@ -1225,8 +1393,7 @@ export class PublicFestivalService {
       });
     const published = await this.festivals.findOne({ where: { id } });
     if (published?.published && published.publishedVersion > 0) {
-      const pack = projectPack(published.published);
-      return pack;
+      return this.published(id);
     }
     const entry = (await this.discoveryCatalog()).find(
       (item) => item.id === id,
@@ -1247,10 +1414,13 @@ export class PublicFestivalService {
       keys.forEach((key) => knownArtists.add(key));
     }
     const profileImages = await this.attachStoredImages([entry], true);
-    const imageCreditByUrl = new Map<string, typeof SOHYANG_COMMONS_CREDIT>();
+    const imageCreditByUrl = new Map<
+      string,
+      NonNullable<DiscoverySummary['artists']>[number]['imageCredit']
+    >();
     for (const artist of entry.artists ?? []) {
       if (artist.imageUrl && artist.imageCredit)
-        imageCreditByUrl.set(artist.imageUrl, SOHYANG_COMMONS_CREDIT);
+        imageCreditByUrl.set(artist.imageUrl, artist.imageCredit);
     }
     const imageCredit = (imageUrl: string | null) =>
       imageUrl ? imageCreditByUrl.get(imageUrl) : undefined;
@@ -1312,8 +1482,12 @@ export class PublicFestivalService {
         addArtistImage(primaryArtistImages, artist.name, artist.imageUrl);
     }
     for (const [key, imageId] of profileImages) {
-      const [festivalSourceUrl, artistName] = key.split('\u0000');
-      if (!entry.sourceUrls.includes(festivalSourceUrl)) continue;
+      const [scope, festivalSourceUrl, artistName] = key.split('\u0000');
+      if (
+        (scope !== '*' && scope !== entry.id) ||
+        !entry.sourceUrls.includes(festivalSourceUrl)
+      )
+        continue;
       const imageUrl = `/api/v1/festivals/images/${imageId}.webp`;
       addArtistImage(artistImages, artistName, imageUrl);
       if (festivalSourceUrl === entry.sourceUrl)
@@ -1536,6 +1710,66 @@ export class PublicFestivalService {
         },
       ];
     });
+    const summaryImageIds = [
+      ...new Set(
+        summaries
+          .map((summary) => storedImageId(summary.thumbUrl))
+          .filter((imageId): imageId is string => imageId !== null),
+      ),
+    ];
+    if (summaryImageIds.length) {
+      const visible = await this.dataSource.query<
+        {
+          id: string;
+          seed: string | null;
+          reviewFestivalId: string | null;
+          festivalSourceUrl: string | null;
+          artistName: string | null;
+        }[]
+      >(
+        `SELECT image.id, source."parserConfig"->>'seed' AS seed,
+           review."festivalId" AS "reviewFestivalId",
+           review."festivalSourceUrl" AS "festivalSourceUrl",
+           review."artistName" AS "artistName"
+         FROM crawl_images image
+         JOIN crawl_sources source ON source.id = image."sourceId"
+         LEFT JOIN crawl_artist_image_reviews review ON
+           review."sourceId" = source.id AND review."imageId" = image.id
+           AND review.status = 'approved'
+         WHERE image.id = ANY($1::uuid[])
+           AND ${PUBLIC_CRAWL_IMAGE_SQL}`,
+        [summaryImageIds],
+      );
+      const visibleById = new Map(visible.map((image) => [image.id, image]));
+      const publishedById = new Map(rows.map((row) => [row.id, row.published]));
+      for (const summary of summaries) {
+        const imageId = storedImageId(summary.thumbUrl);
+        if (!imageId) continue;
+        const image = visibleById.get(imageId);
+        if (!image) {
+          summary.thumbUrl = null;
+          continue;
+        }
+        if (image.seed !== 'commons-approved-profile') continue;
+        const published = publishedById.get(summary.id);
+        const pack = published ? projectPack(published) : null;
+        const sourceUrl = pack && object(pack.source) ? pack.source.url : null;
+        const name = image.artistName
+          ? normalizeArtistName(image.artistName)
+          : null;
+        if (
+          image.reviewFestivalId !== summary.id ||
+          image.festivalSourceUrl !== sourceUrl ||
+          !name ||
+          requiredArray(pack?.artists).filter(
+            (artist) =>
+              typeof artist.name === 'string' &&
+              normalizeArtistName(artist.name) === name,
+          ).length !== 1
+        )
+          summary.thumbUrl = null;
+      }
+    }
     const discovered = (await this.discoveryCatalog()).filter((entry) => {
       if (entry.lastDate < floor) return false;
       if (!cursor) return true;
@@ -1571,11 +1805,11 @@ export class PublicFestivalService {
   }
 
   async version(id: string) {
-    const pack = await this.published(id);
+    const { document: pack, etag } = await this.publishedWithEtag(id);
     return {
       packVersion: pack.packVersion as number,
       packUpdatedAt: pack.packUpdatedAt as string,
-      etag: publicPackEtag(pack.packVersion as number),
+      etag,
     };
   }
 

@@ -15,6 +15,9 @@ import { CrawlTimetableRevision } from './entity/crawl-timetable-revision.entity
 import { CrawlLineupRevision } from './entity/crawl-lineup-revision.entity';
 import { CrawlLineupController } from './controller/crawl-lineup.controller';
 import { CrawlLineupRevisionService } from './service/crawl-lineup-revision.service';
+import { CrawlArtistImageReview } from './entity/crawl-artist-image-review.entity';
+import { CrawlArtistImageReviewController } from './controller/crawl-artist-image-review.controller';
+import { CrawlArtistImageReviewService } from './service/crawl-artist-image-review.service';
 import { Proposal } from './entity/proposal.entity';
 import { CrawlService } from './service/crawl.service';
 import { CrawlAlertService } from './service/crawl-alert.service';
@@ -35,6 +38,7 @@ import { PublicFestivalModule } from '../../public/public-festival.module';
       CrawlAlert,
       CrawlTimetableRevision,
       CrawlLineupRevision,
+      CrawlArtistImageReview,
     ]),
   ],
   controllers: [
@@ -43,6 +47,7 @@ import { PublicFestivalModule } from '../../public/public-festival.module';
     CrawlAlertController,
     CrawlTimetableController,
     CrawlLineupController,
+    CrawlArtistImageReviewController,
   ],
   providers: [
     CrawlService,
@@ -51,6 +56,7 @@ import { PublicFestivalModule } from '../../public/public-festival.module';
     ImageStorageService,
     CrawlTimetableRevisionService,
     CrawlLineupRevisionService,
+    CrawlArtistImageReviewService,
   ],
   exports: [TypeOrmModule],
 })

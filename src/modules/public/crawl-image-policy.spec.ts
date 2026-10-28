@@ -1,4 +1,5 @@
 import { PUBLIC_CRAWL_IMAGE_SQL } from './crawl-image-policy';
+import { COMMONS_APPROVED_PUBLIC_IMAGE_SQL } from './commons-approved-image-policy';
 import {
   CDF_PROFILES,
   CDF_PUBLIC_IMAGE_SQL,
@@ -209,5 +210,25 @@ describe('public crawl image policy', () => {
         `source."parserConfig"->>'artistName' = '${profile.artistName}'`,
       );
     }
+  });
+
+  it('keeps unapproved Commons images out of the generic branch and gates the dedicated branch', () => {
+    expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(
+      "source.\"parserConfig\"->>'seed' IS DISTINCT FROM 'commons-approved-profile'",
+    );
+    expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(COMMONS_APPROVED_PUBLIC_IMAGE_SQL);
+    expect(COMMONS_APPROVED_PUBLIC_IMAGE_SQL).toContain(
+      "review.status = 'approved'",
+    );
+    expect(COMMONS_APPROVED_PUBLIC_IMAGE_SQL).toContain(
+      'image."originalSha256" = review."originalSha256"',
+    );
+    expect(COMMONS_APPROVED_PUBLIC_IMAGE_SQL).toContain(
+      'rights_run."artistImageRightsEvidence"',
+    );
+    expect(COMMONS_APPROVED_PUBLIC_IMAGE_SQL).toContain("interval '36 hours'");
+    expect(COMMONS_APPROVED_PUBLIC_IMAGE_SQL).toContain(
+      'ORDER BY rights."startedAt" DESC, rights.id DESC',
+    );
   });
 });

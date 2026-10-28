@@ -4,12 +4,14 @@ import { INestApplication } from '@nestjs/common';
 import { ImageStorageService } from '../storage/image-storage.service';
 import { DataSource } from 'typeorm';
 import { PublicFestivalMapController } from './public-festival-map.controller';
+import { PublicFestivalService } from './public-festival.service';
 
 describe('GET festival map image', () => {
   let app: INestApplication;
   const readFestivalMap = jest.fn();
   const readCrawlImage = jest.fn();
   const query = jest.fn();
+  const hasCurrentArtist = jest.fn();
 
   beforeAll(async () => {
     const module = await Test.createTestingModule({
@@ -20,6 +22,7 @@ describe('GET festival map image', () => {
           useValue: { readFestivalMap, readCrawlImage },
         },
         { provide: DataSource, useValue: { query } },
+        { provide: PublicFestivalService, useValue: { hasCurrentArtist } },
       ],
     }).compile();
     app = module.createNestApplication();
@@ -82,5 +85,35 @@ describe('GET festival map image', () => {
       .get(path)
       .expect(404);
     expect(readCrawlImage).toHaveBeenCalledTimes(readsBefore + 1);
+  });
+
+  it('requires current festival membership before serving an approved Commons photo', async () => {
+    const path =
+      '/api/v1/festivals/images/123e4567-e89b-42d3-a456-426614174002.webp';
+    const approved = {
+      objectKey: 'crawl/images/approved.webp',
+      seed: 'commons-approved-profile',
+      festivalId: 'fst_12345678',
+      festivalSourceUrl:
+        'https://ticket.melon.com/performance/index.htm?prodId=213769',
+      artistName: '가수 A',
+    };
+    query.mockResolvedValueOnce([approved]);
+    hasCurrentArtist.mockResolvedValueOnce(false);
+    await request(app.getHttpServer() as import('http').Server)
+      .get(path)
+      .expect(404);
+    query.mockResolvedValueOnce([approved]);
+    hasCurrentArtist.mockResolvedValueOnce(true);
+    readCrawlImage.mockResolvedValueOnce(Buffer.from('RIFF0000WEBPapproved'));
+    const visible = await request(app.getHttpServer() as import('http').Server)
+      .get(path)
+      .expect(200);
+    expect(visible.headers['cache-control']).toBe('no-store');
+    expect(hasCurrentArtist).toHaveBeenCalledWith(
+      approved.festivalId,
+      approved.festivalSourceUrl,
+      approved.artistName,
+    );
   });
 });

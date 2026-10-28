@@ -1,6 +1,6 @@
 import { QueryRunner } from 'typeorm';
 import { ScrubUntrustedGalleryIdentity1792500073000 } from '../../database/migrations/1792500073000-scrub-untrusted-gallery-identity';
-import { discoverySummaries } from './crawl-catalog';
+import { discoverySummaries, DiscoverySummary } from './crawl-catalog';
 import { PublicFestivalService } from './public-festival.service';
 import {
   SOHYANG_COMMONS_CREDIT,
@@ -8,6 +8,181 @@ import {
   SOHYANG_FESTIVAL_URL,
 } from '../admin/crawl/service/sohyang-commons-profile';
 describe('discovered festival artist profile images', () => {
+  it('reads two approved Commons credits from their own image review rows', async () => {
+    const festivalSourceUrl =
+      'https://ticket.melon.com/performance/index.htm?prodId=213769';
+    const candidate = {
+      name: '사진 출처 검증 페스티벌',
+      venue: '공연장',
+      date: '2026.12.26',
+      url: festivalSourceUrl,
+      artists: [{ name: '가수 A' }, { name: '가수 B' }],
+    };
+    const festivalId = discoverySummaries([{ candidate }])[0].id;
+    const profileRows = ['가수 A', '가수 B'].map((name, index) => ({
+      festivalSourceUrl,
+      artistName: name,
+      reviewFestivalId: festivalId,
+      artistAlias: null,
+      artistOfficialName: null,
+      seed: 'commons-approved-profile',
+      id: `00000000-0000-4000-8000-00000000000${index + 1}`,
+      author: `${name} 사진가`,
+      license: 'CC BY 4.0',
+      licenseUrl: 'https://creativecommons.org/licenses/by/4.0',
+      creditSourceUrl: `https://commons.wikimedia.org/wiki/File:${name}.jpg`,
+    }));
+    const query = jest.fn().mockImplementation((sql: string) => {
+      if (sql.includes('WITH candidates AS')) return [{ candidate }];
+      if (sql.includes('SELECT DISTINCT ON (source."parserConfig"'))
+        return profileRows;
+      return [];
+    });
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    const detail = await service.detail(festivalId);
+    expect(detail.artists).toEqual([
+      {
+        name: '가수 A',
+        imageUrl: `/api/v1/festivals/images/${profileRows[0].id}.webp`,
+        imageCredit: {
+          author: '가수 A 사진가',
+          license: 'CC BY 4.0',
+          licenseUrl: 'https://creativecommons.org/licenses/by/4.0',
+          sourceUrl: profileRows[0].creditSourceUrl,
+          changes: 'WebP 변환',
+        },
+      },
+      {
+        name: '가수 B',
+        imageUrl: `/api/v1/festivals/images/${profileRows[1].id}.webp`,
+        imageCredit: {
+          author: '가수 B 사진가',
+          license: 'CC BY 4.0',
+          licenseUrl: 'https://creativecommons.org/licenses/by/4.0',
+          sourceUrl: profileRows[1].creditSourceUrl,
+          changes: 'WebP 변환',
+        },
+      },
+    ]);
+  });
+
+  it('does not attach an approval for an older festival ID at the same source URL', async () => {
+    const candidate = {
+      name: '새로운 회차',
+      venue: '공연장',
+      date: '2026.12.26',
+      url: 'https://ticket.melon.com/performance/index.htm?prodId=213769',
+      artists: [{ name: '가수 A' }],
+    };
+    const query = jest.fn().mockImplementation((sql: string) => {
+      if (sql.includes('WITH candidates AS')) return [{ candidate }];
+      if (sql.includes('SELECT DISTINCT ON (source."parserConfig"'))
+        return [
+          {
+            festivalSourceUrl: candidate.url,
+            artistName: '가수 A',
+            reviewFestivalId: 'fst_previous',
+            seed: 'commons-approved-profile',
+            id: '00000000-0000-4000-8000-000000000011',
+          },
+        ];
+      return [];
+    });
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    const detail = await service.detail(
+      discoverySummaries([{ candidate }])[0].id,
+    );
+    expect(detail.artists).toEqual([{ name: '가수 A', imageUrl: null }]);
+    expect(JSON.stringify(detail)).not.toContain('000000000011');
+  });
+
+  it('preserves each approved photo credit in artist details and timetable', async () => {
+    const candidate = {
+      name: '사진 출처 검증 페스티벌',
+      venue: '공연장',
+      date: '2026.12.26 - 2026.12.27',
+      url: 'https://ticket.melon.com/performance/index.htm?prodId=213769',
+      artists: [{ name: '가수 A' }, { name: '가수 B' }],
+    };
+    const credits = [
+      {
+        author: '사진가 A',
+        license: 'CC BY 4.0',
+        licenseUrl: 'https://creativecommons.org/licenses/by/4.0',
+        sourceUrl: 'https://commons.wikimedia.org/wiki/File:Artist_A.jpg',
+        changes: 'WebP 변환',
+      },
+      {
+        author: '사진가 B',
+        license: 'CC BY 3.0',
+        licenseUrl: 'https://creativecommons.org/licenses/by/3.0',
+        sourceUrl: 'https://commons.wikimedia.org/wiki/File:Artist_B.jpg',
+        changes: 'WebP 변환',
+      },
+    ];
+    const query = jest.fn().mockImplementation((sql: string) => {
+      if (sql.includes('WITH candidates AS')) return [{ candidate }];
+      if (sql.includes('FROM crawl_timetable_revisions revision'))
+        return [
+          {
+            id: 'timetable',
+            sourceUrl: candidate.url,
+            sourceImageId: null,
+            verifiedAt: new Date('2026-10-27T00:00:00Z'),
+            sets: [
+              {
+                artist: '가수 B',
+                date: '2026-12-26',
+                stageName: '메인',
+                startsAt: '2026-12-26T12:00:00+09:00',
+                endsAt: null,
+              },
+            ],
+          },
+        ];
+      return [];
+    });
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    Object.defineProperty(service, 'attachStoredImages', {
+      value: (entries: DiscoverySummary[]) => {
+        entries[0].artists = entries[0].artists?.map((artist, index) => ({
+          ...artist,
+          imageUrl: `/api/v1/festivals/images/artist-${index}.webp`,
+          imageCredit: credits[index],
+        }));
+        return Promise.resolve(new Map<string, string>());
+      },
+    });
+
+    const result = await service.detail(
+      discoverySummaries([{ candidate }])[0].id,
+    );
+    expect(result.artists).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: '가수 A', imageCredit: credits[0] }),
+        expect.objectContaining({ name: '가수 B', imageCredit: credits[1] }),
+      ]),
+    );
+    expect(result.timetable).toEqual([
+      expect.objectContaining({ artist: '가수 B', imageCredit: credits[1] }),
+    ]);
+  });
+
   it('returns Commons photo attribution beside the OneWay artist and timetable', async () => {
     const candidate = {
       name: '원웨이 페스티벌 2026',
