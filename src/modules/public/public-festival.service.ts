@@ -11,6 +11,7 @@ import { festivalSetId } from '../admin/festival/festival-set-id';
 import { CrawlTimetableSet } from '../admin/crawl/entity/crawl-timetable-revision.entity';
 import { PUBLIC_CRAWL_IMAGE_SQL } from './crawl-image-policy';
 import {
+  invalidStoredImagePath,
   overlayPublishedImages,
   PublicImageRow,
   storedImageId,
@@ -302,6 +303,14 @@ export class PublicFestivalService {
     >(
       `SELECT id, published FROM admin_festivals WHERE published IS NOT NULL AND "publishedVersion" > 0`,
     );
+    const publishedPacks = published.map((row) => ({
+      id: row.id,
+      pack: projectPack(row.published),
+    }));
+    const publishedImageRows = await this.publicImageRows(
+      publishedPacks.map((row) => row.id),
+      publishedPacks.flatMap((row) => this.storedImageIds(row.pack)),
+    );
     const discovered = await this.discoveryCatalog();
     const profileImages = await this.attachStoredImages(discovered, true);
     const publishedIds = new Set(published.map((row) => row.id));
@@ -402,9 +411,14 @@ export class PublicFestivalService {
       artistName: string;
     }[] = [];
     const entries: { id: string; detail: Document }[] = [
-      ...published.map((row) => ({
+      ...publishedPacks.map((row) => ({
         id: row.id,
-        detail: projectPack(row.published),
+        detail: this.overlayPublishedPack(
+          row.pack,
+          row.id,
+          publishedImageRows,
+          row.pack,
+        ).document,
       })),
       ...discovered
         .filter((row) => !publishedIds.has(row.id))
@@ -555,14 +569,38 @@ export class PublicFestivalService {
     id: string,
   ): Promise<{ document: Document; etag: string }> {
     const pack = await this.cachedPublished(id);
-    const storedIds = [
+    const rows = await this.publicImageRows([id], this.storedImageIds(pack));
+    // Check the current roster once even if Redis still holds an older pack.
+    const hasApprovedImage = rows.some(
+      (row) =>
+        row.seed === 'commons-approved-profile' && row.reviewFestivalId === id,
+    );
+    const currentFestival = hasApprovedImage
+      ? await this.festivals.findOne({ where: { id } })
+      : null;
+    const currentPack =
+      currentFestival?.published && currentFestival.publishedVersion > 0
+        ? projectPack(currentFestival.published)
+        : null;
+    return this.overlayPublishedPack(pack, id, rows, currentPack);
+  }
+
+  private storedImageIds(pack: Document): string[] {
+    return [
       ...new Set(
         [pack.thumbUrl, ...requiredArray(pack.sets).map((set) => set.imageUrl)]
           .map(storedImageId)
           .filter((imageId): imageId is string => imageId !== null),
       ),
     ];
-    const rows = await this.dataSource.query<PublicImageRow[]>(
+  }
+
+  private async publicImageRows(
+    festivalIds: string[],
+    storedIds: string[],
+  ): Promise<PublicImageRow[]> {
+    if (!festivalIds.length) return [];
+    return this.dataSource.query<PublicImageRow[]>(
       `SELECT image.id, source."parserConfig"->>'seed' AS seed,
          review."artistName" AS "artistName",
          review."festivalId" AS "reviewFestivalId",
@@ -581,23 +619,21 @@ export class PublicFestivalService {
            AND rights."finishedAt" IS NOT NULL
          ORDER BY rights."startedAt" DESC, rights.id DESC LIMIT 1
        ) rights_run ON review.id IS NOT NULL
-       WHERE (image.id = ANY($2::uuid[]) OR review."festivalId" = $1)
+       WHERE (image.id = ANY($2::uuid[]) OR review."festivalId" = ANY($1::text[]))
          AND (source."parserConfig"->>'seed' IS DISTINCT FROM 'commons-approved-profile'
-           OR review."festivalId" = $1)
+           OR review."festivalId" = ANY($1::text[]))
          AND ${PUBLIC_CRAWL_IMAGE_SQL}`,
-      [id, storedIds],
+      [festivalIds, [...new Set(storedIds)]],
     );
-    // Check the current roster once even if Redis still holds an older pack.
-    const hasApprovedImage = rows.some(
-      (row) => row.seed === 'commons-approved-profile',
-    );
-    const currentFestival = hasApprovedImage
-      ? await this.festivals.findOne({ where: { id } })
-      : null;
-    const currentPack =
-      currentFestival?.published && currentFestival.publishedVersion > 0
-        ? projectPack(currentFestival.published)
-        : null;
+  }
+
+  private overlayPublishedPack(
+    pack: Document,
+    id: string,
+    rows: PublicImageRow[],
+    currentPack: Document | null,
+  ): { document: Document; etag: string } {
+    const storedIds = new Set(this.storedImageIds(pack));
     const sourceUrl =
       currentPack && object(currentPack.source) ? currentPack.source.url : null;
     const artistCounts = new Map<string, number>();
@@ -611,11 +647,12 @@ export class PublicFestivalService {
       id,
       rows.filter(
         (row) =>
-          row.seed !== 'commons-approved-profile' ||
-          (row.reviewFestivalId === id &&
-            row.festivalSourceUrl === sourceUrl &&
-            !!row.artistName &&
-            artistCounts.get(normalizeArtistName(row.artistName)) === 1),
+          (storedIds.has(row.id) || row.reviewFestivalId === id) &&
+          (row.seed !== 'commons-approved-profile' ||
+            (row.reviewFestivalId === id &&
+              row.festivalSourceUrl === sourceUrl &&
+              !!row.artistName &&
+              artistCounts.get(normalizeArtistName(row.artistName)) === 1)),
       ),
     );
   }
@@ -1710,6 +1747,8 @@ export class PublicFestivalService {
         },
       ];
     });
+    for (const summary of summaries)
+      if (invalidStoredImagePath(summary.thumbUrl)) summary.thumbUrl = null;
     const summaryImageIds = [
       ...new Set(
         summaries

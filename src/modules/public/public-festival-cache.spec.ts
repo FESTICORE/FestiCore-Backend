@@ -286,4 +286,66 @@ describe('PublicFestivalService published cache', () => {
     );
     expect(result.items[0]).toMatchObject({ id, thumbUrl: null });
   });
+
+  it('does not expose malformed internal thumbnails in the list or query them as UUIDs', async () => {
+    const published = (festivalId: string, thumbUrl: string) => ({
+      id: festivalId,
+      name: '새 공연',
+      venue: '공연장',
+      thumbUrl,
+      days: [{ date: '2026-11-19', startsAt: '2026-11-19T13:00:00+09:00' }],
+    });
+    const builder = {
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      getMany: jest.fn().mockResolvedValue([
+        {
+          id,
+          publishedVersion: 1,
+          published: published(
+            id,
+            `/api/v1/festivals/images/${'-'.repeat(36)}.webp`,
+          ),
+        },
+        {
+          id: 'fst_external',
+          publishedVersion: 1,
+          published: published(
+            'fst_external',
+            'https://festival.example.com/poster.webp',
+          ),
+        },
+      ]),
+    };
+    const query = jest.fn().mockResolvedValue([]);
+    const service = new PublicFestivalService(
+      { createQueryBuilder: () => builder } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+
+    const result = await service.list(
+      undefined,
+      '20',
+      new Date('2026-10-22T00:00:00Z'),
+    );
+    expect(result.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id, thumbUrl: null }),
+        expect.objectContaining({
+          id: 'fst_external',
+          thumbUrl: 'https://festival.example.com/poster.webp',
+        }),
+      ]),
+    );
+    expect(
+      (query.mock.calls as [string][]).filter(([sql]) =>
+        sql.includes('SELECT image.id, source.'),
+      ),
+    ).toHaveLength(0);
+  });
 });
