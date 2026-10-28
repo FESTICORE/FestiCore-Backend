@@ -1,12 +1,26 @@
 import {
   overlayPublishedImages,
   PublicImageRow,
+  storedImageId,
 } from './published-image-overlay';
 
 const festivalId = 'fst_12345678';
 const a = '00000000-0000-4000-8000-000000000001';
 const b = '00000000-0000-4000-8000-000000000002';
 const image = (id: string) => `/api/v1/festivals/images/${id}.webp`;
+
+describe('stored public image ID', () => {
+  it('accepts only lowercase canonical UUID paths', () => {
+    expect(storedImageId(image(a))).toBe(a);
+    expect(storedImageId(image('-'.repeat(36)))).toBeNull();
+    expect(storedImageId(image('00000000000040008000000000000001'))).toBeNull();
+    expect(
+      storedImageId(
+        image('abcdefab-cdef-4abc-8def-abcdefabcdef'.toUpperCase()),
+      ),
+    ).toBeNull();
+  });
+});
 
 function row(id: string, name: string, run: string): PublicImageRow {
   return {
@@ -77,6 +91,23 @@ describe('published image rights overlay', () => {
     ]);
     expect(JSON.stringify(invalid.document)).not.toContain('imageCredit');
     expect(invalid.etag).not.toBe(valid.etag);
+  });
+
+  it('nulls malformed internal thumbnails and preserves external thumbnails', () => {
+    const malformed = overlayPublishedImages(
+      { ...pack, thumbUrl: image('-'.repeat(36)) },
+      festivalId,
+      [],
+    );
+    const externalUrl = 'https://festival.example.com/poster.webp';
+    const external = overlayPublishedImages(
+      { ...pack, thumbUrl: externalUrl },
+      festivalId,
+      [],
+    );
+
+    expect(malformed.document.thumbUrl).toBeNull();
+    expect(external.document.thumbUrl).toBe(externalUrl);
   });
 
   it('does not attach ambiguous reviews or photos approved for another festival', () => {

@@ -21,12 +21,21 @@ export interface PublicImageRow {
   rightsRunId: string | null;
 }
 
-const imagePath = /^\/api\/v1\/festivals\/images\/([0-9a-f-]{36})\.webp$/;
+const imagePath =
+  /^\/api\/v1\/festivals\/images\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.webp$/;
 
 export function storedImageId(value: unknown): string | null {
   return typeof value === 'string'
     ? (imagePath.exec(value)?.[1] ?? null)
     : null;
+}
+
+export function invalidStoredImagePath(value: unknown): boolean {
+  return (
+    typeof value === 'string' &&
+    value.startsWith('/api/v1/festivals/images/') &&
+    storedImageId(value) === null
+  );
 }
 
 export function overlayPublishedImages(
@@ -103,7 +112,11 @@ export function overlayPublishedImages(
       : pack.timetable,
   };
   const thumbId = storedImageId(pack.thumbUrl);
-  if (thumbId && !visible.has(thumbId)) document.thumbUrl = null;
+  if (
+    invalidStoredImagePath(pack.thumbUrl) ||
+    (thumbId && !visible.has(thumbId))
+  )
+    document.thumbUrl = null;
   const fingerprint = rows
     .map((row) => `${row.id}:${row.rightsRunId ?? ''}`)
     .sort()
