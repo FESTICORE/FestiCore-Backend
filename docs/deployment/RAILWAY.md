@@ -90,9 +90,14 @@ AWS_S3_URL_STYLE=virtual                    # 엔드포인트가 경로 방식�
 
 공개 팩 WebSocket은 `wss://<환경별-도메인>/api/v1/festivals/updates`에서 제공한다.
 브라우저 Origin은 `CORS_ORIGINS`에 있어야 하며 네이티브 앱의 Origin 없는 연결은 허용한다.
-연결이 끊겼거나 앱이 백그라운드에 있는 동안 놓친 변경은 저장된 팩 버전과
-`GET /api/v1/festivals`의 ETag를 비교해 다시 받아야 한다. Railway 프록시의
-실제 WSS 연결과 모바일 재접속은 각 환경에 배포된 뒤 확인한다.
+앱은 연결·전경 복귀·수동 업데이트 때 텍스트 JSON `pack.get`에 `requestId`,
+`festivalId`, 저장된 팩의 `ifNoneMatch` ETag를 보낸다. `pack.snapshot`은 응답의
+팩과 ETag를 함께 저장하고, `pack.not_modified`는 기존 팩을 유지한다. 큰 팩은
+`pack.start` → 순서대로 `pack.chunk` → `pack.complete`를 받으며 크기와 SHA-256을
+검증한 뒤 교체한다. 전송 중 단절, `pack.retry`, `pack.error`에서는 기존 팩을
+유지한다. `pack.updated`는 새 버전 힌트이므로 앱이 `pack.get`으로 실제 팩을
+받아야 한다. 상세 메시지 계약은 [팩 WebSocket 수신 계약](../api/pack-websocket-transfer.spec.md)을 참조한다.
+Railway 프록시의 실제 WSS 연결과 모바일 재접속은 각 환경에 배포된 뒤 확인한다.
 
 Google 웹은 Google Identity Services에서 받은 ID 토큰을 모바일 앱과 동일한
 `POST /api/v1/auth/login`에 `{ "provider": "google", "token": "<idToken>" }`으로 보낸다.
