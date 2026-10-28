@@ -506,6 +506,7 @@ describe('Public festival API', () => {
       ...published,
       published: {
         ...pack,
+        venue: 'KINTEX HALL 7/8/9/10',
         internalSecret: 'TOP_LEVEL_SECRET',
         source: {
           name: 'Official',
