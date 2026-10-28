@@ -589,6 +589,63 @@ describe('crawl parsers', () => {
     ]);
   });
 
+  it('accepts Melon venue coordinates only when the hidden inputs and quick route link agree', async () => {
+    const melon = source('ticket-list', 'discovery');
+    melon.url = 'https://ticket.melon.com/performance/index.htm?prodId=213793';
+    const page = (
+      latitude = '37.66469544695199',
+      longitude = '126.742064181796',
+      map = 'http://map.daum.net/link/to/KINTEX HALL 7/8/9/10,37.66469544695199,126.742064181796',
+    ) =>
+      `<strong class="tit">WONDERLIVET 2026</strong>
+      <span class="txt_info">2026.11.20 - 2026.11.22</span>
+      <span class="place">KINTEX HALL 7/8/9/10</span>
+      <a target="_blank" href="${map}" class="ico_more map">빠른길 찾기</a>
+      <input type="hidden" id="global_ticket_performanceHall_locLati" value="${latitude}" />
+      <input type="hidden" id="global_ticket_performanceHall_locLogi" value="${longitude}" />`;
+    const expected = {
+      latitude: 37.66469544695199,
+      longitude: 126.742064181796,
+      label: 'KINTEX HALL 7/8/9/10',
+    };
+    expect(await parseCrawl(melon, page())).toEqual([
+      expect.objectContaining({ location: expected }),
+    ]);
+    expect(
+      await parseCrawl(
+        melon,
+        page()
+          .replace('KINTEX HALL 7/8/9/10</span>', 'KINTEX &amp; HALL</span>')
+          .replace('KINTEX HALL 7/8/9/10,', 'KINTEX%20%26%20HALL,'),
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        location: { ...expected, label: 'KINTEX & HALL' },
+      }),
+    ]);
+    for (const html of [
+      page().replace('global_ticket_performanceHall_locLogi', 'other'),
+      page('NaN'),
+      page('91'),
+      page('37.1'),
+      page(
+        undefined,
+        undefined,
+        'http://map.daum.net/link/to/Other Hall,37.66469544695199,126.742064181796',
+      ),
+      page(
+        undefined,
+        undefined,
+        'https://map.daum.net.evil.test/link/to/KINTEX HALL 7/8/9/10,37.66469544695199,126.742064181796',
+      ),
+    ]) {
+      const candidates = (await parseCrawl(melon, html)) as Array<{
+        location?: unknown;
+      }>;
+      expect(candidates[0]?.location).toBeUndefined();
+    }
+  });
+
   it('uses each Melon artist lazy image and falls back only to a verified src', async () => {
     const melon = source('ticket-list', 'discovery');
     melon.url = 'https://ticket.melon.com/performance/index.htm?prodId=213793';

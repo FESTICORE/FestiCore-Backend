@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
+import { venuePoint } from '../../../../common/festival-location';
 import type { CrawlSource } from '../entity/crawl-source.entity';
 import { imageTagAttributes } from './image-tag-attributes';
 import {
@@ -185,10 +186,71 @@ type FestivalCandidate = {
   url: string;
   date?: string;
   venue?: string;
+  location?: { latitude: number; longitude: number; label: string };
   posterUrl?: string;
   officialInstagramUrl?: string;
   artists?: { name: string; sourceUrl?: string; profileUrl?: string }[];
 };
+
+function melonVenueLocation(
+  body: string,
+  venue: string,
+): FestivalCandidate['location'] {
+  const inputValue = (id: string): string | null => {
+    const matches = [...body.matchAll(/<input\b[^>]*>/gi)]
+      .filter((match) => {
+        const ids = imageTagAttributes(match[0], ['id']);
+        return ids.length === 1 && ids[0] === id;
+      })
+      .map((match) => imageTagAttributes(match[0], ['value']));
+    return matches.length === 1 && matches[0].length === 1
+      ? matches[0][0]
+      : null;
+  };
+  const latitudeText = inputValue('global_ticket_performanceHall_locLati');
+  const longitudeText = inputValue('global_ticket_performanceHall_locLogi');
+  if (!latitudeText || !longitudeText) return undefined;
+  const anchors = [...body.matchAll(/<a\b[^>]*>([\s\S]*?)<\/a>/gi)]
+    .filter((match) => plainText(match[1]) === '빠른길 찾기')
+    .map((match) =>
+      imageTagAttributes(match[0].slice(0, match[0].indexOf('>') + 1), [
+        'href',
+      ]),
+    );
+  if (anchors.length !== 1 || anchors[0].length !== 1) return undefined;
+  let map: URL;
+  let destination: string;
+  try {
+    map = new URL(anchors[0][0].replace(/&amp;/gi, '&'));
+    if (
+      !['http:', 'https:'].includes(map.protocol) ||
+      map.hostname !== 'map.daum.net' ||
+      map.port ||
+      map.username ||
+      map.password ||
+      map.search ||
+      map.hash ||
+      !map.pathname.startsWith('/link/to/')
+    )
+      return undefined;
+    destination = decodeURIComponent(map.pathname.slice('/link/to/'.length));
+  } catch {
+    return undefined;
+  }
+  const parts = /^(.+),([^,]+),([^,]+)$/.exec(destination);
+  if (!parts) return undefined;
+  const normalize = (value: string) =>
+    value.normalize('NFKC').replace(/\s+/g, ' ').trim();
+  const label = normalize(parts[1]);
+  if (!label || normalize(venue) !== label) return undefined;
+  const numeric = (value: string) =>
+    /^-?\d+(?:\.\d+)?$/.test(value) ? Number(value) : NaN;
+  const latitude = numeric(latitudeText);
+  const longitude = numeric(longitudeText);
+  if (latitude !== numeric(parts[2]) || longitude !== numeric(parts[3]))
+    return undefined;
+  return venuePoint({ latitude, longitude, label }) ?? undefined;
+}
 
 const FESTIVAL_TITLE = /(?:페스티벌|축제|festival|\bfest\b)/i;
 const GENERIC_TITLE =
@@ -883,6 +945,8 @@ function melonDetailCandidates(
     date,
     venue,
   };
+  const location = melonVenueLocation(body, venue);
+  if (location) candidate.location = location;
   const poster =
     /<meta\b[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i.exec(
       body,

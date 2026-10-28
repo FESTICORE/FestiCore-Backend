@@ -72,6 +72,7 @@ function draftFor(
       lastShuttleAt: null,
       lastTrainAt: null,
       mapLinks: { naver: null, kakao: null },
+      location: null,
       source,
     },
     checklist: [],
@@ -215,6 +216,11 @@ export class AdminFestivalService {
       entry.ticketLinks,
       { firstDate: entry.firstDate, lastDate: entry.lastDate },
     );
+    if (entry.location)
+      draft.directions = {
+        ...(draft.directions as Record<string, unknown>),
+        location: entry.location,
+      };
     draftErrors(draft);
     const row = this.festivals.create({
       id,

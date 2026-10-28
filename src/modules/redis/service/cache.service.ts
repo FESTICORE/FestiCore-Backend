@@ -4,7 +4,7 @@ import { randomBytes } from 'crypto';
 import Redis from 'ioredis';
 
 export type RedisStatus = 'up' | 'down' | 'disabled';
-export const PUBLIC_PACK_PROJECTION_VERSION = 2;
+export const PUBLIC_PACK_PROJECTION_VERSION = 3;
 
 @Injectable()
 export class CacheService implements OnModuleDestroy {

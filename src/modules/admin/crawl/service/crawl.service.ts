@@ -11,7 +11,10 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, LessThan, Repository } from 'typeorm';
-import { AdminFestival } from '../../festival/festival.entity';
+import {
+  AdminFestival,
+  FestivalDocument,
+} from '../../festival/festival.entity';
 import { PublicFestivalService } from '../../../public/public-festival.service';
 import { AdminAuditService } from '../../audit/admin-audit.service';
 import { ImageStorageService } from '../../../storage/image-storage.service';
@@ -49,6 +52,10 @@ import {
   MAX_NOL_LINEUP_IMAGE_BYTES,
 } from './nol-world-lineup-evidence';
 import { normalizeArtistName } from '../../../../common/artist-name';
+import {
+  venueLabelMatches,
+  venuePoint,
+} from '../../../../common/festival-location';
 import { PRUGIO_LINEUP_SEED, PRUGIO_LINEUP_URL } from './prugio-lineup';
 import {
   parseWonderlivetBundleLineup,
@@ -1296,6 +1303,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       source.kind === 'artist-image' && source.url === GMF_LINEUP_URL
         ? 'GMF_VERIFY'
         : 'ROBOTS';
+    let locationParserCompleted = false;
     try {
       if (source.kind === 'artist-image-discovery') {
         phase = 'COMMONS_DISCOVERY';
@@ -1914,6 +1922,15 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
           );
         else await this.reconcileOfficialTicketLinks(source, officialParsed);
       }
+      const melonLocationSource =
+        source.kind === 'discovery' &&
+        source.parser === 'ticket-list' &&
+        /^https:\/\/ticket\.melon\.com\/performance\/index\.htm\?prodId=\d+$/.test(
+          source.url,
+        );
+      const needsLocationReparse =
+        melonLocationSource &&
+        source.parserConfig.locationParserVersion !== '1';
       if (source.kind === 'artist-image') {
         run.result =
           previous?.contentHash === run.contentHash
@@ -1938,7 +1955,8 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
           source.parser === 'ticket-list' &&
           source.parserConfig.seed === WONDERLIVET_DETAIL_SEED &&
           source.parserConfig.festivalSourceUrl === WONDERLIVET_FESTIVAL_URL
-        )
+        ) &&
+        !needsLocationReparse
       ) {
         run.result = 'unchanged';
       } else {
@@ -2002,7 +2020,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         if (candidate.items.length) {
           const proposal = await this.proposalsRepo.save(
             this.proposalsRepo.create({
-              festivalId: source.festivalId,
+              festivalId: candidate.festivalId ?? source.festivalId,
               sourceId: source.id,
               runId: run.id,
               kind: candidate.kind,
@@ -2028,6 +2046,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         }
         if (previous?.contentHash !== run.contentHash)
           source.lastChangedAt = new Date();
+        locationParserCompleted = melonLocationSource;
       }
       source.consecutiveFailures = 0;
       source.status = 'ok';
@@ -2087,14 +2106,22 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         "status" = CASE WHEN "enabled" = false THEN 'disabled'
           WHEN $3::boolean AND "consecutiveFailures" >= 2 THEN 'broken' ELSE 'ok' END,
         "consecutiveFailures" = CASE WHEN $3::boolean THEN "consecutiveFailures" + 1 ELSE 0 END,
+        "parserConfig" = CASE WHEN $5::boolean AND "url" = $6::text
+          AND "kind" = 'discovery' AND "parser" = 'ticket-list'
+          THEN jsonb_set("parserConfig", '{locationParserVersion}', to_jsonb('1'::text), true)
+          ELSE "parserConfig" END,
         "updatedAt" = now() WHERE "id" = $4 RETURNING "consecutiveFailures"`,
         [
           source.lastRunAt,
           source.lastChangedAt,
           run.result === 'failed',
           source.id,
+          locationParserCompleted && run.result !== 'failed',
+          source.url,
         ],
       );
+      if (locationParserCompleted && run.result !== 'failed')
+        source.parserConfig.locationParserVersion = '1';
       if (
         run.result === 'failed' &&
         Number(updated[0]?.[0]?.consecutiveFailures) === 3
@@ -2983,6 +3010,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
   ): Promise<{
     kind: Proposal['kind'];
     items: ProposalItem[];
+    festivalId?: string;
     matchedProposalId?: string;
   }> {
     const item = (
@@ -3003,20 +3031,78 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     });
     if (source.kind === 'discovery' && Array.isArray(parsed)) {
       const known = await this.dataSource.query<
-        { url: string | null; value: unknown; proposalId: string | null }[]
+        {
+          url: string | null;
+          value: unknown;
+          proposalId: string | null;
+          festivalId?: string | null;
+          draft?: FestivalDocument | null;
+        }[]
       >(
         `SELECT item->'after'->>'url' AS url, item->'after' AS value,
-           p.id AS "proposalId"
+           p.id AS "proposalId", NULL::varchar AS "festivalId",
+           NULL::jsonb AS draft
          FROM crawl_proposals p, jsonb_array_elements(p.items) item
          WHERE "sourceId" = $1 AND kind = 'festival.new'
            AND status IN ('open', 'partial')
            AND item->>'decision' = 'pending'
          UNION ALL
          SELECT draft->'source'->>'url' AS url, NULL::jsonb AS value,
-           NULL::uuid AS "proposalId" FROM admin_festivals
+           NULL::uuid AS "proposalId", id AS "festivalId", draft
+         FROM admin_festivals
          WHERE draft->'source'->>'url' IS NOT NULL`,
         [source.id],
       );
+      if (
+        /^https:\/\/ticket\.melon\.com\/performance\/index\.htm\?prodId=\d+$/.test(
+          source.url,
+        ) &&
+        parsed.length === 1
+      ) {
+        const entry = parsed[0] as Record<string, unknown> | null;
+        const point = venuePoint(entry?.location);
+        const drafts = known.filter(
+          (row) => row.festivalId && row.draft && row.url === source.url,
+        );
+        const existing = drafts.length === 1 ? drafts[0] : null;
+        if (
+          entry?.url === source.url &&
+          point &&
+          existing?.draft &&
+          existing.festivalId &&
+          venueLabelMatches(point.label, existing.draft.venue) &&
+          !(existing.draft.directions as { location?: unknown } | null)
+            ?.location
+        ) {
+          const pending = await this.dataSource.query<{ id: string }[]>(
+            `SELECT id FROM crawl_proposals
+             WHERE "festivalId" = $1 AND kind = 'directions.diff'
+               AND status IN ('open', 'partial')
+               AND EXISTS (SELECT 1 FROM jsonb_array_elements(items) item
+                 WHERE item->>'path' = '/directions/location'
+                   AND item->>'decision' = 'pending') LIMIT 1`,
+            [existing.festivalId],
+          );
+          if (!pending.length) {
+            const verified = {
+              name:
+                source.parserConfig.sourceName || new URL(source.url).hostname,
+              url: source.url,
+              verifiedAt: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+            };
+            return {
+              kind: 'directions.diff',
+              festivalId: existing.festivalId,
+              items: [
+                item('location', 'update', '/directions/location', null, {
+                  ...point,
+                  source: verified,
+                }),
+              ],
+            };
+          }
+        }
+      }
       const items = parsed.flatMap((entry, index) => {
         const url =
           entry && typeof entry === 'object'

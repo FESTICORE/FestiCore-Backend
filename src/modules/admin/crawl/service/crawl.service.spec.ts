@@ -75,6 +75,7 @@ type PrivateCrawl = {
     parsed: unknown,
   ): Promise<{
     kind: string;
+    festivalId?: string;
     items: { id: string; op: string; path: string; after: unknown }[];
     matchedProposalId?: string;
   }>;
@@ -3915,6 +3916,70 @@ describe('CrawlService manual runs and snapshots', () => {
     expect(proposalsRepo.save).not.toHaveBeenCalled();
   });
 
+  it('reparses an unchanged official Melon detail once for venue coordinates', async () => {
+    const { service, source, run, runsRepo, dataSource, execute } = harness();
+    execute.mockRestore();
+    source.url = 'https://ticket.melon.com/performance/index.htm?prodId=213793';
+    source.parserConfig = { seed: 'ticket-detail' };
+    const body = `<strong class="tit">WONDERLIVET 2026</strong>
+      <span class="txt_info">2026.11.20 - 2026.11.22</span>
+      <span class="place">KINTEX HALL 7/8/9/10</span>
+      <a href="http://map.daum.net/link/to/KINTEX HALL 7/8/9/10,37.66469544695199,126.742064181796">빠른길 찾기</a>
+      <input id="global_ticket_performanceHall_locLati" value="37.66469544695199">
+      <input id="global_ticket_performanceHall_locLogi" value="126.742064181796">`;
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({ status: 200, body });
+    jest
+      .spyOn(
+        service as unknown as {
+          captureImages(
+            source: CrawlSource,
+            run: CrawlRun,
+            urls: URL[],
+          ): Promise<string[]>;
+        },
+        'captureImages',
+      )
+      .mockResolvedValue([]);
+    const oldHash = createHash('sha256')
+      .update(body)
+      .update('ticket-list:v3')
+      .digest('hex');
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue({ contentHash: oldHash }),
+    }));
+    const proposalItems = jest
+      .spyOn(service, 'proposalItems')
+      .mockResolvedValue({
+        kind: 'festival.new',
+        items: [],
+      });
+    await service.execute(run, source);
+    expect(run.result).toBe('nochange-parsed');
+    expect(proposalItems).toHaveBeenCalledTimes(1);
+    expect(proposalItems.mock.calls[0]?.[1]).toEqual([
+      expect.objectContaining({
+        location: {
+          latitude: 37.66469544695199,
+          longitude: 126.742064181796,
+          label: 'KINTEX HALL 7/8/9/10',
+        },
+      }),
+    ]);
+    expect(dataSource.query).toHaveBeenCalledWith(
+      expect.stringContaining("'{locationParserVersion}'"),
+      expect.arrayContaining([true, source.url]),
+    );
+    expect(source.parserConfig.locationParserVersion).toBe('1');
+
+    const nextRun = { id: 'run-2', sourceId: source.id } as CrawlRun;
+    await service.execute(nextRun, source);
+    expect(nextRun.result).toBe('unchanged');
+    expect(proposalItems).toHaveBeenCalledTimes(1);
+  });
+
   it('registers a dynamic official WONDERLIVET Melon product on the daily crawl', async () => {
     const { service, source, run, dataSource, runsRepo, execute } = harness();
     execute.mockRestore();
@@ -4660,6 +4725,79 @@ describe('CrawlService manual runs and snapshots', () => {
 });
 
 describe('CrawlService proposal changes', () => {
+  it('proposes reviewed coordinates for a same-source accepted Melon draft only once', async () => {
+    const { service, source, dataSource } = harness();
+    source.url = 'https://ticket.melon.com/performance/index.htm?prodId=213793';
+    source.parserConfig = { seed: 'ticket-detail', sourceName: '멜론티켓' };
+    const point = {
+      latitude: 37.66469544695199,
+      longitude: 126.742064181796,
+      label: 'KINTEX HALL 7/8/9/10',
+    };
+    const draft = {
+      venue: point.label,
+      directions: { location: null },
+      source: { url: source.url },
+    };
+    const known = [
+      {
+        url: source.url,
+        value: null,
+        proposalId: null,
+        festivalId: 'fst_existing',
+        draft,
+      },
+    ];
+    dataSource.query.mockResolvedValueOnce(known).mockResolvedValueOnce([]);
+    const result = await service.proposalItems(source, [
+      { name: 'WONDERLIVET 2026', url: source.url, location: point },
+    ]);
+    expect(result.kind).toBe('directions.diff');
+    expect(result.festivalId).toBe('fst_existing');
+    const issuedAt = (
+      result.items[0].after as {
+        source: { verifiedAt: string };
+      }
+    ).source.verifiedAt;
+    expect(issuedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(result.items).toEqual([
+      expect.objectContaining({
+        op: 'update',
+        path: '/directions/location',
+        before: null,
+        after: {
+          ...point,
+          source: {
+            name: '멜론티켓',
+            url: source.url,
+            verifiedAt: issuedAt,
+          },
+        },
+      }),
+    ]);
+    expect(dataSource.query).toHaveBeenCalledWith(
+      expect.stringContaining("kind = 'directions.diff'"),
+      ['fst_existing'],
+    );
+
+    dataSource.query
+      .mockResolvedValueOnce(known)
+      .mockResolvedValueOnce([{ id: 'pending-location' }]);
+    const duplicate = await service.proposalItems(source, [
+      { name: 'WONDERLIVET 2026', url: source.url, location: point },
+    ]);
+    expect(duplicate.items).toEqual([]);
+    expect(duplicate.kind).toBe('festival.new');
+
+    dataSource.query.mockResolvedValueOnce([
+      { ...known[0], draft: { ...draft, venue: '다른 공연장' } },
+    ]);
+    const mismatch = await service.proposalItems(source, [
+      { name: 'WONDERLIVET 2026', url: source.url, location: point },
+    ]);
+    expect(mismatch.items).toEqual([]);
+  });
+
   it('omits festival URLs already proposed or present in a draft', async () => {
     const { service, source, dataSource } = harness();
     dataSource.query.mockResolvedValueOnce([

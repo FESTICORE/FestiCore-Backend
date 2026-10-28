@@ -7,6 +7,11 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { randomBytes } from 'crypto';
 import { DataSource, Repository } from 'typeorm';
 import {
+  venueLabelMatches,
+  venuePoint,
+  verifiedVenueLocation,
+} from '../../../../common/festival-location';
+import {
   AdminFestival,
   FestivalDocument,
 } from '../../festival/festival.entity';
@@ -162,6 +167,14 @@ function discoveryDraft(
     url: url.toString(),
     verifiedAt,
   };
+  const point = venuePoint(entry.location);
+  const location =
+    url.hostname === 'ticket.melon.com' &&
+    url.pathname === '/performance/index.htm' &&
+    /^\d+$/.test(url.searchParams.get('prodId') ?? '') &&
+    point?.label === entry.venue
+      ? { ...point, source: provenance }
+      : null;
   const draft: FestivalDocument = {
     id: newFestivalId(),
     name: entry.name,
@@ -182,6 +195,7 @@ function discoveryDraft(
       lastShuttleAt: null,
       lastTrainAt: null,
       mapLinks: { naver: null, kakao: null },
+      location,
       source: provenance,
     },
     checklist: [],
@@ -385,6 +399,26 @@ export class ProposalService {
             continue;
           }
           try {
+            if (
+              proposal.kind === 'directions.diff' &&
+              item.path === '/directions/location'
+            ) {
+              const location = verifiedVenueLocation(item.after);
+              if (
+                !source ||
+                !/^https:\/\/ticket\.melon\.com\/performance\/index\.htm\?prodId=\d+$/.test(
+                  source.url,
+                ) ||
+                (draft.source as { url?: unknown } | null)?.url !==
+                  source.url ||
+                !location ||
+                location.source.url !== source.url ||
+                !venueLabelMatches(location.label, draft.venue)
+              )
+                throw new Error(
+                  '공연장 좌표의 출처 또는 장소가 초안과 일치하지 않습니다.',
+                );
+            }
             const next = applyItem(draft, item);
             if (source) {
               const verified = {

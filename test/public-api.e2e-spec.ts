@@ -418,6 +418,16 @@ describe('Public festival API', () => {
         venue: 'KINTEX HALL 7/8/9/10',
         date: '2026.11.20 - 2026.11.22',
         url: 'https://ticket.melon.com/performance/index.htm?prodId=213793',
+        locationEvidence: {
+          point: {
+            latitude: 37.66469544695199,
+            longitude: 126.742064181796,
+            label: 'KINTEX HALL 7/8/9/10',
+          },
+          sourceUrl:
+            'https://ticket.melon.com/performance/index.htm?prodId=213793',
+          verifiedAt: '2026-10-28T11:00:00Z',
+        },
         posterUrl:
           'https://cdnticket.melon.co.kr/resource/image/upload/product/poster.jpg',
         artists: [
@@ -443,6 +453,14 @@ describe('Public festival API', () => {
     const response = await request(server)
       .get(`/api/v1/festivals/${id}`)
       .expect(200);
+    expect(
+      successData<{ location: unknown }>(response.body).location,
+    ).toMatchObject({
+      latitude: 37.66469544695199,
+      longitude: 126.742064181796,
+      label: 'KINTEX HALL 7/8/9/10',
+      source: { name: '멜론티켓' },
+    });
     expect(successData<Record<string, unknown>>(response.body)).toMatchObject({
       id,
       status: 'discovered',
@@ -488,6 +506,7 @@ describe('Public festival API', () => {
       ...published,
       published: {
         ...pack,
+        venue: 'KINTEX HALL 7/8/9/10',
         internalSecret: 'TOP_LEVEL_SECRET',
         source: {
           name: 'Official',
@@ -523,6 +542,18 @@ describe('Public festival API', () => {
           },
         ],
         directions: {
+          location: {
+            latitude: 37.66469544695199,
+            longitude: 126.742064181796,
+            label: 'KINTEX HALL 7/8/9/10',
+            source: {
+              name: '멜론티켓',
+              url: 'https://ticket.melon.com/performance/index.htm?prodId=213793',
+              verifiedAt: pack.packUpdatedAt,
+              internalSecret: 'LOCATION_SOURCE_SECRET',
+            },
+            internalSecret: 'LOCATION_SECRET',
+          },
           shuttle: {
             body: 'Shuttle',
             links: [
@@ -559,6 +590,8 @@ describe('Public festival API', () => {
       'SHUTTLE_SECRET',
       'MAP_SECRET',
       'DIRECTION_SECRET',
+      'LOCATION_SECRET',
+      'LOCATION_SOURCE_SECRET',
       'flags/private-key.webp',
     ])
       expect(serialized).not.toContain(secret);
@@ -570,6 +603,19 @@ describe('Public festival API', () => {
     expect(successData<{ flags: unknown[] }>(response.body).flags).toHaveLength(
       1,
     );
+    expect(
+      successData<{ directions: { location: unknown } }>(response.body)
+        .directions.location,
+    ).toEqual({
+      latitude: 37.66469544695199,
+      longitude: 126.742064181796,
+      label: 'KINTEX HALL 7/8/9/10',
+      source: {
+        name: '멜론티켓',
+        url: 'https://ticket.melon.com/performance/index.htm?prodId=213793',
+        verifiedAt: pack.packUpdatedAt,
+      },
+    });
   });
 
   it('returns version and filters flag tags with OR semantics', async () => {
