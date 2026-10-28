@@ -407,6 +407,7 @@ describe('PublicFestivalUpdatesGateway', () => {
     const socket = new WebSocket(
       `ws://127.0.0.1:${address.port}/api/v1/festivals/updates`,
     );
+    let reconnected: WebSocket | undefined;
     try {
       await new Promise<void>((resolve, reject) => {
         socket.once('open', resolve);
@@ -434,7 +435,63 @@ describe('PublicFestivalUpdatesGateway', () => {
         },
       );
       socket.send(command().toString());
-      expect((await snapshot).event).toBe('pack.snapshot');
+      const savedSnapshot = await snapshot;
+      expect(savedSnapshot.event).toBe('pack.snapshot');
+      await new Promise<void>((resolve, reject) => {
+        socket.once('close', resolve);
+        socket.once('error', reject);
+        socket.close();
+      });
+      publishedPack.mockResolvedValue({
+        document: { id: 'fst_test', packVersion: 3 },
+        etag: '"etag-3"',
+      });
+      findOne.mockResolvedValue({
+        id: 'fst_test',
+        publishedVersion: 3,
+        published: {},
+      });
+      reconnected = new WebSocket(
+        `ws://127.0.0.1:${address.port}/api/v1/festivals/updates`,
+      );
+      await new Promise<void>((resolve, reject) => {
+        reconnected?.once('open', resolve);
+        reconnected?.once('error', reject);
+      });
+      const recovered = new Promise<Record<string, unknown>>(
+        (resolve, reject) => {
+          const timeout = setTimeout(
+            () => reject(new Error('reconnected pack.snapshot timed out')),
+            2000,
+          );
+          reconnected?.once('message', (raw) => {
+            clearTimeout(timeout);
+            try {
+              if (!Buffer.isBuffer(raw))
+                throw new Error('Expected a text frame');
+              resolve(
+                JSON.parse(raw.toString('utf8')) as Record<string, unknown>,
+              );
+            } catch (error) {
+              reject(error instanceof Error ? error : new Error(String(error)));
+            }
+          });
+        },
+      );
+      reconnected.send(command('reconnected', '"etag-2"').toString());
+      expect(await recovered).toEqual({
+        event: 'pack.snapshot',
+        requestId: 'reconnected',
+        data: {
+          festivalId: 'fst_test',
+          packVersion: 3,
+          etag: '"etag-3"',
+          pack: { id: 'fst_test', packVersion: 3 },
+        },
+      });
+      expect(savedSnapshot).toMatchObject({
+        data: { packVersion: 2, etag: '"etag-2"' },
+      });
       const rejected = new WebSocket(
         `ws://127.0.0.1:${address.port}/api/v1/festivals/updates`,
         {
@@ -452,6 +509,7 @@ describe('PublicFestivalUpdatesGateway', () => {
       rejected.terminate();
     } finally {
       socket.terminate();
+      reconnected?.terminate();
       await app.close();
     }
   }, 20_000);
