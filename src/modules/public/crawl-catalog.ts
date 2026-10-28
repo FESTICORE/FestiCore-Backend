@@ -1,6 +1,12 @@
 import { createHash } from 'node:crypto';
 import { artistNameKeys } from '../../common/artist-name';
 import {
+  VerifiedVenueLocation,
+  venueLabelMatches,
+  venuePoint,
+  verifiedVenueLocation,
+} from '../../common/festival-location';
+import {
   PRUGIO_FESTIVAL_ID,
   PRUGIO_LINEUP_URL,
 } from '../admin/crawl/service/prugio-lineup';
@@ -38,6 +44,7 @@ export interface DiscoverySummary {
   status: 'discovered';
   sourceUrl: string;
   sourceUrls: string[];
+  location?: VerifiedVenueLocation;
   officialInstagramUrl?: string;
   posterUrl?: string;
   artists?: {
@@ -85,6 +92,48 @@ function officialInstagramUrl(raw: unknown): string | null {
   } catch {
     return null;
   }
+}
+
+function officialMelonLocation(
+  value: Record<string, unknown>,
+): VerifiedVenueLocation | null {
+  const evidence = value.locationEvidence;
+  if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence))
+    return null;
+  const row = evidence as Record<string, unknown>;
+  const point = venuePoint(row.point);
+  if (
+    !point ||
+    typeof row.sourceUrl !== 'string' ||
+    typeof row.verifiedAt !== 'string'
+  )
+    return null;
+  if (!venueLabelMatches(point.label, value.venue)) return null;
+  if (row.sourceUrl !== value.url) return null;
+  let sourceUrl: URL;
+  try {
+    sourceUrl = new URL(row.sourceUrl);
+  } catch {
+    return null;
+  }
+  if (
+    sourceUrl.protocol !== 'https:' ||
+    sourceUrl.hostname !== 'ticket.melon.com' ||
+    sourceUrl.pathname !== '/performance/index.htm' ||
+    !/^[1-9]\d*$/.test(sourceUrl.searchParams.get('prodId') ?? '') ||
+    sourceUrl.searchParams.size !== 1 ||
+    sourceUrl.username ||
+    sourceUrl.password
+  )
+    return null;
+  return verifiedVenueLocation({
+    ...point,
+    source: {
+      name: '멜론티켓',
+      url: sourceUrl.toString(),
+      verifiedAt: row.verifiedAt,
+    },
+  });
 }
 
 function officialPosterUrl(raw: unknown, sourceUrl: string): string | null {
@@ -397,6 +446,7 @@ export function discoverySummaries(
         ? value.artistSourceUrl
         : url.toString(),
     );
+    const location = officialMelonLocation(value);
     const officialArtists = verifiedArtists(
       value.officialProfileArtists,
       'https://www.mintpaper.co.kr/posts/4819',
@@ -433,6 +483,7 @@ export function discoverySummaries(
           url: instagramUrl,
         });
       if (posterUrl && !existing.posterUrl) existing.posterUrl = posterUrl;
+      if (location && !existing.location) existing.location = location;
       if (artists.length) {
         const merged = new Map(
           existing.artists?.map((artist) => [artist.name, artist]) ?? [],
@@ -468,6 +519,7 @@ export function discoverySummaries(
       status: 'discovered',
       sourceUrl: url.toString(),
       sourceUrls: [url.toString()],
+      ...(location ? { location } : {}),
       ...(instagramUrl ? { officialInstagramUrl: instagramUrl } : {}),
       ...(posterUrl ? { posterUrl } : {}),
       ...(artists.length ? { artists } : {}),

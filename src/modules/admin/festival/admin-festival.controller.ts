@@ -55,6 +55,7 @@ const draftExample = {
     lastShuttleAt: null,
     lastTrainAt: null,
     mapLinks: { naver: null, kakao: null },
+    location: null,
     source: {
       name: '관리자 입력',
       url: null,
@@ -364,7 +365,32 @@ export class AdminFestivalController {
         sets: { type: 'array', maxItems: 400, items: { type: 'object' } },
         zones: { type: 'array', maxItems: 40, items: { type: 'object' } },
         flags: { type: 'array', maxItems: 200, items: { type: 'object' } },
-        directions: { type: 'object' },
+        directions: {
+          type: 'object',
+          description:
+            '가는 길 안내. location은 확인된 장소의 위도·경도와 HTTPS 출처를 함께 입력합니다.',
+          properties: {
+            location: {
+              type: 'object',
+              nullable: true,
+              required: ['latitude', 'longitude', 'label', 'source'],
+              properties: {
+                latitude: { type: 'number', minimum: -90, maximum: 90 },
+                longitude: { type: 'number', minimum: -180, maximum: 180 },
+                label: { type: 'string', minLength: 1, maxLength: 80 },
+                source: {
+                  type: 'object',
+                  required: ['name', 'url', 'verifiedAt'],
+                  properties: {
+                    name: { type: 'string' },
+                    url: { type: 'string', format: 'uri' },
+                    verifiedAt: { type: 'string', format: 'date-time' },
+                  },
+                },
+              },
+            },
+          },
+        },
         checklist: { type: 'array', maxItems: 40, items: {} },
         rules: { type: 'array', maxItems: 20, items: {} },
         mapImageUrl: { type: 'string', nullable: true, format: 'uri' },

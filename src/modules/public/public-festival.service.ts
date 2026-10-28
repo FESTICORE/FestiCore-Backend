@@ -19,6 +19,10 @@ import {
 import { Flag } from '../flags/flag.entity';
 import { artistNameKeys, normalizeArtistName } from '../../common/artist-name';
 import {
+  venueLabelMatches,
+  verifiedVenueLocation,
+} from '../../common/festival-location';
+import {
   CacheService,
   PUBLIC_PACK_PROJECTION_VERSION,
 } from '../redis/service/cache.service';
@@ -91,7 +95,7 @@ function artistImageForName(
   return images.size === 1 ? [...images][0] : null;
 }
 
-function projectDirections(value: unknown): Document {
+function projectDirections(value: unknown, venue: unknown): Document {
   const direction = fields(value, [
     'shuttle',
     'transit',
@@ -100,6 +104,7 @@ function projectDirections(value: unknown): Document {
     'lastShuttleAt',
     'lastTrainAt',
     'mapLinks',
+    'location',
     'source',
   ]);
   for (const key of ['shuttle', 'transit', 'parking'] as const) {
@@ -114,6 +119,9 @@ function projectDirections(value: unknown): Document {
     }
   }
   direction.mapLinks = fields(direction.mapLinks, ['naver', 'kakao']);
+  const location = verifiedVenueLocation(direction.location);
+  direction.location =
+    location && venueLabelMatches(location.label, venue) ? location : null;
   direction.source = projectSource(direction.source);
   return direction;
 }
@@ -213,7 +221,7 @@ function projectPack(pack: Document): Document {
           : [];
       return profile;
     });
-  result.directions = projectDirections(pack.directions);
+  result.directions = projectDirections(pack.directions, pack.venue);
   result.checklist = projectedArray(pack.checklist, [
     'id',
     'label',
@@ -725,14 +733,41 @@ export class PublicFestivalService {
                  'https://www.mintpaper.co.kr/posts/4819',
                  'https://mintpaper.co.kr/posts/4819')
                AND jsonb_array_length(CASE WHEN jsonb_typeof(candidate->'artists') = 'array'
-                 THEN candidate->'artists' ELSE '[]'::jsonb END) > 0))[1] AS "officialProfileArtists"
+                 THEN candidate->'artists' ELSE '[]'::jsonb END) > 0))[1] AS "officialProfileArtists",
+           (array_agg(jsonb_build_object(
+               'point', candidate->'location',
+               'sourceUrl', candidate->>'url',
+               'verifiedAt', created_at)
+               ORDER BY created_at DESC, proposal_id DESC)
+             FILTER (WHERE candidate->'location' IS NOT NULL
+               AND decision IS DISTINCT FROM 'rejected'
+               AND "proposalStatus" IS DISTINCT FROM 'rejected'
+               AND candidate->>'url' = "catalogUrl"
+               AND candidate->>'url' ~ '^https://ticket[.]melon[.]com/performance/index[.]htm[?]prodId=[1-9][0-9]*$'))[1] AS "locationEvidence"
          FROM candidates GROUP BY "catalogUrl"
+       ), location_diff AS (
+         SELECT DISTINCT ON (source.url) source.url,
+           jsonb_build_object(
+             'point', item->'after',
+             'sourceUrl', source.url,
+             'verifiedAt', proposal."createdAt"
+           ) AS evidence
+         FROM crawl_proposals proposal
+         JOIN crawl_sources source ON source.id = proposal."sourceId"
+         CROSS JOIN LATERAL jsonb_array_elements(proposal.items) item
+         WHERE proposal.kind = 'directions.diff'
+           AND proposal.status <> 'rejected'
+           AND item->>'decision' <> 'rejected'
+           AND item->>'path' = '/directions/location'
+           AND source.url ~ '^https://ticket[.]melon[.]com/performance/index[.]htm[?]prodId=[1-9][0-9]*$'
+         ORDER BY source.url, proposal."createdAt" DESC, proposal.id DESC
        )
        SELECT (latest.candidate - 'artistSourceUrl' - 'officialProfileArtists') || jsonb_strip_nulls(jsonb_build_object(
            'officialInstagramUrl', details.account, 'posterUrl', details.poster,
            'artists', details."artistDetails"->'artists',
            'artistSourceUrl', details."artistDetails"->>'url',
-           'officialProfileArtists', details."officialProfileArtists"
+           'officialProfileArtists', details."officialProfileArtists",
+           'locationEvidence', COALESCE(location_diff.evidence, details."locationEvidence")
          )) AS candidate,
          latest.decision,
          latest."proposalStatus",
@@ -747,7 +782,8 @@ export class PublicFestivalService {
             AND item->>'decision' <> 'rejected'
           ORDER BY proposal."createdAt" DESC, proposal.id DESC
           LIMIT 1) AS "prugioCandidate"
-       FROM latest JOIN details USING (url)`,
+       FROM latest JOIN details USING (url)
+       LEFT JOIN location_diff ON location_diff.url = latest.url`,
       [PRUGIO_LINEUP_URL, PRUGIO_LINEUP_SEED],
     );
     const publishedRows = await this.dataSource.query<PublishedDiscoveryRow[]>(
@@ -1613,6 +1649,7 @@ export class PublicFestivalService {
       thumbUrl: entry.thumbUrl,
       ticketLinks: entry.ticketLinks,
       sourceUrl: entry.sourceUrl,
+      location: entry.location ?? null,
       officialInstagramUrl: entry.officialInstagramUrl ?? null,
       artists: [...artists].map(([name, details]) => ({ name, ...details })),
       timetable: uniqueTimetable,

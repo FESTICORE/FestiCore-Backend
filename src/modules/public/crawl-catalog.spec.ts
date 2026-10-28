@@ -1,6 +1,59 @@
 import { discoverySummaries, ticketDateRange } from './crawl-catalog';
 
 describe('ticket discovery catalog', () => {
+  it('keeps official Melon venue coordinates with source evidence', () => {
+    const candidate = {
+      name: 'WONDERLIVET 2026',
+      venue: 'KINTEX HALL 7/8/9/10',
+      date: '2026.11.20 - 2026.11.21',
+      url: 'https://ticket.melon.com/performance/index.htm?prodId=213793',
+      locationEvidence: {
+        point: {
+          latitude: 37.66469544695199,
+          longitude: 126.742064181796,
+          label: 'KINTEX HALL 7/8/9/10',
+          internalSecret: 'hidden',
+        },
+        sourceUrl:
+          'https://ticket.melon.com/performance/index.htm?prodId=213793',
+        verifiedAt: '2026-10-28T11:00:00Z',
+      },
+    };
+    expect(discoverySummaries([{ candidate }])[0].location).toEqual({
+      latitude: 37.66469544695199,
+      longitude: 126.742064181796,
+      label: 'KINTEX HALL 7/8/9/10',
+      source: {
+        name: '멜론티켓',
+        url: candidate.url,
+        verifiedAt: '2026-10-28T11:00:00Z',
+      },
+    });
+    expect(
+      discoverySummaries([
+        {
+          candidate: {
+            ...candidate,
+            locationEvidence: {
+              ...candidate.locationEvidence,
+              sourceUrl: 'https://evil.example/',
+            },
+          },
+        },
+      ])[0].location,
+    ).toBeUndefined();
+    expect(
+      discoverySummaries([
+        {
+          candidate: {
+            ...candidate,
+            venue: '다른 공연장',
+          },
+        },
+      ])[0].location,
+    ).toBeUndefined();
+  });
+
   it('accepts a bounded multi-week NOL World festival without widening other tickets', () => {
     const candidate = {
       name: 'Hampyeong Grand Chrysanthemum Festival 2026',

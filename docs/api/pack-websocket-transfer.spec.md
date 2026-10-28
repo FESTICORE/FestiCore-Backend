@@ -10,7 +10,7 @@
 
 엔드포인트: `wss://<host>/api/v1/festivals/updates`.
 
-클라이언트 요청: `{"event":"pack.get","data":{"festivalId":"fst_example","ifNoneMatch":"\"cdm2-v12\""},"requestId":"request-1"}`. `requestId`는 필수, `ifNoneMatch`는 선택이다. 서버는 한 소켓에서 한 요청씩 처리하고 응답에 `requestId`를 그대로 넣는다. 앱은 재연결 세대가 다른 소켓의 늦은 응답을 버린다. `packVersion`만으로 변경 없음 여부를 판단하지 않는다. 이미지 권리 상태가 변하면 버전이 그대로여도 ETag가 변할 수 있다.
+클라이언트 요청: `{"event":"pack.get","data":{"festivalId":"fst_example","ifNoneMatch":"\"cdm3-v12\""},"requestId":"request-1"}`. `requestId`는 필수, `ifNoneMatch`는 선택이다. 서버는 한 소켓에서 한 요청씩 처리하고 응답에 `requestId`를 그대로 넣는다. 앱은 재연결 세대가 다른 소켓의 늦은 응답을 버린다. `packVersion`만으로 변경 없음 여부를 판단하지 않는다. 이미지 권리 상태가 변하면 버전이 그대로여도 ETag가 변할 수 있다.
 
 - 변경됨: `{"event":"pack.snapshot","requestId":"request-1","data":{"festivalId":"fst_example","packVersion":12,"etag":"\"...\"","pack":{...}}}`. `pack`은 `PublicFestivalService.publishedPack()`의 공개 투영 결과만 사용한다.
 - 단일 응답이 4 MiB를 넘으면 같은 공개 팩 JSON UTF-8 바이트를 48 KiB씩 나누어 `pack.start`(`requestId`, `festivalId`, `packVersion`, `etag`, `totalBytes`, `chunkCount`, `sha256`), 순서가 있는 `pack.chunk`(`requestId`, `index`, `base64`), `pack.complete`(`requestId`) 순으로 보낸다. 앱은 청크 순서·총 크기·SHA-256을 확인한 후에만 팩과 ETag를 원자적으로 교체한다. 중간 끊김·시간 초과에는 부분 데이터를 버리고 기존 팩을 유지한다.

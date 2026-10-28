@@ -26,6 +26,38 @@ const draft = {
 };
 
 describe('festival draft validation', () => {
+  it('requires a complete verified coordinate pair for directions', () => {
+    const location = {
+      latitude: 37.66469544695199,
+      longitude: 126.742064181796,
+      label: 'KINTEX HALL 7/8/9/10',
+      source: {
+        name: '멜론티켓',
+        url: 'https://ticket.melon.com/performance/index.htm?prodId=213793',
+        verifiedAt: '2026-10-28T11:00:00.000Z',
+      },
+    };
+    expect(
+      validateDraft({
+        ...draft,
+        venue: location.label,
+        directions: { location },
+      }),
+    ).toEqual([]);
+    expect(
+      validateDraft({
+        ...draft,
+        venue: location.label,
+        directions: { location: { ...location, longitude: null } },
+      }),
+    ).toContain(
+      'directions.location: 검증된 위도·경도, 공연장 일치 장소명과 HTTPS 출처가 필요',
+    );
+    expect(validateDraft({ ...draft, directions: { location } })).toContain(
+      'directions.location: 검증된 위도·경도, 공연장 일치 장소명과 HTTPS 출처가 필요',
+    );
+  });
+
   it('accepts stored set images and rejects external image URLs', () => {
     const set = {
       stageId: 'stg_12345678',

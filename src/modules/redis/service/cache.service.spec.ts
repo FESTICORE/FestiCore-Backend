@@ -1,6 +1,6 @@
 import { Logger } from '@nestjs/common';
 import Redis from 'ioredis';
-import { CacheService } from './cache.service';
+import { CacheService, PUBLIC_PACK_PROJECTION_VERSION } from './cache.service';
 
 jest.mock('ioredis', () => jest.fn());
 
@@ -78,10 +78,12 @@ describe('CacheService', () => {
     expect(await cache.getPack('fst_1', generation!)).toBeNull();
     expect(get).not.toHaveBeenCalledWith('pack:fst_1:g0');
     expect(get).not.toHaveBeenCalledWith(`pack:fst_1:g${generation}`);
-    expect(get).toHaveBeenCalledWith(`pack:fst_1:g${generation}:p2`);
+    expect(get).toHaveBeenCalledWith(
+      `pack:fst_1:g${generation}:p${PUBLIC_PACK_PROJECTION_VERSION}`,
+    );
     await cache.setPack('fst_1', generation!, { artists: [] });
     expect(set).toHaveBeenCalledWith(
-      `pack:fst_1:g${generation}:p2`,
+      `pack:fst_1:g${generation}:p${PUBLIC_PACK_PROJECTION_VERSION}`,
       '{"artists":[]}',
       'EX',
       3600,

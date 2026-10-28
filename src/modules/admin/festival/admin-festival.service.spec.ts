@@ -211,6 +211,28 @@ describe('discovered festival import', () => {
     });
   });
 
+  it('keeps verified venue coordinates when importing a discovered festival', async () => {
+    const { service, query, discoveredLookup } = fixture();
+    const location = {
+      latitude: 37.5,
+      longitude: 127.1,
+      label: discovered.venue,
+      source: {
+        name: '멜론티켓',
+        url: discovered.sourceUrl,
+        verifiedAt: '2026-10-28T11:00:00Z',
+      },
+    };
+    discoveredLookup.mockResolvedValue({ ...discovered, location });
+    await service.importDiscovered(id, { days }, 'adm_1');
+    const calls = query.mock.calls as unknown as [string, string[]][];
+    const values = calls[0][1];
+    const draft = JSON.parse(values[1]) as {
+      directions: { location: unknown };
+    };
+    expect(draft.directions.location).toEqual(location);
+  });
+
   it('imports a discovered date range without inventing daily operating hours', async () => {
     const { service, query, record } = fixture();
     const response = await service.importDiscovered(id, {}, 'adm_1');

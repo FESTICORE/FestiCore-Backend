@@ -1,4 +1,8 @@
 import { BadRequestException } from '@nestjs/common';
+import {
+  venueLabelMatches,
+  verifiedVenueLocation,
+} from '../../../common/festival-location';
 import type { FestivalDocument } from './festival.entity';
 
 const keys = new Set([
@@ -130,6 +134,17 @@ export function validateDraft(
   }
   if (typeof draft.flagsEnabled !== 'boolean')
     errors.push('flagsEnabled: boolean 필요');
+  if (
+    object(draft.directions) &&
+    draft.directions.location !== undefined &&
+    draft.directions.location !== null
+  ) {
+    const location = verifiedVenueLocation(draft.directions.location);
+    if (!location || !venueLabelMatches(location.label, draft.venue))
+      errors.push(
+        'directions.location: 검증된 위도·경도, 공연장 일치 장소명과 HTTPS 출처가 필요',
+      );
+  }
   if (
     draft.thumbUrl !== undefined &&
     draft.thumbUrl !== null &&
