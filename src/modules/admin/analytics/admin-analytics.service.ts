@@ -41,7 +41,13 @@ const count = (value: unknown): number | null => {
   return Number.isSafeInteger(number) && number >= 0 ? number : null;
 };
 const failure = (error: unknown): Status =>
-  error instanceof AnalyticsFetchError ? error.kind : 'error';
+  error instanceof AnalyticsFetchError && error.kind === 'rate_limited'
+    ? 'rate_limited'
+    : 'error';
+const isEmptyEnvironment = (result: PromiseSettledResult<unknown>): boolean =>
+  result.status === 'rejected' &&
+  result.reason instanceof AnalyticsFetchError &&
+  result.reason.kind === 'empty_environment';
 
 @Injectable()
 export class AdminAnalyticsService {
@@ -196,11 +202,22 @@ export class AdminAnalyticsService {
             });
           }
         }
+        const issuesValid =
+          results[1].status === 'fulfilled' && Array.isArray(results[1].value);
+        const issuesEmpty =
+          results[1].status === 'fulfilled' &&
+          Array.isArray(results[1].value) &&
+          results[1].value.length === 0;
+        if (
+          isEmptyEnvironment(results[0]) &&
+          (isEmptyEnvironment(results[1]) || issuesEmpty)
+        )
+          totalEvents = 0;
         const succeeded =
           Number(totalEvents !== null) +
           Number(
-            results[1].status === 'fulfilled' &&
-              Array.isArray(results[1].value),
+            issuesValid ||
+              (isEmptyEnvironment(results[1]) && totalEvents === 0),
           );
         if (succeeded === 2)
           return {
