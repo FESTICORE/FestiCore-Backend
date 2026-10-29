@@ -1,6 +1,17 @@
 import { createHash } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
+import { venuePoint } from '../../../../common/festival-location';
 import type { CrawlSource } from '../entity/crawl-source.entity';
+import { imageTagAttributes } from './image-tag-attributes';
+import {
+  parsePrugioLineup,
+  PRUGIO_LINEUP_SEED,
+  PRUGIO_LINEUP_URL,
+} from './prugio-lineup';
+import {
+  WONDERLIVET_LINK_PAGE,
+  wonderlivetMelonProduct,
+} from './wonderlivet-ticket-link';
 
 const REGEX_TIMEOUT_MS = 1000;
 const MAX_REGEX_WORKERS = 10;
@@ -76,15 +87,170 @@ export function plainText(html: string): string {
     .trim();
 }
 
+function htmlAnchorHrefs(html: string): string[] {
+  const hrefs: string[] = [];
+  const lowercaseHtml = html.toLowerCase();
+  let cursor = 0;
+  while (cursor < html.length) {
+    const tagStart = html.indexOf('<', cursor);
+    if (tagStart < 0) break;
+    if (html.startsWith('<!--', tagStart)) {
+      const commentEnd = html.indexOf('-->', tagStart + 4);
+      if (commentEnd < 0) break;
+      cursor = commentEnd + 3;
+      continue;
+    }
+    let position = tagStart + 1;
+    const closing = html[position] === '/';
+    if (closing) position++;
+    const tag = /^[a-z][\w:-]*/i.exec(html.slice(position));
+    if (!tag) {
+      cursor = position;
+      continue;
+    }
+    position += tag[0].length;
+    const tagName = tag[0].toLowerCase();
+    let href: string | undefined;
+    let hrefCount = 0;
+    let closedTag = false;
+    while (position < html.length) {
+      while (/\s/.test(html[position] ?? '')) position++;
+      if (html[position] === '>') {
+        position++;
+        closedTag = true;
+        break;
+      }
+      if (html[position] === '/' && html[position + 1] === '>') {
+        position += 2;
+        closedTag = true;
+        break;
+      }
+      const nameStart = position;
+      while (position < html.length && !/[\s=/>]/.test(html[position]))
+        position++;
+      if (position === nameStart) {
+        position++;
+        continue;
+      }
+      const name = html.slice(nameStart, position).toLowerCase();
+      if (name === 'href') hrefCount++;
+      while (/\s/.test(html[position] ?? '')) position++;
+      if (html[position] !== '=') continue;
+      position++;
+      while (/\s/.test(html[position] ?? '')) position++;
+      let value: string;
+      if (html[position] === '"' || html[position] === "'") {
+        const quote = html[position++];
+        const end = html.indexOf(quote, position);
+        if (end < 0) return [];
+        value = html.slice(position, end);
+        position = end + 1;
+      } else {
+        const valueStart = position;
+        while (position < html.length && !/[\s>]/.test(html[position]))
+          position++;
+        value = html.slice(valueStart, position);
+      }
+      if (name === 'href') href = value;
+    }
+    if (!closedTag) return [];
+    if (!closing && tagName === 'a' && href !== undefined && hrefCount === 1)
+      hrefs.push(href);
+    cursor = position;
+    if (
+      !closing &&
+      (tagName === 'script' ||
+        tagName === 'style' ||
+        tagName === 'textarea' ||
+        tagName === 'title')
+    ) {
+      let rawEnd = lowercaseHtml.indexOf(`</${tagName}`, cursor);
+      while (rawEnd >= 0) {
+        const afterName = rawEnd + tagName.length + 2;
+        if (/[\s>]/.test(html[afterName] ?? '')) {
+          const end = html.indexOf('>', afterName);
+          if (end < 0) return hrefs;
+          cursor = end + 1;
+          break;
+        }
+        rawEnd = lowercaseHtml.indexOf(`</${tagName}`, afterName);
+      }
+      if (rawEnd < 0) break;
+    }
+  }
+  return hrefs;
+}
+
 type FestivalCandidate = {
   name: string;
   url: string;
   date?: string;
   venue?: string;
+  location?: { latitude: number; longitude: number; label: string };
   posterUrl?: string;
   officialInstagramUrl?: string;
-  artists?: { name: string; sourceUrl?: string }[];
+  artists?: { name: string; sourceUrl?: string; profileUrl?: string }[];
 };
+
+function melonVenueLocation(
+  body: string,
+  venue: string,
+): FestivalCandidate['location'] {
+  const inputValue = (id: string): string | null => {
+    const matches = [...body.matchAll(/<input\b[^>]*>/gi)]
+      .filter((match) => {
+        const ids = imageTagAttributes(match[0], ['id']);
+        return ids.length === 1 && ids[0] === id;
+      })
+      .map((match) => imageTagAttributes(match[0], ['value']));
+    return matches.length === 1 && matches[0].length === 1
+      ? matches[0][0]
+      : null;
+  };
+  const latitudeText = inputValue('global_ticket_performanceHall_locLati');
+  const longitudeText = inputValue('global_ticket_performanceHall_locLogi');
+  if (!latitudeText || !longitudeText) return undefined;
+  const anchors = [...body.matchAll(/<a\b[^>]*>([\s\S]*?)<\/a>/gi)]
+    .filter((match) => plainText(match[1]) === '빠른길 찾기')
+    .map((match) =>
+      imageTagAttributes(match[0].slice(0, match[0].indexOf('>') + 1), [
+        'href',
+      ]),
+    );
+  if (anchors.length !== 1 || anchors[0].length !== 1) return undefined;
+  let map: URL;
+  let destination: string;
+  try {
+    map = new URL(anchors[0][0].replace(/&amp;/gi, '&'));
+    if (
+      !['http:', 'https:'].includes(map.protocol) ||
+      map.hostname !== 'map.daum.net' ||
+      map.port ||
+      map.username ||
+      map.password ||
+      map.search ||
+      map.hash ||
+      !map.pathname.startsWith('/link/to/')
+    )
+      return undefined;
+    destination = decodeURIComponent(map.pathname.slice('/link/to/'.length));
+  } catch {
+    return undefined;
+  }
+  const parts = /^(.+),([^,]+),([^,]+)$/.exec(destination);
+  if (!parts) return undefined;
+  const normalize = (value: string) =>
+    value.normalize('NFKC').replace(/\s+/g, ' ').trim();
+  const label = normalize(parts[1]);
+  if (!label || normalize(venue) !== label) return undefined;
+  const numeric = (value: string) =>
+    /^-?\d+(?:\.\d+)?$/.test(value) ? Number(value) : NaN;
+  const latitude = numeric(latitudeText);
+  const longitude = numeric(longitudeText);
+  if (latitude !== numeric(parts[2]) || longitude !== numeric(parts[3]))
+    return undefined;
+  return venuePoint({ latitude, longitude, label }) ?? undefined;
+}
 
 const FESTIVAL_TITLE = /(?:페스티벌|축제|festival|\bfest\b)/i;
 const GENERIC_TITLE =
@@ -118,6 +284,81 @@ function nolEventDate(value: string): string | undefined {
   if (!valid(lastYear, match[5], match[6])) return undefined;
   const last = `${year(lastYear)}.${match[5]}.${match[6]}`;
   return last >= first ? `${first} - ${last}` : undefined;
+}
+
+function mintPaperOfficialTicketLinks(
+  body: string,
+  base: string,
+): FestivalCandidate[] | null {
+  if (base !== 'https://www.mintpaper.co.kr/posts/4821') return null;
+  if (body.length > 2_000_000) return [];
+  const script =
+    /<script\b[^>]*\bid=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i.exec(
+      body,
+    )?.[1];
+  if (!script) return [];
+  try {
+    const payload = JSON.parse(script) as {
+      props?: {
+        apolloState?: {
+          data?: Record<string, { title?: string; content?: string }>;
+        };
+      };
+    };
+    const post = payload.props?.apolloState?.data?.['Post:4821'];
+    if (
+      post?.title !== 'CDF2026-2027 TICKET | 예매 안내, 입장 안내, 관람 안내' ||
+      typeof post.content !== 'string'
+    )
+      return [];
+    const content = plainText(post.content).normalize('NFKC');
+    if (!/COUNTDOWN FANTASY 2026-2027/i.test(content)) return [];
+    const date = /일시\s*:\s*(20\d{2})년\s*(\d{1,2})월\s*(\d{1,2})일/.exec(
+      content,
+    );
+    if (
+      !date ||
+      nolEventDate(
+        `${date[1]}.${date[2].padStart(2, '0')}.${date[3].padStart(2, '0')}`,
+      ) !== '2026.12.31'
+    )
+      return [];
+    const hrefs = htmlAnchorHrefs(post.content);
+    const urls: string[] = [];
+    for (const href of hrefs) {
+      if (/nol\.yanolja\.com/i.test(href)) {
+        if (!/^https:\/\/nol\.yanolja\.com\/ticket\/products\/\d+$/.test(href))
+          return [];
+        urls.push(href);
+      } else if (/ticket\.yes24\.com/i.test(href)) {
+        let ticket: URL;
+        try {
+          ticket = new URL(href);
+        } catch {
+          return [];
+        }
+        if (
+          ticket.protocol !== 'https:' ||
+          ticket.hostname !== 'ticket.yes24.com' ||
+          ticket.port ||
+          ticket.username ||
+          ticket.password ||
+          ticket.hash ||
+          !/^\/Perf\/\d+$/.test(ticket.pathname)
+        )
+          return [];
+        urls.push(`${ticket.origin}${ticket.pathname}`);
+      }
+    }
+    const uniqueUrls = [...new Set(urls)];
+    if (!uniqueUrls.length || uniqueUrls.length > 5) return [];
+    return uniqueUrls.map((url) => ({
+      name: 'COUNTDOWN FANTASY 2026-2027',
+      url,
+    }));
+  } catch {
+    return [];
+  }
 }
 
 function mintPaperCandidates(
@@ -236,21 +477,28 @@ function mintPaperCandidates(
   return [...candidates.values()];
 }
 
+type XmfNoticeResult = {
+  candidates: FestivalCandidate[];
+  year: number;
+  aliases: { name: string; alias: string }[];
+};
+
 function xmfNoticeCandidates(
   body: string,
   base: string,
-): FestivalCandidate[] | null {
+): XmfNoticeResult | null {
   const source = new URL(base);
   if (source.hostname !== 'xmfestival.com' || source.pathname !== '/notice')
     return null;
-  if (body.length > 2_000_000) return [];
+  const invalid = { candidates: [], year: 0, aliases: [] };
+  if (body.length > 2_000_000) return invalid;
 
   // The organizer publishes several announcements on this page. Read only the
   // final-lineup announcement so notices for other years cannot add performers.
   const heading = /\[\s*(XMF\s+(20\d{2}))\s+최종\s+라인업\s+공개\s*\]/i.exec(
     body,
   );
-  if (!heading) return [];
+  if (!heading) return invalid;
   const nextNotice = body.indexOf(
     'class="acd_row',
     heading.index + heading[0].length,
@@ -267,7 +515,7 @@ function xmfNoticeCandidates(
     announcement,
   );
   const venue = /이틀간\s+(.{2,80}?)에서\s+열리는/.exec(announcement)?.[1];
-  if (!dates || !venue) return [];
+  if (!dates || !venue) return invalid;
   const year = Number(heading[2]);
   const first = Number(dates[2]);
   const last = Number(dates[3]);
@@ -277,7 +525,7 @@ function xmfNoticeCandidates(
     new Date(Date.UTC(year, monthNumber - 1, day)).getUTCDate() === day &&
     new Date(Date.UTC(year, monthNumber - 1, day)).getUTCMonth() + 1 ===
       monthNumber;
-  if (!validDay(first) || !validDay(last) || last < first) return [];
+  if (!validDay(first) || !validDay(last) || last < first) return invalid;
 
   const dayOne =
     /첫날인\s+\d{1,2}월\s+\d{1,2}일에는\s+(.+?)\s+등\s+(\d{1,2})팀/.exec(
@@ -287,36 +535,58 @@ function xmfNoticeCandidates(
     /둘째\s+날인\s+\d{1,2}일\s+무대는\s+(.+?)\s+등\s+(\d{1,2})팀/.exec(
       announcement,
     );
-  if (!dayOne || !dayTwo) return [];
-  const names = [dayOne, dayTwo].flatMap((day) => {
-    const artists = day[1]
-      .split(/\s*,\s*/)
-      .map((name) => name.replace(/\s*\([^()]*\)\s*$/, '').trim());
-    return artists.length === Number(day[2]) ? artists : [];
-  });
-  if (names.length !== Number(dayOne[2]) + Number(dayTwo[2])) return [];
+  if (!dayOne || !dayTwo) return invalid;
+  const perDayLabels = [dayOne, dayTwo].map((day) => day[1].split(/\s*,\s*/));
+  if (
+    perDayLabels.some(
+      (labels, index) => labels.length !== Number([dayOne, dayTwo][index][2]),
+    )
+  )
+    return invalid;
+  const artistLabels = perDayLabels.flat();
   const openingDjs =
     /첫날은\s+(DJ\s+[^,]+?)\s*,\s*둘째\s+날은\s+(.+?)가\s+오프닝\s+무대/.exec(
       announcement,
     );
-  if (openingDjs) {
-    names.push(
-      openingDjs[1].replace(/\s*\([^()]*\)\s*$/, '').trim(),
-      openingDjs[2].replace(/\s*\([^()]*\)\s*$/, '').trim(),
-    );
-  }
-  if (names.some((name) => !name || name.length > 160)) return [];
+  if (openingDjs) artistLabels.push(openingDjs[1], openingDjs[2]);
+  const names = artistLabels.map((label) =>
+    label.replace(/\s*\([^()]*\)\s*$/, '').trim(),
+  );
+  if (names.some((name) => !name || name.length > 160)) return invalid;
+  const aliases = artistLabels.flatMap((label) => {
+    const match = /^(.+?)\s*\(([^()]+)\)\s*$/.exec(label.trim());
+    if (!match || !/[가-힣]/.test(match[1]) || !/[a-zA-Z]/.test(match[2]))
+      return [];
+    const name = match[1].trim();
+    const alias = match[2].trim();
+    return name.length <= 160 && alias.length <= 160 ? [{ name, alias }] : [];
+  });
   const day = (value: number) =>
     `${year}.${String(monthNumber).padStart(2, '0')}.${String(value).padStart(2, '0')}`;
-  return [
-    {
-      name: heading[1],
-      url: source.toString(),
-      date: `${day(first)} - ${day(last)}`,
-      venue,
-      artists: [...new Set(names)].map((name) => ({ name })),
-    },
-  ];
+  return {
+    year,
+    aliases,
+    candidates: [
+      {
+        name: heading[1],
+        url: source.toString(),
+        date: `${day(first)} - ${day(last)}`,
+        venue,
+        artists: [...new Set(names)].map((name) => ({ name })),
+      },
+    ],
+  };
+}
+
+export function xmfNoticeArtistAliases(
+  body: string,
+  base: string,
+  expectedYear: number,
+): { name: string; alias: string }[] | null {
+  const result = xmfNoticeCandidates(body, base);
+  return result?.year === expectedYear && result.candidates.length === 1
+    ? result.aliases
+    : null;
 }
 
 function officialLineupCandidates(
@@ -351,7 +621,7 @@ function officialLineupCandidates(
   if (isMintPost) {
     const title = /<h1\b[^>]*>([\s\S]*?)<\/h1>/i.exec(body)?.[1];
     const article =
-      /<div\b[^>]*class=["'][^"']*\bPostContent_content\S*[^"']*["'][^>]*>([\s\S]*?)<\/div>/i.exec(
+      /<div\b[^>]*class=["'][^"']*\bPostContent_content[^"']*["'][^>]*>([\s\S]*?)<\/div>/i.exec(
         body,
       )?.[1];
     if (!title || !article) return [];
@@ -365,20 +635,22 @@ function officialLineupCandidates(
       /12[.．]31/i.test(plainText(line).normalize('NFKC')),
     );
     if (day < 0) return [];
-    const artists: { name: string }[] = [];
+    const artists: { name: string; profileUrl: string }[] = [];
     for (const line of lineup.slice(day + 1, day + 81)) {
       if (/and\s+many\s+more/i.test(plainText(line).normalize('NFKC'))) break;
-      if (
-        !/<a\b[^>]*href=["']https:\/\/www\.instagram\.com\/[A-Za-z0-9._]+\/?["']/i.test(
+      const profile =
+        /<a\b[^>]*\bhref=["'](https:\/\/www\.instagram\.com\/[A-Za-z0-9._]+\/?)["'][^>]*>/i.exec(
           line,
-        )
-      )
-        continue;
+        )?.[1];
+      if (!profile) continue;
       const artistName = plainText(line.split(/<a\b/i)[0])
         .normalize('NFKC')
         .trim();
       if (artistName && artistName.length <= 160)
-        artists.push({ name: artistName });
+        artists.push({
+          name: artistName,
+          profileUrl: `${profile.replace(/\/$/, '')}/`,
+        });
     }
     if (artists.length !== 12) return [];
     return [{ name, url: source.toString(), artists }];
@@ -673,6 +945,8 @@ function melonDetailCandidates(
     date,
     venue,
   };
+  const location = melonVenueLocation(body, venue);
+  if (location) candidate.location = location;
   const poster =
     /<meta\b[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i.exec(
       body,
@@ -699,15 +973,23 @@ function melonDetailCandidates(
       const artistName = classText(row[1], 'singer');
       if (!artistName || artistName.length > 160) continue;
       const artist: { name: string; sourceUrl?: string } = { name: artistName };
-      const rawImage = /<img\b[^>]*\bsrc=["']([^"']+)["']/i.exec(row[1])?.[1];
-      if (rawImage) {
+      const imageTag = /<img\b[^>]*>/i.exec(row[1])?.[0];
+      const imageSources = imageTag
+        ? imageTagAttributes(imageTag, ['data-src', 'src'])
+        : [];
+      for (const rawImage of imageSources) {
+        if (!rawImage) continue;
         try {
           const image = new URL(rawImage, source);
           if (
             image.protocol === 'https:' &&
-            image.hostname === 'cdnimg.melon.co.kr'
-          )
+            image.hostname === 'cdnimg.melon.co.kr' &&
+            !image.username &&
+            !image.password
+          ) {
             artist.sourceUrl = image.toString();
+            break;
+          }
         } catch {
           /* Ignore malformed artist images. */
         }
@@ -928,12 +1210,121 @@ function nolDetailCandidates(
   return [candidate];
 }
 
-export function nolPosterUrl(body: string, source: URL): string | null {
+const NOL_WORLD_LIST = 'https://world.nol.com/en/ticket/genre/CONCERT/products';
+const NOL_WORLD_HOME = 'https://world.nol.com/en/ticket';
+const NOL_WORLD_SEARCH = 'https://world.nol.com/en/search?q=festival';
+
+function isNolWorldFestivalTitle(name: string): boolean {
+  return (
+    isFestivalTitle(name) ||
+    VERIFIED_FESTIVAL_BRAND.test(name) ||
+    (/\bfesta\b/i.test(name) && name.length <= 160)
+  );
+}
+
+function nolWorldCandidates(
+  body: string,
+  base: string,
+): FestivalCandidate[] | null {
+  const source = new URL(base);
+  if (source.origin !== 'https://world.nol.com') return null;
+  if (body.length > 2_000_000) return [];
   if (
-    source.hostname !== 'nol.yanolja.com' ||
-    !/^\/ticket\/products\/\d+$/.test(source.pathname)
+    [NOL_WORLD_LIST, NOL_WORLD_HOME, NOL_WORLD_SEARCH].includes(
+      source.toString(),
+    )
+  ) {
+    const candidates = new Map<string, FestivalCandidate>();
+    for (const match of body.matchAll(
+      /<a\b[^>]*\bhref=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi,
+    )) {
+      let url: URL;
+      try {
+        url = new URL(match[1], source);
+      } catch {
+        continue;
+      }
+      if (
+        url.origin !== source.origin ||
+        url.username ||
+        url.password ||
+        url.search ||
+        url.hash ||
+        !/^\/en\/ticket\/products\/\d+$/.test(url.pathname)
+      )
+        continue;
+      const heading = /<(h2|h3|p)\b[^>]*>([\s\S]*?)<\/\1>/i.exec(match[2])?.[2];
+      if (!heading) continue;
+      const name = plainText(heading);
+      if (
+        CONCERT_TITLE.test(name) ||
+        /^\[(?:early|blind|play\s*&\s*stay)\]/i.test(name) ||
+        !isNolWorldFestivalTitle(name)
+      )
+        continue;
+      candidates.set(url.toString(), { name, url: url.toString() });
+      if (candidates.size >= 100) break;
+    }
+    return [...candidates.values()];
+  }
+  if (
+    !/^\/en\/ticket\/products\/\d+$/.test(source.pathname) ||
+    source.search ||
+    source.hash
   )
     return null;
+  const event = yes24EventJson(body);
+  const name = event?.name;
+  const start = event?.startDate;
+  const end = event?.endDate ?? start;
+  const location = event?.location;
+  const venue =
+    location && typeof location === 'object' && 'name' in location
+      ? location.name
+      : null;
+  if (
+    typeof name !== 'string' ||
+    CONCERT_TITLE.test(name) ||
+    /^\[(?:early|blind|play\s*&\s*stay)\]/i.test(name) ||
+    !isNolWorldFestivalTitle(name) ||
+    typeof start !== 'string' ||
+    typeof end !== 'string' ||
+    !/^20\d{2}-\d{2}-\d{2}$/.test(start) ||
+    !/^20\d{2}-\d{2}-\d{2}$/.test(end) ||
+    typeof venue !== 'string' ||
+    !venue.trim() ||
+    venue.length > 160 ||
+    /[<>\\]/.test(venue)
+  )
+    return [];
+  const date = nolEventDate(
+    start === end
+      ? start.replaceAll('-', '.')
+      : `${start.replaceAll('-', '.')} ~ ${end.replaceAll('-', '.')}`,
+  );
+  if (!date) return [];
+  const candidate: FestivalCandidate = {
+    name,
+    url: source.toString(),
+    date,
+    venue: venue.trim(),
+  };
+  const artists = eventPerformers(event, base);
+  if (artists.length) candidate.artists = artists;
+  const poster = nolPosterUrl(body, source);
+  if (poster) candidate.posterUrl = poster;
+  return [candidate];
+}
+
+export function nolPosterUrl(body: string, source: URL): string | null {
+  const productId = (
+    source.hostname === 'nol.yanolja.com'
+      ? /^\/ticket\/products\/(\d+)$/.exec(source.pathname)
+      : source.hostname === 'world.nol.com'
+        ? /^\/en\/ticket\/products\/(\d+)$/.exec(source.pathname)
+        : null
+  )?.[1];
+  if (!productId) return null;
   const event = yes24EventJson(body);
   const poster =
     (typeof event?.image === 'string' ? event.image : null) ??
@@ -943,12 +1334,14 @@ export function nolPosterUrl(body: string, source: URL): string | null {
   if (poster) {
     try {
       const image = new URL(poster, source);
+      const posterProductId =
+        /^\/Play\/image\/large\/\d+\/(\d+)_p\.(?:gif|jpe?g|png|webp)$/i.exec(
+          image.pathname,
+        )?.[1];
       if (
         image.protocol === 'https:' &&
         image.hostname === 'ticketimage.interpark.com' &&
-        /^\/Play\/image\/large\/\d+\/\d+_p\.(?:gif|jpe?g|png|webp)$/i.test(
-          image.pathname,
-        )
+        posterProductId === productId
       )
         return image.toString();
     } catch {
@@ -1042,12 +1435,16 @@ export function ticketCandidates(
   base: string,
   config: Record<string, string> = {},
 ): FestivalCandidate[] {
+  if (base === WONDERLIVET_LINK_PAGE)
+    return [{ name: 'WONDERLIVET 2026', url: wonderlivetMelonProduct(body) }];
+  const officialTicketLinks = mintPaperOfficialTicketLinks(body, base);
+  if (officialTicketLinks) return officialTicketLinks;
   const seoulCultureLineup = seoulCultureLineupCandidates(body, base, config);
   if (seoulCultureLineup) return seoulCultureLineup;
   const officialLineup = officialLineupCandidates(body, base, config);
   if (officialLineup) return officialLineup;
   const xmfNotice = xmfNoticeCandidates(body, base);
-  if (xmfNotice) return xmfNotice;
+  if (xmfNotice) return xmfNotice.candidates;
   const mintPaper = mintPaperCandidates(body, base);
   if (mintPaper) return mintPaper;
   const melonSearch = melonSearchCandidates(body, base);
@@ -1058,6 +1455,8 @@ export function ticketCandidates(
   if (yes24Detail) return yes24Detail;
   const nolDetail = nolDetailCandidates(body, base);
   if (nolDetail) return nolDetail;
+  const nolWorld = nolWorldCandidates(body, base);
+  if (nolWorld) return nolWorld;
   const melon = melonFestivalCandidates(body, base);
   if (melon) return melon;
   const yes24 = yes24FestivalCandidates(body, base);
@@ -1195,6 +1594,15 @@ export async function parseCrawl(
   body: string,
 ): Promise<unknown> {
   const config = source.parserConfig;
+  if (config.seed === PRUGIO_LINEUP_SEED) {
+    if (
+      source.kind !== 'discovery' ||
+      source.parser !== 'ticket-list' ||
+      source.url !== PRUGIO_LINEUP_URL
+    )
+      throw new Error('푸르지오 공식 출연진 소스 설정이 잘못되었습니다.');
+    return [parsePrugioLineup(body)];
+  }
   if (source.parser === 'html-text') {
     const text = plainText(body).slice(0, 10000);
     if (!text) throw new Error('파싱 결과가 비었습니다.');

@@ -19,7 +19,7 @@
 | P1       | 팩 발행·롤백의 `pack.updated` 푸시 대기열은 구현. 기존 CDN 캐시 객체의 즉시 무효화는 미구현이며 CDN 제공자·퍼지 설정을 확인해 연결할 것. 실제 APNs 전송도 배포 후 검증할 것 |
 | P1       | `POST /crews/:id/status`의 `Idempotency-Key` 재전송·충돌 처리는 구현. PostgreSQL 실동작과 배포 경로를 검증할 것                                                             |
 | P2       | 발견 축제의 `discovered`·`packVersion: 0`을 앱 계약에 반영할 것                                                                                                             |
-| P2       | 목록 캐시를 명세의 3600초로 맞춤. 앱은 즉시 갱신 시 `If-None-Match`와 `Cache-Control: no-cache`를 함께 보낼 것                                                               |
+| P2       | Railway CDN이 요청의 `no-cache`를 무시한 실측에 따라 목록 응답을 `public, no-cache, must-revalidate`로 변경. 앱은 `If-None-Match`로 변경 없는 목록에 304를 받음 |
 | P2       | 전역 `{code,data,message}`와 원본 PDF의 RFC 9457 오류 형식 차이를 문서에 반영할 것                                                                                          |
 
 `GET /festivals/:id`는 구현돼 있다. Railway 빌드 중단 중에는 개발·운영 DB의 마이그레이션, 정기 크롤 실행, 새 데이터 노출을 완료로 표시하지 않는다.
@@ -34,7 +34,7 @@
 | 4    | 타임테이블 이미지 입력 `POST /admin/festivals/:id/pack/import-image` (p26, p31) | 코드 구현                                 | Tesseract 기반 업로드 OCR 미리보기 `{draft, confidence, unparsed}` 반환, 초안 자동 변경 방지. 실제 이미지 정확도는 운영 데이터 검증 필요. 정기 크롤의 `sets.diff` 제안은 별개 |
 | 5    | `POST /admin/flags/:id/force-status`, `POST /admin/push/test` (p32)             | 상태 강제 변경·등록 기기 테스트 푸시 구현 | 관리자 역할·존·상태 조합·테스트 푸시 감사 기록. 실제 DB 마이그레이션·실기기 APNs 수신 검증은 남음                                                                             |
 | 6    | `GET /admin/audit`, 관리자 목록·초대·삭제 (p32)                                 | 코드 구현                                 | owner 권한·필터·페이지 검증. 축제·크롤 제안·크롤 소스 변경, 수동 실행 요청, 크롤 장애 알림 확인 감사 기록 연결 완료. 그 밖의 관리자 쓰기 경로 감사 범위 재확인 필요              |
-| 7    | `GET /festivals` 캐시 계약 (p9)                                                 | 코드 구현                                 | 목록의 `Cache-Control: public, max-age=3600`과 ETag 재검증 테스트. 배포 후 헤더 검증은 남음                                                                                  |
+| 7    | `GET /festivals` 캐시 계약 (p9)                                                 | 코드 구현                                 | 목록의 `Cache-Control: public, no-cache, must-revalidate`와 ETag 재검증 테스트. 배포 후 CDN 응답 검증 필요 |
 
 추가 사용자 요구: 원더리벳 등 티켓 소스 파싱과 실제 데이터 저장, WebSocket, Redis 캐시, 아티스트 이미지, 불안정한 네트워크용 오프라인 갱신, 개발·운영 배포 및 보안 검증. 이는 위의 API 라우트 존재와 별도로 완료 여부를 확인한다.
 

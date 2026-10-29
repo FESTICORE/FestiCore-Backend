@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import sharp from 'sharp';
 import { checkedUrl } from './crawl-fetch';
+import { imageTagAttributes } from './image-tag-attributes';
 import {
   eventPerformers,
   melonSearchCandidates,
@@ -31,7 +32,9 @@ export function selectRunImages(
     (page.hostname === 'nol.yanolja.com' &&
       /^\/ticket\/(?:products\/\d+|meta\/performance\/[\w%.-]+)$/.test(
         page.pathname,
-      ))
+      )) ||
+    (page.hostname === 'world.nol.com' &&
+      /^\/en\/ticket\/products\/\d+$/.test(page.pathname))
   )
     return urls.slice(0, MAX_MELON_DETAIL_IMAGES);
   if (urls.length <= MAX_IMAGES_PER_RUN) return urls;
@@ -60,16 +63,16 @@ function melonDetailImages(html: string, pageUrl: string): URL[] | null {
   )
     return null;
   const urls: URL[] = [];
-  const add = (raw: string, hostname: string) => {
+  const add = (raw: string, hostname: string): boolean => {
     try {
       const url = checkedUrl(new URL(raw, page).toString());
-      if (
-        url.hostname === hostname &&
-        !urls.some((item) => item.toString() === url.toString())
-      )
+      if (url.hostname !== hostname) return false;
+      if (!urls.some((item) => item.toString() === url.toString()))
         urls.push(url);
+      return true;
     } catch {
       /* Ignore malformed or unsafe image locations. */
+      return false;
     }
   };
   const poster =
@@ -82,8 +85,9 @@ function melonDetailImages(html: string, pageUrl: string): URL[] | null {
       html,
     )?.[1];
   for (const tag of artistList?.match(/<img\b[^>]*>/gi) ?? []) {
-    const image = /\bsrc=["']([^"']+)["']/i.exec(tag)?.[1];
-    if (image) add(image, 'cdnimg.melon.co.kr');
+    for (const image of imageTagAttributes(tag, ['data-src', 'src'])) {
+      if (add(image, 'cdnimg.melon.co.kr')) break;
+    }
     if (urls.length >= 81) break;
   }
   return urls;
@@ -97,8 +101,8 @@ export function artistProfileImageUrl(
   const page = html.slice(0, 2_000_000);
   const tags: string[] = page.match(/<(?:img|meta|a|div)\b[^>]*>/gi) ?? [];
   const candidates = [
-    ...tags.map(
-      (tag) => /\b(?:data-src|src|content)=["']([^"']+)["']/i.exec(tag)?.[1],
+    ...tags.flatMap((tag) =>
+      imageTagAttributes(tag, ['data-src', 'src', 'content']),
     ),
     ...[...page.matchAll(/url\(\s*["']?([^)'"\s]+)["']?\s*\)/gi)].map(
       (match) => match[1],
@@ -169,15 +173,19 @@ function yes24DetailImages(html: string, pageUrl: string): URL[] | null {
 
 function nolDetailImages(html: string, pageUrl: string): URL[] | null {
   const page = new URL(pageUrl);
-  if (
-    page.hostname !== 'nol.yanolja.com' ||
-    !/^\/ticket\/(?:products\/\d+|meta\/performance\/[\w%.-]+)$/.test(
-      page.pathname,
-    )
-  )
+  if (!(
+    (page.hostname === 'nol.yanolja.com' &&
+      /^\/ticket\/(?:products\/\d+|meta\/performance\/[\w%.-]+)$/.test(
+        page.pathname,
+      )) ||
+    (page.hostname === 'world.nol.com' &&
+      /^\/en\/ticket\/products\/\d+$/.test(page.pathname))
+  ))
     return null;
-  const event = yes24EventJson(html);
   const poster = nolPosterUrl(html, page);
+  if (page.hostname === 'world.nol.com')
+    return poster ? [checkedUrl(poster)] : [];
+  const event = yes24EventJson(html);
   return [
     ...new Map(
       [
@@ -287,6 +295,7 @@ function mintPaperImages(html: string, pageUrl: string): URL[] | null {
 }
 
 export function discoverImageUrls(html: string, pageUrl: string): URL[] {
+  if (pageUrl === 'https://www.mintpaper.co.kr/posts/4821') return [];
   const officialImages = mintPaperImages(html, pageUrl);
   if (officialImages) return officialImages;
   const melonImages = melonDetailImages(html, pageUrl);
@@ -376,12 +385,13 @@ export function discoverImageUrls(html: string, pageUrl: string): URL[] {
 export async function prepareCrawlImage(
   bytes: Buffer,
   declaredType: string,
+  maxInputBytes = MAX_INPUT_BYTES,
 ): Promise<{
   body: Buffer;
   hash: string;
   key: string;
 }> {
-  if (!bytes.length || bytes.length > MAX_INPUT_BYTES)
+  if (!bytes.length || bytes.length > maxInputBytes)
     throw new Error('이미지 입력 크기 제한을 초과했습니다.');
   const types: Record<string, string> = {
     jpeg: 'image/jpeg',

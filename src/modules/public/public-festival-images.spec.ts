@@ -1,6 +1,720 @@
-import { discoverySummaries } from './crawl-catalog';
+import { QueryRunner } from 'typeorm';
+import { ScrubUntrustedGalleryIdentity1792500073000 } from '../../database/migrations/1792500073000-scrub-untrusted-gallery-identity';
+import { discoverySummaries, DiscoverySummary } from './crawl-catalog';
 import { PublicFestivalService } from './public-festival.service';
+import {
+  SOHYANG_COMMONS_CREDIT,
+  SOHYANG_COMMONS_SEED,
+  SOHYANG_FESTIVAL_URL,
+} from '../admin/crawl/service/sohyang-commons-profile';
 describe('discovered festival artist profile images', () => {
+  it('reads two approved Commons credits from their own image review rows', async () => {
+    const festivalSourceUrl =
+      'https://ticket.melon.com/performance/index.htm?prodId=213769';
+    const candidate = {
+      name: '사진 출처 검증 페스티벌',
+      venue: '공연장',
+      date: '2026.12.26',
+      url: festivalSourceUrl,
+      artists: [{ name: '가수 A' }, { name: '가수 B' }],
+    };
+    const festivalId = discoverySummaries([{ candidate }])[0].id;
+    const profileRows = ['가수 A', '가수 B'].map((name, index) => ({
+      festivalSourceUrl,
+      artistName: name,
+      reviewFestivalId: festivalId,
+      artistAlias: null,
+      artistOfficialName: null,
+      seed: 'commons-approved-profile',
+      id: `00000000-0000-4000-8000-00000000000${index + 1}`,
+      author: `${name} 사진가`,
+      license: 'CC BY 4.0',
+      licenseUrl: 'https://creativecommons.org/licenses/by/4.0',
+      creditSourceUrl: `https://commons.wikimedia.org/wiki/File:${name}.jpg`,
+    }));
+    const query = jest.fn().mockImplementation((sql: string) => {
+      if (sql.includes('WITH candidates AS')) return [{ candidate }];
+      if (sql.includes('SELECT DISTINCT ON (source."parserConfig"'))
+        return profileRows;
+      return [];
+    });
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    const detail = await service.detail(festivalId);
+    expect(detail.artists).toEqual([
+      {
+        name: '가수 A',
+        imageUrl: `/api/v1/festivals/images/${profileRows[0].id}.webp`,
+        imageCredit: {
+          author: '가수 A 사진가',
+          license: 'CC BY 4.0',
+          licenseUrl: 'https://creativecommons.org/licenses/by/4.0',
+          sourceUrl: profileRows[0].creditSourceUrl,
+          changes: 'WebP 변환',
+        },
+      },
+      {
+        name: '가수 B',
+        imageUrl: `/api/v1/festivals/images/${profileRows[1].id}.webp`,
+        imageCredit: {
+          author: '가수 B 사진가',
+          license: 'CC BY 4.0',
+          licenseUrl: 'https://creativecommons.org/licenses/by/4.0',
+          sourceUrl: profileRows[1].creditSourceUrl,
+          changes: 'WebP 변환',
+        },
+      },
+    ]);
+  });
+
+  it('does not attach an approval for an older festival ID at the same source URL', async () => {
+    const candidate = {
+      name: '새로운 회차',
+      venue: '공연장',
+      date: '2026.12.26',
+      url: 'https://ticket.melon.com/performance/index.htm?prodId=213769',
+      artists: [{ name: '가수 A' }],
+    };
+    const query = jest.fn().mockImplementation((sql: string) => {
+      if (sql.includes('WITH candidates AS')) return [{ candidate }];
+      if (sql.includes('SELECT DISTINCT ON (source."parserConfig"'))
+        return [
+          {
+            festivalSourceUrl: candidate.url,
+            artistName: '가수 A',
+            reviewFestivalId: 'fst_previous',
+            seed: 'commons-approved-profile',
+            id: '00000000-0000-4000-8000-000000000011',
+          },
+        ];
+      return [];
+    });
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    const detail = await service.detail(
+      discoverySummaries([{ candidate }])[0].id,
+    );
+    expect(detail.artists).toEqual([{ name: '가수 A', imageUrl: null }]);
+    expect(JSON.stringify(detail)).not.toContain('000000000011');
+  });
+
+  it('preserves each approved photo credit in artist details and timetable', async () => {
+    const candidate = {
+      name: '사진 출처 검증 페스티벌',
+      venue: '공연장',
+      date: '2026.12.26 - 2026.12.27',
+      url: 'https://ticket.melon.com/performance/index.htm?prodId=213769',
+      artists: [{ name: '가수 A' }, { name: '가수 B' }],
+    };
+    const credits = [
+      {
+        author: '사진가 A',
+        license: 'CC BY 4.0',
+        licenseUrl: 'https://creativecommons.org/licenses/by/4.0',
+        sourceUrl: 'https://commons.wikimedia.org/wiki/File:Artist_A.jpg',
+        changes: 'WebP 변환',
+      },
+      {
+        author: '사진가 B',
+        license: 'CC BY 3.0',
+        licenseUrl: 'https://creativecommons.org/licenses/by/3.0',
+        sourceUrl: 'https://commons.wikimedia.org/wiki/File:Artist_B.jpg',
+        changes: 'WebP 변환',
+      },
+    ];
+    const query = jest.fn().mockImplementation((sql: string) => {
+      if (sql.includes('WITH candidates AS')) return [{ candidate }];
+      if (sql.includes('FROM crawl_timetable_revisions revision'))
+        return [
+          {
+            id: 'timetable',
+            sourceUrl: candidate.url,
+            sourceImageId: null,
+            verifiedAt: new Date('2026-10-27T00:00:00Z'),
+            sets: [
+              {
+                artist: '가수 B',
+                date: '2026-12-26',
+                stageName: '메인',
+                startsAt: '2026-12-26T12:00:00+09:00',
+                endsAt: null,
+              },
+            ],
+          },
+        ];
+      return [];
+    });
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    Object.defineProperty(service, 'attachStoredImages', {
+      value: (entries: DiscoverySummary[]) => {
+        entries[0].artists = entries[0].artists?.map((artist, index) => ({
+          ...artist,
+          imageUrl: `/api/v1/festivals/images/artist-${index}.webp`,
+          imageCredit: credits[index],
+        }));
+        return Promise.resolve(new Map<string, string>());
+      },
+    });
+
+    const result = await service.detail(
+      discoverySummaries([{ candidate }])[0].id,
+    );
+    expect(result.artists).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: '가수 A', imageCredit: credits[0] }),
+        expect.objectContaining({ name: '가수 B', imageCredit: credits[1] }),
+      ]),
+    );
+    expect(result.timetable).toEqual([
+      expect.objectContaining({ artist: '가수 B', imageCredit: credits[1] }),
+    ]);
+  });
+
+  it('returns Commons photo attribution beside the OneWay artist and timetable', async () => {
+    const candidate = {
+      name: '원웨이 페스티벌 2026',
+      venue: '킨텍스 제2전시장 10홀',
+      date: '2026.12.26 - 2026.12.27',
+      url: SOHYANG_FESTIVAL_URL,
+      artists: [{ name: '소향' }],
+    };
+    let rightsValid = true;
+    const query = jest.fn().mockImplementation((sql: string) => {
+      if (sql.includes('WITH candidates AS')) return [{ candidate }];
+      if (sql.includes('SELECT DISTINCT ON (source."parserConfig"'))
+        return rightsValid
+          ? [
+              {
+                festivalSourceUrl: SOHYANG_FESTIVAL_URL,
+                artistName: '소향',
+                seed: SOHYANG_COMMONS_SEED,
+                id: 'sohyang-photo',
+              },
+            ]
+          : [];
+      if (sql.includes('FROM crawl_timetable_revisions revision'))
+        return [
+          {
+            id: 'oneway-timetable',
+            sourceUrl: SOHYANG_FESTIVAL_URL,
+            sourceImageId: null,
+            verifiedAt: new Date('2026-10-27T00:00:00Z'),
+            sets: [
+              {
+                artist: '소향 (Sohyang)',
+                date: '2026-12-26',
+                stageName: '메인',
+                startsAt: '2026-12-26T12:00:00+09:00',
+                endsAt: null,
+              },
+            ],
+          },
+        ];
+      return [];
+    });
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    const result = await service.detail(
+      discoverySummaries([{ candidate }])[0].id,
+    );
+    expect(result.artists).toEqual(
+      expect.arrayContaining([
+        {
+          name: '소향',
+          imageUrl: '/api/v1/festivals/images/sohyang-photo.webp',
+          imageCredit: SOHYANG_COMMONS_CREDIT,
+        },
+        {
+          name: '소향 (Sohyang)',
+          imageUrl: '/api/v1/festivals/images/sohyang-photo.webp',
+          imageCredit: SOHYANG_COMMONS_CREDIT,
+        },
+      ]),
+    );
+    expect(result.timetable).toEqual([
+      expect.objectContaining({
+        artist: '소향 (Sohyang)',
+        imageCredit: SOHYANG_COMMONS_CREDIT,
+      }),
+    ]);
+    rightsValid = false;
+    const invalid = await service.detail(
+      discoverySummaries([{ candidate }])[0].id,
+    );
+    expect(invalid.artists).toEqual(
+      expect.arrayContaining([{ name: '소향', imageUrl: null }]),
+    );
+    expect(invalid.timetable).toEqual(
+      expect.arrayContaining([expect.objectContaining({ imageUrl: null })]),
+    );
+    expect(JSON.stringify(invalid)).not.toContain('imageCredit');
+    rightsValid = true;
+    const recovered = await service.detail(
+      discoverySummaries([{ candidate }])[0].id,
+    );
+    expect(recovered.artists).toEqual(
+      expect.arrayContaining([
+        {
+          name: '소향',
+          imageUrl: '/api/v1/festivals/images/sohyang-photo.webp',
+          imageCredit: SOHYANG_COMMONS_CREDIT,
+        },
+      ]),
+    );
+  });
+  it('adds only saved official GMF child artists when the discovery has no lineup', async () => {
+    const gmfUrl = 'https://mintpaper.co.kr/festivals/172';
+    const candidate = {
+      name: 'Grand Mint Festival 2026',
+      venue: 'Olympic Park',
+      date: '2026.10.17 - 2026.10.18',
+      url: gmfUrl,
+      artists: [],
+    };
+    const query = jest.fn().mockImplementation((sql: string) => {
+      if (sql.includes('WITH candidates AS')) return [{ candidate }];
+      if (
+        sql.includes('FROM crawl_images image') &&
+        sql.includes("source.kind = 'artist-image'")
+      )
+        return [
+          {
+            festivalSourceUrl: gmfUrl,
+            artistName: '이소라',
+            seed: 'official-gmf-lineup',
+            id: 'official-photo',
+          },
+          {
+            festivalSourceUrl: gmfUrl,
+            artistName: '잘못된 소스',
+            seed: 'manual',
+            id: 'manual-photo',
+          },
+          {
+            festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
+            artistName: '다른 축제',
+            seed: 'official-gmf-lineup',
+            id: 'other-photo',
+          },
+        ];
+      return [];
+    });
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    const result = await service.detail(
+      discoverySummaries([{ candidate }])[0].id,
+    );
+    expect(result.artists).toEqual([
+      {
+        name: '이소라',
+        imageUrl: '/api/v1/festivals/images/official-photo.webp',
+      },
+    ]);
+    expect(result.timetable).toEqual([]);
+  });
+
+  it('uses an official CDF profile photo in detail and timetable with the ONEWE lineup alias', async () => {
+    const festivalUrl = 'https://mintpaper.co.kr/festivals/178';
+    const candidate = {
+      name: 'COUNTDOWN FANTASY 2026-2027',
+      venue: '킨텍스',
+      date: '2026.12.31 - 2026.12.31',
+      url: festivalUrl,
+      artists: [{ name: 'ONEWE' }],
+      officialProfileArtists: [
+        {
+          name: 'ONEWE(원위)',
+          profileUrl: 'https://www.instagram.com/official_onewe/',
+        },
+      ],
+    };
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([{ candidate }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          festivalSourceUrl: festivalUrl,
+          artistName: 'ONEWE(원위)',
+          artistAlias: null,
+          id: 'cdf-onewe-photo',
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: 'cdf-timetable',
+          sourceUrl: festivalUrl,
+          sourceImageId: null,
+          verifiedAt: new Date('2026-10-23T00:00:00Z'),
+          sets: [
+            {
+              artist: 'ONEWE',
+              date: '2026-12-31',
+              stageName: 'Main',
+              startsAt: '2026-12-31T18:00:00+09:00',
+              endsAt: null,
+            },
+          ],
+        },
+      ]);
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    const result = await service.detail(
+      discoverySummaries([{ candidate }])[0].id,
+    );
+    const imageUrl = '/api/v1/festivals/images/cdf-onewe-photo.webp';
+    expect(result.artists).toContainEqual(
+      expect.objectContaining({ name: 'ONEWE', imageUrl }),
+    );
+    expect(result.timetable).toContainEqual(
+      expect.objectContaining({ artist: 'ONEWE', imageUrl }),
+    );
+  });
+
+  it('shows only the saved GMF artist image on its official festival detail', async () => {
+    const gmfUrl = 'https://mintpaper.co.kr/festivals/172';
+    const otherUrl = 'https://mintpaper.co.kr/festivals/178';
+    const candidate = {
+      name: 'GRAND MINT FESTIVAL 2026',
+      venue: '올림픽공원',
+      date: '2026.10.17 - 2026.10.18',
+      url: gmfUrl,
+      artists: [{ name: '이소라' }],
+    };
+    const query = jest.fn().mockImplementation((sql: string) => {
+      if (sql.includes('WITH candidates AS')) return [{ candidate }];
+      if (sql.includes('FROM admin_festivals')) return [];
+      if (
+        sql.includes('FROM crawl_images image') &&
+        sql.includes("source.kind = 'artist-image'")
+      )
+        return [
+          { festivalSourceUrl: gmfUrl, artistName: '이소라', id: 'gmf-photo' },
+          {
+            festivalSourceUrl: otherUrl,
+            artistName: '이소라',
+            id: 'other-photo',
+          },
+        ];
+      return [];
+    });
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    const result = await service.detail(
+      discoverySummaries([{ candidate }])[0].id,
+    );
+    expect(result.artists).toContainEqual({
+      name: '이소라',
+      imageUrl: '/api/v1/festivals/images/gmf-photo.webp',
+    });
+    const imageQuery = (query.mock.calls as [string, unknown[]][]).find(
+      ([sql]) =>
+        sql.includes('FROM crawl_images image') &&
+        sql.includes("source.kind = 'artist-image'"),
+    );
+    expect(imageQuery?.[1][0]).toContain(gmfUrl);
+    expect(imageQuery?.[1][0]).not.toContain(otherUrl);
+  });
+
+  it('shows an official CDF performer profile beside an already stored artist photo', async () => {
+    const candidate = {
+      name: 'COUNTDOWN FANTASY 2026-2027',
+      venue: '킨텍스',
+      date: '2026.12.31 - 2026.12.31',
+      url: 'https://mintpaper.co.kr/festivals/178',
+      artistSourceUrl: 'https://ticket.yes24.com/Perf/60590',
+      artists: [{ name: '혁오' }],
+      officialProfileArtists: [
+        {
+          name: '혁오',
+          profileUrl: 'https://www.instagram.com/hyukohofficial/',
+        },
+      ],
+    };
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([{ candidate }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          festivalSourceUrl: candidate.url,
+          artistName: '혁오',
+          artistAlias: null,
+          id: 'stored-image',
+        },
+      ])
+      .mockResolvedValueOnce([]);
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    const id = discoverySummaries([{ candidate }])[0].id;
+    await expect(service.detail(id)).resolves.toMatchObject({
+      artists: [
+        {
+          name: '혁오',
+          profileUrl: 'https://www.instagram.com/hyukohofficial/',
+          imageUrl: '/api/v1/festivals/images/stored-image.webp',
+        },
+      ],
+    });
+    const calls = query.mock.calls as unknown as [string, unknown[]][];
+    expect(calls[0][0]).toContain('"officialProfileArtists"');
+    expect(calls[0][0]).toContain("'https://www.mintpaper.co.kr/posts/4819'");
+    expect(calls[0][0]).toContain(
+      "jsonb_build_object(\n               'artists', candidate->'artists', 'url', candidate->>'url')",
+    );
+    expect(calls[0][0]).toContain('details."artistDetails"->\'artists\'');
+    expect(calls[0][0]).toContain('details."artistDetails"->>\'url\'');
+    expect(calls[0][0]).toContain('"sourceSeed" = \'official-lineup\'');
+    expect(calls[0][0]).toContain(
+      "NOT IN (\n                 'https://www.mintpaper.co.kr/posts/4819'",
+    );
+  });
+
+  it('prefers a stored primary performer image over a linked source profile', async () => {
+    const yes24Url = 'https://ticket.yes24.com/Perf/60590';
+    const melonUrl =
+      'https://ticket.melon.com/performance/index.htm?prodId=213793';
+    const performerUrl = 'https://tkfile.yes24.com/artists/band-a.jpg';
+    const candidates = [
+      {
+        candidate: {
+          name: 'Linked Festival',
+          venue: 'KINTEX',
+          date: '2026.11.20 - 2026.11.21',
+          url: yes24Url,
+          artists: [{ name: 'Band A', sourceUrl: performerUrl }],
+        },
+      },
+      {
+        candidate: {
+          name: 'Linked Festival',
+          venue: 'KINTEX',
+          date: '2026.11.20 - 2026.11.21',
+          url: melonUrl,
+          artists: [{ name: 'Band A' }],
+        },
+      },
+    ];
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce(candidates)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ originUrl: performerUrl, id: 'primary-image' }])
+      .mockResolvedValueOnce([
+        {
+          festivalSourceUrl: melonUrl,
+          artistName: 'Band A',
+          id: 'linked-image',
+        },
+      ])
+      .mockResolvedValueOnce([]);
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    const id = discoverySummaries(candidates)[0].id;
+    await expect(service.detail(id)).resolves.toMatchObject({
+      artists: [
+        {
+          name: 'Band A',
+          imageUrl: '/api/v1/festivals/images/primary-image.webp',
+        },
+      ],
+    });
+  });
+
+  it('keeps the primary image when two linked sources store different photos of one artist', async () => {
+    const yes24Url = 'https://ticket.yes24.com/Perf/60590';
+    const melonUrl =
+      'https://ticket.melon.com/performance/index.htm?prodId=213793';
+    const candidates = [yes24Url, melonUrl].map((url) => ({
+      candidate: {
+        name: 'Linked Festival',
+        venue: 'KINTEX',
+        date: '2026.11.20 - 2026.11.21',
+        url,
+        artists: [{ name: 'Band A' }],
+      },
+    }));
+    const primaryId = '00000000-0000-4000-8000-000000000041';
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce(candidates)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        { festivalSourceUrl: yes24Url, artistName: 'Band A', id: primaryId },
+        {
+          festivalSourceUrl: melonUrl,
+          artistName: 'Band A',
+          id: '00000000-0000-4000-8000-000000000042',
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: 'revision-1',
+          sourceUrl: 'https://official.example/timetable',
+          sourceImageId: null,
+          verifiedAt: new Date('2026-10-23T00:00:00Z'),
+          sets: [
+            {
+              artist: 'Band A',
+              date: '2026-11-20',
+              stageName: 'Main',
+              startsAt: '2026-11-20T18:00:00+09:00',
+              endsAt: null,
+            },
+          ],
+        },
+      ]);
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    const result = await service.detail(discoverySummaries(candidates)[0].id);
+    const imageUrl = `/api/v1/festivals/images/${primaryId}.webp`;
+    expect(result.artists).toContainEqual({ name: 'Band A', imageUrl });
+    expect(result.timetable).toEqual([
+      expect.objectContaining({ artist: 'Band A', imageUrl }),
+    ]);
+  });
+
+  it.each([
+    ['YES24 first', false],
+    ['Melon first', true],
+  ])(
+    'uses linked source images and timetable when %s',
+    async (_label, melonFirst) => {
+      const yes24Url = 'https://ticket.yes24.com/Perf/60590';
+      const melonUrl =
+        'https://ticket.melon.com/performance/index.htm?prodId=213793';
+      const imageId = '00000000-0000-4000-8000-000000000031';
+      const unrelatedUrl =
+        'https://ticket.melon.com/performance/index.htm?prodId=999999';
+      const candidates = [
+        {
+          candidate: {
+            name: 'Linked Festival',
+            venue: 'KINTEX',
+            date: '2026.11.20 - 2026.11.21',
+            url: yes24Url,
+            artists: [{ name: 'Band A' }],
+          },
+        },
+        {
+          candidate: {
+            name: 'Linked Festival',
+            venue: 'KINTEX',
+            date: '2026.11.20 - 2026.11.21',
+            url: melonUrl,
+            artists: [{ name: 'Band A' }],
+          },
+        },
+      ];
+      if (melonFirst) candidates.reverse();
+      const query = jest.fn().mockImplementation((sql: string) => {
+        if (sql.includes('WITH candidates AS')) return candidates;
+        if (sql.includes('FROM admin_festivals')) return [];
+        if (sql.includes('SELECT DISTINCT ON (revision."sourceId")'))
+          return [
+            {
+              id: 'linked-revision',
+              sourceUrl: 'https://official.example/linked-timetable',
+              sourceImageId: null,
+              verifiedAt: new Date('2026-10-23T00:00:00Z'),
+              sets: [
+                {
+                  artist: 'Band A',
+                  date: '2026-11-20',
+                  stageName: 'Main',
+                  startsAt: '2026-11-20T18:00:00+09:00',
+                  endsAt: null,
+                },
+              ],
+            },
+          ];
+        if (
+          sql.includes('FROM crawl_images image') &&
+          sql.includes("source.kind = 'artist-image'")
+        )
+          return [
+            { festivalSourceUrl: melonUrl, artistName: 'Band A', id: imageId },
+            {
+              festivalSourceUrl: unrelatedUrl,
+              artistName: 'Band A',
+              id: '00000000-0000-4000-8000-000000000032',
+            },
+          ];
+        return [];
+      });
+      const service = new PublicFestivalService(
+        { findOne: jest.fn().mockResolvedValue(null) } as never,
+        {} as never,
+        { query } as never,
+        {} as never,
+      );
+      const id = discoverySummaries(candidates)[0].id;
+      const result = await service.detail(id);
+      expect(discoverySummaries(candidates)[0].sourceUrls).toEqual(
+        expect.arrayContaining([yes24Url, melonUrl]),
+      );
+      const imageUrl = `/api/v1/festivals/images/${imageId}.webp`;
+      expect(result.artists).toContainEqual({ name: 'Band A', imageUrl });
+      expect(result.timetable).toEqual([
+        expect.objectContaining({ artist: 'Band A', imageUrl }),
+      ]);
+      const sourceQueries = (
+        query.mock.calls as unknown as [string, [string[]]][]
+      ).filter(
+        ([sql]) =>
+          sql.includes('SELECT DISTINCT ON (revision."sourceId")') ||
+          sql.includes('SELECT DISTINCT ON (source."parserConfig"'),
+      );
+      for (const [, [urls]] of sourceQueries) {
+        expect(urls).toEqual(expect.arrayContaining([yes24Url, melonUrl]));
+        expect(urls).not.toContain(unrelatedUrl);
+      }
+    },
+  );
+
   it('serves a YES24 performer image only when its exact origin URL was stored', async () => {
     const imageUrl = 'https://tkfile.yes24.com/artists/band-a.jpg';
     const candidate = {
@@ -61,6 +775,7 @@ describe('discovered festival artist profile images', () => {
       .mockResolvedValueOnce([{ candidate }])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([]);
     const service = new PublicFestivalService(
       { findOne: jest.fn().mockResolvedValue(null) } as never,
@@ -77,9 +792,9 @@ describe('discovered festival artist profile images', () => {
         },
       ],
     });
-    expect(query).toHaveBeenCalledTimes(4);
+    expect(query).toHaveBeenCalledTimes(5);
     expect(
-      (query.mock.calls as unknown as [string, [string[]]][])[2][1][0],
+      (query.mock.calls as unknown as [string, [string[]]][])[3][1][0],
     ).toEqual([sourceUrl]);
   });
 
@@ -103,6 +818,7 @@ describe('discovered festival artist profile images', () => {
     const query = jest
       .fn()
       .mockResolvedValueOnce([{ candidate }])
+      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([
@@ -129,8 +845,213 @@ describe('discovered festival artist profile images', () => {
     });
     const profileQuery = (
       query.mock.calls as unknown as [string, [string[]]][]
-    )[3];
+    )[4];
     expect(profileQuery[1][0]).toEqual([sourceUrl]);
+  });
+
+  it('attaches the stored Seoul profile to its YES24 catalog festival', async () => {
+    const catalogUrl = 'https://ticket.yes24.com/Perf/60368';
+    const candidate = {
+      name: '2026 서울뮤직페스티벌',
+      venue: '노들섬 잔디마당 야외 특설무대',
+      date: '2026-10-24 ~ 2026-10-24',
+      url: catalogUrl,
+      artists: [{ name: '추다해차지스' }],
+    };
+    const id = discoverySummaries([{ candidate }])[0].id;
+    const imageId = '00000000-0000-4000-8000-000000000848';
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([{ candidate }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          festivalSourceUrl: catalogUrl,
+          artistName: '추다해차지스',
+          id: imageId,
+        },
+      ])
+      .mockResolvedValueOnce([]);
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    await expect(service.detail(id)).resolves.toMatchObject({
+      artists: [
+        {
+          name: '추다해차지스',
+          imageUrl: `/api/v1/festivals/images/${imageId}.webp`,
+        },
+      ],
+    });
+    const profileQuery = (
+      query.mock.calls as unknown as [string, [string[]]][]
+    )[2];
+    expect(profileQuery[1][0]).toEqual([catalogUrl]);
+  });
+
+  it('links a stored official artist photo only after the exact Melon product is verified', async () => {
+    const melon =
+      'https://ticket.melon.com/performance/index.htm?prodId=214999';
+    const official = 'https://www.wonderli.vet/lineup';
+    const candidate = {
+      name: 'WONDERLIVET 2026 (원더리벳 2026)',
+      venue: 'KINTEX HALL 7/8/9/10',
+      date: '2026.11.20 - 2026.11.22',
+      url: melon,
+      artists: [{ name: 'The Shepherd Bois' }],
+    };
+    const imageId = '00000000-0000-4000-8000-000000000199';
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([{ candidate }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ url: melon, candidate }])
+      .mockResolvedValueOnce([
+        {
+          festivalSourceUrl: official,
+          artistName: 'The Shepherd Bois',
+          id: imageId,
+        },
+      ])
+      .mockResolvedValueOnce([]);
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    const original = discoverySummaries([{ candidate }])[0];
+    const detail = await service.detail(original.id);
+    expect(detail).toMatchObject({
+      id: original.id,
+      sourceUrl: melon,
+      ticketLinks: [{ label: '멜론티켓', url: melon }],
+      artists: [
+        {
+          name: 'The Shepherd Bois',
+          imageUrl: `/api/v1/festivals/images/${imageId}.webp`,
+        },
+      ],
+    });
+    expect(
+      (query.mock.calls as unknown as [string, [string[]]][])[3][1][0],
+    ).toEqual([melon, official]);
+    const proofQuery = (
+      query.mock.calls as unknown as [string, unknown[]][]
+    )[2][0];
+    const catalogQuery = (
+      query.mock.calls as unknown as [string, unknown[]][]
+    )[0][0];
+    expect(catalogQuery).toContain('jsonb_array_elements_text');
+    expect(catalogQuery).toContain('FROM latest JOIN details USING (url)');
+    expect(proofQuery).toContain(
+      "verified.result IN ('nochange-parsed', 'unchanged')",
+    );
+    expect(proofQuery).toContain('newer."startedAt" > verified."startedAt"');
+    expect(proofQuery).toContain("latest.status IS DISTINCT FROM 'rejected'");
+    expect(proofQuery).toContain("latest.decision IS DISTINCT FROM 'rejected'");
+    expect(proofQuery).toContain(
+      "childRun.result IN ('proposed', 'unchanged', 'nochange-parsed')",
+    );
+    expect(proofQuery).toContain(
+      "childRun.result IN ('proposed', 'unchanged')",
+    );
+    expect(proofQuery).toContain(
+      'proposedRun."contentHash" = childRun."contentHash"',
+    );
+    expect(proofQuery).toContain("childRun.result = 'nochange-parsed'");
+    expect(proofQuery).toContain('childRun."proposalId" = latest."proposalId"');
+    expect(proofQuery).toContain('proposedRun."sourceId" = child.id');
+    expect(proofQuery).toContain('jsonb_build_array(child.url, $3::text)');
+  });
+
+  it('does not bridge a rejected latest proposal to the official lineup', async () => {
+    const melon =
+      'https://ticket.melon.com/performance/index.htm?prodId=214999';
+    const candidate = {
+      name: 'WONDERLIVET 2026',
+      venue: 'KINTEX HALL 7/8/9/10',
+      date: '2026.11.20 - 2026.11.22',
+      url: melon,
+      artists: [{ name: 'The Shepherd Bois' }],
+    };
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([{ candidate }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    const detail = await service.detail(
+      discoverySummaries([{ candidate }])[0].id,
+    );
+    expect(detail).toMatchObject({
+      artists: [{ name: 'The Shepherd Bois', imageUrl: null }],
+    });
+    const proofQuery = (
+      query.mock.calls as unknown as [string, unknown[]][]
+    )[2][0];
+    expect(proofQuery).toContain("latest.status IS DISTINCT FROM 'rejected'");
+    expect(proofQuery).toContain("latest.decision IS DISTINCT FROM 'rejected'");
+  });
+
+  it.each([
+    [
+      'another product',
+      'https://ticket.melon.com/performance/index.htm?prodId=999',
+    ],
+    [
+      'another event',
+      'https://ticket.melon.com/performance/index.htm?prodId=214999',
+    ],
+  ])('does not borrow a photo for %s', async (reason, verifiedUrl) => {
+    const melon =
+      'https://ticket.melon.com/performance/index.htm?prodId=214999';
+    const candidate = {
+      name: 'WONDERLIVET 2026',
+      venue: 'KINTEX',
+      date: '2026.11.20 - 2026.11.22',
+      url: melon,
+      artists: [{ name: 'The Shepherd Bois' }],
+    };
+    const proof = {
+      ...candidate,
+      ...(reason === 'another event'
+        ? { date: '2026.11.21 - 2026.11.22' }
+        : {}),
+    };
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([{ candidate }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ url: verifiedUrl, candidate: proof }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    const detail = await service.detail(
+      discoverySummaries([{ candidate }])[0].id,
+    );
+    expect(detail.artists).toContainEqual({
+      name: 'The Shepherd Bois',
+      imageUrl: null,
+    });
+    expect(
+      (query.mock.calls as unknown as [string, [string[]]][])[3][1][0],
+    ).toEqual([melon]);
   });
 
   it('uses a reviewed alternate artist name for the lineup and timetable', async () => {
@@ -193,6 +1114,127 @@ describe('discovered festival artist profile images', () => {
         expect.objectContaining({ artist: 'DAY6', imageUrl }),
       ]),
     );
+  });
+
+  it('shows an XMF official modal photo for a verified full name without leaking another festival photo', async () => {
+    const sourceUrl =
+      'https://ticket.melon.com/performance/index.htm?prodId=213766';
+    const unrelatedUrl =
+      'https://ticket.melon.com/performance/index.htm?prodId=999999';
+    const candidate = {
+      name: 'XMF 2026',
+      venue: '파라다이스시티',
+      date: '2026.10.03 - 2026.10.04',
+      url: sourceUrl,
+      artists: [
+        { name: '나카시마 미카' },
+        { name: 'MIKA NAKASHIMA' },
+        { name: '다른 가수' },
+      ],
+    };
+    const imageId = '00000000-0000-4000-8000-000000000051';
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([{ candidate }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          festivalSourceUrl: sourceUrl,
+          artistName: 'MIKA',
+          artistAlias: '나카시마 미카',
+          artistOfficialName: 'MIKA NAKASHIMA',
+          id: imageId,
+        },
+        {
+          festivalSourceUrl: unrelatedUrl,
+          artistName: '다른 가수',
+          artistAlias: null,
+          artistOfficialName: null,
+          id: '00000000-0000-4000-8000-000000000052',
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: 'xmf-official-revision',
+          sourceUrl: 'https://xmfestival.com/notice',
+          sourceImageId: null,
+          verifiedAt: new Date('2026-10-23T00:00:00Z'),
+          sets: [
+            {
+              artist: '나카시마 미카',
+              date: '2026-10-03',
+              stageName: 'STAGE A',
+              startsAt: '2026-10-03T21:00:00+09:00',
+              endsAt: null,
+            },
+            {
+              artist: 'MIKA NAKASHIMA',
+              date: '2026-10-04',
+              stageName: 'STAGE A',
+              startsAt: '2026-10-04T21:00:00+09:00',
+              endsAt: null,
+            },
+          ],
+        },
+      ]);
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+
+    const result = await service.detail(
+      discoverySummaries([{ candidate }])[0].id,
+    );
+
+    const imageUrl = `/api/v1/festivals/images/${imageId}.webp`;
+    expect(result.artists).toContainEqual({ name: '나카시마 미카', imageUrl });
+    expect(result.artists).toContainEqual({ name: 'MIKA NAKASHIMA', imageUrl });
+    expect(result.artists).toContainEqual({
+      name: '다른 가수',
+      imageUrl: null,
+    });
+    expect(result.timetable).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ artist: '나카시마 미카', imageUrl }),
+        expect.objectContaining({ artist: 'MIKA NAKASHIMA', imageUrl }),
+      ]),
+    );
+    const profileQuery = (
+      query.mock.calls as unknown as [string, [string[]]][]
+    )[2];
+    expect(profileQuery[0]).toContain("'official-artist-gallery'");
+    const galleryPredicate =
+      /source\."parserConfig"->>'seed' = 'official-artist-gallery'\s+AND source\."parserConfig"->>'artistOfficialNameSource' =\s+'official-notice-and-modal-site'\s+AND EXISTS \(\s+SELECT 1 FROM crawl_sources gallery\s+WHERE gallery\.kind = 'artist-gallery'\s+AND gallery\.enabled = true\s+AND gallery\.url = source\.url\s+AND gallery\."parserConfig"->>'seed' = 'xmf-official-gallery'\s+AND gallery\."parserConfig"->>'festivalSourceUrl' =\s+source\."parserConfig"->>'festivalSourceUrl'\s+\)/g;
+    expect(profileQuery[0].match(galleryPredicate)).toHaveLength(2);
+    expect(profileQuery[0]).toMatch(
+      /CASE WHEN source\."parserConfig"->>'seed' = 'official-artist-gallery'[\s\S]+THEN source\."parserConfig"->>'artistOfficialName'/,
+    );
+    expect(profileQuery[0]).not.toContain('prodId=213766');
+    expect(profileQuery[1][0]).toEqual([sourceUrl]);
+  });
+
+  it('scrubs historical admin-created identity claims while preserving crawler-created sources', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    await new ScrubUntrustedGalleryIdentity1792500073000().up({
+      query,
+    } as unknown as QueryRunner);
+
+    const sql = (query.mock.calls as unknown as [string][])[0][0];
+    expect(sql).toContain("source.kind = 'artist-image'");
+    expect(sql).toContain('source."parserConfig" ?| ARRAY[');
+    expect(sql).toContain("'officialSiteKeys', 'artistOfficialName'");
+    expect(sql).toContain("'artistOfficialNameSource'");
+    expect(sql).toContain("THEN ARRAY['seed']::text[]");
+    expect(sql).toContain(
+      "'official-artist-gallery' THEN false ELSE source.enabled END",
+    );
+    expect(sql).toContain(
+      "'official-artist-gallery' THEN 'disabled' ELSE source.status END",
+    );
+    expect(sql).toContain("audit.action = 'crawl.source.created'");
+    expect(sql).toContain("audit.target = 'crawl-source:' || source.id::text");
   });
 
   it('matches harmless name formatting differences without guessing a different artist', async () => {

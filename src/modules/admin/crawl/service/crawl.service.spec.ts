@@ -1,19 +1,63 @@
 import { CrawlService } from './crawl.service';
 import { CrawlSource } from '../entity/crawl-source.entity';
 import { CrawlRun } from '../entity/crawl-run.entity';
-import { NotFoundException } from '@nestjs/common';
+import { Logger, NotFoundException } from '@nestjs/common';
 import { In } from 'typeorm';
 import { createHash } from 'crypto';
 import sharp from 'sharp';
 import * as imageOcr from './timetable-image-ocr';
+import * as nolEvidence from './nol-world-lineup-evidence';
+import * as crawlParser from './crawl-parser';
 import * as artistGallery from './artist-gallery';
+import {
+  GMF_FESTIVAL_URL,
+  GMF_IMAGE_ORIGIN,
+  GMF_LINEUP_URL,
+  GMF_NOTICE_URL,
+} from './gmf-lineup';
+import {
+  WONDERLIVET_FESTIVAL_URL,
+  WONDERLIVET_IMAGE_ORIGIN,
+  WONDERLIVET_LINEUP_URL,
+} from './wonderlivet-lineup';
 import {
   CreateCrawlSourceDto,
   UpdateCrawlSourceDto,
 } from '../dto/crawl-source.dto';
+import { CDF_FESTIVAL_URL, CDF_PROFILE_SEED } from './cdf-profile';
+import { DRDR_PROFILE_SEED } from './drdr-profile';
+import {
+  WONDERLIVET_PROFILE_FESTIVAL_URL,
+  WONDERLIVET_PROFILE_SEED,
+} from './wonderlivet-profile';
+import { FESTIVAL_PROFILE_SEED, FESTIVAL_PROFILES } from './festival-profile';
+import {
+  ADDITIONAL_FESTIVAL_PROFILE_SEED,
+  ADDITIONAL_FESTIVAL_PROFILES,
+} from './additional-festival-profile';
+import { PRUGIO_PROFILE_SEED, PRUGIO_PROFILE_URL } from './prugio-profile';
+import { PRUGIO_LINEUP_URL } from './prugio-lineup';
+import {
+  CDF_LOW_HIGH_LOW_PROFILE_SEED,
+  CDF_LOW_HIGH_LOW_PROFILE_URL,
+} from './cdf-low-high-low-profile';
+import {
+  SOHYANG_COMMONS_PAGE,
+  SOHYANG_COMMONS_SEED,
+  SOHYANG_FESTIVAL_URL,
+} from './sohyang-commons-profile';
+import {
+  COMMONS_DISCOVERY_SEED,
+  COMMONS_DISCOVERY_URL,
+} from './commons-image-discovery';
 
 type PrivateCrawl = {
+  onModuleInit(): void;
+  onModuleDestroy(): void;
   scheduleDue(): Promise<void>;
+  gmfImageQueue: Promise<void>;
+  gmfQueuedSources: Set<string>;
+  reconcileRecentXmf403(): Promise<void>;
   runNow(id: string): Promise<{ runId: string }>;
   createSource(
     dto: CreateCrawlSourceDto,
@@ -31,11 +75,340 @@ type PrivateCrawl = {
     parsed: unknown,
   ): Promise<{
     kind: string;
+    festivalId?: string;
     items: { id: string; op: string; path: string; after: unknown }[];
+    matchedProposalId?: string;
   }>;
-  execute(run: CrawlRun, source: CrawlSource): Promise<void>;
+  execute(
+    run: CrawlRun,
+    source: CrawlSource,
+    verifiedWonderlivetBundle?: { body: string; snapshotUrl: string } | null,
+  ): Promise<{ body: string; snapshotUrl: string } | void>;
+  limitedGetCommonsJson(url: URL): Promise<{ status: number; body: string }>;
   getListing(source: CrawlSource): Promise<{ status: number; body: string }>;
+  syncXmfArtistAliases(source: CrawlSource, body: string): Promise<void>;
+  syncXmfAliasesFromRecentSnapshot(source: CrawlSource): Promise<void>;
+  restoreXmfGalleryIdentityFromRecentSnapshot(
+    source: CrawlSource,
+  ): Promise<void>;
+  reconcileOfficialTicketLinks(
+    source: CrawlSource,
+    parsed: unknown,
+  ): Promise<void>;
+  reconcileWonderlivetTicketLink(
+    source: CrawlSource,
+    parsed: unknown,
+    runId: string,
+  ): Promise<void>;
 };
+
+const CDF_PAGE = 'https://www.bandkardi.com/profile';
+const CDF_PHOTO =
+  'https://www.bandkardi.com/_next/static/media/home_hero_pc.e0cb8389.webp';
+const CDF_HTML =
+  '<section aria-label="KARDI members"><img src="/_next/static/media/home_hero_pc.e0cb8389.webp" alt="KARDI members"></section><h1 id="profile-title">KARDI</h1>';
+const CDF_CONFIG = {
+  seed: CDF_PROFILE_SEED,
+  festivalSourceUrl: CDF_FESTIVAL_URL,
+  artistName: 'KARDI',
+  officialHandle: 'bandkardi_',
+};
+const DRDR_PAGE = 'https://drdr.ac/wordpress/wp-json/wp/v2/posts/1475';
+const DRDR_PHOTO =
+  'https://drdr.ac/wordpress/wp-content/uploads/2025/05/portrait-819x1024.jpg';
+const DRDR_CONFIG = {
+  seed: DRDR_PROFILE_SEED,
+  festivalSourceUrl: CDF_FESTIVAL_URL,
+  artistName: 'OYSTERS',
+};
+const DRDR_POST = JSON.stringify({
+  id: 1475,
+  status: 'publish',
+  categories: [11],
+  title: { rendered: 'OYSTERS///오이스터즈' },
+  content: {
+    rendered: `<p><strong>MUSICIAN</strong></p><p><img src="${DRDR_PHOTO}"></p><p><strong>ALBUMS</strong></p><p><img src="https://drdr.ac/wordpress/wp-content/uploads/2026/08/album.jpg"></p>`,
+  },
+});
+
+describe('Commons 사진 후보 일일 수집', () => {
+  it('관리자 API에서 탐색 소스 직접 등록과 URL 변경을 거절한다', async () => {
+    const { service, source } = harness();
+    await expect(
+      service.createSource(
+        {
+          kind: 'artist-image-discovery',
+          parser: 'commons-search',
+          url: COMMONS_DISCOVERY_URL,
+          parserConfig: { seed: COMMONS_DISCOVERY_SEED },
+        },
+        null,
+      ),
+    ).rejects.toThrow();
+    source.kind = 'artist-image-discovery';
+    await expect(
+      service.updateSource(
+        source.id,
+        {
+          url: 'https://evil.example/search',
+        },
+        null,
+      ),
+    ).rejects.toThrow();
+  });
+
+  it('이미지를 저장하거나 공개하지 않고 후보 메타데이터만 실행 기록에 남긴다', async () => {
+    const {
+      service,
+      source,
+      run,
+      execute,
+      publicFestivals,
+      runsRepo,
+      imageStorage,
+    } = harness();
+    execute.mockRestore();
+    source.kind = 'artist-image-discovery';
+    source.parser = 'commons-search';
+    source.url = COMMONS_DISCOVERY_URL;
+    source.parserConfig = { seed: COMMONS_DISCOVERY_SEED };
+    publicFestivals.missingArtistImages.mockResolvedValue([
+      {
+        festivalId: 'fst_abc',
+        festivalSourceUrl: 'https://festival.example.com',
+        artistName: '소향',
+      },
+    ]);
+    jest.spyOn(service, 'limitedGetCommonsJson').mockImplementation((url) => {
+      if (url.pathname.endsWith('/search/page'))
+        return Promise.resolve({
+          status: 200,
+          body: JSON.stringify({
+            pages: [
+              {
+                id: 1,
+                key: 'File:소향.png',
+                title: 'File:소향.png',
+                thumbnail: { mimetype: 'image/png' },
+              },
+            ],
+          }),
+        });
+      return Promise.resolve({
+        status: 200,
+        body: JSON.stringify({
+          title: '소향.png',
+          file_description_url:
+            '//commons.wikimedia.org/wiki/File:%EC%86%8C%ED%96%A5.png',
+          original: {
+            mediatype: 'BITMAP',
+            size: 123,
+            url: 'https://upload.wikimedia.org/wikipedia/commons/a/a0/a.png',
+          },
+        }),
+      });
+    });
+
+    await service.execute(run, source);
+
+    expect(run.result).toBe('nochange-parsed');
+    expect(run.artistImageEvidence).toMatchObject({
+      totalMissing: 1,
+      deferredCount: 0,
+      targets: [
+        {
+          status: 'candidates',
+          artistName: '소향',
+          candidates: [{ status: 'pending', license: null }],
+        },
+      ],
+    });
+    expect(imageStorage.saveCrawlImage).not.toHaveBeenCalled();
+    expect(runsRepo.save).toHaveBeenCalledWith(run);
+  });
+
+  it('검색 장애와 실제 0건을 다른 상태로 기록한다', async () => {
+    const { service, source, run, execute, publicFestivals } = harness();
+    execute.mockRestore();
+    source.kind = 'artist-image-discovery';
+    source.parser = 'commons-search';
+    source.url = COMMONS_DISCOVERY_URL;
+    source.parserConfig = { seed: COMMONS_DISCOVERY_SEED };
+    publicFestivals.missingArtistImages.mockResolvedValue([
+      {
+        festivalId: 'fst_one',
+        festivalSourceUrl: 'https://festival.example.com/1',
+        artistName: '첫째',
+      },
+      {
+        festivalId: 'fst_two',
+        festivalSourceUrl: 'https://festival.example.com/2',
+        artistName: '둘째',
+      },
+    ]);
+    jest
+      .spyOn(service, 'limitedGetCommonsJson')
+      .mockImplementation((url) =>
+        Promise.resolve(
+          url.searchParams.get('q')?.startsWith('첫째')
+            ? { status: 429, body: '' }
+            : { status: 200, body: '{"pages":[]}' },
+        ),
+      );
+    await service.execute(run, source);
+    expect(run.result).toBe('nochange-parsed');
+    expect(run.error).toBe('COMMONS_PARTIAL');
+    expect(run.artistImageEvidence?.targets).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          artistName: '첫째',
+          status: 'failed',
+          error: 'SEARCH_HTTP',
+          httpStatus: 429,
+        }),
+        expect.objectContaining({ artistName: '둘째', status: 'no-results' }),
+      ]),
+    );
+  });
+});
+
+describe('소향 Commons 사진 수집', () => {
+  const config = {
+    seed: SOHYANG_COMMONS_SEED,
+    festivalSourceUrl: SOHYANG_FESTIVAL_URL,
+    artistName: '소향',
+  };
+  const image =
+    'https://upload.wikimedia.org/wikipedia/commons/4/49/180212_%EC%86%8C%ED%96%A5.png';
+  const body = `<h1 id="firstHeading">File:180212 소향.png</h1>
+    <div class="fullImageLink" id="file"><a href="${image}"></a></div>
+    <td id="fileinfotpl&#95;aut">Author</td><td>뉴스인스타</td>
+    <span class="licensetpl&#95;link">https://creativecommons.org/licenses/by/3.0</span>
+    <span class="licensetpl&#95;short">CC BY 3.0</span>
+    who confirmed that it was available there under the stated license
+    <a title="Category:Sohyang">Sohyang</a>`;
+
+  it('다른 축제 연결과 고정 이미지 힌트를 거절한다', async () => {
+    const { service } = harness();
+    for (const parserConfig of [
+      {
+        ...config,
+        festivalSourceUrl:
+          'https://ticket.melon.com/performance/index.htm?prodId=1',
+      },
+      { ...config, imageHint: '/untrusted.png' },
+    ])
+      await expect(
+        service.createSource(
+          {
+            kind: 'artist-image',
+            url: SOHYANG_COMMONS_PAGE,
+            parser: 'html-text',
+            parserConfig,
+          },
+          'admin-1',
+        ),
+      ).rejects.toMatchObject({ status: 422 });
+  });
+
+  it('미리보기와 예약 수집이 같은 검증 사진만 사용한다', async () => {
+    const { service, source, run, execute, runsRepo } = harness();
+    execute.mockRestore();
+    Object.assign(source, {
+      kind: 'artist-image',
+      url: SOHYANG_COMMONS_PAGE,
+      parser: 'html-text',
+      parserConfig: config,
+    });
+    const robots = jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({ status: 200, body });
+    const preview = await (
+      service as unknown as {
+        testSource(id: string): Promise<{ parsed: unknown }>;
+      }
+    ).testSource(source.id);
+    expect(preview.parsed).toEqual({ artistName: '소향', imageUrl: image });
+    expect(robots.mock.calls.map(([url]) => url)).toEqual([
+      SOHYANG_COMMONS_PAGE,
+      image,
+    ]);
+    const capture = jest
+      .spyOn(
+        service as unknown as {
+          captureImages: (...args: unknown[]) => Promise<string[]>;
+        },
+        'captureImages',
+      )
+      .mockResolvedValue(['/api/v1/admin/crawl/images/image-1']);
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(null),
+    }));
+    await service.execute(run, source);
+    expect(capture.mock.calls[0][2]).toEqual([new URL(image)]);
+  });
+
+  it('다음 수집에서 라이선스가 바뀌면 검증 실패로 기록한다', async () => {
+    const { service, source, run, execute } = harness();
+    execute.mockRestore();
+    Object.assign(source, {
+      kind: 'artist-image',
+      url: SOHYANG_COMMONS_PAGE,
+      parser: 'html-text',
+      parserConfig: config,
+    });
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({
+      status: 200,
+      body: body.replace('CC BY 3.0', 'All rights reserved'),
+    });
+    await service.execute(run, source);
+    expect(run.result).toBe('failed');
+    expect(run.error).toBe('COMMONS_RIGHTS');
+  });
+});
+
+function wonderlivetBundle(artists: unknown[]) {
+  const json = JSON.stringify({
+    dataState: 'ready',
+    isComingSoon: false,
+    artists,
+  });
+  return `const $T=JSON.parse('${json.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}')`;
+}
+
+const XMF_NOTICE_HTML = `<div class="acd_row"><h4>[XMF 2026 최종 라인업 공개]</h4>
+  <p>10월 3일부터 4일까지 이틀간 인천 파라다이스시티에서 열리는 XMF 2026.</p>
+  <p>첫날인 10월 3일에는 아도(Ado), 루시(LUCY) 등 2팀이 공연한다.</p>
+  <p>둘째 날인 4일 무대는 데이식스(DAY6) 등 1팀이 공연한다.</p></div>`;
+
+function gmfPages() {
+  const data: Record<string, unknown> = {};
+  const banners = Array.from({ length: 48 }, (_, index) => {
+    data[`UploadFile:${index}`] = {
+      url: `${GMF_IMAGE_ORIGIN}/GMF_2026_${index}_aabbccdd00.jpg`,
+      formats: {
+        thumbnail: {
+          name: `thumbnail_GMF2026_아티개별_토_Artist ${index}.jpg`,
+        },
+      },
+    };
+    return {
+      image: { __ref: `UploadFile:${index}` },
+      link: `https://www.instagram.com/gmf_${index}/`,
+    };
+  });
+  data['Festival:172'] = { lineup: [{ banners }] };
+  const content = Array.from(
+    { length: 48 },
+    (_, index) =>
+      `<span>Artist ${index}</span><a href="https://www.instagram.com/gmf_${index}/">@gmf_${index}</a>`,
+  ).join('<br>');
+  const wrap = (apollo: Record<string, unknown>) =>
+    `<script id="__NEXT_DATA__" type="application/json">${JSON.stringify({ props: { apolloState: { data: apollo } } })}</script>`;
+  return { lineup: wrap(data), notice: wrap({ 'Post:4802': { content } }) };
+}
 
 function harness() {
   const source = {
@@ -90,11 +463,18 @@ function harness() {
     findBy: jest.fn().mockResolvedValue([source]),
     findOneBy: jest.fn().mockResolvedValue(source),
   };
+  const dataSourceQuery = jest.fn().mockResolvedValue([]);
   const dataSource = {
-    query: jest.fn().mockResolvedValue([]),
+    query: dataSourceQuery,
     getRepository: jest.fn(),
     transaction: jest.fn((callback: (manager: unknown) => Promise<unknown>) =>
-      callback({}),
+      callback({ query: dataSourceQuery }),
+    ),
+  };
+  const proposalsRepo = {
+    create: jest.fn((value: unknown) => value),
+    save: jest.fn((value: unknown) =>
+      Promise.resolve({ ...(value as object), id: 'proposal-1' }),
     ),
   };
   const imageStorage = {
@@ -113,17 +493,21 @@ function harness() {
         Promise.resolve({ ...candidate, id: 'revision-1' }),
       ),
   };
+  const publicFestivals = {
+    missingArtistImages: jest.fn().mockResolvedValue([]),
+  };
   const service = new CrawlService(
     sourcesRepo as never,
     runsRepo as never,
     snapshotsRepo as never,
     {} as never,
-    {} as never,
+    proposalsRepo as never,
     dataSource as never,
     imageStorage as never,
     alerts as never,
     audit as never,
     timetableRevisions as never,
+    publicFestivals as never,
   ) as unknown as PrivateCrawl;
   const execute = jest.spyOn(service, 'execute').mockResolvedValue(undefined);
   return {
@@ -133,11 +517,13 @@ function harness() {
     runsRepo,
     sourcesRepo,
     dataSource,
+    proposalsRepo,
     snapshotsRepo,
     imageStorage,
     alerts,
     audit,
     timetableRevisions,
+    publicFestivals,
     insertQb,
     insertResult,
     updateQb,
@@ -162,6 +548,480 @@ describe('CrawlService scheduled runs', () => {
       scheduledDate: '2026-10-21',
     });
     expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('defers Commons discovery while another scheduled crawl is still running', async () => {
+    const { service, source, sourcesRepo, dataSource, insertQb, execute } =
+      harness();
+    sourcesRepo.findBy.mockResolvedValueOnce([
+      {
+        ...source,
+        kind: 'artist-image-discovery',
+        url: COMMONS_DISCOVERY_URL,
+        parser: 'commons-search',
+      },
+    ]);
+    dataSource.query.mockResolvedValueOnce([{ active: true }]);
+
+    await service.scheduleDue();
+
+    expect(insertQb.values).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('does not starve Commons discovery on a completed GMF source re-queued today', async () => {
+    const { service, source, sourcesRepo, dataSource, insertQb, execute } =
+      harness();
+    sourcesRepo.findBy.mockResolvedValueOnce([
+      {
+        ...source,
+        kind: 'artist-image-discovery',
+        url: COMMONS_DISCOVERY_URL,
+        parser: 'commons-search',
+      },
+    ]);
+    service.gmfQueuedSources.add('00000000-0000-4000-8000-000000000001');
+    dataSource.query
+      .mockResolvedValueOnce([{ pending: false }])
+      .mockResolvedValueOnce([{ active: false }]);
+
+    await service.scheduleDue();
+
+    expect(insertQb.values).toHaveBeenCalledWith({
+      sourceId: source.id,
+      scheduledDate: '2026-10-21',
+    });
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('defers Commons discovery while a queued GMF source has no run today', async () => {
+    const { service, source, sourcesRepo, dataSource, insertQb } = harness();
+    sourcesRepo.findBy.mockResolvedValueOnce([
+      {
+        ...source,
+        kind: 'artist-image-discovery',
+        url: COMMONS_DISCOVERY_URL,
+        parser: 'commons-search',
+      },
+    ]);
+    service.gmfQueuedSources.add('00000000-0000-4000-8000-000000000001');
+    dataSource.query.mockResolvedValueOnce([{ pending: true }]);
+
+    await service.scheduleDue();
+
+    expect(insertQb.values).not.toHaveBeenCalled();
+  });
+
+  it('keeps a failed GMF source ahead of discovery until its one retry finishes', async () => {
+    const { service, source, sourcesRepo, dataSource, insertQb } = harness();
+    sourcesRepo.findBy.mockResolvedValueOnce([
+      {
+        ...source,
+        kind: 'artist-image-discovery',
+        url: COMMONS_DISCOVERY_URL,
+        parser: 'commons-search',
+      },
+    ]);
+    const queuedId = '00000000-0000-4000-8000-000000000001';
+    service.gmfQueuedSources.add(queuedId);
+    dataSource.query.mockResolvedValueOnce([{ pending: true }]);
+
+    await service.scheduleDue();
+
+    expect(dataSource.query).toHaveBeenCalledWith(
+      expect.stringContaining(
+        `failed.error IN ('PROCESS', 'IMAGE_FETCH', 'IMAGE_STORE')`,
+      ),
+      [[queuedId], '2026-10-21'],
+    );
+    expect(dataSource.query).toHaveBeenCalledWith(
+      expect.stringContaining('queued_source."consecutiveFailures" = 1'),
+      [[queuedId], '2026-10-21'],
+    );
+    expect(insertQb.values).not.toHaveBeenCalled();
+  });
+
+  it('reconciles prior XMF HTTP 403 runs once when the server starts', () => {
+    const { service } = harness();
+    const schedule = jest.spyOn(service, 'scheduleDue').mockResolvedValue();
+    const reconcile = jest
+      .spyOn(service, 'reconcileRecentXmf403')
+      .mockResolvedValue();
+
+    service.onModuleInit();
+    service.onModuleDestroy();
+
+    expect(schedule).toHaveBeenCalledTimes(1);
+    expect(reconcile).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs a backdated enabled GMF gallery immediately through the daily reservation', async () => {
+    const { service, source, insertQb, execute } = harness();
+    source.kind = 'artist-gallery';
+    source.url = GMF_LINEUP_URL;
+    source.parserConfig = {
+      seed: 'gmf-official-lineup',
+      festivalSourceUrl: GMF_FESTIVAL_URL,
+    };
+    source.createdAt = new Date('2026-10-20T14:59:00Z');
+
+    await service.scheduleDue();
+
+    expect(insertQb.values).toHaveBeenCalledWith({
+      sourceId: source.id,
+      scheduledDate: '2026-10-21',
+    });
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs Wonderlivet gallery before its new image children on the same scheduled day', async () => {
+    const {
+      service,
+      source,
+      sourcesRepo,
+      runsRepo,
+      updateQb,
+      execute,
+      insertQb,
+    } = harness();
+    source.kind = 'artist-gallery';
+    source.url = WONDERLIVET_LINEUP_URL;
+    source.parserConfig = {
+      seed: 'wonderlivet-official-lineup',
+      festivalSourceUrl: WONDERLIVET_FESTIVAL_URL,
+    };
+    const child = {
+      ...source,
+      id: 'new-wonderlivet-image',
+      kind: 'artist-image',
+      parserConfig: {
+        seed: 'official-wonderlivet-lineup',
+        festivalSourceUrl: WONDERLIVET_FESTIVAL_URL,
+        artistName: 'Official Act',
+        imageHint: '/lineup/artists/production/live/day1/official.webp',
+      },
+    } as CrawlSource;
+    sourcesRepo.findBy
+      .mockResolvedValueOnce([source])
+      .mockResolvedValueOnce([child]);
+    sourcesRepo.findOneBy.mockResolvedValue(child);
+    runsRepo.createQueryBuilder
+      .mockReset()
+      .mockImplementationOnce(() => updateQb)
+      .mockImplementationOnce(() => insertQb)
+      .mockImplementationOnce(() => updateQb)
+      .mockImplementationOnce(() => insertQb);
+    const verifiedBundle = {
+      body: wonderlivetBundle([
+        {
+          id: 1,
+          name: 'Official Act',
+          performanceDay: 'DAY1',
+          imageUrl: `${WONDERLIVET_IMAGE_ORIGIN}/lineup/artists/production/live/day1/official.webp`,
+        },
+      ]),
+      snapshotUrl: '/api/v1/admin/crawl/snapshots/gallery-snapshot',
+    };
+    execute.mockResolvedValueOnce(verifiedBundle);
+
+    await service.scheduleDue();
+
+    expect(execute.mock.calls.map(([, item]) => item.id)).toEqual([
+      source.id,
+      child.id,
+    ]);
+    expect(execute.mock.calls[1][2]).toBe(verifiedBundle);
+    expect(insertQb.values).toHaveBeenCalledWith({
+      sourceId: child.id,
+      scheduledDate: '2026-10-21',
+    });
+  });
+
+  it('does not run Wonderlivet children after a failed gallery refresh', async () => {
+    const { service, source, sourcesRepo, execute, run } = harness();
+    source.kind = 'artist-gallery';
+    source.url = WONDERLIVET_LINEUP_URL;
+    source.parserConfig = {
+      seed: 'wonderlivet-official-lineup',
+      festivalSourceUrl: WONDERLIVET_FESTIVAL_URL,
+    };
+    const child = {
+      ...source,
+      id: 'stale-image',
+      kind: 'artist-image',
+      parserConfig: { seed: 'official-wonderlivet-lineup' },
+    } as CrawlSource;
+    sourcesRepo.findBy.mockResolvedValue([child, source]);
+    execute.mockImplementation(() => {
+      run.result = 'failed';
+      return Promise.resolve();
+    });
+
+    await service.scheduleDue();
+
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute.mock.calls[0][1]).toBe(source);
+  });
+
+  it('runs the GMF gallery before children and reloads their current image hints', async () => {
+    const {
+      service,
+      source,
+      sourcesRepo,
+      runsRepo,
+      updateQb,
+      insertQb,
+      execute,
+    } = harness();
+    const child = {
+      ...source,
+      kind: 'artist-image',
+      url: GMF_LINEUP_URL,
+      parserConfig: {
+        seed: 'official-gmf-lineup',
+        imageHint: '/GMF_2026_old.jpg',
+      },
+    } as CrawlSource;
+    const gallery = {
+      ...source,
+      id: 'gallery-1',
+      kind: 'artist-gallery',
+      url: GMF_LINEUP_URL,
+      parserConfig: {
+        seed: 'gmf-official-lineup',
+        festivalSourceUrl: GMF_FESTIVAL_URL,
+      },
+    } as CrawlSource;
+    const freshChild = {
+      ...child,
+      parserConfig: { ...child.parserConfig, imageHint: '/GMF_2026_new.jpg' },
+    } as CrawlSource;
+    sourcesRepo.findBy.mockResolvedValue([child, gallery]);
+    sourcesRepo.findOneBy.mockResolvedValue(freshChild);
+    runsRepo.createQueryBuilder
+      .mockImplementationOnce(() => updateQb)
+      .mockImplementationOnce(() => insertQb);
+
+    await service.scheduleDue();
+    await service.gmfImageQueue;
+
+    expect(execute.mock.calls[0][1]).toBe(gallery);
+    expect(execute.mock.calls[1][1]).toBe(freshChild);
+  });
+
+  it('runs new GMF image sources on the day the gallery creates them', async () => {
+    const {
+      service,
+      source,
+      sourcesRepo,
+      runsRepo,
+      updateQb,
+      insertQb,
+      execute,
+    } = harness();
+    source.kind = 'artist-gallery';
+    source.url = GMF_LINEUP_URL;
+    source.parserConfig = {
+      seed: 'gmf-official-lineup',
+      festivalSourceUrl: GMF_FESTIVAL_URL,
+    };
+    const child = {
+      ...source,
+      id: 'new-image-source',
+      kind: 'artist-image',
+      parserConfig: {
+        seed: 'official-gmf-lineup',
+        imageHint: '/GMF_2026_new.jpg',
+      },
+    } as CrawlSource;
+    sourcesRepo.findBy
+      .mockResolvedValueOnce([source])
+      .mockResolvedValueOnce([child]);
+    sourcesRepo.findOneBy.mockResolvedValue(child);
+    runsRepo.createQueryBuilder
+      .mockImplementationOnce(() => updateQb)
+      .mockImplementationOnce(() => insertQb);
+
+    await service.scheduleDue();
+    await service.gmfImageQueue;
+
+    expect(execute.mock.calls.map((call) => call[1].id)).toEqual([
+      source.id,
+      child.id,
+    ]);
+  });
+
+  it('waits for one GMF image download before starting the next', async () => {
+    const {
+      service,
+      source,
+      sourcesRepo,
+      runsRepo,
+      updateQb,
+      insertQb,
+      execute,
+    } = harness();
+    const first = {
+      ...source,
+      kind: 'artist-image',
+      url: GMF_LINEUP_URL,
+      parserConfig: { seed: 'official-gmf-lineup' },
+    } as CrawlSource;
+    const second = { ...first, id: 'source-2' };
+    sourcesRepo.findBy.mockResolvedValue([first, second]);
+    sourcesRepo.findOneBy.mockImplementation(({ id }: { id: string }) =>
+      Promise.resolve(id === first.id ? first : second),
+    );
+    runsRepo.createQueryBuilder
+      .mockImplementationOnce(() => updateQb)
+      .mockImplementationOnce(() => insertQb)
+      .mockImplementationOnce(() => updateQb)
+      .mockImplementationOnce(() => insertQb);
+    let finishFirst: () => void = () => undefined;
+    const firstStarted = new Promise<void>((resolve) => {
+      execute.mockImplementationOnce(
+        () =>
+          new Promise<void>((finish) => {
+            finishFirst = finish;
+            resolve();
+          }),
+      );
+    });
+    const scheduled = service.scheduleDue();
+    await firstStarted;
+    expect(execute).toHaveBeenCalledTimes(1);
+    jest.setSystemTime(new Date('2026-10-20T15:16:00Z'));
+    await service.scheduleDue();
+    expect(insertQb.execute).toHaveBeenCalledTimes(1);
+    finishFirst();
+    await scheduled;
+    await service.gmfImageQueue;
+    expect(execute.mock.calls.map((call) => call[1].id)).toEqual([
+      first.id,
+      second.id,
+    ]);
+  });
+
+  it('reserves another festival while a GMF image is downloading', async () => {
+    const {
+      service,
+      source,
+      sourcesRepo,
+      runsRepo,
+      updateQb,
+      insertQb,
+      execute,
+    } = harness();
+    const image = {
+      ...source,
+      kind: 'artist-image',
+      url: GMF_LINEUP_URL,
+      parserConfig: { seed: 'official-gmf-lineup' },
+    } as CrawlSource;
+    const other = { ...source, id: 'other-source' };
+    sourcesRepo.findBy
+      .mockResolvedValueOnce([image])
+      .mockResolvedValueOnce([other]);
+    sourcesRepo.findOneBy.mockResolvedValue(image);
+    runsRepo.createQueryBuilder
+      .mockImplementationOnce(() => updateQb)
+      .mockImplementationOnce(() => insertQb)
+      .mockImplementationOnce(() => updateQb)
+      .mockImplementationOnce(() => insertQb);
+    let finishImage: () => void = () => undefined;
+    const imageStarted = new Promise<void>((resolve) => {
+      execute.mockImplementationOnce(
+        () =>
+          new Promise<void>((finish) => {
+            finishImage = finish;
+            resolve();
+          }),
+      );
+    });
+
+    await service.scheduleDue();
+    await imageStarted;
+    await service.scheduleDue();
+
+    expect(execute.mock.calls.map((call) => call[1].id)).toEqual([
+      image.id,
+      other.id,
+    ]);
+    finishImage();
+    await service.gmfImageQueue;
+  });
+
+  it('retries one failed GMF image run after a minute', async () => {
+    const {
+      service,
+      source,
+      run,
+      runsRepo,
+      insertResult,
+      insertQb,
+      updateQb,
+      execute,
+    } = harness();
+    source.kind = 'artist-image';
+    source.url = GMF_LINEUP_URL;
+    source.parserConfig = { seed: 'official-gmf-lineup' };
+    source.createdAt = new Date('2026-10-20T15:00:00Z');
+    source.consecutiveFailures = 1;
+    insertResult.identifiers = [];
+    run.finishedAt = new Date('2026-10-20T14:58:00Z');
+    runsRepo.createQueryBuilder
+      .mockImplementationOnce(() => updateQb)
+      .mockImplementationOnce(() => insertQb)
+      .mockImplementationOnce(() => updateQb)
+      .mockImplementationOnce(() => insertQb);
+    insertQb.execute
+      .mockResolvedValueOnce({ identifiers: [] })
+      .mockResolvedValueOnce({ identifiers: [{ id: 'retry-1' }] });
+    runsRepo.findOneByOrFail.mockResolvedValue({ ...run, id: 'retry-1' });
+
+    await service.scheduleDue();
+    await service.gmfImageQueue;
+
+    expect(runsRepo.findOneBy).toHaveBeenCalledWith({
+      sourceId: source.id,
+      scheduledDate: '2026-10-21',
+      result: 'failed',
+      error: In(['PROCESS', 'IMAGE_FETCH', 'IMAGE_STORE']),
+    });
+    expect(insertQb.values).toHaveBeenLastCalledWith({ sourceId: source.id });
+    expect(execute.mock.calls[0][0].id).toBe('retry-1');
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not keep retrying a GMF image after its second failure', async () => {
+    const { service, source, insertResult, updateQb, execute } = harness();
+    source.kind = 'artist-image';
+    source.url = GMF_LINEUP_URL;
+    source.parserConfig = { seed: 'official-gmf-lineup' };
+    source.consecutiveFailures = 2;
+    insertResult.identifiers = [];
+
+    await service.scheduleDue();
+    await service.gmfImageQueue;
+
+    expect(updateQb.andWhere).not.toHaveBeenCalledWith(
+      'result = :failed',
+      expect.anything(),
+    );
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('does not run a queued GMF image after the source is disabled', async () => {
+    const { service, source, sourcesRepo, execute } = harness();
+    source.kind = 'artist-image';
+    source.url = GMF_LINEUP_URL;
+    source.parserConfig = { seed: 'official-gmf-lineup' };
+    sourcesRepo.findOneBy.mockResolvedValue({ ...source, enabled: false });
+
+    await service.scheduleDue();
+    await service.gmfImageQueue;
+
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it('skips a duplicate daily run that is still active', async () => {
@@ -221,6 +1081,646 @@ describe('CrawlService scheduled runs', () => {
     await service.scheduleDue();
 
     expect(execute).not.toHaveBeenCalled();
+  });
+});
+
+describe('Wonderlivet public bundle fetch', () => {
+  it('fetches only the module asset linked from the official page after robots checks', async () => {
+    const { service, source } = harness();
+    source.kind = 'artist-gallery';
+    source.url = WONDERLIVET_LINEUP_URL;
+    source.parserConfig = {
+      seed: 'wonderlivet-official-lineup',
+      festivalSourceUrl: WONDERLIVET_FESTIVAL_URL,
+    };
+    const bundleUrl = 'https://www.wonderli.vet/assets/index-8xy3D9hg.js';
+    const limitedGet = jest
+      .spyOn(
+        service as unknown as {
+          limitedGet: (url: URL) => Promise<{ status: number; body: string }>;
+        },
+        'limitedGet',
+      )
+      .mockResolvedValueOnce({
+        status: 200,
+        body: '<script type="module" src="/assets/index-8xy3D9hg.js"></script>',
+      })
+      .mockResolvedValueOnce({ status: 200, body: wonderlivetBundle([]) });
+    const robots = jest.spyOn(service, 'checkRobots').mockResolvedValue();
+
+    await service.getListing(source);
+
+    expect(limitedGet.mock.calls.map(([url]) => url.href)).toEqual([
+      WONDERLIVET_LINEUP_URL,
+      bundleUrl,
+    ]);
+    expect(robots).toHaveBeenCalledWith(bundleUrl);
+  });
+});
+
+describe('DRDR official profile sources', () => {
+  it('rejects a forged page and an unreviewed source setting', async () => {
+    const { service, dataSource } = harness();
+    for (const source of [
+      {
+        url: 'https://drdr.ac/wordpress/wp-json/wp/v2/posts/999',
+        parserConfig: DRDR_CONFIG,
+      },
+      {
+        url: DRDR_PAGE,
+        parserConfig: { ...DRDR_CONFIG, artistAlias: 'another artist' },
+      },
+    ]) {
+      await expect(
+        service.createSource(
+          {
+            kind: 'artist-image',
+            parser: 'html-text',
+            ...source,
+          },
+          'admin-1',
+        ),
+      ).rejects.toMatchObject({ status: 422 });
+    }
+    expect(dataSource.transaction).not.toHaveBeenCalled();
+  });
+
+  it('tests and captures only the verified MUSICIAN portrait', async () => {
+    const { service, source, run, execute, runsRepo } = harness();
+    execute.mockRestore();
+    source.kind = 'artist-image';
+    source.url = DRDR_PAGE;
+    source.parser = 'html-text';
+    source.parserConfig = DRDR_CONFIG;
+    const robots = jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({
+      status: 200,
+      body: DRDR_POST,
+    });
+    const test = await (
+      service as unknown as {
+        testSource(id: string): Promise<{ parsed: unknown }>;
+      }
+    ).testSource(source.id);
+    expect(test.parsed).toEqual({
+      artistName: 'OYSTERS',
+      imageUrl: DRDR_PHOTO,
+    });
+    expect(robots).toHaveBeenCalledWith(DRDR_PHOTO);
+    const capture = jest
+      .spyOn(
+        service as unknown as {
+          captureImages: (...args: unknown[]) => Promise<string[]>;
+        },
+        'captureImages',
+      )
+      .mockResolvedValue(['/api/v1/admin/crawl/images/image-1']);
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(null),
+    }));
+    await service.execute(run, source);
+    expect(capture.mock.calls[0][2]).toEqual([new URL(DRDR_PHOTO)]);
+    expect(run.result).toBe('nochange-parsed');
+  });
+});
+
+describe('CDF LOW HIGH LOW official Melon Ticket profile source', () => {
+  const photo =
+    'https://cdnimg.melon.co.kr/cm2/artistcrop/images/027/54/370/2754370_20250307154851.jpg';
+  const config = {
+    seed: CDF_LOW_HIGH_LOW_PROFILE_SEED,
+    festivalSourceUrl: CDF_FESTIVAL_URL,
+    artistName: '로우하이로우',
+    artistAlias: 'LOW HIGH LOW',
+  };
+  const body = `<div class="wrap_artist_profile"><div class="box_artist_profile">
+    <div class="box_artist_thumb"><img src="${photo}" alt="로우하이로우"></div>
+    <div class="box_artist_txt"><p class="tit_artist">로우하이로우</p></div>
+    </div></div><!--//wrap_artist_profile -->`;
+
+  it('rejects another artist, festival, or source URL', async () => {
+    const { service, dataSource } = harness();
+    for (const [url, parserConfig] of [
+      [CDF_LOW_HIGH_LOW_PROFILE_URL, { ...config, artistAlias: 'Other' }],
+      [
+        CDF_LOW_HIGH_LOW_PROFILE_URL,
+        {
+          ...config,
+          festivalSourceUrl: 'https://mintpaper.co.kr/festivals/172',
+        },
+      ],
+      ['https://ticket.melon.com/artist/index.htm?artistId=9999999', config],
+    ] as const) {
+      await expect(
+        service.createSource(
+          { kind: 'artist-image', url, parser: 'html-text', parserConfig },
+          'admin-1',
+        ),
+      ).rejects.toMatchObject({ status: 422 });
+    }
+    expect(dataSource.transaction).not.toHaveBeenCalled();
+  });
+
+  it('tests and captures only the identified Melon Ticket artist photo', async () => {
+    const { service, source, run, execute, runsRepo } = harness();
+    execute.mockRestore();
+    source.kind = 'artist-image';
+    source.url = CDF_LOW_HIGH_LOW_PROFILE_URL;
+    source.parser = 'html-text';
+    source.parserConfig = config;
+    const robots = jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({ status: 200, body });
+
+    const test = await (
+      service as unknown as {
+        testSource(id: string): Promise<{ parsed: unknown }>;
+      }
+    ).testSource(source.id);
+    expect(test.parsed).toEqual({
+      artistName: '로우하이로우',
+      imageUrl: photo,
+    });
+    expect(robots.mock.calls.map(([url]) => url)).toEqual([
+      CDF_LOW_HIGH_LOW_PROFILE_URL,
+      photo,
+    ]);
+
+    const capture = jest
+      .spyOn(
+        service as unknown as {
+          captureImages: (...args: unknown[]) => Promise<string[]>;
+        },
+        'captureImages',
+      )
+      .mockResolvedValue(['/api/v1/admin/crawl/images/image-1']);
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(null),
+    }));
+    await service.execute(run, source);
+    expect(capture.mock.calls[0][2]).toEqual([new URL(photo)]);
+    expect(run.result).toBe('nochange-parsed');
+  });
+});
+
+describe('Wonderlivet official profile sources', () => {
+  const page =
+    'https://poclanos.com/artist/%ED%86%A0%EB%A7%88%ED%86%A0%EB%A7%9B/';
+  const photo =
+    'https://poclanos.com/drmvsn/wp-content/uploads/2026/10/new-portrait.jpeg';
+  const config = {
+    seed: WONDERLIVET_PROFILE_SEED,
+    festivalSourceUrl: WONDERLIVET_PROFILE_FESTIVAL_URL,
+    artistName: 'Tomatomat',
+  };
+  const body = `<title>토마토맛 | POCLANOS</title><main class="artist-single"><span class="artist-img-wrap"><img src="${photo}"></span><h1 class="page-title">토마토맛</h1></main>`;
+
+  it('checks both the source and selected photo against robots rules', async () => {
+    const { service, source } = harness();
+    source.kind = 'artist-image';
+    source.url = page;
+    source.parser = 'html-text';
+    source.parserConfig = config;
+    const robots = jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({ status: 200, body });
+
+    const result = await (
+      service as unknown as {
+        testSource(id: string): Promise<{ parsed: unknown }>;
+      }
+    ).testSource(source.id);
+    expect(result.parsed).toEqual({ artistName: 'Tomatomat', imageUrl: photo });
+    expect(robots.mock.calls.map(([url]) => url)).toEqual([page, photo]);
+  });
+
+  it('rejects an unregistered profile page or spoofed source ownership', async () => {
+    const { service, dataSource } = harness();
+    for (const [url, parserConfig] of [
+      ['https://poclanos.com/artist/other/', config],
+      [page, { ...config, festivalSourceUrl: CDF_FESTIVAL_URL }],
+      [page, { ...config, imageHint: 'other.jpg' }],
+    ] as const)
+      await expect(
+        service.createSource(
+          { kind: 'artist-image', url, parser: 'html-text', parserConfig },
+          'admin-1',
+        ),
+      ).rejects.toMatchObject({ status: 422 });
+    expect(dataSource.transaction).not.toHaveBeenCalled();
+  });
+
+  it('captures the current verified photo when executing the source', async () => {
+    const { service, source, run, execute, runsRepo } = harness();
+    execute.mockRestore();
+    source.kind = 'artist-image';
+    source.url = page;
+    source.parser = 'html-text';
+    source.parserConfig = config;
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({ status: 200, body });
+    const capture = jest
+      .spyOn(
+        service as unknown as {
+          captureImages: (...args: unknown[]) => Promise<string[]>;
+        },
+        'captureImages',
+      )
+      .mockResolvedValue(['/api/v1/admin/crawl/images/image-1']);
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(null),
+    }));
+
+    await service.execute(run, source);
+    expect(capture.mock.calls[0][2]).toEqual([new URL(photo)]);
+    expect(run.result).toBe('nochange-parsed');
+  });
+});
+
+describe('Seoul Music and Oneway official profile sources', () => {
+  const pages = Object.keys(FESTIVAL_PROFILES);
+  const photos = [
+    'https://poclanos.com/drmvsn/wp-content/uploads/2026/10/new-group-photo.jpeg',
+    'https://images.squarespace-cdn.com/content/v1/6752a80810127d336fce8328/2c2c201c-2ce0-49ee-84eb-db4fba1c8f4b/new-group-photo.jpeg',
+    'https://www.inhisplan.com/assets/photo/promo/new-team-photo.jpg',
+  ];
+  const bodies = [
+    `<title>추다혜차지스 | POCLANOS</title><main class="artist-single"><span class="artist-img-wrap"><img src="${photos[0]}"></span><h1 class="page-title">추다혜차지스</h1></main>`,
+    `<title>About &mdash; LEVISTANCE</title><section data-test="page-section"><img data-sqsp-image-block-image src="${photos[1]}"><strong>WE ARE LEVISTANCE.</strong><strong>안녕하세요 레비스탕스입니다.</strong></section>`,
+    `<title>HISPLAN | 히스플랜</title><p>히스플랜은 노래로 하나님을 노래하는 사람들.</p><div class="promo-photo-banner"><img src="${photos[2]}" alt="히스플랜 팀"><div class="promo-photo-fade"></div></div>`,
+  ];
+
+  it.each([0, 1, 2])(
+    'checks source and group photo robots rules, then captures photo %i',
+    async (index) => {
+      const { service, source, run, execute, runsRepo } = harness();
+      execute.mockRestore();
+      const page = pages[index];
+      source.kind = 'artist-image';
+      source.url = page;
+      source.parser = 'html-text';
+      source.parserConfig = {
+        seed: FESTIVAL_PROFILE_SEED,
+        festivalSourceUrl: FESTIVAL_PROFILES[page].festivalSourceUrl,
+        artistName: FESTIVAL_PROFILES[page].artistName,
+      };
+      const robots = jest.spyOn(service, 'checkRobots').mockResolvedValue();
+      jest
+        .spyOn(service, 'getListing')
+        .mockResolvedValue({ status: 200, body: bodies[index] });
+      const result = await (
+        service as unknown as {
+          testSource(id: string): Promise<{ parsed: unknown }>;
+        }
+      ).testSource(source.id);
+      expect(result.parsed).toEqual({
+        artistName: source.parserConfig.artistName,
+        imageUrl: photos[index],
+      });
+      expect(robots.mock.calls.map(([url]) => url)).toEqual([
+        page,
+        photos[index],
+      ]);
+      const capture = jest
+        .spyOn(
+          service as unknown as {
+            captureImages: (...args: unknown[]) => Promise<string[]>;
+          },
+          'captureImages',
+        )
+        .mockResolvedValue(['/api/v1/admin/crawl/images/image-1']);
+      runsRepo.createQueryBuilder = jest.fn(() => ({
+        where: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        getOne: jest.fn().mockResolvedValue(null),
+      }));
+      await service.execute(run, source);
+      expect(capture.mock.calls[0][2]).toEqual([new URL(photos[index])]);
+    },
+  );
+
+  it('rejects an unregistered page and extra source config', async () => {
+    const { service, dataSource } = harness();
+    const page = pages[0];
+    const config = {
+      seed: FESTIVAL_PROFILE_SEED,
+      festivalSourceUrl: FESTIVAL_PROFILES[page].festivalSourceUrl,
+      artistName: FESTIVAL_PROFILES[page].artistName,
+    };
+    for (const [url, parserConfig] of [
+      [page + 'other', config],
+      [page, { ...config, imageHint: 'fixed-photo.jpg' }],
+    ] as const)
+      await expect(
+        service.createSource(
+          { kind: 'artist-image', url, parser: 'html-text', parserConfig },
+          'admin-1',
+        ),
+      ).rejects.toMatchObject({ status: 422 });
+    expect(dataSource.transaction).not.toHaveBeenCalled();
+  });
+});
+
+describe('additional Seoul Music official photo sources', () => {
+  it('rejects an unregistered page and a fixed image hint', async () => {
+    const { service, dataSource } = harness();
+    const page = Object.keys(ADDITIONAL_FESTIVAL_PROFILES)[0];
+    const profile = ADDITIONAL_FESTIVAL_PROFILES[page];
+    const config = {
+      seed: ADDITIONAL_FESTIVAL_PROFILE_SEED,
+      festivalSourceUrl: profile.festivalSourceUrl,
+      artistName: profile.artistName,
+    };
+    for (const [url, parserConfig] of [
+      [page + 'other', config],
+      [page, { ...config, imageHint: 'fixed-photo.jpg' }],
+    ] as const)
+      await expect(
+        service.createSource(
+          { kind: 'artist-image', url, parser: 'html-text', parserConfig },
+          'admin-1',
+        ),
+      ).rejects.toMatchObject({ status: 422 });
+    expect(dataSource.transaction).not.toHaveBeenCalled();
+  });
+
+  it.each(Object.keys(ADDITIONAL_FESTIVAL_PROFILES))(
+    'checks both official page and image robots, then captures %s',
+    async (page) => {
+      const { service, source, run, execute, runsRepo } = harness();
+      execute.mockRestore();
+      const profile = ADDITIONAL_FESTIVAL_PROFILES[page];
+      const image =
+        profile.rule === 'antenna'
+          ? 'https://cdn.imweb.me/thumbnail/20261026/abc123.jpg'
+          : profile.rule === 'poclanos'
+            ? 'https://poclanos.com/drmvsn/wp-content/uploads/2026/10/okdal.jpg'
+            : profile.rule === 'paulkim'
+              ? 'https://image.static.bstage.in/cdn-cgi/image/metadata=none/paulkim/f14d75b4-f328-4832-8fee-9f12fd8bdd7e/d40f80c8-63b1-403b-933a-e898b853778e/ori.jpg'
+              : profile.rule === 'nerd-connection'
+                ? 'https://cdn.prod.website-files.com/6649fa6f24368d5b7f0e9bc1/6aa3bcf26a0d432320d3492d_nerd-connection.jpg'
+                : 'https://images.squarespace-cdn.com/content/v1/586ebc34d482e9c69268b69a/29d51387-1577-41f8-a74e-c0169ad742df/KakaoTalk_20250519_163031185.jpg?format=750w';
+      const body =
+        profile.rule === 'antenna'
+          ? `<meta property="og:url" content="${page}"><h3>권진아<img src="/logo.png"></h3><h6>Kwon Jin Ah</h6><img class="org_image" src="${image}">`
+          : profile.rule === 'poclanos'
+            ? `<title>옥상달빛 | POCLANOS</title><main class="artist-single"><span class="artist-img-wrap"><img src="${image}"></span></main><h1 class="page-title">옥상달빛</h1>`
+            : profile.rule === 'paulkim'
+              ? `<title>폴킴 공식 홈페이지ㅣPaul Kim Official Homepage</title><meta property="og:image" content="${image}">`
+              : profile.rule === 'nerd-connection'
+                ? `<title>너드커넥션 Nerd Connection</title><span class="artist-name-bold">너드커넥션</span><img class="image-43" src="${image}">`
+                : `<title>K-Music Night: 김창완밴드 &amp; 터치드 &mdash; 뉴욕한국문화원</title><div class="sqs-block sqs-block-image"><img data-sqsp-image-classic-block-image srcset="${image} 750w"></div><div class="sqs-block sqs-block-html"><strong>▲ 김창완밴드</strong></div>`;
+      source.kind = 'artist-image';
+      source.url = page;
+      source.parser = 'html-text';
+      source.parserConfig = {
+        seed: ADDITIONAL_FESTIVAL_PROFILE_SEED,
+        festivalSourceUrl: profile.festivalSourceUrl,
+        artistName: profile.artistName,
+      };
+      const robots = jest.spyOn(service, 'checkRobots').mockResolvedValue();
+      jest
+        .spyOn(service, 'getListing')
+        .mockResolvedValue({ status: 200, body });
+      const result = await (
+        service as unknown as {
+          testSource(id: string): Promise<{ parsed: unknown }>;
+        }
+      ).testSource(source.id);
+      expect(result.parsed).toEqual({
+        artistName: profile.artistName,
+        imageUrl: image,
+      });
+      expect(robots.mock.calls.map(([url]) => url)).toEqual([page, image]);
+      const capture = jest
+        .spyOn(
+          service as unknown as {
+            captureImages: (...args: unknown[]) => Promise<string[]>;
+          },
+          'captureImages',
+        )
+        .mockResolvedValue(['/api/v1/admin/crawl/images/image-1']);
+      runsRepo.createQueryBuilder = jest.fn(() => ({
+        where: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        getOne: jest.fn().mockResolvedValue(null),
+      }));
+      await service.execute(run, source);
+      expect(capture.mock.calls[0][2]).toEqual([new URL(image)]);
+    },
+  );
+});
+
+describe('Prugio official soprano photo source', () => {
+  const config = {
+    seed: PRUGIO_PROFILE_SEED,
+    festivalSourceUrl: PRUGIO_LINEUP_URL,
+    artistName: '서운정',
+  };
+  const image = 'https://www.kiffa.or.kr/images/sub/sub0504_img20.jpg';
+  const body =
+    '<title>한국국제물류주선업협회</title><div class="con3"><h6 class="sub_tit02">홍보대사</h6><ul>' +
+    '<li><div class="img_wrap"><img src="/images/sub/sub0504_img20.jpg"></div>' +
+    '<div class="txt_wrap"><p>소프라노</p><strong>서운정</strong></div></li></ul></div>';
+
+  it('rejects an unregistered page and a fixed image hint', async () => {
+    const { service, dataSource } = harness();
+    for (const [url, parserConfig] of [
+      [PRUGIO_PROFILE_URL + '/other', config],
+      [PRUGIO_PROFILE_URL, { ...config, imageHint: 'fixed.jpg' }],
+    ] as const)
+      await expect(
+        service.createSource(
+          { kind: 'artist-image', url, parser: 'html-text', parserConfig },
+          'admin-1',
+        ),
+      ).rejects.toMatchObject({ status: 422 });
+    expect(dataSource.transaction).not.toHaveBeenCalled();
+  });
+
+  it('uses the same selected image in test and scheduled capture', async () => {
+    const { service, source, run, execute, runsRepo } = harness();
+    execute.mockRestore();
+    Object.assign(source, {
+      kind: 'artist-image',
+      url: PRUGIO_PROFILE_URL,
+      parser: 'html-text',
+      parserConfig: config,
+    });
+    const robots = jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({ status: 200, body });
+    const result = await (
+      service as unknown as {
+        testSource(id: string): Promise<{ parsed: unknown }>;
+      }
+    ).testSource(source.id);
+    expect(result.parsed).toEqual({ artistName: '서운정', imageUrl: image });
+    expect(robots.mock.calls.map(([url]) => url)).toEqual([
+      PRUGIO_PROFILE_URL,
+      image,
+    ]);
+    const capture = jest
+      .spyOn(
+        service as unknown as {
+          captureImages: (...args: unknown[]) => Promise<string[]>;
+        },
+        'captureImages',
+      )
+      .mockResolvedValue(['/api/v1/admin/crawl/images/image-1']);
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(null),
+    }));
+    await service.execute(run, source);
+    expect(capture.mock.calls[0][2]).toEqual([new URL(image)]);
+  });
+});
+
+describe('CDF official profile sources', () => {
+  it('checks both ONEWE profile and selected image against robots rules', async () => {
+    const { service, source } = harness();
+    const page = 'https://oneweofficial.jp/profile';
+    const photo =
+      'https://storage.googleapis.com/image.fanicon.net/cms/12345_group.jpg';
+    source.kind = 'artist-image';
+    source.url = page;
+    source.parser = 'html-text';
+    source.parserConfig = {
+      seed: 'cdf-official-profile',
+      festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
+      artistName: 'ONEWE(원위)',
+      officialHandle: 'official_onewe',
+    };
+    const robots = jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({
+      status: 200,
+      body: `<title>profile | ONEWE</title><ul class="members__list"><li class="member"><div class="member__avatar"><img src="${photo}"></div><div class="member__name">ONEWE</div></li></ul>`,
+    });
+
+    const result = await (
+      service as unknown as {
+        testSource(id: string): Promise<{ parsed: unknown }>;
+      }
+    ).testSource(source.id);
+    expect(result.parsed).toEqual({
+      artistName: 'ONEWE(원위)',
+      imageUrl: photo,
+    });
+    expect(robots.mock.calls.map(([url]) => url)).toEqual([page, photo]);
+  });
+
+  it('rejects a forged seed on an unlisted page', async () => {
+    const { service, dataSource } = harness();
+    await expect(
+      service.createSource(
+        {
+          kind: 'artist-image',
+          url: 'https://www.bandkardi.com/other',
+          parser: 'html-text',
+          parserConfig: CDF_CONFIG,
+        },
+        'admin-1',
+      ),
+    ).rejects.toMatchObject({ status: 422 });
+    expect(dataSource.transaction).not.toHaveBeenCalled();
+  });
+
+  it('permits an alias-only edit while preserving the verified owner', async () => {
+    const { service, source, dataSource } = harness();
+    source.kind = 'artist-image';
+    source.url = CDF_PAGE;
+    source.parserConfig = CDF_CONFIG;
+    const repo = {
+      findOne: jest.fn().mockResolvedValue({ ...source }),
+      save: jest.fn((value: CrawlSource) => Promise.resolve(value)),
+    };
+    dataSource.transaction.mockImplementation(
+      (
+        callback: (manager: {
+          getRepository: () => typeof repo;
+        }) => Promise<unknown>,
+      ) => callback({ getRepository: () => repo }),
+    );
+    await expect(
+      service.updateSource(
+        source.id,
+        { parserConfig: { artistAlias: '카디' } },
+        'admin-1',
+      ),
+    ).resolves.toMatchObject({
+      parserConfig: { ...CDF_CONFIG, artistAlias: '카디' },
+    });
+  });
+
+  it('tests a source with the same profile selector used by execution', async () => {
+    const { service, source } = harness();
+    source.kind = 'artist-image';
+    source.url = CDF_PAGE;
+    source.parser = 'html-text';
+    source.parserConfig = CDF_CONFIG;
+    const robots = jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({
+      status: 200,
+      body: CDF_HTML,
+    });
+    const result = await (
+      service as unknown as {
+        testSource(id: string): Promise<{ parsed: unknown }>;
+      }
+    ).testSource(source.id);
+    expect(result.parsed).toEqual({
+      artistName: 'KARDI',
+      imageUrl: CDF_PHOTO,
+    });
+    expect(robots).toHaveBeenCalledWith(CDF_PHOTO);
+  });
+
+  it('captures the verified image and rejects a volatile query on the next run', async () => {
+    const { service, source, run, execute, runsRepo } = harness();
+    execute.mockRestore();
+    source.kind = 'artist-image';
+    source.url = CDF_PAGE;
+    source.parser = 'html-text';
+    source.parserConfig = CDF_CONFIG;
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    const listing = jest.spyOn(service, 'getListing').mockResolvedValue({
+      status: 200,
+      body: CDF_HTML,
+    });
+    const capture = jest
+      .spyOn(
+        service as unknown as {
+          captureImages: (...args: unknown[]) => Promise<string[]>;
+        },
+        'captureImages',
+      )
+      .mockResolvedValue(['/api/v1/admin/crawl/images/image-1']);
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(null),
+    }));
+
+    await service.execute(run, source);
+    expect(capture.mock.calls[0][2]).toEqual([new URL(CDF_PHOTO)]);
+    expect(run.result).toBe('nochange-parsed');
+
+    listing.mockResolvedValue({
+      status: 200,
+      body: CDF_HTML.replace(
+        '/home_hero_pc.e0cb8389.webp',
+        '/home_hero_pc.e0cb8389.webp?v=2',
+      ),
+    });
+    const second = { id: 'run-2', sourceId: source.id } as CrawlRun;
+    await service.execute(second, source);
+    expect(second.result).toBe('failed');
+    expect(capture).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -304,6 +1804,7 @@ describe('CrawlService official timetable image', () => {
 });
 
 describe('CrawlService source audit', () => {
+  afterEach(() => jest.useRealTimers());
   it('records a new source in the same transaction', async () => {
     const { service, dataSource, audit } = harness();
     jest.spyOn(service, 'checkRobots').mockResolvedValue(undefined);
@@ -403,6 +1904,33 @@ describe('CrawlService source audit', () => {
     expect(dataSource.transaction).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { seed: 'official-artist-gallery' },
+    { artistOfficialNameSource: 'official-notice-and-modal-site' },
+    { officialSiteKeys: '["artist-site"]' },
+  ])(
+    'rejects administrator supplied official gallery identity %j',
+    async (protectedConfig) => {
+      const { service, dataSource } = harness();
+      const dto = {
+        kind: 'artist-image',
+        url: 'https://xmfestival.com/lineup',
+        parser: 'html-text',
+        parserConfig: {
+          artistName: 'Artist',
+          festivalSourceUrl:
+            'https://ticket.melon.com/performance/index.htm?prodId=213766',
+          imageHint: '20260811/9e91f35508e81.jpg',
+          ...protectedConfig,
+        },
+      } as unknown as CreateCrawlSourceDto;
+      await expect(service.createSource(dto, 'admin-1')).rejects.toMatchObject({
+        status: 422,
+      });
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+    },
+  );
+
   it('does not connect the XMF gallery to another ticket on the same site', async () => {
     const { service, dataSource } = harness();
     await expect(
@@ -449,6 +1977,8 @@ describe('CrawlService source audit', () => {
     source.url = 'https://xmfestival.com/lineup';
     source.parserConfig = {
       artistName: 'DAY6',
+      artistAlias: '이전 자동 별칭',
+      artistAliasSource: 'official-notice',
       imageHint: '20260811/9e91f35508e81.jpg',
       festivalSourceUrl:
         'https://ticket.melon.com/performance/index.htm?prodId=213766',
@@ -486,6 +2016,695 @@ describe('CrawlService source audit', () => {
         seed: 'official-artist-gallery',
       },
     });
+    expect(repo.save.mock.calls[0][0].parserConfig).not.toHaveProperty(
+      'artistAliasSource',
+    );
+  });
+
+  it('replaces an automatic XMF alias while preserving a manually reviewed alias', async () => {
+    const { service, source, dataSource } = harness();
+    source.url = 'https://xmfestival.com/notice';
+    source.parserConfig = {
+      seed: 'official-lineup',
+      expectedYear: '2026',
+      festivalSourceUrl:
+        'https://ticket.melon.com/performance/index.htm?prodId=213766',
+    };
+    const rows = [
+      {
+        id: 'id-ado',
+        enabled: true,
+        artistName: 'Ａｄｏ',
+        artistAlias: '옛 아도',
+        aliasSource: 'official-notice',
+        seed: 'official-artist-gallery',
+      },
+      {
+        id: 'id-lucy',
+        enabled: true,
+        artistName: 'LUCY',
+        artistAlias: '수동 별칭',
+        aliasSource: null,
+        seed: 'official-artist-gallery',
+      },
+      {
+        id: 'id-day6',
+        enabled: true,
+        artistName: 'DAY6',
+        artistAlias: null,
+        aliasSource: null,
+        seed: 'official-artist-gallery',
+      },
+    ];
+    dataSource.query.mockImplementation((sql: string) =>
+      Promise.resolve(sql.includes('SELECT id, enabled') ? rows : []),
+    );
+
+    await service.syncXmfArtistAliases(source, XMF_NOTICE_HTML);
+
+    const updates = dataSource.query.mock.calls.filter(([sql]: [string]) =>
+      sql.includes('UPDATE crawl_sources'),
+    ) as [string, string[]][];
+    expect(updates.map(([, values]) => [values[0], values[2]])).toEqual([
+      ['id-ado', '아도'],
+      ['id-day6', '데이식스'],
+    ]);
+    expect(updates[0][0]).toContain("'artistAliasSource', 'official-notice'");
+    expect(updates[0][0]).toContain(
+      'OR NOT ("parserConfig" ? \'artistAlias\')',
+    );
+  });
+
+  it('links a shortened gallery title only when its official site proves the full notice name', async () => {
+    const { service, source, dataSource } = harness();
+    source.url = 'https://xmfestival.com/notice';
+    source.parserConfig = {
+      seed: 'official-lineup',
+      expectedYear: '2026',
+      festivalSourceUrl:
+        'https://ticket.melon.com/performance/index.htm?prodId=213766',
+    };
+    const rows = [
+      {
+        id: 'id-mika',
+        enabled: true,
+        artistName: 'MIKA',
+        artistAlias: null,
+        aliasSource: null,
+        officialSiteKeys: ['mikanakashima'],
+        artistOfficialName: null,
+        officialNameSource: null,
+        seed: 'official-artist-gallery',
+      },
+      {
+        id: 'id-other',
+        enabled: true,
+        artistName: 'MIKA BAND',
+        artistAlias: null,
+        aliasSource: null,
+        officialSiteKeys: [],
+        artistOfficialName: null,
+        officialNameSource: null,
+        seed: 'official-artist-gallery',
+      },
+    ];
+    dataSource.query.mockImplementation((sql: string) =>
+      Promise.resolve(sql.includes('SELECT id, enabled') ? rows : []),
+    );
+    const notice = XMF_NOTICE_HTML.replace(
+      '아도(Ado), 루시(LUCY) 등 2팀',
+      '아도(Ado), 루시(LUCY), 나카시마 미카(MIKA NAKASHIMA) 등 3팀',
+    );
+
+    await service.syncXmfArtistAliases(source, notice);
+
+    const updates = dataSource.query.mock.calls.filter(([sql]: [string]) =>
+      sql.includes('UPDATE crawl_sources'),
+    ) as [string, string[]][];
+    expect(updates.map(([, values]) => values.slice(0, 3))).toEqual([
+      ['id-mika', 'MIKA NAKASHIMA', '나카시마 미카'],
+    ]);
+    rows[0].officialSiteKeys = [];
+    dataSource.query.mockClear();
+    await service.syncXmfArtistAliases(source, notice);
+    expect(
+      dataSource.query.mock.calls.some(([sql]: [string]) =>
+        sql.includes('UPDATE crawl_sources'),
+      ),
+    ).toBe(false);
+  });
+
+  it('clears only obsolete automatic aliases and rejects same-festival conflicts', async () => {
+    const { service, source, dataSource } = harness();
+    source.url = 'https://xmfestival.com/notice';
+    source.parserConfig = {
+      seed: 'official-lineup',
+      expectedYear: '2026',
+      festivalSourceUrl:
+        'https://ticket.melon.com/performance/index.htm?prodId=213766',
+    };
+    const rows = [
+      {
+        id: 'id-ado',
+        enabled: true,
+        artistName: 'Ado',
+        artistAlias: '옛 아도',
+        aliasSource: 'official-notice',
+        seed: 'official-artist-gallery',
+      },
+      {
+        id: 'id-other',
+        enabled: true,
+        artistName: '아도',
+        artistAlias: null,
+        aliasSource: null,
+        seed: 'manual',
+      },
+      {
+        id: 'id-lucy',
+        enabled: false,
+        artistName: 'LUCY',
+        artistAlias: '루시',
+        aliasSource: 'official-notice',
+        seed: 'official-artist-gallery',
+      },
+      {
+        id: 'id-day6',
+        enabled: true,
+        artistName: 'DAY6',
+        artistAlias: null,
+        aliasSource: null,
+        seed: 'official-artist-gallery',
+      },
+      {
+        id: 'id-day6-other',
+        enabled: true,
+        artistName: 'DAY6',
+        artistAlias: null,
+        aliasSource: null,
+        seed: 'manual',
+      },
+    ];
+    dataSource.query.mockImplementation((sql: string) =>
+      Promise.resolve(sql.includes('SELECT id, enabled') ? rows : []),
+    );
+    await service.syncXmfArtistAliases(source, XMF_NOTICE_HTML);
+    expect(
+      dataSource.query.mock.calls
+        .filter(([sql]: [string]) => sql.includes('UPDATE crawl_sources'))
+        .map(([, values]: [string, string[]]) => [values[0], values[2]]),
+    ).toEqual([
+      ['id-ado', null],
+      ['id-lucy', null],
+    ]);
+  });
+
+  it('clears an automatic alias when the notice proposes two image owners', async () => {
+    const { service, source, dataSource } = harness();
+    source.url = 'https://xmfestival.com/notice';
+    source.parserConfig = {
+      seed: 'official-lineup',
+      expectedYear: '2026',
+      festivalSourceUrl:
+        'https://ticket.melon.com/performance/index.htm?prodId=213766',
+    };
+    const rows = [
+      {
+        id: 'id-lucy',
+        enabled: true,
+        artistName: 'LUCY',
+        artistAlias: '루시',
+        aliasSource: 'official-notice',
+        seed: 'official-artist-gallery',
+      },
+      {
+        id: 'id-band',
+        enabled: true,
+        artistName: 'LUCY BAND',
+        artistAlias: null,
+        aliasSource: null,
+        seed: 'official-artist-gallery',
+      },
+    ];
+    dataSource.query.mockImplementation((sql: string) =>
+      Promise.resolve(sql.includes('SELECT id, enabled') ? rows : []),
+    );
+    const notice = XMF_NOTICE_HTML.replace(
+      '루시(LUCY) 등 2팀',
+      '루시(LUCY), 루시(LUCY BAND) 등 3팀',
+    );
+    await service.syncXmfArtistAliases(source, notice);
+    expect(
+      dataSource.query.mock.calls
+        .filter(([sql]: [string]) => sql.includes('UPDATE crawl_sources'))
+        .map(([, values]: [string, string[]]) => [values[0], values[2]]),
+    ).toEqual([['id-lucy', null]]);
+  });
+
+  it('moves an automatic alias to its new official image owner in one run', async () => {
+    const { service, source, dataSource } = harness();
+    source.url = 'https://xmfestival.com/notice';
+    source.parserConfig = {
+      seed: 'official-lineup',
+      expectedYear: '2026',
+      festivalSourceUrl:
+        'https://ticket.melon.com/performance/index.htm?prodId=213766',
+    };
+    const rows = [
+      {
+        id: 'id-lucy',
+        enabled: true,
+        artistName: 'LUCY',
+        artistAlias: '루시',
+        aliasSource: 'official-notice',
+        seed: 'official-artist-gallery',
+      },
+      {
+        id: 'id-band',
+        enabled: true,
+        artistName: 'LUCY BAND',
+        artistAlias: null,
+        aliasSource: null,
+        seed: 'official-artist-gallery',
+      },
+    ];
+    dataSource.query.mockImplementation((sql: string) =>
+      Promise.resolve(sql.includes('SELECT id, enabled') ? rows : []),
+    );
+    const notice = XMF_NOTICE_HTML.replace('루시(LUCY)', '루시(LUCY BAND)');
+    await service.syncXmfArtistAliases(source, notice);
+    expect(
+      dataSource.query.mock.calls
+        .filter(([sql]: [string]) => sql.includes('UPDATE crawl_sources'))
+        .map(([, values]: [string, string[]]) => [values[0], values[2]]),
+    ).toEqual([
+      ['id-lucy', null],
+      ['id-band', '루시'],
+    ]);
+  });
+
+  it('does not change aliases for another official notice year or invalid counts', async () => {
+    const { service, source, dataSource } = harness();
+    source.url = 'https://xmfestival.com/notice';
+    source.parserConfig = {
+      seed: 'official-lineup',
+      expectedYear: '2027',
+      festivalSourceUrl:
+        'https://ticket.melon.com/performance/index.htm?prodId=213766',
+    };
+    await service.syncXmfArtistAliases(source, XMF_NOTICE_HTML);
+    source.parserConfig.expectedYear = '2026';
+    await service.syncXmfArtistAliases(
+      source,
+      XMF_NOTICE_HTML.replace('등 2팀', '등 3팀'),
+    );
+    expect(dataSource.query).not.toHaveBeenCalled();
+  });
+
+  it('links a gallery source added after the first valid notice collection', async () => {
+    const { service, source, dataSource } = harness();
+    source.url = 'https://xmfestival.com/notice';
+    source.parserConfig = {
+      seed: 'official-lineup',
+      expectedYear: '2026',
+      festivalSourceUrl:
+        'https://ticket.melon.com/performance/index.htm?prodId=213766',
+    };
+    let rows: object[] = [];
+    dataSource.query.mockImplementation((sql: string) =>
+      Promise.resolve(sql.includes('SELECT id, enabled') ? rows : []),
+    );
+    await service.syncXmfArtistAliases(source, XMF_NOTICE_HTML);
+    expect(
+      dataSource.query.mock.calls.some(([sql]: [string]) =>
+        sql.includes('UPDATE crawl_sources'),
+      ),
+    ).toBe(false);
+    rows = [
+      {
+        id: 'id-ado',
+        enabled: true,
+        artistName: 'Ado',
+        artistAlias: null,
+        aliasSource: null,
+        seed: 'official-artist-gallery',
+      },
+    ];
+    await service.syncXmfArtistAliases(source, XMF_NOTICE_HTML);
+    expect(
+      dataSource.query.mock.calls
+        .filter(([sql]: [string]) => sql.includes('UPDATE crawl_sources'))
+        .map(([, values]: [string, string[]]) => [values[0], values[2]]),
+    ).toEqual([['id-ado', '아도']]);
+  });
+
+  it('synchronizes a late gallery alias even when the notice content is unchanged', async () => {
+    const { service, source, run, runsRepo, dataSource, execute } = harness();
+    execute.mockRestore();
+    source.url = 'https://xmfestival.com/notice';
+    source.parserConfig = {
+      seed: 'official-lineup',
+      expectedYear: '2026',
+      festivalSourceUrl:
+        'https://ticket.melon.com/performance/index.htm?prodId=213766',
+    };
+    jest.spyOn(service, 'getListing').mockResolvedValue({
+      status: 200,
+      body: XMF_NOTICE_HTML,
+    });
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest
+      .spyOn(
+        service as unknown as {
+          captureImages(
+            source: CrawlSource,
+            run: CrawlRun,
+            urls: URL[],
+          ): Promise<string[]>;
+        },
+        'captureImages',
+      )
+      .mockResolvedValue([]);
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue({
+        contentHash: createHash('sha256')
+          .update(XMF_NOTICE_HTML)
+          .update('ticket-list:v4')
+          .digest('hex'),
+      }),
+    }));
+    dataSource.query.mockImplementation((sql: string) =>
+      Promise.resolve(
+        sql.includes('SELECT id, enabled')
+          ? [
+              {
+                id: 'id-ado',
+                enabled: true,
+                artistName: 'Ado',
+                artistAlias: null,
+                aliasSource: null,
+                seed: 'official-artist-gallery',
+              },
+            ]
+          : [],
+      ),
+    );
+    const proposalItems = jest.spyOn(service, 'proposalItems');
+    await service.execute(run, source);
+    expect(run.result).toBe('unchanged');
+    expect(
+      dataSource.query.mock.calls.some(([sql]: [string]) =>
+        sql.includes('UPDATE crawl_sources'),
+      ),
+    ).toBe(true);
+    expect(proposalItems).not.toHaveBeenCalled();
+  });
+
+  it('recovers proven XMF aliases from a recent official notice snapshot after HTTP 403', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-10-25T00:00:00Z'));
+    const {
+      service,
+      source,
+      run,
+      execute,
+      sourcesRepo,
+      dataSource,
+      imageStorage,
+    } = harness();
+    execute.mockRestore();
+    const festivalSourceUrl =
+      'https://ticket.melon.com/performance/index.htm?prodId=213766';
+    source.kind = 'artist-gallery';
+    source.url = 'https://xmfestival.com/lineup';
+    source.parserConfig = { festivalSourceUrl };
+    const notice = {
+      ...source,
+      id: 'notice-1',
+      kind: 'discovery',
+      url: 'https://xmfestival.com/notice',
+      parserConfig: {
+        seed: 'official-lineup',
+        expectedYear: '2026',
+        festivalSourceUrl,
+      },
+    } as CrawlSource;
+    sourcesRepo.findOneBy.mockResolvedValue(notice);
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({
+      status: 403,
+      body: '',
+    });
+    const officialNotice = XMF_NOTICE_HTML.replace(
+      '아도(Ado), 루시(LUCY) 등 2팀',
+      '아도(Ado), 루시(LUCY), 나카시마 미카(MIKA NAKASHIMA) 등 3팀',
+    );
+    imageStorage.readCrawlSnapshot.mockResolvedValue(
+      Buffer.from(officialNotice),
+    );
+    dataSource.query.mockImplementation((sql: string) => {
+      if (sql.includes('FROM crawl_snapshots'))
+        return Promise.resolve([
+          { objectKey: 'crawl/snapshots/official-notice.txt' },
+        ]);
+      if (sql.includes('SELECT id, enabled'))
+        return Promise.resolve([
+          {
+            id: 'ado-image',
+            enabled: true,
+            artistName: 'Ado',
+            artistAlias: null,
+            aliasSource: null,
+            officialSiteKeys: null,
+            seed: 'official-artist-gallery',
+          },
+          {
+            id: 'mika-image',
+            enabled: true,
+            artistName: 'MIKA',
+            artistAlias: null,
+            aliasSource: null,
+            officialSiteKeys: null,
+            seed: 'official-artist-gallery',
+          },
+        ]);
+      return Promise.resolve([]);
+    });
+
+    await service.execute(run, source);
+
+    expect(run.result).toBe('failed');
+    expect(run.error).toBe('HTTP_403');
+    expect(imageStorage.readCrawlSnapshot).toHaveBeenCalledWith(
+      'crawl/snapshots/official-notice.txt',
+    );
+    const lookup = dataSource.query.mock.calls.find(([sql]: [string]) =>
+      sql.includes('FROM crawl_snapshots'),
+    ) as [string, string[]];
+    expect(lookup[0]).toContain("interval '7 days'");
+    expect(lookup[0]).toContain('previous."httpStatus" = 200');
+    expect(lookup[0]).toContain('snapshot."expiresAt" > now()');
+    expect(lookup[1]).toEqual([
+      notice.id,
+      notice.url,
+      '2026',
+      festivalSourceUrl,
+    ]);
+    const updates = dataSource.query.mock.calls.filter(([sql]: [string]) =>
+      sql.includes('UPDATE crawl_sources SET "parserConfig"'),
+    ) as [string, string[]][];
+    expect(updates.map(([, values]) => [values[0], values[2]])).toEqual([
+      ['ado-image', '아도'],
+    ]);
+  });
+
+  it.each([0, 1, 2])(
+    'reprocesses a saved official gallery and updates only one matching image source (matches=%i)',
+    async (matches) => {
+      const { service, source, dataSource, imageStorage } = harness();
+      const festivalSourceUrl =
+        'https://ticket.melon.com/performance/index.htm?prodId=213766';
+      source.kind = 'artist-gallery';
+      source.url = 'https://xmfestival.com/lineup';
+      source.parserConfig = {
+        seed: 'xmf-official-gallery',
+        festivalSourceUrl,
+      };
+      jest.spyOn(service, 'checkRobots').mockResolvedValue();
+      const galleryHtml =
+        `<a href="${festivalSourceUrl.replace('&', '&amp;')}">Ticket</a>` +
+        '<a class="item_container _item_container" href="javascript:SITE.openModalMenu(\'m1\', \'b1\');">' +
+        '<div class="img_wrap _img_wrap" data-src="https://cdn.imweb.me/thumbnail/20260811/photo.jpg"></div></a>';
+      imageStorage.readCrawlSnapshot.mockResolvedValue(
+        Buffer.from(galleryHtml),
+      );
+      const parse = jest
+        .spyOn(artistGallery, 'crawlArtistGallery')
+        .mockResolvedValue([
+          {
+            artistName: 'MIKA',
+            officialSiteKeys: ['mikanakashima'],
+            imageUrl: new URL(
+              'https://cdn.imweb.me/thumbnail/20260811/photo.jpg',
+            ),
+          },
+        ]);
+      let savedKey = false;
+      dataSource.query.mockImplementation((sql: string) => {
+        if (sql.includes('FROM crawl_snapshots'))
+          return Promise.resolve([
+            { objectKey: 'crawl/snapshots/gallery.txt' },
+          ]);
+        if (sql.includes('SELECT source.id FROM crawl_sources source'))
+          return Promise.resolve(
+            Array.from({ length: savedKey ? 0 : matches }, (_, index) => ({
+              id: `image-${index}`,
+            })),
+          );
+        if (sql.includes("jsonb_build_object('officialSiteKeys'"))
+          savedKey = true;
+        return Promise.resolve([]);
+      });
+      await service.restoreXmfGalleryIdentityFromRecentSnapshot(source);
+      if (matches === 1)
+        await service.restoreXmfGalleryIdentityFromRecentSnapshot(source);
+      expect(imageStorage.readCrawlSnapshot).toHaveBeenCalledWith(
+        'crawl/snapshots/gallery.txt',
+      );
+      expect(parse).toHaveBeenCalledWith(galleryHtml, source.url);
+      const lookup = dataSource.query.mock.calls.find(([sql]: [string]) =>
+        sql.includes('SELECT source.id FROM crawl_sources source'),
+      ) as [string, string[]];
+      expect(lookup[0]).toContain(
+        'source."parserConfig"->>\'imageHint\' = $4::text',
+      );
+      expect(lookup[0]).toContain(
+        'split_part(image."originUrl", \'?\', 1) = $5::text',
+      );
+      expect(lookup[1]).toEqual([
+        source.url,
+        festivalSourceUrl,
+        'MIKA',
+        '20260811/photo.jpg',
+        'https://cdn.imweb.me/thumbnail/20260811/photo.jpg',
+      ]);
+      const updates = dataSource.query.mock.calls.filter(([sql]: [string]) =>
+        sql.includes("jsonb_build_object('officialSiteKeys'"),
+      ) as [string, string[]][];
+      expect(updates).toHaveLength(matches === 1 ? 1 : 0);
+      if (matches === 1) {
+        expect(updates[0][1].slice(0, 2)).toEqual([
+          'image-0',
+          '["mikanakashima"]',
+        ]);
+        expect(updates[0][0]).toContain(
+          'NOT ("parserConfig" ? \'officialSiteKeys\')',
+        );
+      }
+      parse.mockRestore();
+    },
+  );
+
+  it('ignores a stale or mismatched XMF snapshot without changing aliases', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-10-25T00:00:00Z'));
+    const { service, source, sourcesRepo, dataSource, imageStorage } =
+      harness();
+    source.kind = 'artist-gallery';
+    source.url = 'https://xmfestival.com/lineup';
+    source.parserConfig = { festivalSourceUrl: 'https://other.example/fest' };
+    sourcesRepo.findOneBy.mockResolvedValue({
+      ...source,
+      kind: 'discovery',
+      url: 'https://xmfestival.com/notice',
+      parserConfig: {
+        seed: 'official-lineup',
+        expectedYear: '2026',
+        festivalSourceUrl:
+          'https://ticket.melon.com/performance/index.htm?prodId=213766',
+      },
+    });
+    await service.syncXmfAliasesFromRecentSnapshot(source);
+    expect(dataSource.query).not.toHaveBeenCalled();
+
+    source.parserConfig.festivalSourceUrl =
+      'https://ticket.melon.com/performance/index.htm?prodId=213766';
+    await service.syncXmfAliasesFromRecentSnapshot(source);
+    expect(dataSource.query).toHaveBeenCalledTimes(1);
+    expect(imageStorage.readCrawlSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('uses a saved official notice after a pre-deploy 403 without changing the failed run', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-10-25T00:00:00Z'));
+    const { service, source, sourcesRepo, dataSource, imageStorage } =
+      harness();
+    const festivalSourceUrl =
+      'https://ticket.melon.com/performance/index.htm?prodId=213766';
+    source.kind = 'artist-gallery';
+    source.url = 'https://xmfestival.com/lineup';
+    source.parserConfig = { festivalSourceUrl };
+    const notice = {
+      ...source,
+      id: 'notice-1',
+      kind: 'discovery',
+      url: 'https://xmfestival.com/notice',
+      parserConfig: {
+        seed: 'official-lineup',
+        expectedYear: '2026',
+        festivalSourceUrl,
+      },
+    } as CrawlSource;
+    sourcesRepo.findOneBy.mockImplementation((where: { id?: string }) =>
+      Promise.resolve(where.id ? source : notice),
+    );
+    imageStorage.readCrawlSnapshot.mockResolvedValue(
+      Buffer.from(XMF_NOTICE_HTML),
+    );
+    let savedAlias: string | null = null;
+    dataSource.query.mockImplementation((sql: string) => {
+      if (sql.includes('SELECT DISTINCT source.id'))
+        return Promise.resolve([{ id: source.id }]);
+      if (sql.includes('FROM crawl_snapshots'))
+        return Promise.resolve([
+          { objectKey: 'crawl/snapshots/official-notice.txt' },
+        ]);
+      if (sql.includes('SELECT id, enabled'))
+        return Promise.resolve([
+          {
+            id: 'ado-image',
+            enabled: true,
+            artistName: 'Ado',
+            artistAlias: savedAlias,
+            aliasSource: savedAlias ? 'official-notice' : null,
+            officialSiteKeys: null,
+            seed: 'official-artist-gallery',
+          },
+        ]);
+      if (sql.includes('UPDATE crawl_sources SET "parserConfig"'))
+        savedAlias = '아도';
+      return Promise.resolve([]);
+    });
+
+    await service.reconcileRecentXmf403();
+    await service.reconcileRecentXmf403();
+
+    const recentFailures = dataSource.query.mock.calls.find(([sql]: [string]) =>
+      sql.includes('SELECT DISTINCT source.id'),
+    ) as [string, string[]];
+    expect(recentFailures[0]).toContain('failed."httpStatus" = 403');
+    expect(recentFailures[0]).toContain("interval '7 days'");
+    expect(recentFailures[0]).toContain(
+      `NOT (image."parserConfig" ? 'officialSiteKeys')`,
+    );
+    expect(recentFailures[0]).toContain('snapshot."expiresAt" > now()');
+    expect(
+      dataSource.query.mock.calls.filter(([sql]: [string]) =>
+        sql.includes('UPDATE crawl_sources SET "parserConfig"'),
+      ),
+    ).toHaveLength(1);
+    expect(
+      dataSource.query.mock.calls.some(([sql]: [string]) =>
+        sql.includes('UPDATE crawl_runs'),
+      ),
+    ).toBe(false);
+  });
+
+  it('skips XMF alias recovery for an older event year or no recent 403', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-10-25T00:00:00Z'));
+    const { service, source, dataSource, imageStorage } = harness();
+    source.url = 'https://xmfestival.com/notice';
+    source.parserConfig = {
+      seed: 'official-lineup',
+      expectedYear: '2025',
+      festivalSourceUrl:
+        'https://ticket.melon.com/performance/index.htm?prodId=213766',
+    };
+
+    await service.syncXmfAliasesFromRecentSnapshot(source);
+    await service.reconcileRecentXmf403();
+
+    expect(dataSource.query).toHaveBeenCalledTimes(1);
+    expect(imageStorage.readCrawlSnapshot).not.toHaveBeenCalled();
   });
 
   it('records the previous and new source settings', async () => {
@@ -682,11 +2901,11 @@ describe('CrawlService manual runs and snapshots', () => {
       {
         artistName: 'New Artist From Page',
         imageUrl: new URL('https://cdn.imweb.me/thumbnail/20261023/new.jpg'),
+        officialSiteKeys: [],
       },
     ]);
 
     await service.execute(run, source);
-
     const calls = dataSource.query.mock.calls as unknown as [
       string,
       unknown[],
@@ -700,9 +2919,637 @@ describe('CrawlService manual runs and snapshots', () => {
       source.parserConfig.festivalSourceUrl,
       'New Artist From Page',
       '20261023/new.jpg',
+      '[]',
     ]);
     expect(run.result).toBe('nochange-parsed');
     gallery.mockRestore();
+  });
+
+  it('links official notice aliases in the same run that creates gallery image sources', async () => {
+    const { service, source, run, execute, dataSource, sourcesRepo } =
+      harness();
+    execute.mockRestore();
+    const festivalSourceUrl =
+      'https://ticket.melon.com/performance/index.htm?prodId=213766';
+    source.kind = 'artist-gallery';
+    source.url = 'https://xmfestival.com/lineup';
+    source.parser = 'html-text';
+    source.parserConfig = { festivalSourceUrl };
+    const notice = {
+      ...source,
+      kind: 'discovery',
+      url: 'https://xmfestival.com/notice',
+      parserConfig: {
+        seed: 'official-lineup',
+        expectedYear: '2026',
+        festivalSourceUrl,
+      },
+    } as CrawlSource;
+    sourcesRepo.findOneBy.mockResolvedValue(notice);
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    const getListing = jest.spyOn(service, 'getListing');
+    getListing
+      .mockResolvedValueOnce({
+        status: 200,
+        body: `<a href="${festivalSourceUrl}">예매</a>`,
+      })
+      .mockResolvedValueOnce({ status: 200, body: XMF_NOTICE_HTML });
+    const gallery = jest.spyOn(artistGallery, 'crawlArtistGallery');
+    gallery.mockResolvedValue([
+      {
+        artistName: 'Ado',
+        imageUrl: new URL('https://cdn.imweb.me/thumbnail/20261023/ado.jpg'),
+        officialSiteKeys: [],
+      },
+    ]);
+    dataSource.query.mockImplementation((sql: string) => {
+      if (sql.includes('SELECT id, enabled'))
+        return Promise.resolve([
+          {
+            id: 'ado-image-source',
+            enabled: true,
+            artistName: 'Ado',
+            artistAlias: null,
+            aliasSource: null,
+            seed: 'official-artist-gallery',
+          },
+        ]);
+      return Promise.resolve(sql.includes('RETURNING id') ? [[], 0] : []);
+    });
+
+    await service.execute(run, source);
+
+    expect(getListing).toHaveBeenNthCalledWith(2, notice);
+    expect(dataSource.query.mock.calls).toEqual(
+      expect.arrayContaining([
+        [
+          expect.stringContaining('UPDATE crawl_sources SET "parserConfig"'),
+          ['ado-image-source', null, '아도', festivalSourceUrl, false, true],
+        ],
+      ]),
+    );
+    expect(run.result).toBe('nochange-parsed');
+    gallery.mockRestore();
+  });
+
+  it('keeps a saved gallery run successful when the optional notice request fails', async () => {
+    const { service, source, run, execute, dataSource, sourcesRepo } =
+      harness();
+    execute.mockRestore();
+    const festivalSourceUrl =
+      'https://ticket.melon.com/performance/index.htm?prodId=213766';
+    source.kind = 'artist-gallery';
+    source.url = 'https://xmfestival.com/lineup';
+    source.parser = 'html-text';
+    source.parserConfig = { festivalSourceUrl };
+    sourcesRepo.findOneBy.mockResolvedValue({
+      ...source,
+      kind: 'discovery',
+      url: 'https://xmfestival.com/notice',
+      parserConfig: {
+        seed: 'official-lineup',
+        expectedYear: '2026',
+        festivalSourceUrl,
+      },
+    });
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest
+      .spyOn(service, 'getListing')
+      .mockResolvedValueOnce({
+        status: 200,
+        body: `<a href="${festivalSourceUrl}">예매</a>`,
+      })
+      .mockResolvedValueOnce({ status: 503, body: '' });
+    const gallery = jest.spyOn(artistGallery, 'crawlArtistGallery');
+    gallery.mockResolvedValue([
+      {
+        artistName: 'Ado',
+        imageUrl: new URL('https://cdn.imweb.me/thumbnail/20261023/ado.jpg'),
+        officialSiteKeys: [],
+      },
+    ]);
+    dataSource.query.mockImplementation((sql: string) =>
+      Promise.resolve(sql.includes('RETURNING id') ? [[], 0] : []),
+    );
+    const warning = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+
+    await service.execute(run, source);
+
+    expect(run.result).toBe('nochange-parsed');
+    expect(source.status).toBe('ok');
+    expect(warning).toHaveBeenCalledWith(
+      expect.stringContaining('XMF 공식 라인업 공지 HTTP 503'),
+    );
+    gallery.mockRestore();
+    warning.mockRestore();
+  });
+
+  it('reconciles 48 GMF image sources from both official pages without duplicating a normalized owner', async () => {
+    const { service, source, run, execute, dataSource } = harness();
+    execute.mockRestore();
+    source.kind = 'artist-gallery';
+    source.url = GMF_LINEUP_URL;
+    source.parser = 'html-text';
+    source.parserConfig = {
+      seed: 'gmf-official-lineup',
+      festivalSourceUrl: GMF_FESTIVAL_URL,
+    };
+    const pages = gmfPages();
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    const getListing = jest.spyOn(service, 'getListing');
+    getListing
+      .mockResolvedValueOnce({ status: 200, body: pages.lineup })
+      .mockResolvedValueOnce({ status: 200, body: pages.notice });
+    dataSource.query.mockImplementation((sql: string) =>
+      Promise.resolve(
+        sql.includes('SELECT id, "parserConfig"')
+          ? [
+              {
+                id: '00000000-0000-4000-8000-000000000001',
+                artistName: 'Ａｒｔｉｓｔ ０',
+              },
+            ]
+          : [],
+      ),
+    );
+
+    await service.execute(run, source);
+
+    const calls = dataSource.query.mock.calls as unknown as [
+      string,
+      unknown[],
+    ][];
+    expect(getListing).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ url: GMF_NOTICE_URL }),
+    );
+    expect(
+      calls.filter(([sql]) => sql.includes("SELECT 'artist-image'")),
+    ).toHaveLength(47);
+    expect(
+      calls.find(([sql]) => sql.includes('previousImageHint'))?.[1],
+    ).toEqual([
+      '00000000-0000-4000-8000-000000000001',
+      'Artist 0',
+      '/GMF_2026_0_aabbccdd00.jpg',
+      GMF_LINEUP_URL,
+    ]);
+    expect(run.result).toBe('nochange-parsed');
+  });
+
+  it('preserves existing GMF images when the official notice fails', async () => {
+    const { service, source, run, execute, dataSource } = harness();
+    execute.mockRestore();
+    source.kind = 'artist-gallery';
+    source.url = GMF_LINEUP_URL;
+    source.parser = 'html-text';
+    source.parserConfig = {
+      seed: 'gmf-official-lineup',
+      festivalSourceUrl: GMF_FESTIVAL_URL,
+    };
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    const getListing = jest.spyOn(service, 'getListing');
+    getListing
+      .mockResolvedValueOnce({ status: 200, body: gmfPages().lineup })
+      .mockResolvedValueOnce({ status: 503, body: '' });
+
+    await service.execute(run, source);
+
+    expect(run.result).toBe('failed');
+    expect(
+      dataSource.query.mock.calls.some(
+        ([sql]) =>
+          String(sql).includes("kind = 'artist-image'") ||
+          String(sql).includes("SELECT 'artist-image'"),
+      ),
+    ).toBe(false);
+  });
+
+  it('captures a GMF child image from the completed daily gallery without refetching HTML', async () => {
+    const { service, source, run, execute, runsRepo, dataSource } = harness();
+    execute.mockRestore();
+    source.kind = 'artist-image';
+    source.url = GMF_LINEUP_URL;
+    source.parser = 'html-text';
+    source.parserConfig = {
+      seed: 'official-gmf-lineup',
+      festivalSourceUrl: GMF_FESTIVAL_URL,
+      artistName: 'Artist 0',
+      imageHint: '/GMF_2026_0_aabbccdd00.jpg',
+    };
+    const checkRobots = jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    const getListing = jest.spyOn(service, 'getListing');
+    dataSource.query.mockImplementation((sql: string) =>
+      Promise.resolve(
+        sql.includes('SELECT gallery."parserConfig"')
+          ? [
+              {
+                verifiedEntries: JSON.stringify(
+                  Array.from({ length: 48 }, (_, index) => ({
+                    artistName: `Artist ${index}`,
+                    imageUrl: `${GMF_IMAGE_ORIGIN}/GMF_2026_${index}_aabbccdd00.jpg`,
+                  })),
+                ),
+              },
+            ]
+          : [],
+      ),
+    );
+    const capture = jest
+      .spyOn(
+        service as unknown as {
+          captureImages: (...args: unknown[]) => Promise<string[]>;
+        },
+        'captureImages',
+      )
+      .mockResolvedValue(['/api/v1/admin/crawl/images/image-1']);
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(null),
+    }));
+
+    await service.execute(run, source);
+
+    expect(capture.mock.calls[0][2]).toEqual([
+      new URL(`${GMF_IMAGE_ORIGIN}/GMF_2026_0_aabbccdd00.jpg`),
+    ]);
+    expect(getListing).not.toHaveBeenCalled();
+    expect(checkRobots).not.toHaveBeenCalled();
+    expect(
+      dataSource.query.mock.calls.some(([sql]) =>
+        String(sql).includes("- 'previousImageHint'"),
+      ),
+    ).toBe(true);
+    expect(run.result).toBe('nochange-parsed');
+  });
+
+  it('classifies a refused GMF image as non-retryable HTTP failure', async () => {
+    const { service, source, run } = harness();
+    source.kind = 'artist-image';
+    source.url = GMF_LINEUP_URL;
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    const imageService = service as unknown as {
+      limitedGetImage: (url: URL) => Promise<unknown>;
+      captureImages: (
+        source: CrawlSource,
+        run: CrawlRun,
+        urls: URL[],
+      ) => Promise<string[]>;
+    };
+    jest.spyOn(imageService, 'limitedGetImage').mockResolvedValue({
+      status: 403,
+    });
+
+    const stored = await imageService.captureImages(source, run, [
+      new URL(`${GMF_IMAGE_ORIGIN}/GMF_2026_0_aabbccdd00.jpg`),
+    ]);
+
+    expect(stored).toEqual([]);
+    expect(run.error).toBe('IMAGE_HTTP');
+  });
+
+  it('classifies a GMF image connection failure for a bounded retry', async () => {
+    const { service, source, run } = harness();
+    source.kind = 'artist-image';
+    source.url = GMF_LINEUP_URL;
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    const imageService = service as unknown as {
+      limitedGetImage: (url: URL) => Promise<unknown>;
+      captureImages: (
+        source: CrawlSource,
+        run: CrawlRun,
+        urls: URL[],
+      ) => Promise<string[]>;
+    };
+    jest
+      .spyOn(imageService, 'limitedGetImage')
+      .mockRejectedValue(new Error('connection reset'));
+
+    await imageService.captureImages(source, run, [
+      new URL(`${GMF_IMAGE_ORIGIN}/GMF_2026_0_aabbccdd00.jpg`),
+    ]);
+
+    expect(run.error).toBe('IMAGE_FETCH');
+  });
+
+  it('keeps a GMF child image unchanged when today has no completed gallery proof', async () => {
+    const { service, source, run, execute, dataSource } = harness();
+    execute.mockRestore();
+    source.kind = 'artist-image';
+    source.url = GMF_LINEUP_URL;
+    source.parser = 'html-text';
+    source.parserConfig = {
+      seed: 'official-gmf-lineup',
+      festivalSourceUrl: GMF_FESTIVAL_URL,
+      artistName: 'Artist 0',
+      imageHint: '/GMF_2026_0_aabbccdd00.jpg',
+    };
+    const capture = jest.spyOn(
+      service as unknown as {
+        captureImages: (...args: unknown[]) => Promise<string[]>;
+      },
+      'captureImages',
+    );
+    await service.execute(run, source);
+    expect(run.result).toBe('failed');
+    expect(capture).not.toHaveBeenCalled();
+    expect(
+      dataSource.query.mock.calls.some(([sql]) =>
+        String(sql).includes("- 'previousImageHint'"),
+      ),
+    ).toBe(false);
+  });
+
+  it('reconciles official Wonderlivet artist sources from a complete JSON response', async () => {
+    const { service, source, run, execute, dataSource } = harness();
+    execute.mockRestore();
+    source.kind = 'artist-gallery';
+    source.url = WONDERLIVET_LINEUP_URL;
+    source.parser = 'html-text';
+    source.parserConfig = { festivalSourceUrl: WONDERLIVET_FESTIVAL_URL };
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({
+      status: 200,
+      body: wonderlivetBundle([
+        {
+          id: 1,
+          name: 'Official Act',
+          performanceDay: 'DAY2',
+          imageUrl: `${WONDERLIVET_IMAGE_ORIGIN}/lineup/artists/production/live/day2/official-123.webp`,
+        },
+      ]),
+    });
+    dataSource.query.mockImplementation((sql: string) =>
+      Promise.resolve(sql.includes('RETURNING id') ? [[], 0] : []),
+    );
+
+    const verifiedBundle = await service.execute(run, source);
+    expect(verifiedBundle).toEqual({
+      body: expect.any(String) as string,
+      snapshotUrl: '/api/v1/admin/crawl/snapshots/snapshot-1',
+    });
+
+    const calls = dataSource.query.mock.calls as unknown as [
+      string,
+      unknown[],
+    ][];
+    const insert = calls.find(([sql]) => sql.includes("SELECT 'artist-image'"));
+    expect(insert?.[1]).toEqual([
+      WONDERLIVET_LINEUP_URL,
+      WONDERLIVET_FESTIVAL_URL,
+      'Official Act',
+      '/lineup/artists/production/live/day2/official-123.webp',
+    ]);
+    expect(run.result).toBe('nochange-parsed');
+  });
+
+  it('preserves existing Wonderlivet artist sources on upstream JSON failure', async () => {
+    const { service, source, run, execute, dataSource } = harness();
+    execute.mockRestore();
+    source.kind = 'artist-gallery';
+    source.url = WONDERLIVET_LINEUP_URL;
+    source.parser = 'html-text';
+    source.parserConfig = { festivalSourceUrl: WONDERLIVET_FESTIVAL_URL };
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({
+      status: 200,
+      body: JSON.stringify({ error: { json: { message: 'Failed query' } } }),
+    });
+
+    await service.execute(run, source);
+
+    expect(run.result).toBe('failed');
+    const mutations = dataSource.query.mock.calls.map(([sql]) => String(sql));
+    expect(
+      mutations.filter((sql) => sql.includes("kind = 'artist-image'")),
+    ).toEqual([]);
+  });
+
+  it('disables only previously enabled official children absent from a complete published lineup', async () => {
+    const { service, source, run, execute, dataSource } = harness();
+    execute.mockRestore();
+    source.kind = 'artist-gallery';
+    source.url = WONDERLIVET_LINEUP_URL;
+    source.parser = 'html-text';
+    source.parserConfig = { festivalSourceUrl: WONDERLIVET_FESTIVAL_URL };
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({
+      status: 200,
+      body: wonderlivetBundle([
+        {
+          id: 2,
+          name: 'Current Act',
+          performanceDay: 'DAY2',
+          imageUrl: `${WONDERLIVET_IMAGE_ORIGIN}/lineup/artists/production/live/day2/current.webp`,
+        },
+      ]),
+    });
+    dataSource.query.mockImplementation((sql: string) =>
+      Promise.resolve(
+        sql.includes('SELECT id, "parserConfig"')
+          ? [
+              {
+                id: '00000000-0000-4000-8000-000000000001',
+                artistName: 'Former Act',
+              },
+            ]
+          : [],
+      ),
+    );
+
+    await service.execute(run, source);
+
+    const disable = (
+      dataSource.query.mock.calls as unknown as [string, unknown[]][]
+    ).find(([sql]) => sql.includes("'disabledBy', 'official-lineup'"));
+    expect(disable?.[0]).toContain('AND enabled = true');
+    expect(disable?.[1]).toEqual([
+      WONDERLIVET_LINEUP_URL,
+      WONDERLIVET_FESTIVAL_URL,
+      [],
+      ['00000000-0000-4000-8000-000000000001'],
+    ]);
+    expect(run.result).toBe('nochange-parsed');
+  });
+
+  it('updates a normalized name match without creating a second image owner', async () => {
+    const { service, source, run, execute, dataSource } = harness();
+    execute.mockRestore();
+    source.kind = 'artist-gallery';
+    source.url = WONDERLIVET_LINEUP_URL;
+    source.parser = 'html-text';
+    source.parserConfig = { festivalSourceUrl: WONDERLIVET_FESTIVAL_URL };
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({
+      status: 200,
+      body: wonderlivetBundle([
+        {
+          id: 3,
+          name: 'ACT A',
+          performanceDay: 'DAY1',
+          imageUrl: `${WONDERLIVET_IMAGE_ORIGIN}/lineup/artists/production/live/day1/new.webp`,
+        },
+      ]),
+    });
+    dataSource.query.mockImplementation((sql: string) =>
+      Promise.resolve(
+        sql.includes('SELECT id, "parserConfig"')
+          ? [
+              {
+                id: '00000000-0000-4000-8000-000000000002',
+                artistName: 'ＡＣＴ Ａ',
+              },
+            ]
+          : [],
+      ),
+    );
+
+    await service.execute(run, source);
+
+    const calls = dataSource.query.mock.calls as unknown as [
+      string,
+      unknown[],
+    ][];
+    expect(calls.some(([sql]) => sql.includes("SELECT 'artist-image'"))).toBe(
+      false,
+    );
+    const update = calls.find(([sql]) => sql.includes('previousImageHint'));
+    expect(update?.[1]).toEqual([
+      '00000000-0000-4000-8000-000000000002',
+      'ACT A',
+      '/lineup/artists/production/live/day1/new.webp',
+      WONDERLIVET_LINEUP_URL,
+    ]);
+    expect(update?.[0]).toContain(
+      'COALESCE("parserConfig"->>\'previousImageHint\'',
+    );
+  });
+
+  it('selects only the matching official Wonderlivet image for an artist source', async () => {
+    const {
+      service,
+      source,
+      run,
+      execute,
+      runsRepo,
+      dataSource,
+      imageStorage,
+    } = harness();
+    execute.mockRestore();
+    source.kind = 'artist-image';
+    source.url = WONDERLIVET_LINEUP_URL;
+    source.parser = 'html-text';
+    source.parserConfig = {
+      seed: 'official-wonderlivet-lineup',
+      artistName: 'Official Act',
+      festivalSourceUrl: WONDERLIVET_FESTIVAL_URL,
+      imageHint: '/lineup/artists/production/live/day1/official-123.webp',
+    };
+    const robots = jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    const listing = jest.spyOn(service, 'getListing');
+    const verifiedBundle = {
+      body: wonderlivetBundle([
+        {
+          id: 4,
+          name: 'Official Act',
+          performanceDay: 'DAY1',
+          imageUrl: `${WONDERLIVET_IMAGE_ORIGIN}/lineup/artists/production/live/day1/official-123.webp`,
+        },
+      ]),
+      snapshotUrl: '/api/v1/admin/crawl/snapshots/gallery-snapshot',
+    };
+    const capture = jest
+      .spyOn(
+        service as unknown as {
+          captureImages: (...args: unknown[]) => Promise<string[]>;
+        },
+        'captureImages',
+      )
+      .mockResolvedValue(['/api/v1/admin/crawl/images/image-1']);
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(null),
+    }));
+
+    await service.execute(run, source, verifiedBundle);
+
+    expect(listing).not.toHaveBeenCalled();
+    expect(imageStorage.saveCrawlSnapshot).not.toHaveBeenCalled();
+    expect(robots).toHaveBeenCalledWith(WONDERLIVET_LINEUP_URL);
+    expect(run.snapshotUrl).toBe(verifiedBundle.snapshotUrl);
+    expect(capture.mock.calls[0][2]).toEqual([
+      new URL(
+        `${WONDERLIVET_IMAGE_ORIGIN}/lineup/artists/production/live/day1/official-123.webp`,
+      ),
+    ]);
+    expect(run.result).toBe('nochange-parsed');
+    expect(
+      dataSource.query.mock.calls.some(([sql]) =>
+        String(sql).includes("- 'previousImageHint'"),
+      ),
+    ).toBe(true);
+    const originalConfig = source.parserConfig;
+    const changes: Record<string, string>[] = [
+      { artistName: 'Different Act' },
+      { imageHint: '/lineup/artists/production/live/day1/different.webp' },
+    ];
+    for (const changed of changes) {
+      const staleRun = {
+        ...run,
+        id: `stale-${Object.keys(changed)[0]}`,
+      };
+      source.parserConfig = { ...originalConfig, ...changed };
+      await service.execute(staleRun, source, verifiedBundle);
+      expect(staleRun.result).toBe('failed');
+    }
+    expect(capture).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the previous official image path when replacement capture fails', async () => {
+    const { service, source, run, execute, dataSource } = harness();
+    execute.mockRestore();
+    source.kind = 'artist-image';
+    source.url = WONDERLIVET_LINEUP_URL;
+    source.parser = 'html-text';
+    source.parserConfig = {
+      seed: 'official-wonderlivet-lineup',
+      artistName: 'Official Act',
+      festivalSourceUrl: WONDERLIVET_FESTIVAL_URL,
+      imageHint: '/lineup/artists/production/live/day1/new.webp',
+      previousImageHint: '/lineup/artists/production/live/day1/old.webp',
+    };
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    const listing = jest.spyOn(service, 'getListing').mockResolvedValue({
+      status: 200,
+      body: wonderlivetBundle([
+        {
+          id: 5,
+          name: 'Official Act',
+          performanceDay: 'DAY1',
+          imageUrl: `${WONDERLIVET_IMAGE_ORIGIN}/lineup/artists/production/live/day1/new.webp`,
+        },
+      ]),
+    });
+    jest
+      .spyOn(
+        service as unknown as {
+          captureImages: (...args: unknown[]) => Promise<string[]>;
+        },
+        'captureImages',
+      )
+      .mockRejectedValue(new Error('image download failed'));
+
+    await service.execute(run, source);
+
+    expect(listing).toHaveBeenCalledWith(source);
+    expect(run.result).toBe('failed');
+    expect(
+      dataSource.query.mock.calls.some(([sql]) =>
+        String(sql).includes("- 'previousImageHint'"),
+      ),
+    ).toBe(false);
   });
 
   it('reparses an unchanged English YES24 listing after the parser update', async () => {
@@ -756,6 +3603,61 @@ describe('CrawlService manual runs and snapshots', () => {
     ).toContain('https://ticket.yes24.com/English/Perf/60590');
   });
 
+  it('reparses an unchanged CDF official post to persist performer profiles', async () => {
+    const { service, source, run, runsRepo, proposalsRepo, execute } =
+      harness();
+    execute.mockRestore();
+    source.url = 'https://www.mintpaper.co.kr/posts/4819';
+    source.parserConfig = {
+      seed: 'official-lineup',
+      festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
+    };
+    const profiles = Array.from({ length: 12 }, (_, index) => [
+      `Artist ${index + 1}`,
+      `artist_${index + 1}`,
+    ]);
+    const body = `<h1>COUNTDOWN FANTASY 2026-2027 1차 라인업 공개</h1>
+      <div class="PostContent_content__test">12.31<br>
+      ${profiles.map(([name, handle]) => `${name} <a href="https://www.instagram.com/${handle}/">@${handle}</a>`).join('<br>')}
+      <br>and many more</div>`;
+    const oldHash = createHash('sha256')
+      .update(body)
+      .update('ticket-list:v3')
+      .digest('hex');
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({ status: 200, body });
+    jest
+      .spyOn(
+        service as unknown as {
+          captureImages(
+            source: CrawlSource,
+            run: CrawlRun,
+            urls: URL[],
+          ): Promise<string[]>;
+        },
+        'captureImages',
+      )
+      .mockResolvedValue([]);
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue({ contentHash: oldHash }),
+    }));
+
+    await service.execute(run, source);
+
+    expect(run.contentHash).not.toBe(oldHash);
+    expect(run.result).toBe('proposed');
+    const proposal = proposalsRepo.save.mock.calls[0][0] as {
+      items: { after: { artists: { name: string; profileUrl: string }[] } }[];
+    };
+    expect(proposal.items[0].after.artists).toHaveLength(12);
+    expect(proposal.items[0].after.artists[0]).toEqual({
+      name: 'Artist 1',
+      profileUrl: 'https://www.instagram.com/artist_1/',
+    });
+  });
+
   it('registers only NOL product pages discovered from a festival listing', async () => {
     const { service, source, run, dataSource, runsRepo, execute } = harness();
     execute.mockRestore();
@@ -796,6 +3698,876 @@ describe('CrawlService manual runs and snapshots', () => {
     expect(sourceUrls).toEqual([
       'https://nol.yanolja.com/ticket/products/26013510',
     ]);
+  });
+
+  it('registers only NOL World festival details from its public concert list', async () => {
+    const { service, source, run, dataSource, runsRepo, execute } = harness();
+    execute.mockRestore();
+    source.url = 'https://world.nol.com/en/ticket/genre/CONCERT/products';
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({
+      status: 200,
+      body: '<a href="/en/ticket/products/26015253"><h2>STILL ROLLING FEST 2026</h2></a><a href="/en/ticket/products/26014833"><h2>단독 콘서트</h2></a>',
+    });
+    jest
+      .spyOn(
+        service as unknown as {
+          captureImages(
+            source: CrawlSource,
+            run: CrawlRun,
+            urls: URL[],
+          ): Promise<string[]>;
+        },
+        'captureImages',
+      )
+      .mockResolvedValue([]);
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(null),
+    }));
+    jest
+      .spyOn(service, 'proposalItems')
+      .mockResolvedValue({ kind: 'discovery', items: [] });
+    await service.execute(run, source);
+    expect(run.result).toBe('nochange-parsed');
+    expect(
+      dataSource.query.mock.calls
+        .filter(([sql]: [string]) => sql.includes('INSERT INTO crawl_sources'))
+        .map(([, params]: [string, string[]]) => params[0]),
+    ).toEqual(['https://world.nol.com/en/ticket/products/26015253']);
+  });
+
+  it('keeps NOL World detail OCR private and rechecks images when HTML is unchanged', async () => {
+    const { service, source, run, runsRepo, proposalsRepo, execute } =
+      harness();
+    execute.mockRestore();
+    source.url = 'https://world.nol.com/en/ticket/products/26013510';
+    const body = `<script type="application/ld+json">${JSON.stringify({
+      '@type': 'Event',
+      name: 'ROUND in Korea 2026',
+      startDate: '2026-11-07',
+      endDate: '2026-11-08',
+      location: { '@type': 'Place', name: 'Seoul' },
+    })}</script>`;
+    const prior = [
+      {
+        sourceUrl: source.url,
+        imageUrl:
+          'https://ticketimage.interpark.com/Play/image/etc/26/26013510-e01.jpg',
+        imageHash: 'old',
+        parserVersion: 'nol-world-detail-ocr:v1',
+        status: 'ok' as const,
+        failureReason: null,
+        rawLines: ['old'],
+      },
+    ];
+    const updated = [{ ...prior[0], imageHash: 'new', rawLines: ['new'] }];
+    const collect = jest
+      .spyOn(nolEvidence, 'collectNolWorldLineupEvidence')
+      .mockResolvedValue(updated);
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({ status: 200, body });
+    jest
+      .spyOn(
+        service as unknown as { captureImages(): Promise<string[]> },
+        'captureImages',
+      )
+      .mockResolvedValue([]);
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue({
+        contentHash: createHash('sha256')
+          .update(body)
+          .update('ticket-list:v5')
+          .digest('hex'),
+        lineupEvidence: prior,
+      }),
+    }));
+    const proposalItems = jest
+      .spyOn(service, 'proposalItems')
+      .mockResolvedValue({ kind: 'festival.new', items: [] });
+    await service.execute(run, source);
+    expect(collect).toHaveBeenCalledWith(
+      body,
+      source.url,
+      prior,
+      expect.any(Object),
+    );
+    expect(run.lineupEvidence).toEqual(updated);
+    expect(run.result).toBe('nochange-parsed');
+    expect(proposalsRepo.save).not.toHaveBeenCalled();
+    expect(proposalItems).not.toHaveBeenCalled();
+    collect.mockRestore();
+  });
+
+  it('reports partial NOL OCR failure while still creating a public discovery proposal', async () => {
+    const { service, source, run, runsRepo, proposalsRepo, execute } =
+      harness();
+    execute.mockRestore();
+    source.url = 'https://world.nol.com/en/ticket/products/26013510';
+    const evidence = [
+      {
+        sourceUrl: source.url,
+        imageUrl:
+          'https://ticketimage.interpark.com/Play/image/etc/26/26013510-e01.jpg',
+        imageHash: null,
+        parserVersion: 'nol-world-detail-ocr:v1',
+        status: 'failed' as const,
+        failureReason: 'robots' as const,
+        rawLines: [],
+      },
+    ];
+    const collect = jest
+      .spyOn(nolEvidence, 'collectNolWorldLineupEvidence')
+      .mockResolvedValue(evidence);
+    const parse = jest.spyOn(crawlParser, 'parseCrawl').mockResolvedValue([]);
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest
+      .spyOn(service, 'getListing')
+      .mockResolvedValue({ status: 200, body: '<html>official event</html>' });
+    jest
+      .spyOn(
+        service as unknown as { captureImages(): Promise<string[]> },
+        'captureImages',
+      )
+      .mockResolvedValue([]);
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(null),
+    }));
+    jest.spyOn(service, 'proposalItems').mockResolvedValue({
+      kind: 'festival.new',
+      items: [
+        {
+          id: 'candidate',
+          op: 'add',
+          path: '/festivals/-',
+          after: { name: 'ROUND in Korea' },
+        },
+      ],
+    });
+    await service.execute(run, source);
+    expect(run.result).toBe('proposed');
+    expect(run.error).toBe('LINEUP_EVIDENCE_PARTIAL');
+    expect(run.lineupEvidence).toEqual(evidence);
+    expect(proposalsRepo.save).toHaveBeenCalledTimes(1);
+    expect(proposalsRepo.save.mock.calls[0][0]).not.toHaveProperty(
+      'lineupEvidence',
+    );
+    collect.mockRestore();
+    parse.mockRestore();
+  });
+
+  it('reparses unchanged Wonderlivet detail and records its matching pending proposal', async () => {
+    const { service, source, run, runsRepo, proposalsRepo, execute } =
+      harness();
+    execute.mockRestore();
+    source.url = 'https://ticket.melon.com/performance/index.htm?prodId=214999';
+    source.parserConfig = {
+      seed: 'wonderlivet-official-ticket-detail',
+      festivalSourceUrl: 'https://www.wonderli.vet/lineup',
+    };
+    const lastChangedAt = new Date('2026-10-24T00:00:00Z');
+    source.lastChangedAt = lastChangedAt;
+    const body = `<strong class="tit">WONDERLIVET 2026 (원더리벳 2026)</strong>
+      <span class="txt_info">2026.11.20 - 2026.11.22</span>
+      <span class="place">KINTEX HALL 7/8/9/10</span>`;
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({ status: 200, body });
+    jest
+      .spyOn(
+        service as unknown as {
+          captureImages(
+            source: CrawlSource,
+            run: CrawlRun,
+            urls: URL[],
+          ): Promise<string[]>;
+        },
+        'captureImages',
+      )
+      .mockResolvedValue([]);
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue({
+        contentHash: createHash('sha256')
+          .update(body)
+          .update('ticket-list:v3')
+          .digest('hex'),
+      }),
+    }));
+    const proposalItems = jest
+      .spyOn(service, 'proposalItems')
+      .mockResolvedValue({
+        kind: 'festival.new',
+        items: [],
+        matchedProposalId: 'proposal-1',
+      });
+
+    await service.execute(run, source);
+
+    expect(proposalItems).toHaveBeenCalledTimes(1);
+    expect(run.result).toBe('nochange-parsed');
+    expect(run.proposalId).toBe('proposal-1');
+    expect(source.lastChangedAt).toBe(lastChangedAt);
+    expect(proposalsRepo.save).not.toHaveBeenCalled();
+  });
+
+  it('reparses an unchanged official Melon detail once for venue coordinates', async () => {
+    const { service, source, run, runsRepo, dataSource, execute } = harness();
+    execute.mockRestore();
+    source.url = 'https://ticket.melon.com/performance/index.htm?prodId=213793';
+    source.parserConfig = { seed: 'ticket-detail' };
+    const body = `<strong class="tit">WONDERLIVET 2026</strong>
+      <span class="txt_info">2026.11.20 - 2026.11.22</span>
+      <span class="place">KINTEX HALL 7/8/9/10</span>
+      <a href="http://map.daum.net/link/to/KINTEX HALL 7/8/9/10,37.66469544695199,126.742064181796">빠른길 찾기</a>
+      <input id="global_ticket_performanceHall_locLati" value="37.66469544695199">
+      <input id="global_ticket_performanceHall_locLogi" value="126.742064181796">`;
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({ status: 200, body });
+    jest
+      .spyOn(
+        service as unknown as {
+          captureImages(
+            source: CrawlSource,
+            run: CrawlRun,
+            urls: URL[],
+          ): Promise<string[]>;
+        },
+        'captureImages',
+      )
+      .mockResolvedValue([]);
+    const oldHash = createHash('sha256')
+      .update(body)
+      .update('ticket-list:v3')
+      .digest('hex');
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue({ contentHash: oldHash }),
+    }));
+    const proposalItems = jest
+      .spyOn(service, 'proposalItems')
+      .mockResolvedValue({
+        kind: 'festival.new',
+        items: [],
+      });
+    await service.execute(run, source);
+    expect(run.result).toBe('nochange-parsed');
+    expect(proposalItems).toHaveBeenCalledTimes(1);
+    expect(proposalItems.mock.calls[0]?.[1]).toEqual([
+      expect.objectContaining({
+        location: {
+          latitude: 37.66469544695199,
+          longitude: 126.742064181796,
+          label: 'KINTEX HALL 7/8/9/10',
+        },
+      }),
+    ]);
+    expect(dataSource.query).toHaveBeenCalledWith(
+      expect.stringContaining("'{locationParserVersion}'"),
+      expect.arrayContaining([true, source.url]),
+    );
+    expect(source.parserConfig.locationParserVersion).toBe('1');
+
+    const nextRun = { id: 'run-2', sourceId: source.id } as CrawlRun;
+    await service.execute(nextRun, source);
+    expect(nextRun.result).toBe('unchanged');
+    expect(proposalItems).toHaveBeenCalledTimes(1);
+  });
+
+  it('registers a dynamic official WONDERLIVET Melon product on the daily crawl', async () => {
+    const { service, source, run, dataSource, runsRepo, execute } = harness();
+    execute.mockRestore();
+    source.url = 'https://litt.ly/wonderlivet';
+    source.parserConfig = {
+      seed: 'wonderlivet-official-ticket-links',
+      festivalSourceUrl: 'https://www.wonderli.vet/lineup',
+    };
+    const product =
+      'https://ticket.melon.com/performance/index.htm?prodId=214999';
+    const body = `<title>WONDERLIVET·원더리벳</title><h1>WONDERLIVET·원더리벳</h1>
+      <p>원더리벳 2026 전체 라인업과 타임테이블이 공개되었습니다.</p>
+      <a href="https://www.wonderli.vet/">홈페이지 바로가기</a><h2>TICKET</h2>
+      <a href="${product}">[멜론티켓] 예매페이지 바로가기</a>`;
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({ status: 200, body });
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(null),
+    }));
+    const childQuery = jest.fn((sql: string) =>
+      sql.includes('SELECT "parserConfig", enabled')
+        ? [
+            {
+              enabled: true,
+              parserConfig: {
+                seed: 'wonderlivet-official-ticket-detail',
+                festivalSourceUrl: 'https://www.wonderli.vet/lineup',
+                festivalSourceUrls: [
+                  product,
+                  'https://www.wonderli.vet/lineup',
+                ],
+              },
+            },
+          ]
+        : sql.includes('RETURNING id')
+          ? [[{ id: source.id }], 1]
+          : [],
+    );
+    dataSource.transaction = jest.fn(async (operation) =>
+      operation({ query: childQuery }),
+    );
+    const proposals = jest.spyOn(service, 'proposalItems');
+
+    await service.execute(run, source);
+
+    expect(run.result).toBe('nochange-parsed');
+    expect(proposals).not.toHaveBeenCalled();
+    const calls = childQuery.mock.calls as unknown as [string, unknown[]][];
+    const parentUpdate = calls.find(([sql]) =>
+      sql.includes("'verifiedTicketUrl'"),
+    );
+    expect(parentUpdate?.[1]).toEqual([
+      source.id,
+      product,
+      'https://litt.ly/wonderlivet',
+      'wonderlivet-official-ticket-links',
+      'https://www.wonderli.vet/lineup',
+      run.id,
+    ]);
+    expect(
+      calls.find(([sql]) => sql.includes('INSERT INTO crawl_sources'))?.[1][0],
+    ).toBe(product);
+    const insertedConfig = JSON.parse(
+      calls.find(([sql]) =>
+        sql.includes('INSERT INTO crawl_sources'),
+      )?.[1][1] as string,
+    ) as Record<string, unknown>;
+    expect(insertedConfig.festivalSourceUrls).toEqual([
+      product,
+      'https://www.wonderli.vet/lineup',
+    ]);
+    expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not publish a WONDERLIVET bridge when the existing product belongs to another source', async () => {
+    const { service, source, dataSource } = harness();
+    source.url = 'https://litt.ly/wonderlivet';
+    source.parserConfig = {
+      seed: 'wonderlivet-official-ticket-links',
+      festivalSourceUrl: 'https://www.wonderli.vet/lineup',
+    };
+    const childQuery = jest.fn((sql: string) =>
+      sql.includes('SELECT "parserConfig", enabled')
+        ? [
+            {
+              enabled: true,
+              parserConfig: {
+                seed: 'official-ticket-link-detail',
+                festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
+              },
+            },
+          ]
+        : [],
+    );
+    dataSource.transaction = jest.fn(async (operation) =>
+      operation({ query: childQuery }),
+    );
+    await expect(
+      service.reconcileWonderlivetTicketLink(
+        source,
+        [
+          {
+            name: 'WONDERLIVET 2026',
+            url: 'https://ticket.melon.com/performance/index.htm?prodId=214999',
+          },
+        ],
+        'run-1',
+      ),
+    ).rejects.toThrow('다른 축제');
+    expect(
+      childQuery.mock.calls.some(([sql]: [string]) =>
+        sql.includes("'verifiedTicketUrl'"),
+      ),
+    ).toBe(false);
+  });
+
+  it.each([
+    ['zero rows', [[], 0]],
+    ['multiple rows', [[{ id: 'source-1' }, { id: 'source-1' }], 2]],
+  ])(
+    'rolls back the Wonderlivet child configuration if parent verification returns %s',
+    async (_case, updateResult) => {
+      const { service, source, dataSource } = harness();
+      source.url = 'https://litt.ly/wonderlivet';
+      source.parserConfig = {
+        seed: 'wonderlivet-official-ticket-links',
+        festivalSourceUrl: 'https://www.wonderli.vet/lineup',
+      };
+      const product =
+        'https://ticket.melon.com/performance/index.htm?prodId=214999';
+      const staged: string[] = [];
+      let committed = false;
+      dataSource.transaction = jest.fn(async (operation) => {
+        const result = await operation({
+          query: jest.fn((sql: string) => {
+            if (sql.includes('SELECT "parserConfig", enabled'))
+              return [
+                {
+                  enabled: true,
+                  parserConfig: {
+                    seed: 'wonderlivet-official-ticket-detail',
+                    festivalSourceUrl: 'https://www.wonderli.vet/lineup',
+                    festivalSourceUrls: [
+                      product,
+                      'https://www.wonderli.vet/lineup',
+                    ],
+                  },
+                },
+              ];
+            if (sql.includes("'verifiedTicketUrl'")) return updateResult;
+            staged.push(sql);
+            return [];
+          }),
+        });
+        committed = true;
+        return result;
+      });
+      await expect(
+        service.reconcileWonderlivetTicketLink(
+          source,
+          [{ name: 'WONDERLIVET 2026', url: product }],
+          'run-1',
+        ),
+      ).rejects.toThrow('부모 소스 설정');
+      expect(staged.length).toBeGreaterThan(0);
+      expect(committed).toBe(false);
+      expect(dataSource.query).not.toHaveBeenCalled();
+    },
+  );
+
+  it('registers an official Mint Paper NOL link without a duplicate festival proposal', async () => {
+    const { service, source, run, dataSource, runsRepo, execute } = harness();
+    execute.mockRestore();
+    source.url = 'https://www.mintpaper.co.kr/posts/4821';
+    source.parserConfig = {
+      seed: 'official-ticket-links',
+      festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
+    };
+    const post = {
+      title: 'CDF2026-2027 TICKET | 예매 안내, 입장 안내, 관람 안내',
+      content:
+        '<p>COUNTDOWN FANTASY 2026-2027 일시 : 2026년 12월 31일</p>' +
+        '<a href="https://nol.yanolja.com/ticket/products/26014568">NOL</a>' +
+        '<a href="https://ticket.yes24.com/Perf/60590?Gcode=009_207">YES24</a>',
+    };
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({
+      status: 200,
+      body: `<script id="__NEXT_DATA__" type="application/json">${JSON.stringify({ props: { apolloState: { data: { 'Post:4821': post } } } })}</script>`,
+    });
+    dataSource.query.mockImplementation((sql: string) =>
+      sql.includes('RETURNING id')
+        ? [[{ id: source.id }], 1]
+        : sql.includes('SELECT "parserConfig"')
+          ? [
+              {
+                parserConfig: {
+                  seed: 'official-ticket-link-detail',
+                  festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
+                },
+              },
+            ]
+          : [],
+    );
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(null),
+    }));
+    const proposals = jest.spyOn(service, 'proposalItems');
+
+    await service.execute(run, source);
+
+    expect(run.result).toBe('nochange-parsed');
+    expect(proposals).not.toHaveBeenCalled();
+    const calls = dataSource.query.mock.calls as unknown as [
+      string,
+      string[],
+    ][];
+    const statements = calls.filter(([sql]) => sql.includes('crawl_sources'));
+    expect(
+      statements.filter(([sql]) => sql.includes('INSERT INTO')),
+    ).toHaveLength(2);
+    expect(statements[0][1][0]).toBe(
+      'https://nol.yanolja.com/ticket/products/26014568',
+    );
+    expect(statements[1][1][1]).toContain('official-ticket-link-detail');
+    expect(statements[1][1][1]).toContain(
+      'https://mintpaper.co.kr/festivals/178',
+    );
+    expect(statements[0][0]).toContain(
+      `"parserConfig"->>'seed' = 'ticket-detail'`,
+    );
+    expect(statements[0][0]).toContain(
+      `"parserConfig"->>'festivalSourceUrl' = $3`,
+    );
+    expect(statements[0][1][2]).toBe('https://mintpaper.co.kr/festivals/178');
+    expect(
+      statements.some(
+        ([, params]) => params[0] === 'https://ticket.yes24.com/Perf/60590',
+      ),
+    ).toBe(true);
+    const verifiedUpdate = statements.find(([sql]) =>
+      sql.includes("'verifiedTicketUrls'"),
+    );
+    expect(verifiedUpdate?.[0]).toContain('RETURNING id');
+    expect(verifiedUpdate?.[1]).toEqual([
+      source.id,
+      '["https://nol.yanolja.com/ticket/products/26014568","https://ticket.yes24.com/Perf/60590"]',
+      'https://mintpaper.co.kr/festivals/178',
+    ]);
+  });
+
+  it.each([
+    ['zero rows', [[], 0]],
+    ['multiple rows', [[{ id: 'source-1' }, { id: 'source-1' }], 2]],
+  ])(
+    'rolls back the official child configuration if parent verification returns %s',
+    async (_case, updateResult) => {
+      const { service, source, dataSource } = harness();
+      source.parserConfig = {
+        seed: 'official-ticket-links',
+        festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
+      };
+      const staged: string[] = [];
+      let committed = false;
+      dataSource.transaction = jest.fn(async (operation) => {
+        const result = await operation({
+          query: jest.fn((sql: string) => {
+            if (sql.includes('SELECT "parserConfig"'))
+              return [
+                {
+                  parserConfig: {
+                    seed: 'official-ticket-link-detail',
+                    festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
+                  },
+                },
+              ];
+            if (sql.includes("'verifiedTicketUrls'")) return updateResult;
+            staged.push(sql);
+            return [];
+          }),
+        });
+        committed = true;
+        return result;
+      });
+      await expect(
+        service.reconcileOfficialTicketLinks(source, [
+          { url: 'https://nol.yanolja.com/ticket/products/26014568' },
+        ]),
+      ).rejects.toThrow('부모 소스 설정이 변경');
+      expect(staged).toHaveLength(2);
+      expect(committed).toBe(false);
+      expect(dataSource.query).not.toHaveBeenCalled();
+    },
+  );
+
+  it('reconciles an official NOL link even when the notice content is unchanged', async () => {
+    const { service, source, run, dataSource, runsRepo, execute } = harness();
+    execute.mockRestore();
+    source.url = 'https://www.mintpaper.co.kr/posts/4821';
+    source.parserConfig = {
+      seed: 'official-ticket-links',
+      festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
+    };
+    const body = `<script id="__NEXT_DATA__">${JSON.stringify({ props: { apolloState: { data: { 'Post:4821': { title: 'CDF2026-2027 TICKET | 예매 안내, 입장 안내, 관람 안내', content: '<p>COUNTDOWN FANTASY 2026-2027 일시 : 2026년 12월 31일</p><a href="https://nol.yanolja.com/ticket/products/26014568">NOL</a>' } } } } })}</script>`;
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({ status: 200, body });
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue({
+        contentHash: createHash('sha256')
+          .update(body)
+          .update('ticket-list:v3')
+          .digest('hex'),
+      }),
+    }));
+    dataSource.query.mockImplementation((sql: string) =>
+      sql.includes('RETURNING id')
+        ? [[{ id: source.id }], 1]
+        : sql.includes('SELECT "parserConfig"')
+          ? [
+              {
+                parserConfig: {
+                  seed: 'official-ticket-link-detail',
+                  festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
+                },
+              },
+            ]
+          : [],
+    );
+    const proposals = jest.spyOn(service, 'proposalItems');
+
+    await service.execute(run, source);
+
+    expect(run.result).toBe('unchanged');
+    expect(proposals).not.toHaveBeenCalled();
+    expect(
+      dataSource.query.mock.calls.filter(([sql]: [string]) =>
+        sql.includes('INSERT INTO crawl_sources'),
+      ),
+    ).toHaveLength(1);
+    for (const fragment of [
+      'UPDATE crawl_sources SET "parserConfig"',
+      'SELECT "parserConfig" FROM crawl_sources',
+    ]) {
+      expect(dataSource.query).toHaveBeenCalledWith(
+        expect.stringContaining(fragment),
+        expect.arrayContaining([
+          'https://nol.yanolja.com/ticket/products/26014568',
+        ]),
+      );
+    }
+  });
+
+  it('fails an unchanged official notice when its NOL links disappear', async () => {
+    const { service, source, run, dataSource, runsRepo, execute } = harness();
+    execute.mockRestore();
+    source.url = 'https://www.mintpaper.co.kr/posts/4821';
+    source.parserConfig = {
+      seed: 'official-ticket-links',
+      festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
+    };
+    const body = '<html><body>공식 공지가 변경되었습니다.</body></html>';
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({ status: 200, body });
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue({
+        contentHash: createHash('sha256')
+          .update(body)
+          .update('ticket-list:v3')
+          .digest('hex'),
+      }),
+    }));
+
+    await service.execute(run, source);
+
+    expect(run.result).toBe('failed');
+    expect(run.error).toBe('PARSE');
+    expect(
+      dataSource.query.mock.calls.some(([sql]: [string]) =>
+        sql.includes('INSERT INTO crawl_sources'),
+      ),
+    ).toBe(false);
+  });
+
+  it('rejects an unchanged official notice with a different seed before writing', async () => {
+    const { service, source, run, dataSource, runsRepo, execute } = harness();
+    execute.mockRestore();
+    source.url = 'https://www.mintpaper.co.kr/posts/4821';
+    source.parserConfig = { seed: 'manual' };
+    const body = `<script id="__NEXT_DATA__">${JSON.stringify({ props: { apolloState: { data: { 'Post:4821': { title: 'CDF2026-2027 TICKET | 예매 안내, 입장 안내, 관람 안내', content: '<p>COUNTDOWN FANTASY 2026-2027 일시 : 2026년 12월 31일</p><a href="https://nol.yanolja.com/ticket/products/26014568">NOL</a>' } } } } })}</script>`;
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({ status: 200, body });
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue({
+        contentHash: createHash('sha256')
+          .update(body)
+          .update('ticket-list:v3')
+          .digest('hex'),
+      }),
+    }));
+
+    await service.execute(run, source);
+
+    expect(run.result).toBe('failed');
+    expect(run.error).toBe('PARSE');
+    expect(
+      dataSource.query.mock.calls.some(
+        ([sql]: [string]) =>
+          sql.includes('INSERT INTO crawl_sources') ||
+          sql.includes('UPDATE crawl_sources SET "parserConfig"'),
+      ),
+    ).toBe(false);
+  });
+
+  it('preserves an existing NOL source with a different configuration', async () => {
+    const { service, source, run, dataSource, runsRepo, execute } = harness();
+    execute.mockRestore();
+    source.url = 'https://www.mintpaper.co.kr/posts/4821';
+    source.parserConfig = {
+      seed: 'official-ticket-links',
+      festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
+    };
+    const content =
+      '<p>COUNTDOWN FANTASY 2026-2027 일시 : 2026년 12월 31일</p>' +
+      '<a href="https://nol.yanolja.com/ticket/products/26014568">NOL</a>';
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({
+      status: 200,
+      body: `<script id="__NEXT_DATA__">${JSON.stringify({ props: { apolloState: { data: { 'Post:4821': { title: 'CDF2026-2027 TICKET | 예매 안내, 입장 안내, 관람 안내', content } } } } })}</script>`,
+    });
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(null),
+    }));
+    dataSource.query.mockImplementation((sql: string) =>
+      sql.includes('SELECT "parserConfig"')
+        ? [{ parserConfig: { seed: 'manual', festivalSourceUrl: 'other' } }]
+        : [],
+    );
+    const warning = jest.spyOn(
+      (service as unknown as { logger: { warn: (message: string) => void } })
+        .logger,
+      'warn',
+    );
+
+    await service.execute(run, source);
+
+    expect(run.result).toBe('failed');
+    expect(run.error).toBe('PARSE');
+    expect(warning).toHaveBeenCalledWith(
+      expect.stringContaining('크롤 처리 실패:'),
+    );
+    const update = (
+      dataSource.query.mock.calls as unknown as [string, string[]][]
+    ).find(([sql]) => sql.includes('UPDATE crawl_sources'));
+    expect(update?.[0]).toContain(`"parserConfig"->>'seed' = 'ticket-detail'`);
+    expect(update?.[0]).toContain(`"parserConfig"->>'festivalSourceUrl' = $3`);
+  });
+
+  it('does not overwrite a YES24 source already assigned to another festival', async () => {
+    const { service, source, dataSource } = harness();
+    source.parserConfig = {
+      seed: 'official-ticket-links',
+      festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
+    };
+    const yes24 = 'https://ticket.yes24.com/Perf/60590';
+    dataSource.query.mockImplementation((sql: string) =>
+      sql.includes('SELECT "parserConfig"')
+        ? [
+            {
+              parserConfig: {
+                seed: 'ticket-detail',
+                festivalSourceUrl: 'https://mintpaper.co.kr/festivals/177',
+              },
+            },
+          ]
+        : [],
+    );
+
+    await expect(
+      service.reconcileOfficialTicketLinks(source, [{ url: yes24 }]),
+    ).rejects.toThrow('기존 예매처 크롤 소스 설정이 다릅니다');
+    const update = (dataSource.query.mock.calls as [string, string[]][]).find(
+      ([sql]) => sql.includes('UPDATE crawl_sources SET "parserConfig"'),
+    );
+    expect(update?.[0]).toContain(`"parserConfig"->>'festivalSourceUrl' = $3`);
+    expect(update?.[0]).toContain(
+      `NOT ("parserConfig" ? 'festivalSourceUrls')`,
+    );
+    expect(update?.[1][0]).toBe(yes24);
+  });
+
+  it('rolls back a preceding NOL source update when the YES24 source conflicts', async () => {
+    const { service, source, dataSource } = harness();
+    source.parserConfig = {
+      seed: 'official-ticket-links',
+      festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
+    };
+    const nol = 'https://nol.yanolja.com/ticket/products/26014568';
+    const yes24 = 'https://ticket.yes24.com/Perf/60590';
+    const persisted = new Map([
+      [nol, { seed: 'ticket-detail' }],
+      [
+        yes24,
+        {
+          seed: 'ticket-detail',
+          festivalSourceUrl: 'https://mintpaper.co.kr/festivals/177',
+        },
+      ],
+    ]);
+    const transactionQueries: string[] = [];
+    dataSource.transaction.mockImplementation(
+      async (
+        callback: (manager: {
+          query: (sql: string, parameters: string[]) => Promise<unknown>;
+        }) => Promise<unknown>,
+      ) => {
+        const pending = new Map(persisted);
+        const query = jest.fn((sql: string, parameters: string[]) => {
+          transactionQueries.push(sql);
+          const url = parameters[0];
+          if (sql.startsWith('UPDATE crawl_sources') && url === nol) {
+            pending.set(nol, {
+              seed: 'official-ticket-link-detail',
+              festivalSourceUrl: source.parserConfig.festivalSourceUrl,
+            });
+          }
+          if (sql.startsWith('SELECT "parserConfig"'))
+            return Promise.resolve([{ parserConfig: pending.get(url) }]);
+          return Promise.resolve([]);
+        });
+        const result = await callback({ query });
+        for (const [url, config] of pending) persisted.set(url, config);
+        return result;
+      },
+    );
+
+    await expect(
+      service.reconcileOfficialTicketLinks(source, [
+        { url: nol },
+        { url: yes24 },
+      ]),
+    ).rejects.toThrow('기존 예매처 크롤 소스 설정이 다릅니다');
+    expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+    expect(transactionQueries).toHaveLength(6);
+    expect(
+      transactionQueries.some((sql) => sql.includes('verifiedTicketUrls')),
+    ).toBe(false);
+    expect(persisted.get(nol)).toEqual({ seed: 'ticket-detail' });
+    expect(dataSource.query).not.toHaveBeenCalled();
+  });
+
+  it('does not turn a reconfigured official post source into a festival proposal', async () => {
+    const { service, source, run, dataSource, runsRepo, execute } = harness();
+    execute.mockRestore();
+    source.url = 'https://www.mintpaper.co.kr/posts/4821';
+    source.parserConfig = { seed: 'manual' };
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({
+      status: 200,
+      body: `<script id="__NEXT_DATA__">${JSON.stringify({ props: { apolloState: { data: { 'Post:4821': { title: 'CDF2026-2027 TICKET | 예매 안내, 입장 안내, 관람 안내', content: '<p>COUNTDOWN FANTASY 2026-2027 일시 : 2026년 12월 31일</p><a href="https://nol.yanolja.com/ticket/products/26014568">NOL</a>' } } } } })}</script>`,
+    });
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(null),
+    }));
+    const proposals = jest.spyOn(service, 'proposalItems');
+
+    await service.execute(run, source);
+
+    expect(run.result).toBe('failed');
+    expect(proposals).not.toHaveBeenCalled();
+    expect(
+      dataSource.query.mock.calls.some(([sql]: [string]) =>
+        sql.includes('INSERT INTO crawl_sources'),
+      ),
+    ).toBe(false);
   });
 
   it('fetches bounded YES24 category pages and combines their listings', async () => {
@@ -953,6 +4725,79 @@ describe('CrawlService manual runs and snapshots', () => {
 });
 
 describe('CrawlService proposal changes', () => {
+  it('proposes reviewed coordinates for a same-source accepted Melon draft only once', async () => {
+    const { service, source, dataSource } = harness();
+    source.url = 'https://ticket.melon.com/performance/index.htm?prodId=213793';
+    source.parserConfig = { seed: 'ticket-detail', sourceName: '멜론티켓' };
+    const point = {
+      latitude: 37.66469544695199,
+      longitude: 126.742064181796,
+      label: 'KINTEX HALL 7/8/9/10',
+    };
+    const draft = {
+      venue: point.label,
+      directions: { location: null },
+      source: { url: source.url },
+    };
+    const known = [
+      {
+        url: source.url,
+        value: null,
+        proposalId: null,
+        festivalId: 'fst_existing',
+        draft,
+      },
+    ];
+    dataSource.query.mockResolvedValueOnce(known).mockResolvedValueOnce([]);
+    const result = await service.proposalItems(source, [
+      { name: 'WONDERLIVET 2026', url: source.url, location: point },
+    ]);
+    expect(result.kind).toBe('directions.diff');
+    expect(result.festivalId).toBe('fst_existing');
+    const issuedAt = (
+      result.items[0].after as {
+        source: { verifiedAt: string };
+      }
+    ).source.verifiedAt;
+    expect(issuedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(result.items).toEqual([
+      expect.objectContaining({
+        op: 'update',
+        path: '/directions/location',
+        before: null,
+        after: {
+          ...point,
+          source: {
+            name: '멜론티켓',
+            url: source.url,
+            verifiedAt: issuedAt,
+          },
+        },
+      }),
+    ]);
+    expect(dataSource.query).toHaveBeenCalledWith(
+      expect.stringContaining("kind = 'directions.diff'"),
+      ['fst_existing'],
+    );
+
+    dataSource.query
+      .mockResolvedValueOnce(known)
+      .mockResolvedValueOnce([{ id: 'pending-location' }]);
+    const duplicate = await service.proposalItems(source, [
+      { name: 'WONDERLIVET 2026', url: source.url, location: point },
+    ]);
+    expect(duplicate.items).toEqual([]);
+    expect(duplicate.kind).toBe('festival.new');
+
+    dataSource.query.mockResolvedValueOnce([
+      { ...known[0], draft: { ...draft, venue: '다른 공연장' } },
+    ]);
+    const mismatch = await service.proposalItems(source, [
+      { name: 'WONDERLIVET 2026', url: source.url, location: point },
+    ]);
+    expect(mismatch.items).toEqual([]);
+  });
+
   it('omits festival URLs already proposed or present in a draft', async () => {
     const { service, source, dataSource } = harness();
     dataSource.query.mockResolvedValueOnce([
@@ -1001,6 +4846,42 @@ describe('CrawlService proposal changes', () => {
     ]);
 
     expect(result.items).toEqual([]);
+  });
+
+  it('attests only an identical pending proposal, never a draft URL, changed candidate, or rejected proposal', async () => {
+    const { service, source, dataSource } = harness();
+    const url = 'https://tickets.example.com/one';
+    const entry = { name: '현재 축제', url };
+    dataSource.query.mockResolvedValueOnce([
+      { url, value: { url, name: '현재 축제' }, proposalId: 'proposal-1' },
+    ]);
+    const matched = await service.proposalItems(source, [entry]);
+    expect(matched.items).toEqual([]);
+    expect(matched.matchedProposalId).toBe('proposal-1');
+
+    dataSource.query.mockResolvedValueOnce([
+      { url, value: null, proposalId: null },
+    ]);
+    const draftOnly = await service.proposalItems(source, [entry]);
+    expect(draftOnly.items).toEqual([]);
+    expect(draftOnly.matchedProposalId).toBeUndefined();
+
+    dataSource.query.mockResolvedValueOnce([
+      { url, value: { name: '이전 축제', url }, proposalId: 'proposal-1' },
+    ]);
+    const changed = await service.proposalItems(source, [entry]);
+    expect(changed.items).toHaveLength(1);
+    expect(changed.matchedProposalId).toBeUndefined();
+
+    dataSource.query.mockResolvedValueOnce([]);
+    const rejected = await service.proposalItems(source, [entry]);
+    expect(rejected.items).toHaveLength(1);
+    expect(rejected.matchedProposalId).toBeUndefined();
+    const sql = (
+      dataSource.query.mock.calls as unknown as [string, unknown[]][]
+    )[0][0];
+    expect(sql).toContain("status IN ('open', 'partial')");
+    expect(sql).toContain("item->>'decision' = 'pending'");
   });
 
   it('removes disappeared timetable sets only when owned by this source', async () => {

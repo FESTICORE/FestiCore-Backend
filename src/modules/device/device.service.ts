@@ -14,6 +14,7 @@ import { DataSource, Repository } from 'typeorm';
 import { AdminFestival } from '../admin/festival/festival.entity';
 import { Device, DeviceSubscription } from './device.entity';
 import type { DevicePrincipal } from './device-auth.guard';
+import { LiveActivityService } from '../notification/live-activity.service';
 import {
   DeviceSubscriptionDto,
   LiveActivityDto,
@@ -35,6 +36,7 @@ export class DeviceService {
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
     private readonly dataSource: DataSource,
+    private readonly liveActivity: LiveActivityService,
   ) {}
 
   async register(
@@ -166,30 +168,38 @@ export class DeviceService {
   ) {
     await this.ownedDevice(id, principal);
     await this.publishedFestival(body.festivalId);
-    const result = await this.devices.update(
-      this.ownerCondition(id, principal),
-      {
-        liveActivityFestivalId: body.festivalId,
-        liveActivityId: body.activityId,
-        liveActivityPushToken: body.pushToken,
-      },
-    );
-    if (result.affected !== 1)
-      throw new ForbiddenException('기기 소유권을 확인할 수 없습니다.');
+    await this.dataSource.transaction(async (manager) => {
+      const result = await manager.update(
+        Device,
+        this.ownerCondition(id, principal),
+        {
+          liveActivityFestivalId: body.festivalId,
+          liveActivityId: body.activityId,
+          liveActivityPushToken: body.pushToken,
+        },
+      );
+      if (result.affected !== 1)
+        throw new ForbiddenException('기기 소유권을 확인할 수 없습니다.');
+      await this.liveActivity.enqueueDevice(id, manager);
+    });
   }
 
   async stopLiveActivity(id: string, principal: DevicePrincipal) {
     await this.ownedDevice(id, principal);
-    const result = await this.devices.update(
-      this.ownerCondition(id, principal),
-      {
-        liveActivityFestivalId: null,
-        liveActivityId: null,
-        liveActivityPushToken: null,
-      },
-    );
-    if (result.affected !== 1)
-      throw new ForbiddenException('기기 소유권을 확인할 수 없습니다.');
+    await this.dataSource.transaction(async (manager) => {
+      const result = await manager.update(
+        Device,
+        this.ownerCondition(id, principal),
+        {
+          liveActivityFestivalId: null,
+          liveActivityId: null,
+          liveActivityPushToken: null,
+        },
+      );
+      if (result.affected !== 1)
+        throw new ForbiddenException('기기 소유권을 확인할 수 없습니다.');
+      await this.liveActivity.stopDevice(id, manager);
+    });
   }
 
   async subscribe(

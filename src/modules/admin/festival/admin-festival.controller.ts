@@ -55,6 +55,7 @@ const draftExample = {
     lastShuttleAt: null,
     lastTrainAt: null,
     mapLinks: { naver: null, kakao: null },
+    location: null,
     source: {
       name: '관리자 입력',
       url: null,
@@ -189,7 +190,7 @@ export class AdminFestivalController {
   @ApiOperation({
     summary: '축제 초안 생성',
     description:
-      'editor 이상이 이름·장소·1~7일의 일정을 입력합니다. `Asia/Seoul` 시간대와 빈 무대·공연·존을 가진 초안 버전 1을 생성합니다.',
+      'editor 이상이 이름·장소·1~32일의 일정을 입력합니다. `Asia/Seoul` 시간대와 빈 무대·공연·존을 가진 초안 버전 1을 생성합니다.',
   })
   @ApiBody({
     description:
@@ -213,7 +214,7 @@ export class AdminFestivalController {
         days: {
           type: 'array',
           minItems: 1,
-          maxItems: 7,
+          maxItems: 32,
           items: {
             type: 'object',
             required: ['date', 'startsAt', 'endsAt'],
@@ -249,6 +250,62 @@ export class AdminFestivalController {
     return this.service.create(body, request.admin?.id ?? null);
   }
 
+  @AdminRoles('editor')
+  @Post('discovered/:id/import')
+  @ApiOperation({
+    summary: '발견된 축제를 관리 초안으로 가져오기',
+    description:
+      '공개 발견 카탈로그의 축제 ID·이름·장소·출처·이미지·티켓 링크와 eventPeriod를 서버에서 확인해 같은 ID의 비공개 관리 초안을 만듭니다. 요청 본문 생략 또는 {}·{ "days": [] }는 시각이 없는 미완성 초안입니다. 검증된 공연 시각을 알고 있으면 기존 { "days": [{ "date", "startsAt", "endsAt" }] }도 허용합니다. eventPeriod는 서버 원본 기준이며 요청으로 수정할 수 없습니다. 발행에는 검증된 시각·무대·세트가 필요합니다.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: '공개 축제 목록에서 받은 발견 축제 ID',
+    example: 'fst_0123456789abcdef',
+  })
+  @ApiBody({
+    required: false,
+    schema: {
+      type: 'object',
+      properties: {
+        days: {
+          type: 'array',
+          minItems: 0,
+          maxItems: 32,
+          description:
+            '생략/빈 배열은 날짜만 저장합니다. 시각을 입력할 때 첫날과 마지막 날은 발견 축제의 날짜 범위와 같아야 합니다.',
+          items: {
+            type: 'object',
+            required: ['date', 'startsAt', 'endsAt'],
+            properties: {
+              date: { type: 'string', format: 'date' },
+              startsAt: { type: 'string', format: 'date-time' },
+              endsAt: { type: 'string', format: 'date-time' },
+            },
+          },
+        },
+      },
+      example: {},
+    },
+  })
+  @ApiResponse({
+    status: 201,
+    description: '생성된 관리 초안',
+    schema: draftResponse,
+  })
+  @ApiResponse({ status: 400, description: '날짜 범위 또는 초안 검증 실패' })
+  @ApiResponse({ status: 404, description: '발견 축제가 존재하지 않음' })
+  @ApiResponse({
+    status: 409,
+    description: '해당 ID의 관리 축제가 이미 존재함',
+  })
+  importDiscovered(
+    @Param('id') id: string,
+    @Body() body: { days?: unknown[] } | undefined,
+    @Req() request: AdminRequest,
+  ) {
+    return this.service.importDiscovered(id, body, request.admin?.id ?? null);
+  }
+
   @Get(':id/draft')
   @ApiOperation({
     summary: '축제 초안 조회',
@@ -273,7 +330,7 @@ export class AdminFestivalController {
   @ApiHeader(draftHeader)
   @ApiBody({
     description:
-      '수정할 필드만 보냅니다. 허용 필드: name, venue, timezone, days, thumbUrl, ticketLinks, flagsEnabled, source, stages, sets, zones, flags, directions, checklist, rules, mapImageUrl, mapAspect. 발행하려면 무대가 1개 이상 필요합니다.',
+      '수정할 필드만 보냅니다. 허용 필드: name, venue, timezone, days, thumbUrl, ticketLinks, flagsEnabled, source, stages, sets, zones, flags, directions, checklist, rules, mapImageUrl, mapAspect. 날짜 전용 초안은 days=[]를 유지할 수 있고, 발행하려면 검증된 시각·무대·세트가 필요합니다. eventPeriod는 수정할 수 없습니다.',
     schema: {
       type: 'object',
       minProperties: 1,
@@ -283,8 +340,10 @@ export class AdminFestivalController {
         timezone: { type: 'string', enum: ['Asia/Seoul'] },
         days: {
           type: 'array',
-          minItems: 1,
-          maxItems: 7,
+          minItems: 0,
+          maxItems: 32,
+          description:
+            '날짜 전용 eventPeriod 초안은 빈 배열을 허용합니다. 시각이 있는 날짜는 최대 32개입니다.',
           items: { type: 'object' },
         },
         thumbUrl: { type: 'string', nullable: true, format: 'uri' },
@@ -306,7 +365,32 @@ export class AdminFestivalController {
         sets: { type: 'array', maxItems: 400, items: { type: 'object' } },
         zones: { type: 'array', maxItems: 40, items: { type: 'object' } },
         flags: { type: 'array', maxItems: 200, items: { type: 'object' } },
-        directions: { type: 'object' },
+        directions: {
+          type: 'object',
+          description:
+            '가는 길 안내. location은 확인된 장소의 위도·경도와 HTTPS 출처를 함께 입력합니다.',
+          properties: {
+            location: {
+              type: 'object',
+              nullable: true,
+              required: ['latitude', 'longitude', 'label', 'source'],
+              properties: {
+                latitude: { type: 'number', minimum: -90, maximum: 90 },
+                longitude: { type: 'number', minimum: -180, maximum: 180 },
+                label: { type: 'string', minLength: 1, maxLength: 80 },
+                source: {
+                  type: 'object',
+                  required: ['name', 'url', 'verifiedAt'],
+                  properties: {
+                    name: { type: 'string' },
+                    url: { type: 'string', format: 'uri' },
+                    verifiedAt: { type: 'string', format: 'date-time' },
+                  },
+                },
+              },
+            },
+          },
+        },
         checklist: { type: 'array', maxItems: 40, items: {} },
         rules: { type: 'array', maxItems: 20, items: {} },
         mapImageUrl: { type: 'string', nullable: true, format: 'uri' },

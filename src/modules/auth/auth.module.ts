@@ -5,9 +5,11 @@ import { AuthController } from './controller/auth.controller';
 import { WebOauthController } from './controller/web-oauth.controller';
 import { MeController } from './controller/me.controller';
 import { RefreshToken } from './entity/refresh-token.entity';
+import { RefreshTokenSession } from './entity/refresh-token-session.entity';
 import { User } from './entity/user.entity';
 import { JwtAuthGuard } from './guard/jwt-auth.guard';
 import { FlagsModule } from '../flags/flags.module';
+import { NotificationModule } from '../notification/notification.module';
 import { AppleRevokeRetry } from './entity/apple-revoke-retry.entity';
 import { AppleRevokeRetryService } from './service/apple-revoke-retry.service';
 import { AppleService } from './service/apple.service';
@@ -26,12 +28,14 @@ import { WebOauthService } from './web/web-oauth.service';
     TypeOrmModule.forFeature([
       User,
       RefreshToken,
+      RefreshTokenSession,
       AppleRevokeRetry,
       WebOauthState,
       WebOauthTicket,
     ]),
     JwtModule.register({}),
     FlagsModule,
+    NotificationModule,
   ],
   controllers: [AuthController, WebOauthController, MeController],
   providers: [

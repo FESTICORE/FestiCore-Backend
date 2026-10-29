@@ -19,6 +19,8 @@ Bearer access token이 필요하다. 응답은 공통 ResponseInterceptor 형식
 
 성공 `200` data 예시: `{"setIds":["set_a1b2c3d4"],"updatedAt":"2026-10-21T03:00:01.000Z"}`.
 
+실제 일정이 저장되면 해당 축제의 사용자 중 갱신 대상으로 선택된 활성 Live Activity 기기의 의도를 같은 DB 트랜잭션에 기록한다. 활성 기기가 없으면 의도는 0건이다. 같은 시각·내용의 재전송이나 저장 전 거부된 요청은 의도를 추가하지 않는다. 의도 기록에 실패하면 일정 저장도 롤백한다.
+
 오류: 400 형식 오류 또는 `VALIDATION`(없는 setId 목록), 401 인증 실패, 404 미공개/없는 축제, 409 `STATUS_STALE`.
 
 ## GET `/api/v1/me/schedule/{festivalId}`

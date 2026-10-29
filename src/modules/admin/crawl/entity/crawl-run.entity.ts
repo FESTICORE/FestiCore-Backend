@@ -4,6 +4,8 @@ import {
   Entity,
   PrimaryGeneratedColumn,
 } from 'typeorm';
+import type { NolLineupEvidence } from '../service/nol-world-lineup-evidence';
+import type { CommonsDiscoveryEvidence } from '../service/commons-image-discovery';
 
 @Entity('crawl_runs')
 export class CrawlRun {
@@ -19,4 +21,14 @@ export class CrawlRun {
   @Column({ type: 'text', nullable: true }) error!: string | null;
   @Column({ type: 'uuid', nullable: true }) proposalId!: string | null;
   @Column({ type: 'date', nullable: true }) scheduledDate!: string | null;
+  @Column({ type: 'jsonb', nullable: true }) lineupEvidence!:
+    NolLineupEvidence[] | null;
+  @Column({ type: 'jsonb', nullable: true, select: false })
+  artistImageEvidence!: CommonsDiscoveryEvidence | null;
+  @Column({ type: 'jsonb', nullable: true, select: false })
+  artistImageRightsEvidence!: {
+    imageId: string;
+    originalSha256: string;
+    status: 'ok';
+  } | null;
 }

@@ -8,11 +8,13 @@ import { NotificationSubscriptionController } from './notification-subscription.
 import { Device, DeviceSubscription } from './device.entity';
 import { DeviceService } from './device.service';
 import { DeviceAuthGuard } from './device-auth.guard';
+import { NotificationModule } from '../notification/notification.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Device, DeviceSubscription, AdminFestival, User]),
     JwtModule.register({}),
+    NotificationModule,
   ],
   controllers: [DeviceController, NotificationSubscriptionController],
   providers: [DeviceService, DeviceAuthGuard],

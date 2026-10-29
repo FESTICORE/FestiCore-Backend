@@ -8,6 +8,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { AdminFestival } from '../admin/festival/festival.entity';
 import { festivalSetId } from '../admin/festival/festival-set-id';
+import { LiveActivityService } from '../notification/live-activity.service';
 import { ReplaceScheduleDto } from './schedule.dto';
 import { UserSchedule } from './schedule.entity';
 
@@ -19,6 +20,7 @@ export class ScheduleService {
     @InjectRepository(AdminFestival)
     private readonly festivals: Repository<AdminFestival>,
     private readonly dataSource: DataSource,
+    private readonly liveActivity: LiveActivityService,
   ) {}
 
   async replace(userId: string, festivalId: string, body: ReplaceScheduleDto) {
@@ -66,6 +68,7 @@ export class ScheduleService {
       row.setIds = body.setIds;
       row.clientAt = clientAt;
       const saved = await manager.getRepository(UserSchedule).save(row);
+      await this.liveActivity.enqueueUser(userId, festivalId, manager);
       return { setIds: saved.setIds, updatedAt: saved.updatedAt.toISOString() };
     });
   }

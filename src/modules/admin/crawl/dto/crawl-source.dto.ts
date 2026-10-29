@@ -80,7 +80,8 @@ export class UpdateCrawlSourceDto {
   @ApiPropertyOptional({
     type: 'object',
     additionalProperties: { type: 'string' },
-    description: '파서별 설정을 교체합니다.',
+    description:
+      '파서별 설정 전체를 교체합니다. 공식 NOL 공지 소스의 검증된 예매 링크 설정도 지워지며, 다음 수집 성공 전까지 공개 목록에서 해당 링크가 숨겨집니다.',
   })
   @IsOptional()
   @IsObject()

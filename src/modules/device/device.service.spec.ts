@@ -47,7 +47,12 @@ describe('DeviceService ownership and pins', () => {
     }),
   };
   const config = { get: jest.fn().mockReturnValue('test-secret') };
-  const transactionManager = { delete: jest.fn(), query: jest.fn() };
+  const transactionManager = {
+    delete: jest.fn(),
+    update: jest.fn(),
+    query: jest.fn(),
+  };
+  const liveActivity = { enqueueDevice: jest.fn(), stopDevice: jest.fn() };
   const dataSource = {
     query: jest.fn().mockResolvedValue([{ count: 1 }]),
     transaction: jest.fn(
@@ -62,6 +67,7 @@ describe('DeviceService ownership and pins', () => {
     jwt as never,
     config as never,
     dataSource as never,
+    liveActivity as never,
   );
 
   beforeEach(() => {
@@ -71,12 +77,46 @@ describe('DeviceService ownership and pins', () => {
     devices.update.mockResolvedValue({ affected: 1 });
     devices.delete.mockResolvedValue({ affected: 1 });
     transactionManager.delete.mockResolvedValue({ affected: 1 });
+    transactionManager.update.mockResolvedValue({ affected: 1 });
     transactionManager.query.mockResolvedValue([]);
+    liveActivity.enqueueDevice.mockResolvedValue(undefined);
+    liveActivity.stopDevice.mockResolvedValue(undefined);
     festivals.findOne.mockResolvedValue({
       published: true,
       publishedVersion: 1,
     });
     dataSource.query.mockResolvedValue([{ count: 1 }]);
+  });
+
+  it('enqueues activity registration in the same transaction as the owned device update', async () => {
+    devices.findOne.mockResolvedValue({ id, userId: user.userId });
+    await service.startLiveActivity(
+      id,
+      {
+        festivalId: 'fst_one',
+        activityId: 'activity-one',
+        pushToken: 'a'.repeat(64),
+      },
+      user,
+    );
+    expect(transactionManager.update).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ id, userId: user.userId }),
+      expect.objectContaining({ liveActivityPushToken: 'a'.repeat(64) }),
+    );
+    expect(liveActivity.enqueueDevice).toHaveBeenCalledWith(
+      id,
+      transactionManager,
+    );
+  });
+
+  it('invalidates delivery when an owned device stops its activity', async () => {
+    devices.findOne.mockResolvedValue({ id, userId: user.userId });
+    await service.stopLiveActivity(id, user);
+    expect(liveActivity.stopDevice).toHaveBeenCalledWith(
+      id,
+      transactionManager,
+    );
   });
 
   it('deletes a device and its metric events in one transaction', async () => {

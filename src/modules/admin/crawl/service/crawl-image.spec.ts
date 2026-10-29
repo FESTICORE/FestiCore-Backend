@@ -37,6 +37,33 @@ describe('crawl image safety', () => {
     ]);
   });
 
+  it('does not save unrelated images from the official NOL ticket notice', () => {
+    expect(
+      discoverImageUrls(
+        '<img src="https://ticketimage.interpark.com/Play/image/large/26/99999999_p.gif">',
+        'https://www.mintpaper.co.kr/posts/4821',
+      ),
+    ).toEqual([]);
+  });
+
+  it('selects only the same-product poster on a NOL World detail', () => {
+    const page = 'https://world.nol.com/en/ticket/products/26015253';
+    const body = (id: string) =>
+      `<script type="application/ld+json">${JSON.stringify({
+        '@type': 'Event',
+        image: `https://ticketimage.interpark.com/Play/image/large/26/${id}_p.gif`,
+        performer: {
+          '@type': 'MusicGroup',
+          name: 'THE BAND',
+          image: 'https://ticketimage.interpark.com/artists/band.jpg',
+        },
+      })}</script><img src="https://evil.example/unrelated.jpg">`;
+    expect(discoverImageUrls(body('26015253'), page).map(String)).toEqual([
+      'https://ticketimage.interpark.com/Play/image/large/26/26015253_p.gif',
+    ]);
+    expect(discoverImageUrls(body('26015254'), page)).toEqual([]);
+  });
+
   it('uses only festival posters from Melon listing JSON', () => {
     const json = JSON.stringify({
       data: [
@@ -221,6 +248,16 @@ describe('crawl image safety', () => {
     ]);
   });
 
+  it('does not download a NOL detail poster from another product', () => {
+    const html = `<meta property="og:image" content="https://ticketimage.interpark.com/Play/image/large/26/99999999_p.gif">`;
+    expect(
+      discoverImageUrls(
+        html,
+        'https://nol.yanolja.com/ticket/products/26013406',
+      ),
+    ).toEqual([]);
+  });
+
   it('downloads only matched festival posters from the public NOL home', () => {
     const html = String.raw`<script>self.__next_f.push([1,\"action\":{\"web\":\"https://nol.yanolja.com/ticket/products/26015181\"},\"thumbnail\":\"https://ticketimage.interpark.com/Play/image/large/26/26015181_p.gif\",\"title\":\"썸띵 뉴 뮤직 페스티벌 2026\"},{\"action\":{\"web\":\"https://nol.yanolja.com/ticket/products/26013510\"},\"thumbnail\":\"https://ticketimage.interpark.com/Play/image/large/26/99999999_p.gif\",\"title\":\"서울 뮤직 페스티벌 2026\"}]);</script>`;
     expect(
@@ -254,6 +291,38 @@ describe('crawl image safety', () => {
         '2026-10-21',
       ),
     ).toHaveLength(81);
+  });
+
+  it('uses lazy-loaded Melon artist images and ignores unsafe or unrelated images', () => {
+    const html = `<meta property="og:image" content="https://cdnticket.melon.co.kr/poster.jpg">
+      <img src="https://cdnimg.melon.co.kr/unrelated.jpg">
+      <ul class="list_artist">
+        <li><img src="/placeholder.gif" data-src="https://cdnimg.melon.co.kr/artist/first.jpg"></li>
+        <li><img src="https://cdnimg.melon.co.kr/artist/second.jpg"></li>
+        <li><img src="https://cdnimg.melon.co.kr/artist/fallback.jpg" data-src="http://cdnimg.melon.co.kr/artist/unsafe.jpg"></li>
+        <li><img src="https://evil.example/artist/third.jpg" data-src="http://cdnimg.melon.co.kr/artist/third.jpg"></li>
+      </ul>`;
+    expect(
+      discoverImageUrls(
+        html,
+        'https://ticket.melon.com/performance/index.htm?prodId=213793',
+      ).map(String),
+    ).toEqual([
+      'https://cdnticket.melon.co.kr/poster.jpg',
+      'https://cdnimg.melon.co.kr/artist/first.jpg',
+      'https://cdnimg.melon.co.kr/artist/second.jpg',
+      'https://cdnimg.melon.co.kr/artist/fallback.jpg',
+    ]);
+  });
+
+  it('ignores an image URL written inside the artist alt text', () => {
+    const html = `<ul class="list_artist"><li><img alt="x data-src='https://cdnimg.melon.co.kr/artist/false.jpg'" src="https://cdnimg.melon.co.kr/artist/real.jpg"></li></ul>`;
+    expect(
+      discoverImageUrls(
+        html,
+        'https://ticket.melon.com/performance/index.htm?prodId=213793',
+      ).map(String),
+    ).toEqual(['https://cdnimg.melon.co.kr/artist/real.jpg']);
   });
 
   it('finds a configured profile image on the current official page', () => {
@@ -292,6 +361,29 @@ describe('crawl image safety', () => {
     ).toBe('https://cdn.imweb.me/thumbnail/20260811/354f5ae07ab1d.jpg');
   });
 
+  it('finds a matching lazy-loaded artist image after a placeholder src', () => {
+    const html = `<img src="/placeholder.gif" data-src="https://artist.example.com/photos/main-profile.jpg">`;
+    expect(
+      artistProfileImageUrl(
+        html,
+        'https://artist.example.com/profile',
+        'main-profile.jpg',
+      )?.toString(),
+    ).toBe('https://artist.example.com/photos/main-profile.jpg');
+  });
+
+  it('keeps the XMF image path check when the matching lazy image follows src', () => {
+    const html = `<img src="/placeholder.gif" data-src="https://other.example.com/thumbnail/20260811/card.jpg">
+      <img src="/placeholder.gif" data-src="https://cdn.imweb.me/thumbnail/20260811/card.jpg">`;
+    expect(
+      artistProfileImageUrl(
+        html,
+        'https://xmfestival.com/lineup',
+        '20260811/card.jpg',
+      )?.toString(),
+    ).toBe('https://cdn.imweb.me/thumbnail/20260811/card.jpg');
+  });
+
   it('normalizes a valid image to content-addressed WebP without trusting its extension', async () => {
     const png = await sharp({
       create: { width: 16, height: 16, channels: 3, background: '#ff0000' },
@@ -308,5 +400,26 @@ describe('crawl image safety', () => {
     await expect(
       prepareCrawlImage(Buffer.from('<script>x</script>'), 'image/png'),
     ).rejects.toThrow('디코딩');
+  });
+
+  it('keeps the default 5MB limit while allowing bounded official lineup input', async () => {
+    const png = await sharp({
+      create: { width: 16, height: 16, channels: 3, background: '#ff0000' },
+    })
+      .png()
+      .toBuffer();
+    const officialDetail = Buffer.concat([png, Buffer.alloc(6 * 1024 * 1024)]);
+    await expect(
+      prepareCrawlImage(officialDetail, 'image/png'),
+    ).rejects.toThrow('크기 제한');
+    const prepared = await prepareCrawlImage(
+      officialDetail,
+      'image/png',
+      8 * 1024 * 1024,
+    );
+    expect((await sharp(prepared.body).metadata()).format).toBe('webp');
+    await expect(
+      prepareCrawlImage(officialDetail, 'image/png', 6 * 1024 * 1024),
+    ).rejects.toThrow('크기 제한');
   });
 });

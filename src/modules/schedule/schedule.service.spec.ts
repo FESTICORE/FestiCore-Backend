@@ -22,10 +22,12 @@ describe('ScheduleService', () => {
   const db = {
     transaction: jest.fn((fn: (value: unknown) => unknown) => fn(manager)),
   };
+  const liveActivity = { enqueueUser: jest.fn().mockResolvedValue(undefined) };
   const service = new ScheduleService(
     schedules as never,
     festivals as never,
     db as never,
+    liveActivity as never,
   );
 
   beforeEach(() => {
@@ -52,6 +54,7 @@ describe('ScheduleService', () => {
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(repo.save).not.toHaveBeenCalled();
+    expect(liveActivity.enqueueUser).not.toHaveBeenCalled();
   });
 
   it('rejects a stale offline replay', async () => {
@@ -67,6 +70,7 @@ describe('ScheduleService', () => {
       }),
     ).rejects.toBeInstanceOf(ConflictException);
     expect(repo.save).not.toHaveBeenCalled();
+    expect(liveActivity.enqueueUser).not.toHaveBeenCalled();
   });
 
   it('saves an empty list to clear the schedule', async () => {
@@ -85,6 +89,11 @@ describe('ScheduleService', () => {
         setIds: [],
       }),
     );
+    expect(liveActivity.enqueueUser).toHaveBeenCalledWith(
+      'user',
+      'fst_festival',
+      manager,
+    );
   });
 
   it('returns the saved result without writing for an identical replay', async () => {
@@ -99,6 +108,7 @@ describe('ScheduleService', () => {
     });
     expect(result.updatedAt).toBe('2026-10-20T03:00:00.000Z');
     expect(repo.save).not.toHaveBeenCalled();
+    expect(liveActivity.enqueueUser).not.toHaveBeenCalled();
   });
 
   it('rejects different content with the same timestamp', async () => {
@@ -113,5 +123,6 @@ describe('ScheduleService', () => {
         clientAt: '2026-10-20T02:00:00Z',
       }),
     ).rejects.toBeInstanceOf(ConflictException);
+    expect(liveActivity.enqueueUser).not.toHaveBeenCalled();
   });
 });

@@ -11,6 +11,7 @@ import { NotificationModule } from './notification/notification.module';
 import { MetricsModule } from './metrics/metrics.module';
 import { AdminAuditModule } from './admin/audit/admin-audit.module';
 import { AdminPushModule } from './admin/push/admin-push.module';
+import { AdminAnalyticsModule } from './admin/analytics/admin-analytics.module';
 import { RedisModule } from './redis/redis.module';
 import { LegalModule } from './legal/legal.module';
 
@@ -35,4 +36,5 @@ export const featureModules = [
   MetricsModule,
   AdminAuditModule,
   AdminPushModule,
+  AdminAnalyticsModule,
 ];

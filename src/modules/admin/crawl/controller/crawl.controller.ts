@@ -69,7 +69,7 @@ export class CrawlController {
   @ApiOperation({
     summary: '크롤 소스 등록',
     description:
-      'owner 전용. discovery·artist-gallery·artist-image·이미지 시간표를 제외한 종류는 festivalId가 필요합니다. artist-gallery는 XMF 공식 라인업 URL과 parserConfig.festivalSourceUrl을 지정하며 출연진 사진 소스를 동적으로 생성합니다. 이미지 시간표는 parser=image-ocr, 공식 이미지 URL, parserConfig의 festivalSourceUrl·sourcePageUrl·date·expectedRows·columns(JSON 문자열)가 필요합니다. robots.txt와 HTTPS 주소를 확인하고 매일 KST 00:00 이후 예약 실행합니다.',
+      'owner 전용. discovery·artist-gallery·artist-image·이미지 시간표를 제외한 종류는 festivalId가 필요합니다. artist-gallery는 XMF 공식 라인업 또는 Wonderlivet 공식 JSON URL과 해당 parserConfig.festivalSourceUrl을 지정하며 출연진 사진 소스를 동적으로 생성합니다. 이미지 시간표는 parser=image-ocr, 공식 이미지 URL, parserConfig의 festivalSourceUrl·sourcePageUrl·date·expectedRows·columns(JSON 문자열)가 필요합니다. robots.txt와 HTTPS 주소를 확인하고 매일 KST 00:00 이후 예약 실행합니다.',
   })
   @ApiResponse({
     status: 201,
@@ -141,7 +141,8 @@ export class CrawlController {
   @AdminRoles('viewer')
   @ApiOperation({
     summary: '크롤 실행 이력',
-    description: 'viewer 이상. 최신순이며 기본 50개, 최대 100개입니다.',
+    description:
+      'viewer 이상. 최신순이며 기본 50개, 최대 100개입니다. NOL World 상세 수집의 lineupEvidence는 공식 이미지 URL·해시·OCR 원문·상태를 담은 관리자 검토용 비공개 자료이며 출연진이나 공연 시간으로 자동 발행되지 않습니다.',
   })
   @ApiQuery({ name: 'sourceId', required: false, format: 'uuid' })
   @ApiQuery({
@@ -165,6 +166,26 @@ export class CrawlController {
     @Query('limit') limit?: string,
   ) {
     return this.crawl.runs(sourceId, result, limit);
+  }
+
+  @Get('runs/:id/artist-image-discovery')
+  @AdminRoles('viewer')
+  @ApiOperation({
+    summary: 'Commons 출연진 사진 후보 증거',
+    description:
+      'viewer 이상. 후보는 모두 검토 대기이며 공개 이미지로 자동 연결되지 않습니다. 저작자와 라이선스가 null이면 권리를 확인하지 못한 상태입니다.',
+  })
+  @ApiParam({ name: 'id', format: 'uuid', description: 'Commons 탐색 실행 ID' })
+  @ApiResponse({
+    status: 200,
+    description: '비공개 후보 증거와 대상별 검색 상태',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Commons 탐색 실행을 찾을 수 없습니다.',
+  })
+  artistImageDiscovery(@Param('id', ParseUUIDPipe) id: string) {
+    return this.crawl.artistImageDiscovery(id);
   }
 
   @Get('snapshots/:id')
