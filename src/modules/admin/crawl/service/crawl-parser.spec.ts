@@ -1,5 +1,5 @@
 import { CrawlSource } from '../entity/crawl-source.entity';
-import { parseCrawl } from './crawl-parser';
+import { parseCrawl, xmfNoticeArtistAliases } from './crawl-parser';
 
 function source(
   parser: CrawlSource['parser'],
@@ -142,6 +142,129 @@ describe('crawl parsers', () => {
     ]);
   });
 
+  it('discovers only festival product links from the public NOL World concert list', async () => {
+    const nol = source('ticket-list', 'discovery');
+    nol.url = 'https://world.nol.com/en/ticket/genre/CONCERT/products';
+    const card = (href: string, title: string) =>
+      `<a href="${href}"><img alt="${title}"><h2>${title}</h2><span>Nov 21, 2026</span><span>ROLLING HALL</span></a>`;
+    const html =
+      card('/en/ticket/products/26015253', 'STILL ROLLING FEST 2026') +
+      card('/en/ticket/products/26014833', '단독 콘서트') +
+      card(
+        'https://evil.example/en/ticket/products/26015253',
+        '악성 페스티벌',
+      ) +
+      card('/en/ticket/products/26015253?tracking=1', '중복 페스티벌');
+    expect(await parseCrawl(nol, html)).toEqual([
+      {
+        name: 'STILL ROLLING FEST 2026',
+        url: 'https://world.nol.com/en/ticket/products/26015253',
+      },
+    ]);
+  });
+
+  it('discovers festival cards from the official NOL World home and public search', async () => {
+    const nol = source('ticket-list', 'discovery');
+    const home =
+      '<a href="/en/ticket/products/26013822"><p>2026 Incheon Airport SKY FESTIVAL</p></a>' +
+      '<a href="/en/ticket/products/26014246"><p>MINT FESTA vol.88</p></a>';
+    nol.url = 'https://world.nol.com/en/ticket';
+    expect(await parseCrawl(nol, home)).toEqual([
+      {
+        name: '2026 Incheon Airport SKY FESTIVAL',
+        url: 'https://world.nol.com/en/ticket/products/26013822',
+      },
+      {
+        name: 'MINT FESTA vol.88',
+        url: 'https://world.nol.com/en/ticket/products/26014246',
+      },
+    ]);
+    nol.url = 'https://world.nol.com/en/search?q=festival';
+    expect(
+      await parseCrawl(
+        nol,
+        '<a href="/en/ticket/products/26014860"><h3>World DJ Festival 2027</h3></a><a href="/en/ticket/products/26011273"><h3>[Early] Sejong Bohemian Music Festival</h3></a><a href="/en/ticket/products/26011889"><h3>[Play&Stay] Busan Fireworks Festival + Hotels</h3></a>',
+      ),
+    ).toEqual([
+      {
+        name: 'World DJ Festival 2027',
+        url: 'https://world.nol.com/en/ticket/products/26014860',
+      },
+    ]);
+  });
+
+  it('reads NOL World Event dates, venue and only the matching product poster', async () => {
+    const nol = source('ticket-list', 'discovery');
+    nol.url = 'https://world.nol.com/en/ticket/products/26015253';
+    const event = (image: string, startDate = '2026-11-21') =>
+      `<script type="application/ld+json">${JSON.stringify({
+        '@type': 'Event',
+        name: 'STILL ROLLING FEST 2026',
+        startDate,
+        endDate: startDate,
+        location: { '@type': 'Place', name: 'ROLLING HALL' },
+        image,
+        performer: {
+          '@type': 'MusicGroup',
+          name: 'THE BAND',
+          image: 'https://ticketimage.interpark.com/artists/band.jpg',
+        },
+      })}</script>`;
+    const poster =
+      'https://ticketimage.interpark.com/Play/image/large/26/26015253_p.gif';
+    expect(await parseCrawl(nol, event(poster))).toEqual([
+      {
+        name: 'STILL ROLLING FEST 2026',
+        url: nol.url,
+        date: '2026.11.21',
+        venue: 'ROLLING HALL',
+        posterUrl: poster,
+        artists: [{ name: 'THE BAND' }],
+      },
+    ]);
+    expect(
+      await parseCrawl(nol, event(poster.replace('26015253', '26015254'))),
+    ).toEqual([
+      {
+        name: 'STILL ROLLING FEST 2026',
+        url: nol.url,
+        date: '2026.11.21',
+        venue: 'ROLLING HALL',
+        artists: [{ name: 'THE BAND' }],
+      },
+    ]);
+    await expect(parseCrawl(nol, event(poster, '2026-02-30'))).rejects.toThrow(
+      '공개 예매 링크',
+    );
+  });
+
+  it('accepts the established COUNTDOWN FANTASY festival brand from a World detail', async () => {
+    const nol = source('ticket-list', 'discovery');
+    nol.url = 'https://world.nol.com/en/ticket/products/26014568';
+    const html = `<script type="application/ld+json">${JSON.stringify({
+      '@type': 'Event',
+      name: 'COUNTDOWN FANTASY 2026-2027',
+      startDate: '2026-12-31',
+      endDate: '2026-12-31',
+      location: {
+        '@type': 'Place',
+        name: 'KINTEX 2 Exhibition Hall 7, Hall 8',
+      },
+      image:
+        'https://ticketimage.interpark.com/Play/image/large/26/26014568_p.gif',
+    })}</script>`;
+    expect(await parseCrawl(nol, html)).toEqual([
+      {
+        name: 'COUNTDOWN FANTASY 2026-2027',
+        url: nol.url,
+        date: '2026.12.31',
+        venue: 'KINTEX 2 Exhibition Hall 7, Hall 8',
+        posterUrl:
+          'https://ticketimage.interpark.com/Play/image/large/26/26014568_p.gif',
+      },
+    ]);
+  });
+
   it('omits invalid NOL dates and does not attach another product’s venue', async () => {
     const nol = source('ticket-list', 'discovery');
     nol.url = 'https://nol.yanolja.com/ticket';
@@ -191,6 +314,22 @@ describe('crawl parsers', () => {
         venue: '킨텍스',
         posterUrl:
           'https://ticketimage.interpark.com/Play/image/large/26/26013406_p.gif',
+      },
+    ]);
+  });
+
+  it('rejects a NOL detail poster belonging to another product', async () => {
+    const nol = source('ticket-list', 'discovery');
+    nol.url = 'https://nol.yanolja.com/ticket/products/26013406';
+    const html = `<meta property="og:image" content="https://ticketimage.interpark.com/Play/image/large/26/99999999_p.gif" />
+      <h1>NOL FESTIVAL 2026</h1><div>장소 킨텍스 일시 2026.10.17</div>`;
+
+    expect(await parseCrawl(nol, html)).toEqual([
+      {
+        name: 'NOL FESTIVAL 2026',
+        url: nol.url,
+        date: '2026.10.17',
+        venue: '킨텍스',
       },
     ]);
   });
@@ -450,6 +589,101 @@ describe('crawl parsers', () => {
     ]);
   });
 
+  it('accepts Melon venue coordinates only when the hidden inputs and quick route link agree', async () => {
+    const melon = source('ticket-list', 'discovery');
+    melon.url = 'https://ticket.melon.com/performance/index.htm?prodId=213793';
+    const page = (
+      latitude = '37.66469544695199',
+      longitude = '126.742064181796',
+      map = 'http://map.daum.net/link/to/KINTEX HALL 7/8/9/10,37.66469544695199,126.742064181796',
+    ) =>
+      `<strong class="tit">WONDERLIVET 2026</strong>
+      <span class="txt_info">2026.11.20 - 2026.11.22</span>
+      <span class="place">KINTEX HALL 7/8/9/10</span>
+      <a target="_blank" href="${map}" class="ico_more map">빠른길 찾기</a>
+      <input type="hidden" id="global_ticket_performanceHall_locLati" value="${latitude}" />
+      <input type="hidden" id="global_ticket_performanceHall_locLogi" value="${longitude}" />`;
+    const expected = {
+      latitude: 37.66469544695199,
+      longitude: 126.742064181796,
+      label: 'KINTEX HALL 7/8/9/10',
+    };
+    expect(await parseCrawl(melon, page())).toEqual([
+      expect.objectContaining({ location: expected }),
+    ]);
+    expect(
+      await parseCrawl(
+        melon,
+        page()
+          .replace('KINTEX HALL 7/8/9/10</span>', 'KINTEX &amp; HALL</span>')
+          .replace('KINTEX HALL 7/8/9/10,', 'KINTEX%20%26%20HALL,'),
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        location: { ...expected, label: 'KINTEX & HALL' },
+      }),
+    ]);
+    for (const html of [
+      page().replace('global_ticket_performanceHall_locLogi', 'other'),
+      page('NaN'),
+      page('91'),
+      page('37.1'),
+      page(
+        undefined,
+        undefined,
+        'http://map.daum.net/link/to/Other Hall,37.66469544695199,126.742064181796',
+      ),
+      page(
+        undefined,
+        undefined,
+        'https://map.daum.net.evil.test/link/to/KINTEX HALL 7/8/9/10,37.66469544695199,126.742064181796',
+      ),
+    ]) {
+      const candidates = (await parseCrawl(melon, html)) as Array<{
+        location?: unknown;
+      }>;
+      expect(candidates[0]?.location).toBeUndefined();
+    }
+  });
+
+  it('uses each Melon artist lazy image and falls back only to a verified src', async () => {
+    const melon = source('ticket-list', 'discovery');
+    melon.url = 'https://ticket.melon.com/performance/index.htm?prodId=213793';
+    const html = `<strong class="tit">WONDERLIVET 2026 (원더리벳 2026)</strong>
+      <span class="txt_info">2026.11.20 - 2026.11.22</span>
+      <span class="place">KINTEX HALL 7/8/9/10</span>
+      <ul class="list_artist">
+        <li><img src="data:image/gif;base64,placeholder" data-src="//cdnimg.melon.co.kr/artist/a.jpg"><span class="singer">BAND A</span></li>
+        <li><img src="https://cdnimg.melon.co.kr/artist/placeholder.gif" data-src="https://cdnimg.melon.co.kr/artist/b.jpg"><span class="singer">BAND B</span></li>
+        <li><img data-src="https://evil.example/artist/c.jpg" src="https://cdnimg.melon.co.kr/artist/c.jpg"><span class="singer">BAND C</span></li>
+        <li><img data-src="https://cdnimg.melon.co.kr@evil.example/artist/d.jpg" src="data:image/gif;base64,placeholder"><span class="singer">BAND D</span></li>
+        <li><img alt="x data-src='https://cdnimg.melon.co.kr/artist/false.jpg'" src="https://cdnimg.melon.co.kr/artist/e.jpg"><span class="singer">BAND E</span></li>
+      </ul>`;
+    expect(await parseCrawl(melon, html)).toEqual([
+      expect.objectContaining({
+        artists: [
+          {
+            name: 'BAND A',
+            sourceUrl: 'https://cdnimg.melon.co.kr/artist/a.jpg',
+          },
+          {
+            name: 'BAND B',
+            sourceUrl: 'https://cdnimg.melon.co.kr/artist/b.jpg',
+          },
+          {
+            name: 'BAND C',
+            sourceUrl: 'https://cdnimg.melon.co.kr/artist/c.jpg',
+          },
+          { name: 'BAND D' },
+          {
+            name: 'BAND E',
+            sourceUrl: 'https://cdnimg.melon.co.kr/artist/e.jpg',
+          },
+        ],
+      }),
+    ]);
+  });
+
   it('reads only the XMF official final-lineup notice and verifies both day counts', async () => {
     const xmf = source('ticket-list', 'discovery');
     xmf.url = 'https://xmfestival.com/notice';
@@ -464,7 +698,7 @@ describe('crawl parsers', () => {
       url: string;
       date: string;
       venue: string;
-      artists: { name: string }[];
+      artists: { name: string; profileUrl: string }[];
     }[];
     expect(candidate).toHaveLength(1);
     expect(candidate[0]).toMatchObject({
@@ -483,9 +717,32 @@ describe('crawl parsers', () => {
         '에무뉴',
       ]),
     );
+    expect(xmfNoticeArtistAliases(html, xmf.url, 2026)).toEqual(
+      expect.arrayContaining([
+        { name: '아도', alias: 'Ado' },
+        { name: '루시', alias: 'LUCY' },
+        { name: '데이식스', alias: 'DAY6' },
+        { name: 'DJ 야베 유나', alias: 'YUNA YABE' },
+      ]),
+    );
+    expect(xmfNoticeArtistAliases(html, xmf.url, 2027)).toBeNull();
+    expect(
+      xmfNoticeArtistAliases(
+        html.replace('등 11팀이 공연을', '등 12팀이 공연을'),
+        xmf.url,
+        2026,
+      ),
+    ).toBeNull();
     await expect(
       parseCrawl(xmf, html.replace('등 11팀이 공연을', '등 12팀이 공연을')),
     ).rejects.toThrow('공개 예매 링크');
+    const swappedCounts = html
+      .replace('등 11팀이 관객과', '등 12팀이 관객과')
+      .replace('등 11팀이 공연을', '등 10팀이 공연을');
+    expect(xmfNoticeArtistAliases(swappedCounts, xmf.url, 2026)).toBeNull();
+    await expect(parseCrawl(xmf, swappedCounts)).rejects.toThrow(
+      '공개 예매 링크',
+    );
   });
 
   it('reads a YES24 detail Event without inventing a timetable', async () => {
@@ -806,12 +1063,195 @@ describe('crawl parsers', () => {
     expect(candidates[0].url).toBe(mint.url);
     expect(candidates[0].name).toBe('COUNTDOWN FANTASY 2026-2027');
     expect(candidates[0].artists).toHaveLength(12);
-    expect(candidates[0].artists.map((artist) => artist.name)).toEqual(
-      expect.arrayContaining(['극동아시아타이거즈', 'LOW HIGH LOW', '혁오']),
+    expect(candidates[0].artists).toEqual(
+      [
+        ['극동아시아타이거즈', 'far_east_asian_tigers'],
+        ['LOW HIGH LOW', 'band_lowhighlow'],
+        ['THE SOLUTIONS', 'the_solutions'],
+        ['실리카겔', 'silicagel.official'],
+        ['AxMxP', 'axmxp_official'],
+        ['FTISLAND', 'ftisland'],
+        ['OYSTERS', 'oysters.999'],
+        ['ONEWE(원위)', 'official_onewe'],
+        ['IDIOTAPE', 'idiotapeofficial'],
+        ['KARDI', 'bandkardi_'],
+        ['포져군단', 'poseridiott'],
+        ['혁오', 'hyukohofficial'],
+      ].map(([name, handle]) => ({
+        name,
+        profileUrl: `https://www.instagram.com/${handle}/`,
+      })),
     );
+    expect(candidates[0].artists).not.toContainEqual(
+      expect.objectContaining({
+        profileUrl: 'https://www.instagram.com/grandmintfestival/',
+      }),
+    );
+    await expect(
+      parseCrawl(
+        mint,
+        html.replace(
+          'https://www.instagram.com/hyukohofficial/',
+          'https://evil.example/hyukohofficial/',
+        ),
+      ),
+    ).rejects.toThrow('공개 예매 링크');
     await expect(parseCrawl(mint, html.replace('혁오', ''))).rejects.toThrow(
       '공개 예매 링크',
     );
+  });
+
+  it('discovers canonical NOL and YES24 products linked by the official CDF ticket notice', async () => {
+    const mint = source('ticket-list', 'discovery', {
+      seed: 'official-ticket-links',
+    });
+    mint.url = 'https://www.mintpaper.co.kr/posts/4821';
+    const post = {
+      title: 'CDF2026-2027 TICKET | 예매 안내, 입장 안내, 관람 안내',
+      content:
+        '<p>COUNTDOWN FANTASY 2026-2027 일시 : 2026년 12월 31일(목)</p>' +
+        '<a href="https://nol.yanolja.com/ticket/products/26014568">NOL</a>' +
+        '<a href="https://nol.yanolja.com/ticket/products/26014568">NOL 중복</a>' +
+        '<a href="https://ticket.yes24.com/Perf/60590?Gcode=009_207">YES24</a>',
+    };
+    const html = (value: typeof post) =>
+      `<script id="__NEXT_DATA__" type="application/json">${JSON.stringify({ props: { apolloState: { data: { 'Post:4821': value } } } }).replace(/</g, '\\u003c')}</script>`;
+    expect(await parseCrawl(mint, html(post))).toEqual([
+      {
+        name: 'COUNTDOWN FANTASY 2026-2027',
+        url: 'https://nol.yanolja.com/ticket/products/26014568',
+      },
+      {
+        name: 'COUNTDOWN FANTASY 2026-2027',
+        url: 'https://ticket.yes24.com/Perf/60590',
+      },
+    ]);
+    const nolOnly = [
+      {
+        name: 'COUNTDOWN FANTASY 2026-2027',
+        url: 'https://nol.yanolja.com/ticket/products/26014568',
+      },
+    ];
+    const nolAnchor =
+      '<a href="https://nol.yanolja.com/ticket/products/26014568">NOL</a>';
+    for (const misleadingAnchor of [
+      '<a data-href="https://ticket.yes24.com/Perf/60591">YES24</a>',
+      '<a href="https://example.com" data-href="https://ticket.yes24.com/Perf/60591">Other</a>',
+      '<a data-href="https://ticket.yes24.com/Perf/60591" href="https://example.com">Other</a>',
+      `<a data-note='please href="https://ticket.yes24.com/Perf/60591"'>Other</a>`,
+      `<a data-note="please href='https://ticket.yes24.com/Perf/60591'">Other</a>`,
+      `<a href="https://example.com" data-note='please href="https://ticket.yes24.com/Perf/60591"'>Other</a>`,
+      '<a href="https://example.com" href="https://ticket.yes24.com/Perf/60591">Other</a>',
+      '<a href="https://ticket.yes24.com/Perf/60591" href="https://example.com">Other</a>',
+      '<a href href=https://ticket.yes24.com/Perf/60591>Other</a>',
+      '<a href=https://ticket.yes24.com/Perf/60591 href>Other</a>',
+      `<div data-note='<a href="https://ticket.yes24.com/Perf/60591">'>Other</div>`,
+      `<script>const fake = '<a href="https://ticket.yes24.com/Perf/60591">';</script>`,
+      `<script>const fake = '</scriptx><a href="https://ticket.yes24.com/Perf/60591">';</script>`,
+      `<style>p::before { content: '<a href="https://ticket.yes24.com/Perf/60591">'; }</style>`,
+      `<style>p::before { content: '</stylex><a href="https://ticket.yes24.com/Perf/60591">'; }</style>`,
+      `<textarea><a href="https://ticket.yes24.com/Perf/60591">Other</textarea>`,
+      `&lt;a href="https://ticket.yes24.com/Perf/60591"&gt;Other`,
+    ]) {
+      expect(
+        await parseCrawl(
+          mint,
+          html({
+            ...post,
+            content: `<p>COUNTDOWN FANTASY 2026-2027 일시 : 2026년 12월 31일(목)</p>${nolAnchor}${misleadingAnchor}`,
+          }),
+        ),
+      ).toEqual(nolOnly);
+    }
+    expect(
+      await parseCrawl(
+        mint,
+        html({
+          ...post,
+          content: `<p>COUNTDOWN FANTASY 2026-2027 일시 : 2026년 12월 31일(목)</p>${nolAnchor}<a data-note='please href="https://ticket.yes24.com/Perf/60591"' data-href="https://ticket.yes24.com/Perf/60591" href="https://ticket.yes24.com/Perf/60590?Gcode=009_207">YES24</a>`,
+        }),
+      ),
+    ).toEqual([
+      ...nolOnly,
+      {
+        name: 'COUNTDOWN FANTASY 2026-2027',
+        url: 'https://ticket.yes24.com/Perf/60590',
+      },
+    ]);
+    for (const forged of [
+      'https://ticket.yes24.com.evil.example/Perf/60590',
+      'https://evil.example/?next=ticket.yes24.com/Perf/60590',
+      'http://ticket.yes24.com/Perf/60590',
+      'https://ticket.yes24.com/English/Perf/60590',
+      'https://ticket.yes24.com/Perf/not-a-product',
+      'https://user@ticket.yes24.com/Perf/60590',
+    ]) {
+      await expect(
+        parseCrawl(
+          mint,
+          html({
+            ...post,
+            content: `${post.content}<a href="${forged}">YES24</a>`,
+          }),
+        ),
+      ).rejects.toThrow('공개 예매 링크');
+    }
+    for (const invalid of [
+      'https://nol.yanolja.com/ticket/products/999?ref=other',
+      'https://nol.yanolja.com/ticket/products/999/',
+      'http://nol.yanolja.com/ticket/products/999',
+      'https://NOL.yanolja.com/ticket/products/999',
+      'https://nol.yanolja.com/ticket/places/999',
+    ]) {
+      await expect(
+        parseCrawl(
+          mint,
+          html({
+            ...post,
+            content: `${post.content}<a href="${invalid}">NOL</a>`,
+          }),
+        ),
+      ).rejects.toThrow('공개 예매 링크');
+    }
+    await expect(
+      parseCrawl(
+        mint,
+        html({
+          ...post,
+          content: `${post.content}<a href=https://nol.yanolja.com/ticket/places/999>NOL</a>`,
+        }),
+      ),
+    ).rejects.toThrow('공개 예매 링크');
+    await expect(
+      parseCrawl(
+        mint,
+        html({
+          ...post,
+          content: `${post.content}${Array.from({ length: 5 }, (_, i) => `<a href="https://nol.yanolja.com/ticket/products/${i + 1}">NOL</a>`).join('')}`,
+        }),
+      ),
+    ).rejects.toThrow('공개 예매 링크');
+    await expect(
+      parseCrawl(mint, html({ ...post, title: '다른 공연 안내' })),
+    ).rejects.toThrow('공개 예매 링크');
+    await expect(
+      parseCrawl(
+        mint,
+        html({
+          ...post,
+          content: post.content.replace('2026년 12월 31일', '2026년 2월 30일'),
+        }),
+      ),
+    ).rejects.toThrow('공개 예매 링크');
+    await expect(
+      parseCrawl(
+        mint,
+        html({
+          ...post,
+          content: post.content.replace('2026년 12월 31일', '2027년 1월 1일'),
+        }),
+      ),
+    ).rejects.toThrow('공개 예매 링크');
   });
 
   it('extracts 11 Oneway performers from the official Melon notice HTML', async () => {

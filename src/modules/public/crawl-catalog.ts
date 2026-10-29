@@ -1,4 +1,15 @@
 import { createHash } from 'node:crypto';
+import { artistNameKeys } from '../../common/artist-name';
+import {
+  VerifiedVenueLocation,
+  venueLabelMatches,
+  venuePoint,
+  verifiedVenueLocation,
+} from '../../common/festival-location';
+import {
+  PRUGIO_FESTIVAL_ID,
+  PRUGIO_LINEUP_URL,
+} from '../admin/crawl/service/prugio-lineup';
 
 interface DateRange {
   firstDate: string;
@@ -7,6 +18,7 @@ interface DateRange {
 
 export interface DiscoveryRow {
   candidate: unknown;
+  prugioCandidate?: unknown;
   decision?: string;
   proposalStatus?: string;
 }
@@ -31,9 +43,24 @@ export interface DiscoverySummary {
   ticketLinks: { label: string; url: string }[];
   status: 'discovered';
   sourceUrl: string;
+  sourceUrls: string[];
+  location?: VerifiedVenueLocation;
   officialInstagramUrl?: string;
   posterUrl?: string;
-  artists?: { name: string; sourceUrl?: string; imageUrl?: string | null }[];
+  artists?: {
+    name: string;
+    sourceUrl?: string;
+    profileUrl?: string;
+    imageUrl?: string | null;
+    imageCredit?: {
+      author: string;
+      license: string;
+      licenseUrl: string;
+      sourceUrl: string;
+      changes: string;
+    };
+    dates?: string[];
+  }[];
   sortAt: string;
 }
 
@@ -43,6 +70,7 @@ function ticketLabel(hostname: string): string {
       'ticket.melon.com': '멜론티켓',
       'ticket.yes24.com': '예스24',
       'nol.yanolja.com': 'NOL',
+      'world.nol.com': 'NOL World',
       'mintpaper.co.kr': '공식 사이트',
     }[hostname] ?? '공식 사이트'
   );
@@ -66,22 +94,75 @@ function officialInstagramUrl(raw: unknown): string | null {
   }
 }
 
-function officialPosterUrl(raw: unknown): string | null {
+function officialMelonLocation(
+  value: Record<string, unknown>,
+): VerifiedVenueLocation | null {
+  const evidence = value.locationEvidence;
+  if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence))
+    return null;
+  const row = evidence as Record<string, unknown>;
+  const point = venuePoint(row.point);
+  if (
+    !point ||
+    typeof row.sourceUrl !== 'string' ||
+    typeof row.verifiedAt !== 'string'
+  )
+    return null;
+  if (!venueLabelMatches(point.label, value.venue)) return null;
+  if (row.sourceUrl !== value.url) return null;
+  let sourceUrl: URL;
+  try {
+    sourceUrl = new URL(row.sourceUrl);
+  } catch {
+    return null;
+  }
+  if (
+    sourceUrl.protocol !== 'https:' ||
+    sourceUrl.hostname !== 'ticket.melon.com' ||
+    sourceUrl.pathname !== '/performance/index.htm' ||
+    !/^[1-9]\d*$/.test(sourceUrl.searchParams.get('prodId') ?? '') ||
+    sourceUrl.searchParams.size !== 1 ||
+    sourceUrl.username ||
+    sourceUrl.password
+  )
+    return null;
+  return verifiedVenueLocation({
+    ...point,
+    source: {
+      name: '멜론티켓',
+      url: sourceUrl.toString(),
+      verifiedAt: row.verifiedAt,
+    },
+  });
+}
+
+function officialPosterUrl(raw: unknown, sourceUrl: string): string | null {
   if (typeof raw !== 'string') return null;
   try {
     const url = new URL(raw);
+    const source = new URL(sourceUrl);
+    const nolProductId = (
+      source.hostname === 'nol.yanolja.com'
+        ? /^\/ticket\/products\/(\d+)$/.exec(source.pathname)
+        : source.hostname === 'world.nol.com'
+          ? /^\/en\/ticket\/products\/(\d+)$/.exec(source.pathname)
+          : null
+    )?.[1];
+    if (source.hostname === 'world.nol.com' && !nolProductId) return null;
+    const posterProductId =
+      /^\/Play\/image\/large\/\d+\/(\d+)_p\.(?:gif|jpe?g|png|webp)$/i.exec(
+        url.pathname,
+      )?.[1];
     const trusted =
       url.hostname === 'mintpaper.s3.ap-northeast-2.amazonaws.com' ||
       (url.hostname === 'tkfile.yes24.com' &&
         url.pathname.startsWith('/upload2/PerfBlog/')) ||
       (url.hostname === 'cdnticket.melon.co.kr' &&
         url.pathname.startsWith('/resource/image/upload/product/')) ||
-      (url.hostname === 'ticketimage.interpark.com' &&
-        /^\/Play\/image\/large\/\d+\/\d+_p\.(?:gif|jpe?g|png|webp)$/i.test(
-          url.pathname,
-        ));
+      (url.hostname === 'ticketimage.interpark.com' && posterProductId);
     return url.protocol === 'https:' &&
       trusted &&
+      (!nolProductId || posterProductId === nolProductId) &&
       !url.username &&
       !url.password
       ? url.toString()
@@ -93,15 +174,46 @@ function officialPosterUrl(raw: unknown): string | null {
 
 function verifiedArtists(
   raw: unknown,
-  sourceHost: string,
-): { name: string; sourceUrl?: string }[] {
+  sourceUrl: string,
+): { name: string; sourceUrl?: string; profileUrl?: string }[] {
   if (!Array.isArray(raw)) return [];
-  const artists: { name: string; sourceUrl?: string }[] = [];
+  let source: URL;
+  try {
+    source = new URL(sourceUrl);
+  } catch {
+    return [];
+  }
+  if (
+    source.protocol !== 'https:' ||
+    source.username ||
+    source.password ||
+    source.port
+  )
+    return [];
+  const sourceHost = source.hostname;
+  const artists: {
+    name: string;
+    sourceUrl?: string;
+    profileUrl?: string;
+  }[] = [];
   for (const value of raw.slice(0, 80)) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
     const name = (value as Record<string, unknown>).name;
     if (typeof name !== 'string' || !name.trim() || name.length > 160) continue;
-    const artist: { name: string; sourceUrl?: string } = { name: name.trim() };
+    const artist: {
+      name: string;
+      sourceUrl?: string;
+      profileUrl?: string;
+    } = { name: name.trim() };
+    if (
+      ['mintpaper.co.kr', 'www.mintpaper.co.kr'].includes(sourceHost) &&
+      source.pathname === '/posts/4819'
+    ) {
+      const profile = officialInstagramUrl(
+        (value as Record<string, unknown>).profileUrl,
+      );
+      if (profile) artist.profileUrl = profile;
+    }
     const rawUrl = (value as Record<string, unknown>).sourceUrl;
     if (typeof rawUrl === 'string') {
       try {
@@ -111,7 +223,7 @@ function verifiedArtists(
             url.hostname === 'cdnimg.melon.co.kr') ||
           (sourceHost === 'ticket.yes24.com' &&
             ['tkfile.yes24.com', 'stkfile.yes24.com'].includes(url.hostname)) ||
-          (sourceHost === 'nol.yanolja.com' &&
+          (['nol.yanolja.com', 'world.nol.com'].includes(sourceHost) &&
             url.hostname === 'ticketimage.interpark.com');
         if (
           url.protocol === 'https:' &&
@@ -156,7 +268,10 @@ function date(year: number, month: number, day: number): string | null {
   return parsed.toISOString().slice(0, 10);
 }
 
-export function ticketDateRange(raw: unknown): DateRange | null {
+export function ticketDateRange(
+  raw: unknown,
+  maxSpanDays = 6,
+): DateRange | null {
   if (typeof raw !== 'string') return null;
   const korean = raw
     .trim()
@@ -192,8 +307,15 @@ export function ticketDateRange(raw: unknown): DateRange | null {
   const span =
     (Date.parse(`${last}T00:00:00Z`) - Date.parse(`${first}T00:00:00Z`)) /
     86_400_000;
-  if (span > 6) return null;
+  if (span > maxSpanDays) return null;
   return { firstDate: first, lastDate: last };
+}
+
+function ticketDateSpanLimit(url: unknown): number {
+  return typeof url === 'string' &&
+    /^https:\/\/world\.nol\.com\/en\/ticket\/products\/\d+$/.test(url)
+    ? 31
+    : 6;
 }
 
 function cleanName(name: string): string {
@@ -231,6 +353,7 @@ export function discoverySummaries(
     );
     const poster = officialPosterUrl(
       (row.candidate as Record<string, unknown>).posterUrl,
+      url,
     );
     if (existing.candidate && typeof existing.candidate === 'object') {
       const first = existing.candidate as Record<string, unknown>;
@@ -238,7 +361,7 @@ export function discoverySummaries(
         ...(account && !officialInstagramUrl(first.officialInstagramUrl)
           ? { officialInstagramUrl: account }
           : {}),
-        ...(poster && !officialPosterUrl(first.posterUrl)
+        ...(poster && !officialPosterUrl(first.posterUrl, url)
           ? { posterUrl: poster }
           : {}),
       };
@@ -262,7 +385,7 @@ export function discoverySummaries(
     const source = row.sourceUrl ? byUrl.get(row.sourceUrl)?.candidate : null;
     if (source && typeof source === 'object' && !Array.isArray(source)) {
       const value = source as Record<string, unknown>;
-      const dates = ticketDateRange(value.date);
+      const dates = ticketDateRange(value.date, ticketDateSpanLimit(value.url));
       if (
         typeof value.name === 'string' &&
         typeof value.venue === 'string' &&
@@ -272,6 +395,10 @@ export function discoverySummaries(
     }
   }
   const found = new Map<string, DiscoverySummary>();
+  const officialArtistsByKey = new Map<
+    string,
+    ReturnType<typeof verifiedArtists>
+  >();
   for (const { candidate, decision, proposalStatus } of byUrl.values()) {
     if (decision === 'rejected' || proposalStatus === 'rejected') continue;
     if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate))
@@ -287,7 +414,7 @@ export function discoverySummaries(
       value.venue.length > 160
     )
       continue;
-    const dates = ticketDateRange(value.date);
+    const dates = ticketDateRange(value.date, ticketDateSpanLimit(value.url));
     if (!dates) continue;
     let url: URL;
     try {
@@ -303,6 +430,7 @@ export function discoverySummaries(
         'ticket.melon.com',
         'ticket.yes24.com',
         'nol.yanolja.com',
+        'world.nol.com',
         'mintpaper.co.kr',
       ].includes(url.hostname)
     )
@@ -311,10 +439,30 @@ export function discoverySummaries(
     const key = candidateKey(name, value.venue, dates);
     if (publishedKeys.has(key)) continue;
     const instagramUrl = officialInstagramUrl(value.officialInstagramUrl);
-    const posterUrl = officialPosterUrl(value.posterUrl);
-    const artists = verifiedArtists(value.artists, url.hostname);
+    const posterUrl = officialPosterUrl(value.posterUrl, url.toString());
+    const artists = verifiedArtists(
+      value.artists,
+      typeof value.artistSourceUrl === 'string'
+        ? value.artistSourceUrl
+        : url.toString(),
+    );
+    const location = officialMelonLocation(value);
+    const officialArtists = verifiedArtists(
+      value.officialProfileArtists,
+      'https://www.mintpaper.co.kr/posts/4819',
+    );
+    if (officialArtists.length) {
+      const known = officialArtistsByKey.get(key) ?? [];
+      for (const official of officialArtists) {
+        if (!known.some((artist) => artist.name === official.name))
+          known.push(official);
+      }
+      officialArtistsByKey.set(key, known);
+    }
     const existing = found.get(key);
     if (existing) {
+      if (!existing.sourceUrls.includes(url.toString()))
+        existing.sourceUrls.push(url.toString());
       if (
         existing.ticketLinks.length < 5 &&
         !existing.ticketLinks.some((link) => link.url === url.toString())
@@ -335,17 +483,19 @@ export function discoverySummaries(
           url: instagramUrl,
         });
       if (posterUrl && !existing.posterUrl) existing.posterUrl = posterUrl;
+      if (location && !existing.location) existing.location = location;
       if (artists.length) {
         const merged = new Map(
           existing.artists?.map((artist) => [artist.name, artist]) ?? [],
         );
         for (const artist of artists) {
           const current = merged.get(artist.name);
-          if (
-            (current && !current.sourceUrl && artist.sourceUrl) ||
-            (!current && merged.size < 80)
-          )
-            merged.set(artist.name, artist);
+          if (current) {
+            if (!current.sourceUrl && artist.sourceUrl)
+              current.sourceUrl = artist.sourceUrl;
+            if (!current.profileUrl && artist.profileUrl)
+              current.profileUrl = artist.profileUrl;
+          } else if (merged.size < 80) merged.set(artist.name, artist);
         }
         existing.artists = [...merged.values()];
       }
@@ -368,6 +518,8 @@ export function discoverySummaries(
       ],
       status: 'discovered',
       sourceUrl: url.toString(),
+      sourceUrls: [url.toString()],
+      ...(location ? { location } : {}),
       ...(instagramUrl ? { officialInstagramUrl: instagramUrl } : {}),
       ...(posterUrl ? { posterUrl } : {}),
       ...(artists.length ? { artists } : {}),
@@ -375,5 +527,94 @@ export function discoverySummaries(
       sortAt: `${dates.firstDate}T00:00:00+09:00`,
     });
   }
+  for (const [key, officialArtists] of officialArtistsByKey) {
+    const summary = found.get(key);
+    if (!summary) continue;
+    if (!summary.artists?.length) {
+      summary.artists = officialArtists;
+      continue;
+    }
+    const profileClaims = new Map<
+      NonNullable<DiscoverySummary['artists']>[number],
+      Set<string>
+    >();
+    for (const official of officialArtists) {
+      const officialKeys = new Set(artistNameKeys(official.name));
+      const matches = summary.artists.filter((artist) =>
+        artistNameKeys(artist.name).some((nameKey) =>
+          officialKeys.has(nameKey),
+        ),
+      );
+      if (matches.length === 1 && official.profileUrl) {
+        const claims = profileClaims.get(matches[0]) ?? new Set<string>();
+        claims.add(official.profileUrl);
+        profileClaims.set(matches[0], claims);
+      }
+    }
+    for (const [artist, claims] of profileClaims) {
+      if (claims.size === 1 && !artist.profileUrl)
+        artist.profileUrl = [...claims][0];
+    }
+  }
   return [...found.values()];
+}
+
+export function attachPrugioLineup(
+  summaries: DiscoverySummary[],
+  candidate: unknown,
+): void {
+  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate))
+    return;
+  const value = candidate as Record<string, unknown>;
+  const summary = summaries.find((item) => item.id === PRUGIO_FESTIVAL_ID);
+  if (
+    !summary ||
+    summary.name.replace(/\s/g, '') !== '제4회푸르지오아트홀뮤직페스티벌' ||
+    summary.venue.replace(/\s/g, '') !== '푸르지오아트홀' ||
+    summary.firstDate !== '2026-10-02' ||
+    summary.lastDate !== '2026-10-04' ||
+    value.festivalId !== PRUGIO_FESTIVAL_ID ||
+    value.name !== '제4회 푸르지오아트홀 뮤직페스티벌' ||
+    value.venue !== '푸르지오아트홀' ||
+    value.date !== '2026.10.02 - 2026.10.04' ||
+    value.url !== PRUGIO_LINEUP_URL ||
+    !Array.isArray(value.artists)
+  )
+    return;
+  const allowedDates = new Set(['2026-10-02', '2026-10-03', '2026-10-04']);
+  const artists = value.artists as unknown[];
+  if (artists.length < 1 || artists.length > 90) return;
+  const dated: { name: string; dates: string[] }[] = [];
+  const seen = new Set<string>();
+  for (const artist of artists) {
+    if (!artist || typeof artist !== 'object' || Array.isArray(artist)) return;
+    const entry = artist as Record<string, unknown>;
+    if (
+      typeof entry.name !== 'string' ||
+      !/^[가-힣]{2,12}$/.test(entry.name) ||
+      seen.has(entry.name) ||
+      !Array.isArray(entry.dates) ||
+      !entry.dates.length ||
+      entry.dates.some(
+        (date) => typeof date !== 'string' || !allowedDates.has(date),
+      ) ||
+      new Set(entry.dates).size !== entry.dates.length
+    )
+      return;
+    seen.add(entry.name);
+    dated.push({ name: entry.name, dates: entry.dates as string[] });
+  }
+  const merged = new Map(
+    summary.artists?.map((artist) => [artist.name, artist]) ?? [],
+  );
+  for (const artist of dated) {
+    const current = merged.get(artist.name);
+    merged.set(
+      artist.name,
+      current ? { ...current, dates: artist.dates } : artist,
+    );
+  }
+  summary.artists = [...merged.values()];
+  if (!summary.sourceUrls.includes(PRUGIO_LINEUP_URL))
+    summary.sourceUrls.push(PRUGIO_LINEUP_URL);
 }

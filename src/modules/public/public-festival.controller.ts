@@ -227,7 +227,7 @@ export class PublicFestivalController {
       }
     }
     if (!response.hasHeader('Cache-Control'))
-      response.setHeader('Cache-Control', 'public, max-age=3600');
+      response.setHeader('Cache-Control', 'public, no-cache, must-revalidate');
     this.send(
       response,
       body,
@@ -240,7 +240,7 @@ export class PublicFestivalController {
   @ApiOperation({
     summary: '축제 상세 정보',
     description:
-      '목록의 축제 ID로 상세를 조회합니다. 발견된 축제는 검증된 공식 시간표가 있으면 날짜·무대·아티스트·시작 시각·종료 시각(미공개 시 null)·출처 URL·원본 이미지 URL을 timetable에 반환합니다. 검증된 공연별 시각이 없으면 빈 배열입니다. 발행 축제는 공개된 팩의 시간표를 반환합니다. 요청 본문은 없습니다.',
+      '목록의 축제 ID로 상세를 조회합니다. 발견된 축제는 검증된 공식 시간표가 있으면 날짜·무대·아티스트·시작 시각·종료 시각(미공개 시 null)·출처 URL·원본 이미지 URL을 timetable에 반환합니다. 검증된 공연별 시각이 없으면 빈 배열입니다. 공식 장소 좌표가 검증된 발견 축제는 location에 위도·경도·장소명·출처를 반환합니다. 발행 축제의 좌표는 directions.location에 있습니다. 요청 본문은 없습니다.',
   })
   @ApiParam({
     name: 'id',
@@ -249,7 +249,8 @@ export class PublicFestivalController {
   })
   @ApiResponse({
     status: 200,
-    description: '축제 상세와 발행된 타임테이블 또는 발견 출연진',
+    description:
+      '축제 상세와 발행된 타임테이블 또는 발견 출연진. 발견 축제의 검증된 장소 좌표는 location, 발행 팩의 좌표는 directions.location입니다. 공식 날짜별 출연진이 확인된 발견 축제에는 artists[].dates(YYYY-MM-DD 배열)가 포함될 수 있습니다. 개별 공연 시각이 검증되지 않았다면 timetable은 빈 배열입니다. 공식 출연진 계정이 검증된 발견 축제에는 artists[].profileUrl이 포함될 수 있습니다. imageUrl은 서버에 저장된 사진에만 부여하며, Creative Commons 사진에는 imageCredit(저작자·라이선스·원본·변경 사항)을 함께 반환합니다.',
     schema: {
       type: 'object',
       example: {
@@ -257,12 +258,24 @@ export class PublicFestivalController {
         data: {
           id: 'fst_0123456789abcdef',
           name: '샘플 페스티벌',
-          venue: '서울 공연장',
+          venue: 'KINTEX HALL 7/8/9/10',
           timezone: 'Asia/Seoul',
           packVersion: 1,
           thumbUrl:
             '/api/v1/festivals/images/00000000-0000-4000-8000-000000000001.webp',
           ticketLinks: [],
+          directions: {
+            location: {
+              latitude: 37.66469544695199,
+              longitude: 126.742064181796,
+              label: 'KINTEX HALL 7/8/9/10',
+              source: {
+                name: '멜론티켓',
+                url: 'https://ticket.melon.com/performance/index.htm?prodId=213793',
+                verifiedAt: '2026-10-28T11:00:00Z',
+              },
+            },
+          },
           days: [
             {
               date: '2026-11-20',
@@ -271,6 +284,13 @@ export class PublicFestivalController {
             },
           ],
           stages: [{ id: 'stg_main', name: '메인 무대', order: 1 }],
+          artists: [
+            {
+              name: '샘플 밴드',
+              imageUrl:
+                '/api/v1/festivals/images/00000000-0000-4000-8000-000000000002.webp',
+            },
+          ],
           timetable: [
             {
               id: 'set_example',
@@ -322,7 +342,7 @@ export class PublicFestivalController {
         data: {
           packVersion: 1,
           packUpdatedAt: '2026-10-20T09:00:00Z',
-          etag: '"cdm1-v1"',
+          etag: '"cdm3-v1"',
         },
         message: '성공적으로 처리되었습니다.',
       },
@@ -374,6 +394,7 @@ export class PublicFestivalController {
           name: '가을 음악 축제',
           days: [{ date: '2026-10-24' }],
           packVersion: 1,
+          artists: [{ name: '샘플 밴드', imageUrl: null }],
         },
         message: '성공적으로 처리되었습니다.',
       },
@@ -391,11 +412,10 @@ export class PublicFestivalController {
     @Headers('accept-encoding') acceptEncoding: string | undefined,
     @Res() response: Response,
   ) {
-    const body = await this.service.published(id);
+    const { document: body, etag } = await this.service.publishedPack(id);
     response.setHeader('Cache-Control', 'public, no-cache, must-revalidate');
     response.setHeader('Date', new Date().toUTCString());
     response.setHeader('Vary', 'Accept-Encoding');
-    const etag = envelopeEtag(`"v${body.packVersion as number}"`);
     response.setHeader('ETag', etag);
     if (matchesEtag(ifNoneMatch, etag)) {
       response.status(304).end();

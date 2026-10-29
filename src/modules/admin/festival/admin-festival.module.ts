@@ -8,11 +8,15 @@ import { TimetableImageService } from './timetable-image.service';
 import { AdminFestival, AdminFestivalVersion } from './festival.entity';
 import { ImageStorageService } from '../../storage/image-storage.service';
 import { AdminAuditModule } from '../audit/admin-audit.module';
+import { PublicFestivalModule } from '../../public/public-festival.module';
+import { NotificationModule } from '../../notification/notification.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([AdminFestival, AdminFestivalVersion]),
     AdminAuditModule,
+    PublicFestivalModule,
+    NotificationModule,
   ],
   controllers: [
     AdminFestivalController,

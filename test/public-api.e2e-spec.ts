@@ -65,7 +65,27 @@ describe('Public festival API', () => {
     find: jest.fn().mockResolvedValue([]),
     findOne: jest.fn().mockResolvedValue(null),
   };
-  const dataSource = { query: jest.fn().mockResolvedValue([{ count: 1 }]) };
+  const storedPackImageId = '00000000-0000-4000-8000-000000000001';
+  let discoveryRows: { candidate: Record<string, unknown> }[] = [];
+  let storedOriginImages: { originUrl: string; id: string }[] = [];
+  let rateLimitCount = 1;
+  const dataSource = {
+    query: jest.fn((sql: string) => {
+      if (sql.includes('INSERT INTO public_live_rate_limits'))
+        return Promise.resolve([{ count: rateLimitCount }]);
+      if (sql.includes('WITH candidates AS'))
+        return Promise.resolve(discoveryRows);
+      if (sql.includes('FROM crawl_images image')) {
+        if (sql.includes('image.id = ANY($2::uuid[])'))
+          return Promise.resolve([{ id: storedPackImageId, seed: null }]);
+        if (sql.includes('image.id = ANY($1::uuid[])'))
+          return Promise.resolve([{ id: storedPackImageId, seed: null }]);
+        if (sql.includes('image."originUrl" = ANY($1::text[])'))
+          return Promise.resolve(storedOriginImages);
+      }
+      return Promise.resolve([]);
+    }),
+  };
   const deviceAuth = {
     resolveOptionalPrincipal: jest.fn().mockResolvedValue(undefined),
   };
@@ -152,6 +172,12 @@ describe('Public festival API', () => {
     await app.close();
   });
 
+  beforeEach(() => {
+    discoveryRows = [];
+    storedOriginImages = [];
+    rateLimitCount = 1;
+  });
+
   it('lists published festivals and sends conditional list caching', async () => {
     const first = await request(server)
       .get('/api/v1/festivals?after=2026-10-21&limit=20')
@@ -166,7 +192,9 @@ describe('Public festival API', () => {
         ticketLinks: pack.ticketLinks,
       }),
     ]);
-    expect(first.headers['cache-control']).toBe('public, max-age=3600');
+    expect(first.headers['cache-control']).toBe(
+      'public, no-cache, must-revalidate',
+    );
     expect(first.headers.vary).toBe('Origin, Authorization, X-Device-Id');
     expect(first.headers['access-control-allow-origin']).toBe(
       'https://festicoreadmin-dev.up.railway.app',
@@ -183,9 +211,40 @@ describe('Public festival API', () => {
       .set('If-None-Match', first.headers.etag)
       .set('Cache-Control', 'no-cache')
       .expect(304);
-    expect(notModified.headers['cache-control']).toBe('public, max-age=3600');
+    expect(notModified.headers['cache-control']).toBe(
+      'public, no-cache, must-revalidate',
+    );
     expect(notModified.headers['access-control-allow-origin']).toBe(
       'https://festicoreadmin-dev.up.railway.app',
+    );
+  });
+
+  it('returns an updated list when the previous ETag no longer matches', async () => {
+    queryBuilder.getMany
+      .mockResolvedValueOnce([published])
+      .mockResolvedValueOnce([
+        published,
+        {
+          id: 'fst_87654321',
+          published: { ...pack, id: 'fst_87654321', name: 'New Festival' },
+          publishedVersion: 7,
+        },
+      ]);
+    const first = await request(server).get('/api/v1/festivals').expect(200);
+    const refreshed = await request(server)
+      .get('/api/v1/festivals')
+      .set('If-None-Match', first.headers.etag)
+      .expect(200);
+    expect(refreshed.headers.etag).not.toBe(first.headers.etag);
+    expect(refreshed.headers['cache-control']).toBe(
+      'public, no-cache, must-revalidate',
+    );
+    expect(
+      successData<{ items: { name: string }[] }>(refreshed.body).items,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'New Festival' }),
+      ]),
     );
   });
 
@@ -230,7 +289,9 @@ describe('Public festival API', () => {
     expect(
       successData<{ items: { pinned?: boolean }[] }>(response.body).items[0],
     ).not.toHaveProperty('pinned');
-    expect(response.headers['cache-control']).toBe('public, max-age=3600');
+    expect(response.headers['cache-control']).toBe(
+      'public, no-cache, must-revalidate',
+    );
     expect(response.headers.vary).toBe('Origin, Authorization, X-Device-Id');
   });
 
@@ -278,11 +339,7 @@ describe('Public festival API', () => {
         },
       },
     ];
-    dataSource.query
-      .mockResolvedValueOnce(candidates)
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce(candidates)
-      .mockResolvedValueOnce([]);
+    discoveryRows = candidates;
     const first = await request(server)
       .get('/api/v1/festivals?limit=1')
       .expect(200);
@@ -334,14 +391,18 @@ describe('Public festival API', () => {
         ticketLinks: pack.ticketLinks,
       }),
     );
-    expect(first.headers.etag).toBe('"cdm1-v7"');
+    expect(first.headers.etag).toMatch(/^"[0-9a-f]{64}"$/);
     await request(server)
       .get(`/api/v1/festivals/${pack.id}/pack`)
       .set('If-None-Match', '"v7"')
       .expect(200);
-    const unchanged = await request(server)
+    await request(server)
       .get(`/api/v1/festivals/${pack.id}/pack`)
       .set('If-None-Match', '"cdm1-v7"')
+      .expect(200);
+    const unchanged = await request(server)
+      .get(`/api/v1/festivals/${pack.id}/pack`)
+      .set('If-None-Match', first.headers.etag)
       .expect(304);
     expect(unchanged.text).toBe('');
     const missing = await request(server)
@@ -357,6 +418,16 @@ describe('Public festival API', () => {
         venue: 'KINTEX HALL 7/8/9/10',
         date: '2026.11.20 - 2026.11.22',
         url: 'https://ticket.melon.com/performance/index.htm?prodId=213793',
+        locationEvidence: {
+          point: {
+            latitude: 37.66469544695199,
+            longitude: 126.742064181796,
+            label: 'KINTEX HALL 7/8/9/10',
+          },
+          sourceUrl:
+            'https://ticket.melon.com/performance/index.htm?prodId=213793',
+          verifiedAt: '2026-10-28T11:00:00Z',
+        },
         posterUrl:
           'https://cdnticket.melon.co.kr/resource/image/upload/product/poster.jpg',
         artists: [
@@ -367,25 +438,29 @@ describe('Public festival API', () => {
         ],
       },
     };
-    dataSource.query
-      .mockResolvedValueOnce([candidate])
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([
-        {
-          originUrl: candidate.candidate.posterUrl,
-          id: '00000000-0000-4000-8000-000000000001',
-        },
-        {
-          originUrl: candidate.candidate.artists[0].sourceUrl,
-          id: '00000000-0000-4000-8000-000000000002',
-        },
-      ])
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([]);
+    discoveryRows = [candidate];
+    storedOriginImages = [
+      {
+        originUrl: candidate.candidate.posterUrl,
+        id: '00000000-0000-4000-8000-000000000001',
+      },
+      {
+        originUrl: candidate.candidate.artists[0].sourceUrl,
+        id: '00000000-0000-4000-8000-000000000002',
+      },
+    ];
     const id = discoverySummaries([candidate])[0].id;
     const response = await request(server)
       .get(`/api/v1/festivals/${id}`)
       .expect(200);
+    expect(
+      successData<{ location: unknown }>(response.body).location,
+    ).toMatchObject({
+      latitude: 37.66469544695199,
+      longitude: 126.742064181796,
+      label: 'KINTEX HALL 7/8/9/10',
+      source: { name: '멜론티켓' },
+    });
     expect(successData<Record<string, unknown>>(response.body)).toMatchObject({
       id,
       status: 'discovered',
@@ -410,7 +485,6 @@ describe('Public festival API', () => {
       id: pack.id,
       packVersion: 7,
     });
-    dataSource.query.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
     const missing = await request(server)
       .get('/api/v1/festivals/fst_unknown')
       .expect(404);
@@ -432,6 +506,7 @@ describe('Public festival API', () => {
       ...published,
       published: {
         ...pack,
+        venue: 'KINTEX HALL 7/8/9/10',
         internalSecret: 'TOP_LEVEL_SECRET',
         source: {
           name: 'Official',
@@ -467,6 +542,18 @@ describe('Public festival API', () => {
           },
         ],
         directions: {
+          location: {
+            latitude: 37.66469544695199,
+            longitude: 126.742064181796,
+            label: 'KINTEX HALL 7/8/9/10',
+            source: {
+              name: '멜론티켓',
+              url: 'https://ticket.melon.com/performance/index.htm?prodId=213793',
+              verifiedAt: pack.packUpdatedAt,
+              internalSecret: 'LOCATION_SOURCE_SECRET',
+            },
+            internalSecret: 'LOCATION_SECRET',
+          },
           shuttle: {
             body: 'Shuttle',
             links: [
@@ -503,6 +590,8 @@ describe('Public festival API', () => {
       'SHUTTLE_SECRET',
       'MAP_SECRET',
       'DIRECTION_SECRET',
+      'LOCATION_SECRET',
+      'LOCATION_SOURCE_SECRET',
       'flags/private-key.webp',
     ])
       expect(serialized).not.toContain(secret);
@@ -514,6 +603,19 @@ describe('Public festival API', () => {
     expect(successData<{ flags: unknown[] }>(response.body).flags).toHaveLength(
       1,
     );
+    expect(
+      successData<{ directions: { location: unknown } }>(response.body)
+        .directions.location,
+    ).toEqual({
+      latitude: 37.66469544695199,
+      longitude: 126.742064181796,
+      label: 'KINTEX HALL 7/8/9/10',
+      source: {
+        name: '멜론티켓',
+        url: 'https://ticket.melon.com/performance/index.htm?prodId=213793',
+        verifiedAt: pack.packUpdatedAt,
+      },
+    });
   });
 
   it('returns version and filters flag tags with OR semantics', async () => {
@@ -523,9 +625,9 @@ describe('Public festival API', () => {
     expect(successData(version.body)).toEqual({
       packVersion: 7,
       packUpdatedAt: pack.packUpdatedAt,
-      etag: '"cdm1-v7"',
+      etag: version.headers.etag,
     });
-    expect(version.headers.etag).toBe('"cdm1-v7"');
+    expect(version.headers.etag).toMatch(/^"[0-9a-f]{64}"$/);
     await request(server)
       .get(`/api/v1/festivals/${pack.id}/pack/version`)
       .set('If-None-Match', version.headers.etag)
@@ -731,12 +833,11 @@ describe('Public festival API', () => {
     await request(server).get(url).set('If-None-Match', '*').expect(304);
     await request(server)
       .get(url)
-      .set('If-None-Match', '"cdm1-v7"')
+      .set('If-None-Match', identity.headers.etag)
       .expect(304);
   });
 
   it('serves anonymous live state and 304 without refreshing server time', async () => {
-    dataSource.query.mockResolvedValue([{ count: 1 }]);
     const device = '3f9a2c1d-2b77-4e7e-9a1b-2a0123456789';
     const first = await request(server)
       .get(`/api/v1/festivals/${pack.id}/live`)
@@ -759,7 +860,6 @@ describe('Public festival API', () => {
   });
 
   it('partitions personalized live responses by authorization', async () => {
-    dataSource.query.mockResolvedValue([{ count: 1 }]);
     const device = '3f9a2c1d-2b77-4e7e-9a1b-2a0123456789';
     const token = app.get(JwtService).sign(
       {
@@ -799,7 +899,7 @@ describe('Public festival API', () => {
       .set('Authorization', 'Bearer invalid')
       .expect(401);
     expect(errorData<null>(invalidToken.body, 'UNAUTHORIZED')).toBeNull();
-    dataSource.query.mockResolvedValueOnce([{ count: 5 }]);
+    rateLimitCount = 5;
     const limited = await request(server)
       .get(url)
       .set('X-Device-Id', device)

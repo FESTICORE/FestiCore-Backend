@@ -1,4 +1,8 @@
 import { BadRequestException } from '@nestjs/common';
+import {
+  venueLabelMatches,
+  verifiedVenueLocation,
+} from '../../../common/festival-location';
 import type { FestivalDocument } from './festival.entity';
 
 const keys = new Set([
@@ -33,6 +37,16 @@ function iso(value: unknown): value is string {
   );
 }
 
+function calendarDate(value: unknown): value is string {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value))
+    return false;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return (
+    !Number.isNaN(parsed.getTime()) &&
+    parsed.toISOString().slice(0, 10) === value
+  );
+}
+
 export function validateDraft(
   draft: FestivalDocument,
   forPublish = false,
@@ -47,16 +61,43 @@ export function validateDraft(
   str('venue', 1, 80);
   if (draft.timezone !== 'Asia/Seoul')
     errors.push('timezone: Asia/Seoul만 허용');
+  const period = draft.eventPeriod;
+  const hasPeriod = period !== undefined;
+  let firstDate: string | null = null;
+  let lastDate: string | null = null;
+  if (hasPeriod) {
+    if (
+      !object(period) ||
+      !calendarDate(period.firstDate) ||
+      !calendarDate(period.lastDate) ||
+      Date.parse(`${period.lastDate}T00:00:00Z`) -
+        Date.parse(`${period.firstDate}T00:00:00Z`) >
+        31 * 86_400_000 ||
+      period.lastDate < period.firstDate
+    )
+      errors.push('eventPeriod: 첫날부터 마지막 날까지 최대 32일 필요');
+    else {
+      firstDate = period.firstDate;
+      lastDate = period.lastDate;
+    }
+  }
   const days = draft.days;
-  if (!Array.isArray(days) || days.length < 1 || days.length > 7)
-    errors.push('days: 1..7개 필요');
+  if (
+    !Array.isArray(days) ||
+    days.length > 32 ||
+    (!hasPeriod && days.length < 1)
+  )
+    errors.push(
+      'days: 1..32개 필요 (날짜 전용 초안은 eventPeriod와 빈 배열 허용)',
+    );
   else {
+    if (forPublish && days.length === 0)
+      errors.push('days: 발행하려면 검증된 시작/종료 시각 필요');
     let previous = '';
     for (const [index, day] of days.entries()) {
       if (
         !object(day) ||
-        typeof day.date !== 'string' ||
-        !/^\d{4}-\d{2}-\d{2}$/.test(day.date) ||
+        !calendarDate(day.date) ||
         !iso(day.startsAt) ||
         !iso(day.endsAt)
       ) {
@@ -70,14 +111,40 @@ export function validateDraft(
         calendar.toISOString().slice(0, 10) !== day.date ||
         duration <= 0 ||
         duration > 18 * 3600_000 ||
-        day.date <= previous
+        day.date <= previous ||
+        (firstDate !== null && (day.date < firstDate || day.date > lastDate!))
       )
         errors.push(`days[${index}]: 날짜 순서 또는 시간 범위 오류`);
       previous = day.date;
     }
+    const firstDay: unknown = days[0];
+    const lastDay: unknown = days[days.length - 1];
+    if (
+      forPublish &&
+      firstDate !== null &&
+      days.length > 0 &&
+      (!object(firstDay) ||
+        firstDay.date !== firstDate ||
+        !object(lastDay) ||
+        lastDay.date !== lastDate)
+    )
+      errors.push(
+        'days: 발행 일정은 eventPeriod의 첫날과 마지막 날을 포함해야 함',
+      );
   }
   if (typeof draft.flagsEnabled !== 'boolean')
     errors.push('flagsEnabled: boolean 필요');
+  if (
+    object(draft.directions) &&
+    draft.directions.location !== undefined &&
+    draft.directions.location !== null
+  ) {
+    const location = verifiedVenueLocation(draft.directions.location);
+    if (!location || !venueLabelMatches(location.label, draft.venue))
+      errors.push(
+        'directions.location: 검증된 위도·경도, 공연장 일치 장소명과 HTTPS 출처가 필요',
+      );
+  }
   if (
     draft.thumbUrl !== undefined &&
     draft.thumbUrl !== null &&
@@ -138,6 +205,8 @@ export function validateDraft(
       errors.push(`stages[${i}]: ID/이름/순서 오류`);
   }
   const sets = Array.isArray(draft.sets) ? draft.sets : [];
+  if (forPublish && hasPeriod && sets.length === 0)
+    errors.push('sets: 날짜 전용 수집 초안은 검증된 공연 세트가 필요');
   const byStage = new Map<unknown, { starts: number; ends: number }[]>();
   for (const [i, set] of sets.entries()) {
     if (

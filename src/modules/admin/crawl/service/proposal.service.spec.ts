@@ -11,7 +11,11 @@ const day = {
 
 function harness(
   after: unknown,
-  options: { existing?: boolean; bound?: boolean } = {},
+  options: {
+    existing?: boolean;
+    bound?: boolean;
+    festival?: AdminFestival;
+  } = {},
 ) {
   const item: ProposalItem = {
     id: '0',
@@ -41,6 +45,7 @@ function harness(
   const festivalRepo = {
     create: jest.fn((value: unknown) => value),
     save: jest.fn((value: unknown) => Promise.resolve(value)),
+    findOne: jest.fn().mockResolvedValue(options.festival ?? null),
     createQueryBuilder: jest.fn(() => ({
       where: jest.fn().mockReturnThis(),
       getOne: jest
@@ -75,6 +80,7 @@ function harness(
   );
   return {
     service,
+    source,
     proposal,
     item,
     festivalRepo,
@@ -154,6 +160,219 @@ describe('ProposalService festival discovery', () => {
         conflicts: [],
       },
     });
+  });
+
+  it('carries a verified venue location and its source into an accepted draft', async () => {
+    const { service, festivalRepo } = harness({
+      name: '가을 페스티벌',
+      venue: '서울 공연장',
+      days: [day],
+      url: 'https://ticket.melon.com/performance/index.htm?prodId=213793',
+      location: { latitude: 37.5, longitude: 126.9, label: '서울 공연장' },
+    });
+    const result = await service.decide(
+      'proposal-1',
+      [{ itemId: '0', decision: 'accepted' }],
+      'admin-1',
+    );
+    expect(result.conflicts).toEqual([]);
+    const saved = festivalRepo.save.mock.calls[0]?.[0] as AdminFestival;
+    expect(saved.draft.directions).toEqual(
+      expect.objectContaining({
+        location: {
+          latitude: 37.5,
+          longitude: 126.9,
+          label: '서울 공연장',
+          source: {
+            name: '예매처',
+            url: 'https://ticket.melon.com/performance/index.htm?prodId=213793',
+            verifiedAt: (saved.draft.source as { verifiedAt: string })
+              .verifiedAt,
+          },
+        },
+      }),
+    );
+  });
+
+  it('applies a reviewed Melon coordinate diff to the draft without publishing it', async () => {
+    const url = 'https://ticket.melon.com/performance/index.htm?prodId=213793';
+    const initial = harness({
+      name: 'WONDERLIVET 2026',
+      venue: 'KINTEX HALL 7/8/9/10',
+      days: [day],
+      url,
+    });
+    await initial.service.decide(
+      'proposal-1',
+      [{ itemId: '0', decision: 'accepted' }],
+      'admin-1',
+    );
+    const festival = initial.festivalRepo.save.mock
+      .calls[0]?.[0] as AdminFestival;
+    festival.published = structuredClone(festival.draft);
+    festival.publishedVersion = 1;
+    const beforePublished = structuredClone(festival.published);
+    const { service, source, proposal, item, festivalRepo } = harness(
+      {},
+      { festival },
+    );
+    source.url = url;
+    proposal.kind = 'directions.diff';
+    proposal.festivalId = festival.id;
+    item.op = 'update';
+    item.path = '/directions/location';
+    item.before = null;
+    item.after = {
+      latitude: 37.66469544695199,
+      longitude: 126.742064181796,
+      label: 'KINTEX HALL 7/8/9/10',
+      source: { name: '멜론티켓', url, verifiedAt: '2026-10-28T12:00:00Z' },
+    };
+
+    const result = await service.decide(
+      'proposal-1',
+      [{ itemId: '0', decision: 'accepted' }],
+      'admin-2',
+    );
+    expect(result.conflicts).toEqual([]);
+    expect(festivalRepo.save).toHaveBeenCalledTimes(1);
+    expect(festival.draftVersion).toBe(2);
+    expect(
+      (festival.draft.directions as { location: unknown }).location,
+    ).toEqual(item.after);
+    expect(festival.published).toEqual(beforePublished);
+    expect(festival.publishedVersion).toBe(1);
+  });
+
+  it.each([
+    { latitude: 91, longitude: 126.9, label: '서울 공연장' },
+    { latitude: '37.5', longitude: 126.9, label: '서울 공연장' },
+    { latitude: 37.5, label: '서울 공연장' },
+    { latitude: 37.5, longitude: 126.9, label: '다른 공연장' },
+  ])('omits an invalid or mismatched venue location: %p', async (location) => {
+    const { service, festivalRepo } = harness({
+      name: '가을 페스티벌',
+      venue: '서울 공연장',
+      days: [day],
+      url: 'https://ticket.melon.com/performance/index.htm?prodId=213793',
+      location,
+    });
+    const result = await service.decide(
+      'proposal-1',
+      [{ itemId: '0', decision: 'accepted' }],
+      'admin-1',
+    );
+    expect(result.conflicts).toEqual([]);
+    const saved = festivalRepo.save.mock.calls[0]?.[0] as AdminFestival;
+    expect(
+      (saved.draft.directions as { location: unknown }).location,
+    ).toBeNull();
+  });
+
+  it('accepts a 17-day NOL World date range without inventing show times', async () => {
+    const { service, item, festivalRepo } = harness({
+      name: '함평 겨울 행사',
+      venue: '함평',
+      date: '2026.10.23 - 2026.11.08',
+      url: 'https://world.nol.com/en/ticket/products/26014860',
+    });
+    const result = await service.decide(
+      'proposal-1',
+      [{ itemId: '0', decision: 'accepted' }],
+      'admin-1',
+    );
+    expect(result.conflicts).toEqual([]);
+    expect(item.decision).toBe('accepted');
+    const saved = festivalRepo.save.mock.calls[0]?.[0] as AdminFestival;
+    expect(saved.draft.days).toEqual([]);
+    expect(saved.draft.eventPeriod).toEqual({
+      firstDate: '2026-10-23',
+      lastDate: '2026-11-08',
+    });
+    expect(saved.publishedVersion).toBe(0);
+  });
+
+  it('requires reviewed timed days to include both source period endpoints', async () => {
+    const candidate = {
+      name: '함평 겨울 행사',
+      venue: '함평',
+      date: '2026.10.23 - 2026.11.08',
+      url: 'https://world.nol.com/en/ticket/products/26014860',
+    };
+    const firstDay = {
+      date: '2026-10-23',
+      startsAt: '2026-10-23T12:00:00+09:00',
+      endsAt: '2026-10-23T20:00:00+09:00',
+    };
+    const lastDay = {
+      date: '2026-11-08',
+      startsAt: '2026-11-08T12:00:00+09:00',
+      endsAt: '2026-11-08T20:00:00+09:00',
+    };
+    const partial = harness(candidate);
+    const rejected = await partial.service.decide(
+      'proposal-1',
+      [{ itemId: '0', decision: 'accepted', after: { days: [firstDay] } }],
+      'admin-1',
+    );
+    expect(rejected.conflicts[0]?.reason).toContain('첫날과 마지막 날');
+    expect(partial.item.decision).toBe('pending');
+    expect(partial.festivalRepo.save).not.toHaveBeenCalled();
+
+    const complete = harness(candidate);
+    const accepted = await complete.service.decide(
+      'proposal-1',
+      [
+        {
+          itemId: '0',
+          decision: 'accepted',
+          after: { days: [firstDay, lastDay] },
+        },
+      ],
+      'admin-1',
+    );
+    expect(accepted.conflicts).toEqual([]);
+    const saved = complete.festivalRepo.save.mock
+      .calls[0]?.[0] as AdminFestival;
+    expect(saved.draft.days).toEqual([firstDay, lastDay]);
+    expect(saved.draft.eventPeriod).toEqual({
+      firstDate: firstDay.date,
+      lastDate: lastDay.date,
+    });
+  });
+
+  it('does not treat an explicitly null day list as a date-only draft', async () => {
+    const { service, item, festivalRepo } = harness({
+      name: '함평 겨울 행사',
+      venue: '함평',
+      date: '2026.10.23 - 2026.11.08',
+      url: 'https://world.nol.com/en/ticket/products/26014860',
+    });
+    const result = await service.decide(
+      'proposal-1',
+      [{ itemId: '0', decision: 'accepted', after: { days: null } }],
+      'admin-1',
+    );
+    expect(result.conflicts[0]?.reason).toContain('days');
+    expect(item.decision).toBe('pending');
+    expect(festivalRepo.save).not.toHaveBeenCalled();
+  });
+
+  it('keeps an overlong NOL World period pending', async () => {
+    const { service, item, festivalRepo } = harness({
+      name: '장기 행사',
+      venue: '함평',
+      date: '2026.10.23 - 2026.11.24',
+      url: 'https://world.nol.com/en/ticket/products/26014860',
+    });
+    const result = await service.decide(
+      'proposal-1',
+      [{ itemId: '0', decision: 'accepted', after: { days: [day] } }],
+      'admin-1',
+    );
+    expect(result.conflicts).toHaveLength(1);
+    expect(item.decision).toBe('pending');
+    expect(festivalRepo.save).not.toHaveBeenCalled();
   });
 
   it('keeps an incomplete discovery entry pending for review', async () => {

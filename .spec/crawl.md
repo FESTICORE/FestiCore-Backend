@@ -12,6 +12,7 @@
 기본 발견 소스는 다음 공개 목록이다. 초기 배포 때 한 번 수집한 뒤 매일 갱신한다. 수집 페이지에서 확정할 수 없는 개최 시각은 추측하지 않고 관리자 검토 입력으로 남긴다.
 
 - [NOL 티켓 콘서트 장르](https://nol.yanolja.com/ticket/genre/concert): 목록의 직렬화된 공연 URL 중 페스티벌 제목만 후보로 삼는다. 카드에 행사 날짜 전체와 장소가 있을 때만 저장 후보에 포함하고, 예매 오픈 시각을 행사 날짜로 쓰지 않는다. 파서 버전을 갱신해 기존 목록도 다시 처리한다. 식별 가능한 크롤러 요청에 403이 반환되고 격리된 일반 Chrome에도 차단 화면이 표시되어 운영 수집 성공은 확인되지 않았다. 실행 이력에 실패로 기록하고 연속 3회 실패 시 관리자 알림을 만든다.
+- [NOL World 공개 콘서트 목록](https://world.nol.com/en/ticket/genre/CONCERT/products), [홈](https://world.nol.com/en/ticket), [축제 검색](https://world.nol.com/en/search?q=festival): 숫자 상품 링크 중 축제 제목만 상세 소스로 등록한다. 상세의 `Event` JSON-LD에서 공연 날짜·장소·상품 ID와 일치하는 포스터를 읽는다. 목록에 축제 제목이 없는 날은 기존의 빈 결과 실패로 기록한다. [상세 계약](nol-world-public-discovery.md)을 따른다.
 - [멜론티켓 페스티벌 목록](https://ticket.melon.com/concert/index.htm): 페이지가 사용하는 공개 `prodList.json?perfGenreCode=GENRE_CON_FESTIVAL` 목록 응답을 수집한다. 이 장르에도 일반 공연이 섞여 있어 제목에 축제 표시가 필요하다. 공식 정보로 확인한 `WONDERLIVET`과 `COUNTDOWN FANTASY`는 예외로 삼고, 콘서트·오케스트라 제목은 제외한다.
 - [멜론티켓 원더리벳 검색 결과](https://ticket.melon.com/search/index.htm?q=WONDERLIVET): 페스티벌 장르 목록에서 누락되는 원더리벳을 검색 결과의 공연 행에서 수집한다. 행의 공연 ID·날짜·장소·포스터를 함께 읽으며 날짜 없는 결과는 공개 목록에서 제외한다. 지난 행사는 일정 그대로 보존한다.
 - [멜론티켓 영문 festival 검색 결과](https://ticket.melon.com/search/index.htm?q=festival): 한글 `페스티벌` 검색과 장르 목록에 잡히지 않는 영문 제목 공연을 같은 검증 파서로 수집한다. 결과에 지난 공연도 포함되므로 일정을 그대로 보존하며, 현재 또는 미래 공연 수 증가를 보장하지 않는다.
@@ -24,7 +25,7 @@
 
 아티스트 사진 대체는 소스별 `artist-image` 크롤로 처리한다. 관리자 소스 생성 API에 `kind: "artist-image"`, `parser: "html-text"`, 공식 프로필 페이지 `url`, `parserConfig: { "festivalSourceUrl": "예매 상세 URL", "artistName": "출연진 이름", "imageHint": "프로필 이미지 경로의 고유 부분" }`을 등록한다. 수집기는 매일 원본 HTML에서 힌트와 일치하는 HTTPS 이미지 주소를 다시 찾고 robots 정책·응답 MIME·디코딩·크기 제한을 통과한 파일만 WebP로 보관한다. 공개 상세 API는 축제 원본 URL과 출연진 이름이 모두 일치하는 저장 이미지를 선택한다. 코드에 특정 아티스트 사진 URL을 추가하지 않는다. 원더리벳 7팀의 후보 출처는 [CHiCO 공식 사이트](https://www.chicoxxx.com/), [hololive 프로필](https://hololive.hololivepro.com/talents/hoshimachi-suisei/), [Humbreaders 프로필](https://humbreaders.com/profile/), [Avex Chevon 프로필](https://avexnet.jp/contents/CHEVO-WORK-0001), [Brandy Senki 프로필](https://brandysenki.com/biography), [Conton Candy 공식 뉴스](https://contoncandy.fanpla.jp/news/2/), [CLAN QUEEN 공식 사이트](https://www.clanqueen.jp/)다. 소스 등록·배포·실제 이미지 보관은 별도 운영 검증이 필요하며, 외부 재배포 허락은 확인되지 않았다.
 
-NOL의 공개 상품·공연정보 상세 HTML이 입력되면 공연명과 명시된 `기간`/`일시`, `장소`를 축제 발견 후보로 읽는다. 별도 티켓 오픈 날짜는 행사 날짜로 사용하지 않으며 유효하지 않은 날짜·장소는 거부한다. 2026-10-22 서버 직접 요청에서 콘서트 목록과 상품 상세가 각각 HTTP 403이었으므로 이 파서의 테스트 통과는 운영 수집 성공을 뜻하지 않는다. `robots.txt`의 `/discovery/` 제외 경로는 수집하지 않고, 비활성화된 NOL 예약 소스를 접근 가능성이 검증되기 전에 켜지 않는다.
+NOL의 공개 상품·공연정보 상세 HTML이 입력되면 공연명과 명시된 `기간`/`일시`, `장소`를 축제 발견 후보로 읽는다. 상품 상세 포스터는 Interpark 이미지 URL의 상품 ID가 상세 URL의 상품 ID와 일치할 때만 수집·공개한다. 별도 티켓 오픈 날짜는 행사 날짜로 사용하지 않으며 유효하지 않은 날짜·장소는 거부한다. 2026-10-22 서버 직접 요청에서 콘서트 목록과 상품 상세가 각각 HTTP 403이었으므로 이 파서의 테스트 통과는 운영 수집 성공을 뜻하지 않는다. `robots.txt`의 `/discovery/` 제외 경로는 수집하지 않고, 비활성화된 NOL 예약 소스를 접근 가능성이 검증되기 전에 켜지 않는다.
 
 새 소스 마이그레이션은 URL이 이미 있으면 중복 등록하지 않는다. 기존 NOL·YES24 소스와 멜론 대체 소스는 `createdAt`을 전날로 등록해 배포 후 첫 예약 점검에서 실행한다. 멜론의 기존 `v=1` 소스는 대체 소스가 존재할 때 비활성화해 같은 목록의 중복 실행을 막는다.
 
@@ -78,7 +79,7 @@ NOL의 공개 상품·공연정보 상세 HTML이 입력되면 공연명과 명�
 
 제안 결정·기각은 상태 변경과 관리자 감사 기록을 같은 DB 트랜잭션으로 저장한다. 감사 기록에는 관리자 ID, 제안 ID, 변경 전후 상태와 항목 결정, 신규 축제 ID 또는 기각 사유를 담는다. 승인으로 축제를 생성하거나 기존 초안을 바꾸면 적용된 초안의 전후값도 별도 축제 감사 기록에 저장한다.
 
-`festival.new` 수락은 발견 후보를 관리자가 검토한 `after` 값으로 비공개 축제 초안을 만든다. `after`에서 `name`, `venue`, `days[{date,startsAt,endsAt}]`를 보완할 수 있으며 발견 원본 URL은 바꿀 수 없다. 필수 정보가 부족하면 `conflicts`로 반환하고 항목을 보류한다. 생성 또는 수정한 초안은 **관리자 축제 발행 API로 별도 발행해야** 공개 팩과 타임테이블에 반영된다. 발행 전에도 검증 가능한 발견 후보 요약은 목록에 표시된다.
+`festival.new` 수락은 발견 후보를 관리자가 검토한 `after` 값으로 비공개 축제 초안을 만든다. `after`에서 `name`, `venue`, `days[{date,startsAt,endsAt}]`를 보완할 수 있으며 발견 원본 URL은 바꿀 수 없다. 원본 날짜 범위를 파싱할 수 있으면 `eventPeriod: { firstDate, lastDate }`를 보존하고, 공연 시각이 없을 때 `days: []`인 미완성 초안으로 수락한다. NOL World의 원본 기간은 양끝 포함 최대 32일까지 허용한다. 필수 정보가 부족하거나 원본 기간이 유효하지 않으면 `conflicts`로 반환하고 항목을 보류한다. 생성 또는 수정한 초안은 **관리자 축제 발행 API로 별도 발행해야** 공개 팩과 타임테이블에 반영된다. 검증된 운영 시각·무대·세트가 없는 날짜 전용 초안의 발행은 거부한다. 발행 전에도 검증 가능한 발견 후보 요약은 목록에 표시된다.
 
 새 축제 후보 검토 예시:
 

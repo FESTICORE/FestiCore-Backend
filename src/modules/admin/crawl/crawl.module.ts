@@ -12,15 +12,23 @@ import { CrawlRun } from './entity/crawl-run.entity';
 import { CrawlSnapshot } from './entity/crawl-snapshot.entity';
 import { CrawlSource } from './entity/crawl-source.entity';
 import { CrawlTimetableRevision } from './entity/crawl-timetable-revision.entity';
+import { CrawlLineupRevision } from './entity/crawl-lineup-revision.entity';
+import { CrawlLineupController } from './controller/crawl-lineup.controller';
+import { CrawlLineupRevisionService } from './service/crawl-lineup-revision.service';
+import { CrawlArtistImageReview } from './entity/crawl-artist-image-review.entity';
+import { CrawlArtistImageReviewController } from './controller/crawl-artist-image-review.controller';
+import { CrawlArtistImageReviewService } from './service/crawl-artist-image-review.service';
 import { Proposal } from './entity/proposal.entity';
 import { CrawlService } from './service/crawl.service';
 import { CrawlAlertService } from './service/crawl-alert.service';
 import { ProposalService } from './service/proposal.service';
 import { CrawlTimetableRevisionService } from './service/crawl-timetable-revision.service';
+import { PublicFestivalModule } from '../../public/public-festival.module';
 
 @Module({
   imports: [
     AdminAuditModule,
+    PublicFestivalModule,
     TypeOrmModule.forFeature([
       CrawlSource,
       CrawlRun,
@@ -29,6 +37,8 @@ import { CrawlTimetableRevisionService } from './service/crawl-timetable-revisio
       Proposal,
       CrawlAlert,
       CrawlTimetableRevision,
+      CrawlLineupRevision,
+      CrawlArtistImageReview,
     ]),
   ],
   controllers: [
@@ -36,6 +46,8 @@ import { CrawlTimetableRevisionService } from './service/crawl-timetable-revisio
     ProposalController,
     CrawlAlertController,
     CrawlTimetableController,
+    CrawlLineupController,
+    CrawlArtistImageReviewController,
   ],
   providers: [
     CrawlService,
@@ -43,6 +55,8 @@ import { CrawlTimetableRevisionService } from './service/crawl-timetable-revisio
     CrawlAlertService,
     ImageStorageService,
     CrawlTimetableRevisionService,
+    CrawlLineupRevisionService,
+    CrawlArtistImageReviewService,
   ],
   exports: [TypeOrmModule],
 })

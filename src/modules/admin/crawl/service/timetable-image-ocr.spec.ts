@@ -115,6 +115,39 @@ describe('timetable image OCR candidates', () => {
     ]);
   });
 
+  it('uses the next artist line after a bracketed time range without its description', () => {
+    const tsv = [
+      header,
+      word(1, 1, 17, '공연'),
+      word(1, 2, 17, '(13:30~14:00)'),
+      word(2, 1, 92, '쓰'),
+      word(2, 2, 92, '다'),
+      word(3, 1, 138, '싱어송라이터'),
+      word(3, 2, 138, '소개'),
+    ].join('\n');
+    expect(parseStageTsv(tsv, '2026-10-24', 'stg_busking', 'after')).toEqual([
+      expect.objectContaining({
+        startsAt: '2026-10-24T13:30:00+09:00',
+        endsAt: '2026-10-24T14:00:00+09:00',
+        artistText: '쓰 다',
+      }),
+    ]);
+  });
+
+  it('keeps two artist lines after a time-only tick', () => {
+    const tsv = [
+      header,
+      word(1, 1, 20, '12:00'),
+      word(2, 1, 70, '첫 번째 출연진'),
+      word(3, 1, 100, '두 번째 출연진'),
+    ].join('\n');
+    expect(parseStageTsv(tsv, '2026-11-20', 'stg_review', 'after')).toEqual([
+      expect.objectContaining({
+        artistText: '첫 번째 출연진 / 두 번째 출연진',
+      }),
+    ]);
+  });
+
   it('rejects unsafe image and region configuration', async () => {
     const image = await sharp({
       create: {

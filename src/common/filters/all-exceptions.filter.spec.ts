@@ -6,7 +6,13 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { QueryFailedError } from 'typeorm';
+import * as Sentry from '@sentry/nestjs';
 import { AllExceptionsFilter } from './all-exceptions.filter';
+
+jest.mock('@sentry/nestjs', () => ({
+  isInitialized: jest.fn(() => false),
+  captureException: jest.fn(),
+}));
 
 function hostFor(body: unknown, url = '/api/v1/auth/login') {
   const json = jest.fn();
@@ -30,6 +36,8 @@ describe('AllExceptionsFilter', () => {
 
   beforeEach(() => {
     warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
+    jest.mocked(Sentry.isInitialized).mockReturnValue(false);
+    jest.mocked(Sentry.captureException).mockClear();
   });
 
   afterEach(() => warn.mockRestore());
@@ -49,6 +57,71 @@ describe('AllExceptionsFilter', () => {
       data: null,
       message: 'bad',
     });
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+  });
+
+  it('초기화된 Sentry에 5xx만 안전한 분류 정보로 한 번 전송한다', () => {
+    jest.mocked(Sentry.isInitialized).mockReturnValue(true);
+    const errorLog = jest.spyOn(Logger.prototype, 'error').mockImplementation();
+    try {
+      const { host, response } = hostFor(
+        { password: 'private-password' },
+        '/api/v1/auth/login?code=private-code',
+      );
+      new AllExceptionsFilter().catch(new Error('private-secret'), host);
+      expect(response.status).toHaveBeenCalledWith(500);
+      expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+      const [reported, context] = jest.mocked(Sentry.captureException).mock
+        .calls[0];
+      expect(reported).toBeInstanceOf(Error);
+      expect((reported as Error).message).toBe('HTTP 500: Error');
+      expect(JSON.stringify(context)).not.toMatch(/private-|password|code=/);
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
+  it('DB 5xx를 수집할 때 SQL과 매개변수를 보내지 않는다', () => {
+    jest.mocked(Sentry.isInitialized).mockReturnValue(true);
+    const errorLog = jest.spyOn(Logger.prototype, 'error').mockImplementation();
+    try {
+      const { host } = hostFor({});
+      const error = new QueryFailedError(
+        'INSERT INTO users (refresh_token) VALUES ($1)',
+        ['private-refresh-token'],
+        new Error('private-driver-error'),
+      );
+      new AllExceptionsFilter().catch(error, host);
+      expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+      expect(
+        JSON.stringify(jest.mocked(Sentry.captureException).mock.calls),
+      ).not.toContain('private-refresh-token');
+      expect(
+        JSON.stringify(jest.mocked(Sentry.captureException).mock.calls),
+      ).not.toContain('INSERT INTO users');
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
+  it('Sentry 장애가 발생해도 500 응답을 반환한다', () => {
+    jest.mocked(Sentry.isInitialized).mockReturnValue(true);
+    jest.mocked(Sentry.captureException).mockImplementationOnce(() => {
+      throw new Error('Sentry unavailable');
+    });
+    const errorLog = jest.spyOn(Logger.prototype, 'error').mockImplementation();
+    try {
+      const { host, response, json } = hostFor({});
+      new AllExceptionsFilter().catch(new Error('server failure'), host);
+      expect(response.status).toHaveBeenCalledWith(500);
+      expect(json).toHaveBeenCalledWith({
+        code: 'INTERNAL_SERVER_ERROR',
+        data: null,
+        message: '내부 서버 오류가 발생했습니다.',
+      });
+    } finally {
+      errorLog.mockRestore();
+    }
   });
 
   it('개발 환경 진단 로그는 인증 값을 가린다', () => {

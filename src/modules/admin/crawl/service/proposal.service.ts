@@ -7,6 +7,11 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { randomBytes } from 'crypto';
 import { DataSource, Repository } from 'typeorm';
 import {
+  venueLabelMatches,
+  venuePoint,
+  verifiedVenueLocation,
+} from '../../../../common/festival-location';
+import {
   AdminFestival,
   FestivalDocument,
 } from '../../festival/festival.entity';
@@ -14,6 +19,7 @@ import { validateDraft } from '../../festival/festival-validation';
 import { AdminAuditService } from '../../audit/admin-audit.service';
 import { Proposal, ProposalItem } from '../entity/proposal.entity';
 import { CrawlSource } from '../entity/crawl-source.entity';
+import { ticketDateRange } from '../../../public/crawl-catalog';
 
 function segments(pointer: string): string[] {
   if (!pointer.startsWith('/'))
@@ -133,17 +139,49 @@ function discoveryDraft(
   }
   if (url.protocol !== 'https:' || url.username || url.password)
     throw new Error('축제 URL은 인증 정보가 없는 HTTPS 주소여야 합니다.');
+  const isWorldNol =
+    /^https:\/\/world\.nol\.com\/en\/ticket\/products\/\d+$/.test(
+      url.toString(),
+    );
+  const eventPeriod = ticketDateRange(entry.date, isWorldNol ? 31 : 6);
+  if (isWorldNol && !eventPeriod)
+    throw new Error(
+      'NOL World 발견 날짜 범위가 유효하지 않거나 32일을 초과합니다.',
+    );
+  const days =
+    entry.days === undefined ? (eventPeriod ? [] : undefined) : entry.days;
+  if (
+    eventPeriod &&
+    Array.isArray(days) &&
+    days.length > 0 &&
+    ((days[0] as { date?: unknown } | undefined)?.date !==
+      eventPeriod.firstDate ||
+      (days[days.length - 1] as { date?: unknown } | undefined)?.date !==
+        eventPeriod.lastDate)
+  )
+    throw new Error(
+      'days의 첫날과 마지막 날은 발견된 축제 날짜 범위와 같아야 합니다.',
+    );
   const provenance = {
     name: source.parserConfig.sourceName || new URL(source.url).hostname,
     url: url.toString(),
     verifiedAt,
   };
+  const point = venuePoint(entry.location);
+  const location =
+    url.hostname === 'ticket.melon.com' &&
+    url.pathname === '/performance/index.htm' &&
+    /^\d+$/.test(url.searchParams.get('prodId') ?? '') &&
+    point?.label === entry.venue
+      ? { ...point, source: provenance }
+      : null;
   const draft: FestivalDocument = {
     id: newFestivalId(),
     name: entry.name,
     venue: entry.venue,
     timezone: 'Asia/Seoul',
-    days: entry.days,
+    days,
+    ...(eventPeriod ? { eventPeriod } : {}),
     flagsEnabled: false,
     stages: [],
     sets: [],
@@ -157,6 +195,7 @@ function discoveryDraft(
       lastShuttleAt: null,
       lastTrainAt: null,
       mapLinks: { naver: null, kakao: null },
+      location,
       source: provenance,
     },
     checklist: [],
@@ -360,6 +399,26 @@ export class ProposalService {
             continue;
           }
           try {
+            if (
+              proposal.kind === 'directions.diff' &&
+              item.path === '/directions/location'
+            ) {
+              const location = verifiedVenueLocation(item.after);
+              if (
+                !source ||
+                !/^https:\/\/ticket\.melon\.com\/performance\/index\.htm\?prodId=\d+$/.test(
+                  source.url,
+                ) ||
+                (draft.source as { url?: unknown } | null)?.url !==
+                  source.url ||
+                !location ||
+                location.source.url !== source.url ||
+                !venueLabelMatches(location.label, draft.venue)
+              )
+                throw new Error(
+                  '공연장 좌표의 출처 또는 장소가 초안과 일치하지 않습니다.',
+                );
+            }
             const next = applyItem(draft, item);
             if (source) {
               const verified = {

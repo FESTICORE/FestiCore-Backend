@@ -124,7 +124,7 @@ export function parseStageTsv(
     const start = matches[0][0];
     const end = matches[1]?.[0] ?? null;
     if (end && end <= start) continue;
-    const onLine =
+    const rawOnLine =
       artistPosition === 'after'
         ? line.text
             .slice(
@@ -132,6 +132,11 @@ export function parseStageTsv(
             )
             .trim()
         : line.text.slice(0, matches[0].index).trim();
+    // A closing bracket after a printed time range is not an artist name.
+    const onLine =
+      artistPosition === 'after' && !/[\p{L}\p{N}]/u.test(rawOnLine)
+        ? ''
+        : rawOnLine;
     const nearby =
       artistPosition === 'after'
         ? onLine
@@ -139,7 +144,7 @@ export function parseStageTsv(
           : lines
               .slice(index + 1)
               .filter((next) => next.top - line.top <= 130)
-              .slice(0, 2)
+              .slice(0, rawOnLine && !onLine ? 1 : 2)
               .filter((next) => ![...next.text.matchAll(TIME)].length)
               .map((next) => next.text)
         : lines

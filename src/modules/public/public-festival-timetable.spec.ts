@@ -13,6 +13,114 @@ describe('discovered festival timetable', () => {
   };
   const id = discoverySummaries([{ candidate }])[0].id;
 
+  it('publishes a verified official timetable linked to the ticket catalog source', async () => {
+    const ticketUrl = 'https://ticket.yes24.com/Perf/60368';
+    const officialUrl = 'https://festival.example.kr/festival/848';
+    const ticketCandidate = { ...candidate, url: ticketUrl, artists: [] };
+    const ticketId = discoverySummaries([{ candidate: ticketCandidate }])[0].id;
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([{ candidate: ticketCandidate }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          id: 'official-verified',
+          sourceUrl: `${officialUrl}/timetable.jpg`,
+          sourceImageId: null,
+          verifiedAt: new Date('2026-10-24T00:00:00Z'),
+          sets: [
+            {
+              artist: '공식 출연진',
+              date: '2026-10-24',
+              stageName: '버스킹',
+              startsAt: '2026-10-24T13:30:00+09:00',
+              endsAt: '2026-10-24T14:00:00+09:00',
+            },
+          ],
+        },
+      ]);
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+
+    await expect(service.detail(ticketId)).resolves.toMatchObject({
+      timetable: [{ artist: '공식 출연진', stageName: '버스킹' }],
+    });
+    const [sql, parameters] = query.mock.calls[3] as [string, string[][]];
+    expect(sql).toContain('timetable_source.id = revision."sourceId"');
+    expect(sql).toContain(
+      'timetable_source."parserConfig"->>\'festivalSourceUrl\' =',
+    );
+    expect(sql).toContain('official_source.url = revision."festivalSourceUrl"');
+    expect(sql).toContain(
+      'official_source."parserConfig"->>\'festivalSourceUrl\' =',
+    );
+    expect(sql).toContain('ANY($1::text[])');
+    expect(sql).toContain("revision.status = 'verified'");
+    expect(parameters).toEqual([[ticketUrl]]);
+  });
+
+  it('keeps the newest verified set when linked sources repeat the same performance', async () => {
+    const linked = {
+      ...candidate,
+      url: 'https://ticket.yes24.com/Perf/60590',
+    };
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([{ candidate }, { candidate: linked }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          id: 'older-revision',
+          sourceUrl: 'https://official.example/older',
+          sourceImageId: null,
+          verifiedAt: new Date('2026-10-10T00:00:00Z'),
+          sets: [
+            {
+              artist: 'artist a',
+              date: '2026-10-17',
+              stageName: 'Ｍａｉｎ  Stage',
+              startsAt: '2026-10-17T11:00:00Z',
+              endsAt: null,
+            },
+          ],
+        },
+        {
+          id: 'newer-revision',
+          sourceUrl: 'https://official.example/newer',
+          sourceImageId: null,
+          verifiedAt: new Date('2026-10-11T00:00:00Z'),
+          sets: [
+            {
+              artist: 'Artist A',
+              date: '2026-10-17',
+              stageName: 'Main Stage',
+              startsAt: '2026-10-17T20:00:00+09:00',
+              endsAt: null,
+            },
+          ],
+        },
+      ]);
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    const result = await service.detail(id);
+    expect(result.timetable).toEqual([
+      expect.objectContaining({ id: 'newer-revision-0' }),
+    ]);
+    expect((query.mock.calls as [string, string[][]][])[3][1]).toEqual([
+      [sourceUrl, linked.url],
+    ]);
+  });
+
   it('combines the latest verified revision per source across two days', async () => {
     const query = jest
       .fn()
@@ -85,7 +193,7 @@ describe('discovered festival timetable', () => {
     expect(sql).toContain('DISTINCT ON (revision."sourceId")');
     expect(sql).toContain("revision.status = 'verified'");
     expect(sql).toContain('revision."imageId" = image.id');
-    expect(parameters).toEqual([sourceUrl]);
+    expect(parameters).toEqual([[sourceUrl]]);
   });
 
   it('retains the prior verified source revision when a newer collection is pending', async () => {
@@ -200,6 +308,54 @@ describe('discovered festival timetable', () => {
         {
           festivalSourceUrl: sourceUrl,
           artistName: 'B (에이)',
+          id: '00000000-0000-4000-8000-000000000022',
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: 'revision-1',
+          sourceUrl: 'https://official.example/timetable',
+          sourceImageId: null,
+          verifiedAt: new Date('2026-10-10T00:00:00Z'),
+          sets: [
+            {
+              artist: '에이',
+              date: '2026-10-17',
+              stageName: 'Main Stage',
+              startsAt: '2026-10-17T20:00:00+09:00',
+              endsAt: null,
+            },
+          ],
+        },
+      ]);
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+    );
+    const result = await service.detail(id);
+    expect(result.timetable).toEqual([
+      expect.objectContaining({ artist: '에이', imageUrl: null }),
+    ]);
+  });
+
+  it('keeps colliding explicit artist aliases without an image', async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([{ candidate }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          festivalSourceUrl: sourceUrl,
+          artistName: 'Artist A',
+          artistAlias: '에이',
+          id: '00000000-0000-4000-8000-000000000021',
+        },
+        {
+          festivalSourceUrl: sourceUrl,
+          artistName: 'Artist B',
+          artistAlias: '에이',
           id: '00000000-0000-4000-8000-000000000022',
         },
       ])
