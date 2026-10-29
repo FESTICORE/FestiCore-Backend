@@ -680,6 +680,7 @@ export class PublicFestivalService {
       `WITH candidates AS (
          SELECT item->'after' AS candidate,
            item->'after'->>'url' AS url,
+           source.url AS "sourceUrl",
            catalog.url AS "catalogUrl",
            source."parserConfig"->>'seed' AS "sourceSeed",
            item->>'decision' AS decision,
@@ -698,9 +699,19 @@ export class PublicFestivalService {
          ) catalog(url)
          WHERE p.kind = 'festival.new'
            AND item->'after'->>'url' IS NOT NULL
+       ), latest_decision AS (
+         SELECT DISTINCT ON (url) url, decision, "proposalStatus"
+         FROM candidates
+         ORDER BY url, created_at DESC, proposal_id DESC
        ), latest AS (
          SELECT DISTINCT ON (url) * FROM candidates
-         ORDER BY url, created_at DESC, proposal_id DESC
+         WHERE decision IS DISTINCT FROM 'rejected'
+           AND "proposalStatus" IS DISTINCT FROM 'rejected'
+           AND NULLIF(btrim(candidate->>'name'), '') IS NOT NULL
+           AND NULLIF(btrim(candidate->>'venue'), '') IS NOT NULL
+           AND NULLIF(btrim(candidate->>'date'), '') IS NOT NULL
+         ORDER BY url, COALESCE("sourceUrl" = url, false) DESC,
+           created_at DESC, proposal_id DESC
        ), details AS (
          SELECT "catalogUrl" AS url,
            (array_agg(candidate->>'officialInstagramUrl' ORDER BY created_at DESC, proposal_id DESC)
@@ -769,8 +780,8 @@ export class PublicFestivalService {
            'officialProfileArtists', details."officialProfileArtists",
            'locationEvidence', COALESCE(location_diff.evidence, details."locationEvidence")
          )) AS candidate,
-         latest.decision,
-         latest."proposalStatus",
+         latest_decision.decision,
+         latest_decision."proposalStatus",
          (SELECT item->'after'
           FROM crawl_proposals proposal
           JOIN crawl_sources source ON source.id = proposal."sourceId"
@@ -782,7 +793,8 @@ export class PublicFestivalService {
             AND item->>'decision' <> 'rejected'
           ORDER BY proposal."createdAt" DESC, proposal.id DESC
           LIMIT 1) AS "prugioCandidate"
-       FROM latest JOIN details USING (url)
+       FROM latest JOIN latest_decision USING (url)
+       JOIN details USING (url)
        LEFT JOIN location_diff ON location_diff.url = latest.url`,
       [PRUGIO_LINEUP_URL, PRUGIO_LINEUP_SEED],
     );
