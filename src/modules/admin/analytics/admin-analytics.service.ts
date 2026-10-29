@@ -48,6 +48,10 @@ const isEmptyEnvironment = (result: PromiseSettledResult<unknown>): boolean =>
   result.status === 'rejected' &&
   result.reason instanceof AnalyticsFetchError &&
   result.reason.kind === 'empty_environment';
+const isEmptyIssues = (result: PromiseSettledResult<unknown>): boolean =>
+  result.status === 'rejected' &&
+  result.reason instanceof AnalyticsFetchError &&
+  result.reason.kind === 'empty_issues';
 
 @Injectable()
 export class AdminAnalyticsService {
@@ -210,14 +214,18 @@ export class AdminAnalyticsService {
           results[1].value.length === 0;
         if (
           isEmptyEnvironment(results[0]) &&
-          (isEmptyEnvironment(results[1]) || issuesEmpty)
+          (isEmptyEnvironment(results[1]) ||
+            isEmptyIssues(results[1]) ||
+            issuesEmpty)
         )
           totalEvents = 0;
         const succeeded =
           Number(totalEvents !== null) +
           Number(
             issuesValid ||
-              (isEmptyEnvironment(results[1]) && totalEvents === 0),
+              ((isEmptyEnvironment(results[1]) || isEmptyIssues(results[1])) &&
+                isEmptyEnvironment(results[0]) &&
+                totalEvents === 0),
           );
         if (succeeded === 2)
           return {
