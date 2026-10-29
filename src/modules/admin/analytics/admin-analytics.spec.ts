@@ -98,6 +98,110 @@ describe('admin analytics', () => {
     }
   });
 
+  it('Sentry 환경이 아직 없다는 404만 실제 0건으로 표시한다', async () => {
+    global.fetch = jest.fn(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({ detail: 'Unknown environments selected' }),
+          {
+            status: 404,
+          },
+        ),
+      ),
+    ) as typeof fetch;
+    const service = new AdminAnalyticsService(
+      config({
+        ANALYTICS_ENVIRONMENT: 'stage',
+        SENTRY_IOS_PROJECT_ID: '123',
+        SENTRY_ANALYTICS_READ_TOKEN: 'read-token',
+      }),
+    );
+    await expect(service.sentry(range(), 'ios')).resolves.toEqual({
+      status: 'ok',
+      scope: 'stage',
+      project: 'ios',
+      totalEvents: 0,
+      series: [],
+      issues: [],
+    });
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('시간대 조회가 환경 없음이고 이슈 조회가 빈 배열이면 0건으로 표시한다', async () => {
+    global.fetch = jest.fn((url: URL) =>
+      Promise.resolve(
+        url.pathname.endsWith('issues/')
+          ? new Response('[]', { status: 200 })
+          : new Response(
+              JSON.stringify({ detail: 'Unknown environments selected' }),
+              { status: 404 },
+            ),
+      ),
+    ) as typeof fetch;
+    const service = new AdminAnalyticsService(
+      config({
+        ANALYTICS_ENVIRONMENT: 'stage',
+        SENTRY_IOS_PROJECT_ID: '123',
+        SENTRY_ANALYTICS_READ_TOKEN: 'read-token',
+      }),
+    );
+    await expect(service.sentry(range(), 'ios')).resolves.toMatchObject({
+      status: 'ok',
+      totalEvents: 0,
+      series: [],
+      issues: [],
+    });
+  });
+
+  it.each([
+    { status: 401, body: 'Unauthorized' },
+    { status: 404, body: JSON.stringify({ detail: 'Project not found' }) },
+  ])(
+    'Sentry $status 응답을 환경 없음으로 오인하지 않는다',
+    async ({ status, body }) => {
+      global.fetch = jest.fn(() =>
+        Promise.resolve(new Response(body, { status })),
+      ) as typeof fetch;
+      const service = new AdminAnalyticsService(
+        config({
+          ANALYTICS_ENVIRONMENT: 'stage',
+          SENTRY_IOS_PROJECT_ID: '123',
+          SENTRY_ANALYTICS_READ_TOKEN: 'read-token',
+        }),
+      );
+      await expect(service.sentry(range(), 'ios')).resolves.toMatchObject({
+        status: 'error',
+        totalEvents: null,
+        series: [],
+        issues: [],
+      });
+    },
+  );
+
+  it('한 조회만 환경 없음이고 다른 조회가 실제 404면 0건으로 단정하지 않는다', async () => {
+    global.fetch = jest.fn((url: URL) =>
+      Promise.resolve(
+        new Response(
+          url.pathname.endsWith('issues/')
+            ? JSON.stringify({ detail: 'Project not found' })
+            : JSON.stringify({ detail: 'Unknown environments selected' }),
+          { status: 404 },
+        ),
+      ),
+    ) as typeof fetch;
+    const service = new AdminAnalyticsService(
+      config({
+        ANALYTICS_ENVIRONMENT: 'stage',
+        SENTRY_IOS_PROJECT_ID: '123',
+        SENTRY_ANALYTICS_READ_TOKEN: 'read-token',
+      }),
+    );
+    await expect(service.sentry(range(), 'ios')).resolves.toMatchObject({
+      status: 'error',
+      totalEvents: null,
+    });
+  });
+
   it('counts Mixpanel export in KST and shares concurrent requests', async () => {
     global.fetch = jest.fn(() =>
       Promise.resolve(
