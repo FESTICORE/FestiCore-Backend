@@ -2,26 +2,29 @@ const MAX_BYTES = 2_000_000;
 const MAX_ERROR_BYTES = 4_096;
 
 export class AnalyticsFetchError extends Error {
-  constructor(readonly kind: 'error' | 'rate_limited' | 'empty_environment') {
+  constructor(
+    readonly kind:
+      'error' | 'rate_limited' | 'empty_environment' | 'empty_issues',
+  ) {
     super(kind);
   }
 }
 
-async function isUnknownSentryEnvironment(
+async function sentryNotFoundKind(
   url: URL,
   response: Response,
-): Promise<boolean> {
+): Promise<'empty_environment' | 'empty_issues' | null> {
   if (
     url.hostname !== 'de.sentry.io' ||
     !/^\/api\/0\/organizations\/festicore\/(events-timeseries|issues)\/$/.test(
       url.pathname,
     )
   )
-    return false;
+    return null;
   if (Number(response.headers.get('content-length')) > MAX_ERROR_BYTES)
-    return false;
+    return null;
   const reader = response.body?.getReader();
-  if (!reader) return false;
+  if (!reader) return null;
   const chunks: Uint8Array[] = [];
   let size = 0;
   while (true) {
@@ -30,23 +33,31 @@ async function isUnknownSentryEnvironment(
     size += value.length;
     if (size > MAX_ERROR_BYTES) {
       await reader.cancel();
-      return false;
+      return null;
     }
     chunks.push(value);
   }
   const body = Buffer.concat(chunks).toString('utf8').trim();
-  if (body === 'Unknown environments selected') return true;
+  let detail = body;
   try {
     const parsed: unknown = JSON.parse(body);
-    return (
+    if (
       parsed !== null &&
       typeof parsed === 'object' &&
       'detail' in parsed &&
-      parsed.detail === 'Unknown environments selected'
-    );
+      typeof parsed.detail === 'string'
+    )
+      detail = parsed.detail;
   } catch {
-    return false;
+    // Sentry also returns plain text for some 404 responses.
   }
+  if (detail === 'Unknown environments selected') return 'empty_environment';
+  if (
+    url.pathname.endsWith('/issues/') &&
+    detail === 'The requested resource does not exist'
+  )
+    return 'empty_issues';
+  return null;
 }
 
 export async function fetchAnalytics(
@@ -61,11 +72,10 @@ export async function fetchAnalytics(
       redirect: 'error',
     });
     if (response.status === 429) throw new AnalyticsFetchError('rate_limited');
-    if (
-      response.status === 404 &&
-      (await isUnknownSentryEnvironment(url, response))
-    )
-      throw new AnalyticsFetchError('empty_environment');
+    if (response.status === 404) {
+      const kind = await sentryNotFoundKind(url, response);
+      if (kind) throw new AnalyticsFetchError(kind);
+    }
     if (!response.ok) throw new AnalyticsFetchError('error');
     if (Number(response.headers.get('content-length')) > MAX_BYTES)
       throw new AnalyticsFetchError('error');
