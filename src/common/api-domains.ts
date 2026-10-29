@@ -115,4 +115,10 @@ export const API_DOMAINS: ApiDomain[] = [
     description: '등록 기기에 테스트 푸시 발송',
     pathPrefix: 'admin/push',
   },
+  {
+    slug: 'admin-analytics',
+    title: 'Admin Analytics',
+    description: 'Sentry 오류 및 Mixpanel 이벤트 분석',
+    pathPrefix: 'admin/analytics',
+  },
 ];

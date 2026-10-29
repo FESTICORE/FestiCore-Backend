@@ -10,6 +10,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { Request, Response } from 'express';
 import { QueryFailedError } from 'typeorm';
+import * as Sentry from '@sentry/nestjs';
 
 // 요청 바디에 실려도 로그에 남기면 안 되는 민감 키(소문자 정확 일치).
 const REDACTED_KEYS = new Set([
@@ -107,6 +108,25 @@ export class AllExceptionsFilter implements ExceptionFilter {
     // 로그에서 실제 장애가 401/404 노이즈에 묻히지 않게 한다.
     const line = `${request.method} ${request.url.split('?')[0]} - ${status} - ${message}`;
     if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
+      if (Sentry.isInitialized()) {
+        const errorType =
+          exception instanceof QueryFailedError
+            ? 'QueryFailedError'
+            : exception instanceof Error &&
+                /^[A-Za-z][A-Za-z0-9_]{0,79}$/.test(exception.name)
+              ? exception.name
+              : 'UnknownError';
+        // 원본 Error.message/stack에는 SQL·OAuth 토큰이 섞일 수 있다.
+        // 안전한 분류 정보만 넣어 5xx 발생을 집계한다.
+        try {
+          Sentry.captureException(new Error(`HTTP ${status}: ${errorType}`), {
+            fingerprint: ['http-error', String(status), errorType],
+          });
+        } catch {
+          // 관측 도구 장애가 원래 API 응답을 바꾸지 않게 한다.
+          this.logger.warn('Sentry 오류 수집에 실패했습니다.');
+        }
+      }
       // QueryFailedError에는 SQL과 매개변수가 들어 있다. 스택·객체를 기록하지 않는다.
       if (exception instanceof QueryFailedError) {
         this.logger.error(`${line} - DB 쿼리 실패`);
