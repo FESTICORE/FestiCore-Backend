@@ -946,7 +946,15 @@ describe('discovered festival artist profile images', () => {
       query.mock.calls as unknown as [string, unknown[]][]
     )[0][0];
     expect(catalogQuery).toContain('jsonb_array_elements_text');
-    expect(catalogQuery).toContain('FROM latest JOIN details USING (url)');
+    expect(catalogQuery).toContain(
+      "NULLIF(btrim(candidate->>'date'), '') IS NOT NULL",
+    );
+    expect(catalogQuery).toContain('COALESCE("sourceUrl" = url, false) DESC');
+    expect(catalogQuery).toContain(
+      'FROM latest JOIN latest_decision USING (url)',
+    );
+    expect(catalogQuery).toContain('JOIN details USING (url)');
+    expect(catalogQuery).toContain('latest_decision.decision');
     expect(proofQuery).toContain(
       "verified.result IN ('nochange-parsed', 'unchanged')",
     );

@@ -153,6 +153,63 @@ describe('admin analytics', () => {
     });
   });
 
+  it('빈 환경의 시간대 404와 이슈 목록 404를 실제 0건으로 표시한다', async () => {
+    global.fetch = jest.fn((url: URL) =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            detail: url.pathname.endsWith('issues/')
+              ? 'The requested resource does not exist'
+              : 'Unknown environments selected',
+          }),
+          { status: 404 },
+        ),
+      ),
+    ) as typeof fetch;
+    const service = new AdminAnalyticsService(
+      config({
+        ANALYTICS_ENVIRONMENT: 'stage',
+        SENTRY_IOS_PROJECT_ID: '123',
+        SENTRY_ANALYTICS_READ_TOKEN: 'read-token',
+      }),
+    );
+    await expect(service.sentry(range(), 'ios')).resolves.toMatchObject({
+      status: 'ok',
+      totalEvents: 0,
+      series: [],
+      issues: [],
+    });
+  });
+
+  it('정상 시간대 조회와 이슈 목록 404만으로는 완전한 결과로 표시하지 않는다', async () => {
+    global.fetch = jest.fn((url: URL) =>
+      Promise.resolve(
+        url.pathname.endsWith('issues/')
+          ? new Response(
+              JSON.stringify({
+                detail: 'The requested resource does not exist',
+              }),
+              { status: 404 },
+            )
+          : new Response(JSON.stringify({ timeSeries: [{ values: [] }] }), {
+              status: 200,
+            }),
+      ),
+    ) as typeof fetch;
+    const service = new AdminAnalyticsService(
+      config({
+        ANALYTICS_ENVIRONMENT: 'stage',
+        SENTRY_IOS_PROJECT_ID: '123',
+        SENTRY_ANALYTICS_READ_TOKEN: 'read-token',
+      }),
+    );
+    await expect(service.sentry(range(), 'ios')).resolves.toMatchObject({
+      status: 'partial',
+      totalEvents: 0,
+      issues: [],
+    });
+  });
+
   it.each([
     { status: 401, body: 'Unauthorized' },
     { status: 404, body: JSON.stringify({ detail: 'Project not found' }) },
