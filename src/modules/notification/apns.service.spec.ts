@@ -293,6 +293,57 @@ describe('ApnsService', () => {
     expect(typeof payload.aps.timestamp).toBe('number');
   });
 
+  it('starts a Live Activity with matching iOS attributes and requests an update token', async () => {
+    const { session, stream } = mockResponse(200);
+    const service = new ApnsService(config(credentials));
+    const state = {
+      phase: 'ongoing',
+      startDate: 812345678,
+      endDate: 812432078,
+    };
+    const before = Math.floor(Date.now() / 1000);
+
+    await expect(
+      service.sendLiveActivityStart(DEVICE_TOKEN, 'sandbox', {
+        festivalId: 'fst_12345678',
+        festivalName: '원더리벳',
+        state,
+      }),
+    ).resolves.toEqual({ accepted: true, permanent: false });
+
+    const after = Math.floor(Date.now() / 1000);
+    const headers = (session.request.mock.calls as unknown[][])[0][0] as Record<
+      string,
+      string
+    >;
+    expect(headers['apns-topic']).toBe(
+      `${credentials.APNS_BUNDLE_ID}.push-type.liveactivity`,
+    );
+    expect(headers['apns-push-type']).toBe('liveactivity');
+    expect(headers['apns-priority']).toBe('10');
+    expect(Number(headers['apns-expiration'])).toBeGreaterThanOrEqual(
+      before + 600,
+    );
+    expect(Number(headers['apns-expiration'])).toBeLessThanOrEqual(after + 600);
+    const payload = JSON.parse(
+      (stream.end.mock.calls as unknown[][])[0][0] as string,
+    ) as { aps: Record<string, unknown> };
+    expect(payload.aps).toEqual({
+      timestamp: payload.aps.timestamp,
+      event: 'start',
+      'attributes-type': 'FestiCoreFestivalActivityAttributes',
+      'input-push-token': 1,
+      attributes: {
+        festivalID: 'fst_12345678',
+        festivalName: '원더리벳',
+      },
+      'content-state': state,
+      alert: { title: '원더리벳', body: '축제가 시작됐어요.' },
+    });
+    expect(payload.aps.timestamp).toBeGreaterThanOrEqual(before);
+    expect(payload.aps.timestamp).toBeLessThanOrEqual(after);
+  });
+
   it('rejects an oversized Live Activity update before connecting', async () => {
     const service = new ApnsService(config(credentials));
 
