@@ -140,6 +140,29 @@ export class ApnsService {
     );
   }
 
+  async sendLiveActivityEnd(
+    token: string,
+    environment: 'sandbox' | 'production',
+    state: Record<string, unknown>,
+  ): Promise<ApnsSendResult> {
+    return this.send(
+      token,
+      environment,
+      {
+        aps: {
+          timestamp: Math.floor(Date.now() / 1000),
+          event: 'end',
+          'content-state': state,
+        },
+      },
+      {
+        pushType: 'liveactivity',
+        priority: '5',
+        expirationSeconds: 10 * 60,
+      },
+    );
+  }
+
   async sendSocialNotification(
     token: string,
     environment: 'sandbox' | 'production',

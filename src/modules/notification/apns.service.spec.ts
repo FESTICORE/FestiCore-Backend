@@ -263,6 +263,36 @@ describe('ApnsService', () => {
     },
   );
 
+  it('sends a final Live Activity state with an end event', async () => {
+    const { session, stream } = mockResponse(200);
+    const service = new ApnsService(config(credentials));
+    const state = { phase: 'finished', nowStages: [] };
+
+    await expect(
+      service.sendLiveActivityEnd(DEVICE_TOKEN, 'sandbox', state),
+    ).resolves.toEqual({ accepted: true, permanent: false });
+
+    const headers = (session.request.mock.calls as unknown[][])[0][0] as Record<
+      string,
+      string
+    >;
+    expect(headers['apns-topic']).toBe(
+      `${credentials.APNS_BUNDLE_ID}.push-type.liveactivity`,
+    );
+    expect(headers['apns-push-type']).toBe('liveactivity');
+    const payload = JSON.parse(
+      (stream.end.mock.calls as unknown[][])[0][0] as string,
+    ) as {
+      aps: Record<string, unknown>;
+    };
+    expect(payload.aps).toEqual({
+      timestamp: payload.aps.timestamp,
+      event: 'end',
+      'content-state': state,
+    });
+    expect(typeof payload.aps.timestamp).toBe('number');
+  });
+
   it('rejects an oversized Live Activity update before connecting', async () => {
     const service = new ApnsService(config(credentials));
 

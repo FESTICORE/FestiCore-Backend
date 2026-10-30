@@ -22,6 +22,7 @@ describe('LiveActivityService durable queue', () => {
   const apns = {
     isConfigured: jest.fn().mockReturnValue(true),
     sendLiveActivityUpdate: jest.fn(),
+    sendLiveActivityEnd: jest.fn(),
   };
   const service = new LiveActivityService(db as never, apns as never);
 
@@ -29,6 +30,10 @@ describe('LiveActivityService durable queue', () => {
     jest.clearAllMocks();
     query.mockResolvedValue([]);
     apns.sendLiveActivityUpdate.mockResolvedValue({
+      accepted: true,
+      permanent: false,
+    });
+    apns.sendLiveActivityEnd.mockResolvedValue({
       accepted: true,
       permanent: false,
     });
@@ -396,12 +401,18 @@ describe('LiveActivityService durable queue', () => {
       jest.setSystemTime(new Date('2026-11-21T17:00:00Z'));
       prepare();
       await service.deliver(job);
-      const finished = apns.sendLiveActivityUpdate.mock.calls[1] as [
+      const finished = apns.sendLiveActivityEnd.mock.calls[0] as [
         string,
         string,
         Record<string, unknown>,
       ];
       expect(finished[2]).toMatchObject({ phase: 'finished', nowStages: [] });
+      expect(apns.sendLiveActivityUpdate).toHaveBeenCalledTimes(1);
+      const cleared = query.mock.calls.find(([sql]) =>
+        sql.includes('SET "liveActivityPushToken" = NULL'),
+      );
+      expect(cleared?.[1]).toEqual([deviceId, 'a'.repeat(64), 'activity-one']);
+      expect(query.mock.calls.at(-1)?.[1]?.[3]).toBe('idle');
     } finally {
       jest.useRealTimers();
     }
@@ -586,7 +597,7 @@ describe('LiveActivityService durable queue', () => {
         {
           published: {
             flagsEnabled: false,
-            days: [{ date: '2026-10-24' }],
+            days: [{ date: '2026-11-24' }],
             sets: [],
           },
         },
