@@ -21,6 +21,7 @@ import {
 import { PublicFestivalController } from '../src/modules/public/public-festival.controller';
 import { discoverySummaries } from '../src/modules/public/crawl-catalog';
 import { PublicFestivalService } from '../src/modules/public/public-festival.service';
+import { publicFestivalTestDataSource } from './public-festival-test-data-source';
 import { PublicLiveService } from '../src/modules/public/public-live.service';
 import { CacheService } from '../src/modules/redis/service/cache.service';
 
@@ -86,6 +87,7 @@ describe('Public festival API', () => {
       return Promise.resolve([]);
     }),
   };
+  Object.assign(dataSource, publicFestivalTestDataSource(dataSource.query));
   const deviceAuth = {
     resolveOptionalPrincipal: jest.fn().mockResolvedValue(undefined),
   };
