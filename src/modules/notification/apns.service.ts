@@ -140,6 +140,44 @@ export class ApnsService {
     );
   }
 
+  async sendLiveActivityStart(
+    token: string,
+    environment: 'sandbox' | 'production',
+    input: {
+      festivalId: string;
+      festivalName: string;
+      state: Record<string, unknown>;
+    },
+  ): Promise<ApnsSendResult> {
+    const timestamp = Math.floor(Date.now() / 1000);
+    return this.send(
+      token,
+      environment,
+      {
+        aps: {
+          timestamp,
+          event: 'start',
+          'attributes-type': 'FestiCoreFestivalActivityAttributes',
+          'input-push-token': 1,
+          attributes: {
+            festivalID: input.festivalId,
+            festivalName: input.festivalName,
+          },
+          'content-state': input.state,
+          alert: {
+            title: input.festivalName,
+            body: '축제가 시작됐어요.',
+          },
+        },
+      },
+      {
+        pushType: 'liveactivity',
+        priority: '10',
+        expirationSeconds: 10 * 60,
+      },
+    );
+  }
+
   async sendLiveActivityEnd(
     token: string,
     environment: 'sandbox' | 'production',
