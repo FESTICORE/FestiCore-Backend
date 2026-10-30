@@ -582,38 +582,43 @@ describe('LiveActivityService durable queue', () => {
   });
 
   it('clears only the exact failed activity token on a permanent APNs rejection', async () => {
-    query
-      .mockResolvedValueOnce([
-        {
-          userId: null,
-          liveActivityFestivalId: 'fst_one',
-          liveActivityId: 'activity-one',
-          liveActivityPushToken: 'a'.repeat(64),
-          apnsEnvironment: 'sandbox',
-        },
-      ])
-      .mockResolvedValueOnce([{ revision: job.revision }])
-      .mockResolvedValueOnce([
-        {
-          published: {
-            flagsEnabled: false,
-            days: [{ date: '2026-11-24' }],
-            sets: [],
+    jest.useFakeTimers().setSystemTime(new Date('2026-10-24T00:00:00Z'));
+    try {
+      query
+        .mockResolvedValueOnce([
+          {
+            userId: null,
+            liveActivityFestivalId: 'fst_one',
+            liveActivityId: 'activity-one',
+            liveActivityPushToken: 'a'.repeat(64),
+            apnsEnvironment: 'sandbox',
           },
-        },
-      ])
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{ canSend: true }]);
-    apns.sendLiveActivityUpdate.mockResolvedValueOnce({
-      accepted: false,
-      permanent: true,
-      reason: 'Unregistered',
-    });
-    await service.deliver(job);
-    const clear = query.mock.calls.find(([sql]) =>
-      sql.includes('SET "liveActivityPushToken" = NULL'),
-    );
-    expect(clear?.[1]).toEqual([deviceId, 'a'.repeat(64), 'activity-one']);
-    expect(query.mock.calls.at(-1)?.[1]?.[3]).toBe('failed');
+        ])
+        .mockResolvedValueOnce([{ revision: job.revision }])
+        .mockResolvedValueOnce([
+          {
+            published: {
+              flagsEnabled: false,
+              days: [{ date: '2026-10-24' }],
+              sets: [],
+            },
+          },
+        ])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ canSend: true }]);
+      apns.sendLiveActivityUpdate.mockResolvedValueOnce({
+        accepted: false,
+        permanent: true,
+        reason: 'Unregistered',
+      });
+      await service.deliver(job);
+      const clear = query.mock.calls.find(([sql]) =>
+        sql.includes('SET "liveActivityPushToken" = NULL'),
+      );
+      expect(clear?.[1]).toEqual([deviceId, 'a'.repeat(64), 'activity-one']);
+      expect(query.mock.calls.at(-1)?.[1]?.[3]).toBe('failed');
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });
