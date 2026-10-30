@@ -165,9 +165,12 @@ export class AuthService {
     });
   }
 
-  async me(
-    userId: string,
-  ): Promise<UserView & { admin: { id: string; role: string } | null }> {
+  async me(userId: string): Promise<
+    UserView & {
+      currentTermsVersion: string;
+      admin: { id: string; role: string } | null;
+    }
+  > {
     const user = await this.userRepo.findOne({ where: { id: userId } });
     if (!user) {
       throw new NotFoundException('사용자를 찾을 수 없습니다.');
@@ -179,7 +182,11 @@ export class AuthService {
             [userId],
           )
         : [];
-    return { ...this.toView(user), admin: admins[0] ?? null };
+    return {
+      ...this.toView(user),
+      currentTermsVersion: CURRENT_TERMS_VERSION,
+      admin: admins[0] ?? null,
+    };
   }
 
   async updateMe(userId: string, input: UpdateMeInput): Promise<UserView> {
