@@ -11,6 +11,8 @@ function input(): LiveActivityContentInput {
   return {
     festivalId,
     now: NOW,
+    festivalStart: new Date('2026-10-24T00:00:00+09:00'),
+    festivalEnd: new Date('2026-10-25T00:00:00+09:00'),
     sets: [
       {
         id: 'set_future',
@@ -60,6 +62,11 @@ function input(): LiveActivityContentInput {
 describe('buildLiveActivityContentState', () => {
   it('calculates active stages and a member-only next set from the same festival', () => {
     const state = buildLiveActivityContentState(input());
+    expect(state).toMatchObject({
+      phase: 'ongoing',
+      startDate: Date.parse('2026-10-23T15:00:00Z') / 1000 - 978307200,
+      endDate: Date.parse('2026-10-24T15:00:00Z') / 1000 - 978307200,
+    });
     expect(state.nowStages).toEqual([
       {
         setId: 'set_live',
@@ -99,6 +106,31 @@ describe('buildLiveActivityContentState', () => {
     expect(buildLiveActivityContentState(source).nowStages).toEqual([]);
     source.now = new Date('2026-10-24T10:30:00Z');
     expect(buildLiveActivityContentState(source).nextMine).toBeNull();
+  });
+
+  it('switches phase at the festival boundaries while retaining the published dates', () => {
+    const source = input();
+    const startDate = source.festivalStart.getTime() / 1000 - 978307200;
+    const endDate = source.festivalEnd.getTime() / 1000 - 978307200;
+    for (const [now, phase] of [
+      ['2026-10-23T14:59:59Z', 'upcoming'],
+      ['2026-10-23T15:00:00Z', 'ongoing'],
+      ['2026-10-24T14:59:59Z', 'ongoing'],
+      ['2026-10-24T15:00:00Z', 'finished'],
+    ] as const) {
+      source.now = new Date(now);
+      expect(buildLiveActivityContentState(source)).toMatchObject({
+        phase,
+        startDate,
+        endDate,
+      });
+    }
+  });
+
+  it('rejects an absent or reversed festival period', () => {
+    const source = input();
+    source.festivalEnd = source.festivalStart;
+    expect(() => buildLiveActivityContentState(source)).toThrow(RangeError);
   });
 
   it('never includes member-only data for an anonymous device', () => {
