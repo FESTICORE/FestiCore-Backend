@@ -32,6 +32,8 @@ import {
   DiscoveryRow,
   DiscoverySummary,
   PublishedDiscoveryRow,
+  ticketDateRange,
+  ticketDateSpanLimit,
 } from './crawl-catalog';
 import {
   PRUGIO_LINEUP_SEED,
@@ -676,8 +678,28 @@ export class PublicFestivalService {
   }
 
   private async discoveryCatalog(): Promise<DiscoverySummary[]> {
-    const discoveryRows = await this.dataSource.query<DiscoveryRow[]>(
-      `WITH candidates AS (
+    const discoveryRows = await this.dataSource.transaction(
+      'REPEATABLE READ',
+      async (manager) => {
+        const dateRows = await manager.query<{ url: string; date: string }[]>(
+          `SELECT DISTINCT item->'after'->>'url' AS url,
+             item->'after'->>'date' AS date
+           FROM crawl_proposals proposal
+           CROSS JOIN LATERAL jsonb_array_elements(proposal.items) item
+           WHERE proposal.kind = 'festival.new'
+             AND item->'after'->>'url' IS NOT NULL
+             AND item->>'decision' IS DISTINCT FROM 'rejected'
+             AND proposal.status IS DISTINCT FROM 'rejected'
+             AND NULLIF(btrim(item->'after'->>'name'), '') IS NOT NULL
+             AND NULLIF(btrim(item->'after'->>'venue'), '') IS NOT NULL
+             AND NULLIF(btrim(item->'after'->>'date'), '') IS NOT NULL`,
+        );
+        const validDates = dateRows.filter(({ url, date }) =>
+          ticketDateRange(date, ticketDateSpanLimit(url)),
+        );
+        if (!validDates.length) return [];
+        return manager.query<DiscoveryRow[]>(
+          `WITH candidates AS (
          SELECT item->'after' AS candidate,
            item->'after'->>'url' AS url,
            source.url AS "sourceUrl",
@@ -709,7 +731,12 @@ export class PublicFestivalService {
            AND "proposalStatus" IS DISTINCT FROM 'rejected'
            AND NULLIF(btrim(candidate->>'name'), '') IS NOT NULL
            AND NULLIF(btrim(candidate->>'venue'), '') IS NOT NULL
-           AND NULLIF(btrim(candidate->>'date'), '') IS NOT NULL
+           AND EXISTS (
+             SELECT 1 FROM jsonb_to_recordset($3::jsonb)
+               AS valid(url text, date text)
+             WHERE valid.url = candidates.url
+               AND valid.date = candidates.candidate->>'date'
+           )
          ORDER BY url, COALESCE("sourceUrl" = url, false) DESC,
            created_at DESC, proposal_id DESC
        ), details AS (
@@ -796,7 +823,9 @@ export class PublicFestivalService {
        FROM latest JOIN latest_decision USING (url)
        JOIN details USING (url)
        LEFT JOIN location_diff ON location_diff.url = latest.url`,
-      [PRUGIO_LINEUP_URL, PRUGIO_LINEUP_SEED],
+          [PRUGIO_LINEUP_URL, PRUGIO_LINEUP_SEED, JSON.stringify(validDates)],
+        );
+      },
     );
     const publishedRows = await this.dataSource.query<PublishedDiscoveryRow[]>(
       `SELECT published->>'name' AS name,

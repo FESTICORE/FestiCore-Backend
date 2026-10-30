@@ -1,3 +1,4 @@
+import { publicFestivalTestDataSource } from '../../../test/public-festival-test-data-source';
 import { QueryRunner } from 'typeorm';
 import { ScrubUntrustedGalleryIdentity1792500073000 } from '../../database/migrations/1792500073000-scrub-untrusted-gallery-identity';
 import { discoverySummaries, DiscoverySummary } from './crawl-catalog';
@@ -41,7 +42,7 @@ describe('discovered festival artist profile images', () => {
     const service = new PublicFestivalService(
       { findOne: jest.fn().mockResolvedValue(null) } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     const detail = await service.detail(festivalId);
@@ -96,7 +97,7 @@ describe('discovered festival artist profile images', () => {
     const service = new PublicFestivalService(
       { findOne: jest.fn().mockResolvedValue(null) } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     const detail = await service.detail(
@@ -155,7 +156,7 @@ describe('discovered festival artist profile images', () => {
     const service = new PublicFestivalService(
       { findOne: jest.fn().mockResolvedValue(null) } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     Object.defineProperty(service, 'attachStoredImages', {
@@ -228,7 +229,7 @@ describe('discovered festival artist profile images', () => {
     const service = new PublicFestivalService(
       { findOne: jest.fn().mockResolvedValue(null) } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     const result = await service.detail(
@@ -319,7 +320,7 @@ describe('discovered festival artist profile images', () => {
     const service = new PublicFestivalService(
       { findOne: jest.fn().mockResolvedValue(null) } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     const result = await service.detail(
@@ -382,7 +383,7 @@ describe('discovered festival artist profile images', () => {
     const service = new PublicFestivalService(
       { findOne: jest.fn().mockResolvedValue(null) } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     const result = await service.detail(
@@ -427,7 +428,7 @@ describe('discovered festival artist profile images', () => {
     const service = new PublicFestivalService(
       { findOne: jest.fn().mockResolvedValue(null) } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     const result = await service.detail(
@@ -478,7 +479,7 @@ describe('discovered festival artist profile images', () => {
     const service = new PublicFestivalService(
       { findOne: jest.fn().mockResolvedValue(null) } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     const id = discoverySummaries([{ candidate }])[0].id;
@@ -546,7 +547,7 @@ describe('discovered festival artist profile images', () => {
     const service = new PublicFestivalService(
       { findOne: jest.fn().mockResolvedValue(null) } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     const id = discoverySummaries(candidates)[0].id;
@@ -606,7 +607,7 @@ describe('discovered festival artist profile images', () => {
     const service = new PublicFestivalService(
       { findOne: jest.fn().mockResolvedValue(null) } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     const result = await service.detail(discoverySummaries(candidates)[0].id);
@@ -688,7 +689,7 @@ describe('discovered festival artist profile images', () => {
       const service = new PublicFestivalService(
         { findOne: jest.fn().mockResolvedValue(null) } as never,
         {} as never,
-        { query } as never,
+        publicFestivalTestDataSource(query) as never,
         {} as never,
       );
       const id = discoverySummaries(candidates)[0].id;
@@ -739,7 +740,7 @@ describe('discovered festival artist profile images', () => {
     const service = new PublicFestivalService(
       { findOne: jest.fn().mockResolvedValue(null) } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     const id = discoverySummaries([{ candidate }])[0].id;
@@ -780,7 +781,7 @@ describe('discovered festival artist profile images', () => {
     const service = new PublicFestivalService(
       { findOne: jest.fn().mockResolvedValue(null) } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     const id = discoverySummaries([{ candidate }])[0].id;
@@ -832,7 +833,7 @@ describe('discovered festival artist profile images', () => {
     const service = new PublicFestivalService(
       { findOne: jest.fn().mockResolvedValue(null) } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     await expect(service.detail(id)).resolves.toMatchObject({
@@ -875,7 +876,7 @@ describe('discovered festival artist profile images', () => {
     const service = new PublicFestivalService(
       { findOne: jest.fn().mockResolvedValue(null) } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     await expect(service.detail(id)).resolves.toMatchObject({
@@ -920,7 +921,7 @@ describe('discovered festival artist profile images', () => {
     const service = new PublicFestivalService(
       { findOne: jest.fn().mockResolvedValue(null) } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     const original = discoverySummaries([{ candidate }])[0];
@@ -946,9 +947,7 @@ describe('discovered festival artist profile images', () => {
       query.mock.calls as unknown as [string, unknown[]][]
     )[0][0];
     expect(catalogQuery).toContain('jsonb_array_elements_text');
-    expect(catalogQuery).toContain(
-      "NULLIF(btrim(candidate->>'date'), '') IS NOT NULL",
-    );
+    expect(catalogQuery).toContain('jsonb_to_recordset($3::jsonb)');
     expect(catalogQuery).toContain('COALESCE("sourceUrl" = url, false) DESC');
     expect(catalogQuery).toContain(
       'FROM latest JOIN latest_decision USING (url)',
@@ -996,7 +995,7 @@ describe('discovered festival artist profile images', () => {
     const service = new PublicFestivalService(
       { findOne: jest.fn().mockResolvedValue(null) } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     const detail = await service.detail(
@@ -1047,7 +1046,7 @@ describe('discovered festival artist profile images', () => {
     const service = new PublicFestivalService(
       { findOne: jest.fn().mockResolvedValue(null) } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     const detail = await service.detail(
@@ -1105,7 +1104,7 @@ describe('discovered festival artist profile images', () => {
     const service = new PublicFestivalService(
       { findOne: jest.fn().mockResolvedValue(null) } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     const id = discoverySummaries([{ candidate }])[0].id;
@@ -1188,7 +1187,7 @@ describe('discovered festival artist profile images', () => {
     const service = new PublicFestivalService(
       { findOne: jest.fn().mockResolvedValue(null) } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
 
@@ -1272,7 +1271,7 @@ describe('discovered festival artist profile images', () => {
     const service = new PublicFestivalService(
       { findOne: jest.fn().mockResolvedValue(null) } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     const id = discoverySummaries([{ candidate }])[0].id;
@@ -1316,7 +1315,7 @@ describe('discovered festival artist profile images', () => {
     const service = new PublicFestivalService(
       { findOne: jest.fn().mockResolvedValue(null) } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     const id = discoverySummaries([{ candidate }])[0].id;
