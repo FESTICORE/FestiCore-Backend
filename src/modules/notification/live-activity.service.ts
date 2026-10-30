@@ -62,7 +62,16 @@ function festivalPeriod(
   };
   if (!validDate(first) || !validDate(last) || last < first) return null;
   const start = new Date(`${first}T00:00:00+09:00`);
-  const end = new Date(Date.parse(`${last}T00:00:00+09:00`) + 86_400_000);
+  const calendarEnd = Date.parse(`${last}T00:00:00+09:00`) + 86_400_000;
+  const actualEnd = Math.max(
+    calendarEnd,
+    ...days
+      .map((day) =>
+        typeof day.endsAt === 'string' ? Date.parse(day.endsAt) : NaN,
+      )
+      .filter(Number.isFinite),
+  );
+  const end = new Date(actualEnd);
   return { start, end };
 }
 
