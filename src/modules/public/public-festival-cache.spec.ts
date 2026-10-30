@@ -1,3 +1,4 @@
+import { publicFestivalTestDataSource } from '../../../test/public-festival-test-data-source';
 import { NotFoundException } from '@nestjs/common';
 import { PublicFestivalService } from './public-festival.service';
 
@@ -276,7 +277,7 @@ describe('PublicFestivalService published cache', () => {
     const service = new PublicFestivalService(
       { createQueryBuilder: () => builder } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     const result = await service.list(
@@ -324,7 +325,7 @@ describe('PublicFestivalService published cache', () => {
     const service = new PublicFestivalService(
       { createQueryBuilder: () => builder } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
 

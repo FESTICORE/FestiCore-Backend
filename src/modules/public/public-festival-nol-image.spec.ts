@@ -1,3 +1,4 @@
+import { publicFestivalTestDataSource } from '../../../test/public-festival-test-data-source';
 import { PublicFestivalService } from './public-festival.service';
 
 describe('NOL festival poster', () => {
@@ -47,7 +48,7 @@ describe('NOL festival poster', () => {
     const service = new PublicFestivalService(
       { createQueryBuilder: () => builder } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     const result = await service.list(
@@ -107,7 +108,7 @@ describe('NOL festival poster', () => {
     const service = new PublicFestivalService(
       { createQueryBuilder: () => builder } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     const result = await service.list(
@@ -170,7 +171,7 @@ describe('NOL festival poster', () => {
       const service = new PublicFestivalService(
         { createQueryBuilder: () => builder } as never,
         {} as never,
-        { query } as never,
+        publicFestivalTestDataSource(query) as never,
         {} as never,
       );
       const result = await service.list(
@@ -244,7 +245,7 @@ describe('NOL festival poster', () => {
     const service = new PublicFestivalService(
       { createQueryBuilder: () => builder } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     const result = await service.list(
@@ -311,7 +312,7 @@ describe('NOL festival poster', () => {
     const service = new PublicFestivalService(
       { createQueryBuilder: () => builder } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     const result = await service.list(
@@ -372,7 +373,7 @@ describe('NOL festival poster', () => {
     const service = new PublicFestivalService(
       { createQueryBuilder: () => builder } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     const result = await service.list(
@@ -443,7 +444,7 @@ describe('NOL festival poster', () => {
     const service = new PublicFestivalService(
       { createQueryBuilder: () => builder } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     const result = await service.list(
@@ -516,7 +517,7 @@ describe('NOL festival poster', () => {
     const service = new PublicFestivalService(
       { createQueryBuilder: () => builder } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     await service.list(undefined, '50', new Date('2026-10-22T00:00:00Z'));
@@ -564,7 +565,7 @@ describe('NOL festival poster', () => {
     const service = new PublicFestivalService(
       { createQueryBuilder: () => builder } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
 
@@ -616,7 +617,7 @@ describe('NOL festival poster', () => {
     const service = new PublicFestivalService(
       { createQueryBuilder: () => builder } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
 

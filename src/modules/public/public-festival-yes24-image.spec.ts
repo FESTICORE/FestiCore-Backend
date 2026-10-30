@@ -1,3 +1,4 @@
+import { publicFestivalTestDataSource } from '../../../test/public-festival-test-data-source';
 import { PublicFestivalService } from './public-festival.service';
 import { PUBLIC_CRAWL_IMAGE_SQL } from './crawl-image-policy';
 
@@ -13,7 +14,7 @@ function serviceWithQuery(query: jest.Mock) {
   return new PublicFestivalService(
     { createQueryBuilder: () => builder } as never,
     {} as never,
-    { query } as never,
+    publicFestivalTestDataSource(query) as never,
     {} as never,
   );
 }

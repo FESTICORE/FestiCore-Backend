@@ -311,7 +311,7 @@ export function ticketDateRange(
   return { firstDate: first, lastDate: last };
 }
 
-function ticketDateSpanLimit(url: unknown): number {
+export function ticketDateSpanLimit(url: unknown): number {
   return typeof url === 'string' &&
     /^https:\/\/world\.nol\.com\/en\/ticket\/products\/\d+$/.test(url)
     ? 31

@@ -1,3 +1,4 @@
+import { publicFestivalTestDataSource } from '../../../test/public-festival-test-data-source';
 import { discoverySummaries } from './crawl-catalog';
 import { PublicFestivalService } from './public-festival.service';
 
@@ -30,7 +31,7 @@ describe('reviewed NOL World lineup projection', () => {
     const service = new PublicFestivalService(
       { findOne: jest.fn().mockResolvedValue(null) } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     const detail = await service.detail(id);
@@ -89,7 +90,7 @@ describe('reviewed NOL World lineup projection', () => {
         }),
       } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       { packGeneration: jest.fn().mockResolvedValue(null) } as never,
     );
     const detail = await service.detail(id);

@@ -1,3 +1,4 @@
+import { publicFestivalTestDataSource } from '../../../test/public-festival-test-data-source';
 import {
   publicPackEtag,
   PublicFestivalService,
@@ -57,7 +58,7 @@ function publishedOnlyService(
   const service = new PublicFestivalService(
     {} as never,
     {} as never,
-    { query } as never,
+    publicFestivalTestDataSource(query) as never,
     {} as never,
   );
   jest
