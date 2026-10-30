@@ -497,21 +497,36 @@ export class LiveActivityService implements OnModuleInit, OnModuleDestroy {
       }
 
       let result: Awaited<ReturnType<ApnsService['sendLiveActivityUpdate']>>;
+      const finished = state.phase === 'finished';
       try {
-        result = await this.apns.sendLiveActivityUpdate(
-          target.liveActivityPushToken,
-          target.apnsEnvironment,
-          state,
-        );
+        result = finished
+          ? await this.apns.sendLiveActivityEnd(
+              target.liveActivityPushToken,
+              target.apnsEnvironment,
+              state,
+            )
+          : await this.apns.sendLiveActivityUpdate(
+              target.liveActivityPushToken,
+              target.apnsEnvironment,
+              state,
+            );
       } catch {
         await this.retryOrFail(manager, job, 'APNS_ERROR');
         return;
       }
       if (result.accepted) {
+        if (finished) {
+          await manager.query(
+            `UPDATE "devices" SET "liveActivityPushToken" = NULL
+            WHERE "id" = $1 AND "liveActivityPushToken" = $2
+              AND "liveActivityId" = $3`,
+            [job.deviceId, target.liveActivityPushToken, target.liveActivityId],
+          );
+        }
         await this.finish(
           manager,
           job,
-          boundary ? 'pending' : 'idle',
+          finished || !boundary ? 'idle' : 'pending',
           null,
           boundary,
         );
