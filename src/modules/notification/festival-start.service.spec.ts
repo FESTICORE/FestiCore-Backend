@@ -22,6 +22,7 @@ describe('FestivalStartService', () => {
     const sendStartNotification = jest.fn();
     const sendPackUpdated = jest.fn();
     const sendReminderNotification = jest.fn();
+    const sendLiveActivityStart = jest.fn();
     const isConfigured = jest.fn().mockReturnValue(true);
     const service = new FestivalStartService(
       { query } as never,
@@ -29,6 +30,7 @@ describe('FestivalStartService', () => {
         sendStartNotification,
         sendPackUpdated,
         sendReminderNotification,
+        sendLiveActivityStart,
         isConfigured,
       } as never,
     );
@@ -38,6 +40,7 @@ describe('FestivalStartService', () => {
       sendStartNotification,
       sendPackUpdated,
       sendReminderNotification,
+      sendLiveActivityStart,
       isConfigured,
     };
   }
@@ -205,6 +208,33 @@ describe('FestivalStartService', () => {
     ]);
   });
 
+  it('schedules one remote start for the first eligible festival day only', async () => {
+    const { service, query } = setup();
+    query.mockResolvedValueOnce([
+      {
+        id: festivalId,
+        name: '축제',
+        days: [{ date: '2026-11-20', startsAt: '2026-11-20T12:00:00+09:00' }],
+      },
+    ]);
+    query.mockResolvedValue([]);
+
+    await service.schedulePublished(new Date('2026-11-20T02:59:00Z'));
+
+    expect(query).toHaveBeenCalledTimes(3);
+    expect(query.mock.calls[2][0]).toContain(
+      'd."liveActivityPushToStartToken" IS NOT NULL',
+    );
+    expect(query.mock.calls[2][0]).toContain('s."festivalStarts" = true');
+    expect(query.mock.calls[2][0]).toContain('s."pinned" = true');
+    expect(query.mock.calls[2][0]).not.toContain('"status" = \'sent\'');
+    expect(query.mock.calls[2][1]).toEqual([
+      festivalId,
+      `live-activity-start:${festivalId}`,
+      scheduledAt,
+    ]);
+  });
+
   it('claims due jobs with SKIP LOCKED and a lease', async () => {
     const { service, query } = setup();
     query.mockResolvedValueOnce([job]);
@@ -212,6 +242,8 @@ describe('FestivalStartService', () => {
     await expect(service.claim()).resolves.toEqual(job);
     expect(query.mock.calls[0][0]).toContain('FOR UPDATE SKIP LOCKED');
     expect(query.mock.calls[0][0]).toContain('"leaseUntil" <= now()');
+    expect(query.mock.calls[0][0]).toContain('"status" = \'pending\'');
+    expect(query.mock.calls[0][0]).toContain('"status" = \'leased\'');
     expect(query.mock.calls[0][0]).toContain("interval '2 minutes'");
   });
 
@@ -466,5 +498,149 @@ describe('FestivalStartService', () => {
     );
     expect(sendStartNotification).toHaveBeenCalledTimes(1);
     expect(query).toHaveBeenCalledTimes(2);
+  });
+
+  const liveStartJob = {
+    ...job,
+    eventKey: `live-activity-start:${festivalId}`,
+  };
+  const liveStartTarget = {
+    apnsToken: null,
+    liveActivityPushToStartToken: 'ab'.repeat(32),
+    liveActivityId: null,
+    apnsEnvironment: 'sandbox',
+    name: '공개 축제',
+    days: [{ date: '2026-11-20', startsAt: '2026-11-20T12:00:00+09:00' }],
+    published: {
+      days: [{ date: '2026-11-20', startsAt: '2026-11-20T12:00:00+09:00' }],
+      sets: [],
+    },
+  };
+
+  it('uses only the push-to-start token after durable reservation', async () => {
+    const { service, query, sendLiveActivityStart, sendStartNotification } =
+      setup();
+    query.mockResolvedValueOnce([liveStartTarget]);
+    query.mockResolvedValueOnce([{ id: job.id }]);
+    query.mockResolvedValueOnce([]);
+    sendLiveActivityStart.mockResolvedValueOnce({
+      accepted: true,
+      permanent: false,
+    });
+
+    await service.deliver(liveStartJob, scheduledAt);
+
+    expect(query.mock.calls[0][0]).toContain('s."festivalStarts" = true');
+    expect(query.mock.calls[0][0]).toContain('s."pinned" = true');
+    expect(query.mock.calls[0][0]).toContain('f."publishedVersion" > 0');
+    expect(query.mock.calls[1][0]).toContain("'OUTCOME_UNKNOWN'");
+    expect(sendLiveActivityStart).toHaveBeenCalledWith(
+      liveStartTarget.liveActivityPushToStartToken,
+      'sandbox',
+      expect.objectContaining({ festivalId, festivalName: '공개 축제' }),
+    );
+    expect(sendStartNotification).not.toHaveBeenCalled();
+    expect(query.mock.calls[2][1]).toEqual([job.id, 'sent', null]);
+  });
+
+  it('does not start an activity when the festival is unavailable or already active', async () => {
+    const { service, query, sendLiveActivityStart } = setup();
+    query.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+    await service.deliver(liveStartJob, scheduledAt);
+    expect(sendLiveActivityStart).not.toHaveBeenCalled();
+    expect(query.mock.calls[1][1]).toEqual([
+      job.id,
+      leaseUntil,
+      'cancelled',
+      'TARGET_UNAVAILABLE',
+    ]);
+
+    query.mockClear();
+    query
+      .mockResolvedValueOnce([
+        {
+          ...liveStartTarget,
+          liveActivityId: 'already-running',
+        },
+      ])
+      .mockResolvedValueOnce([]);
+    await service.deliver(liveStartJob, scheduledAt);
+    expect(sendLiveActivityStart).not.toHaveBeenCalled();
+  });
+
+  it('leaves ambiguous APNs outcomes terminal so a restart cannot create a duplicate activity', async () => {
+    const { service, query, sendLiveActivityStart } = setup();
+    query.mockResolvedValueOnce([liveStartTarget]);
+    query.mockResolvedValueOnce([{ id: job.id }]);
+    sendLiveActivityStart.mockResolvedValueOnce({
+      accepted: false,
+      permanent: false,
+      reason: 'APNS_NETWORK_ERROR',
+    });
+
+    await service.deliver(liveStartJob, scheduledAt);
+
+    expect(sendLiveActivityStart).toHaveBeenCalledTimes(1);
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(query.mock.calls[1][0]).toContain('"status" = \'failed\'');
+    expect(query.mock.calls[1][0]).toContain("'OUTCOME_UNKNOWN'");
+  });
+
+  it('does not send when the durable reservation is lost', async () => {
+    const { service, query, sendLiveActivityStart } = setup();
+    query.mockResolvedValueOnce([liveStartTarget]);
+    query.mockResolvedValueOnce([]);
+
+    await service.deliver(liveStartJob, scheduledAt);
+
+    expect(sendLiveActivityStart).not.toHaveBeenCalled();
+  });
+
+  it('does not replay an activity start after an ambiguous thrown APNs error', async () => {
+    const { service, query, sendLiveActivityStart } = setup();
+    query.mockResolvedValueOnce([liveStartTarget]);
+    query.mockResolvedValueOnce([{ id: job.id }]);
+    sendLiveActivityStart.mockRejectedValueOnce(new Error('timeout'));
+
+    await service.deliver(liveStartJob, scheduledAt);
+
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(query.mock.calls[1][0]).toContain("'OUTCOME_UNKNOWN'");
+  });
+
+  it('retries a definite APNs rejection but clears only an invalid start token', async () => {
+    const { service, query, sendLiveActivityStart } = setup();
+    query.mockResolvedValueOnce([liveStartTarget]);
+    query.mockResolvedValueOnce([{ id: job.id }]);
+    query.mockResolvedValueOnce([]);
+    sendLiveActivityStart.mockResolvedValueOnce({
+      accepted: false,
+      permanent: false,
+      reason: 'APNS_HTTP_503',
+    });
+    await service.deliver(liveStartJob, scheduledAt);
+    expect(query.mock.calls[2][0]).toContain('"status" = \'pending\'');
+    expect(query.mock.calls[2][1]).toEqual([job.id, 15, 'APNS_HTTP_503']);
+
+    query.mockClear();
+    query.mockResolvedValueOnce([liveStartTarget]);
+    query.mockResolvedValueOnce([{ id: job.id }]);
+    query.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+    sendLiveActivityStart.mockResolvedValueOnce({
+      accepted: false,
+      permanent: true,
+      reason: 'BadDeviceToken',
+    });
+    await service.deliver(liveStartJob, scheduledAt);
+    expect(query.mock.calls[2][0]).toContain(
+      '"liveActivityPushToStartToken" = NULL',
+    );
+    expect(query.mock.calls[2][0]).not.toContain(
+      '"liveActivityPushToken" = NULL',
+    );
+    expect(query.mock.calls[2][1]).toEqual([
+      deviceId,
+      liveStartTarget.liveActivityPushToStartToken,
+    ]);
   });
 });

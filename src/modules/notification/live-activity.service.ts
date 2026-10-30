@@ -46,7 +46,7 @@ interface FestivalTarget {
   published: Record<string, unknown>;
 }
 
-function festivalPeriod(
+export function festivalPeriod(
   days: Record<string, unknown>[],
 ): { start: Date; end: Date } | null {
   const first = days[0]?.date;
@@ -75,7 +75,7 @@ function festivalPeriod(
   return { start, end };
 }
 
-function records(value: unknown): Record<string, unknown>[] {
+export function records(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value)
     ? value.filter(
         (item): item is Record<string, unknown> =>
@@ -84,7 +84,7 @@ function records(value: unknown): Record<string, unknown>[] {
     : [];
 }
 
-function publishedSets(
+export function publishedSets(
   pack: Record<string, unknown>,
   festivalId: string,
 ): LiveActivitySet[] {
