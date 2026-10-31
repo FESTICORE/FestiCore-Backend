@@ -6,6 +6,12 @@ import {
 } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { ApnsService } from './apns.service';
+import { buildLiveActivityContentState } from './live-activity-content';
+import {
+  festivalPeriod,
+  publishedSets,
+  records,
+} from './live-activity.service';
 
 const POLL_MS = 60_000;
 const BATCH_SIZE = 100;
@@ -36,15 +42,26 @@ interface Delivery {
 
 interface DeliveryTarget {
   apnsToken: string | null;
+  liveActivityPushToStartToken: string | null;
+  liveActivityId: string | null;
   apnsEnvironment: 'sandbox' | 'production' | null;
   name: string | null;
   days: unknown;
   publishedVersion: number;
   checklist: unknown;
   packDownloadedVersion: number | null;
+  published: Record<string, unknown>;
 }
 
 const REMINDER_PREFIX = 'festival-reminder:';
+const LIVE_START_PREFIX = 'live-activity-start:';
+
+function liveActivityStartAt(days: Day[]): Date | null {
+  const first = [...days].sort((left, right) =>
+    left.date.localeCompare(right.date),
+  )[0];
+  return first ? new Date(first.startsAt) : null;
+}
 
 function reminderAt(days: Day[]): Date | null {
   const firstDate = days.map((day) => day.date).sort()[0];
@@ -204,6 +221,33 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
           [row.id, eventKey, startsAt],
         );
       }
+      const firstStart = liveActivityStartAt(days);
+      if (
+        row.name &&
+        firstStart &&
+        firstStart.getTime() >= now.getTime() - LATE_GRACE_MS
+      ) {
+        await this.db.query(
+          `INSERT INTO "notification_deliveries"
+            ("id", "deviceId", "festivalId", "eventKey", "scheduledAt", "nextAttemptAt")
+           SELECT gen_random_uuid(), s."deviceId", $1, $2, $3::timestamptz, $3::timestamptz
+           FROM "device_subscriptions" s
+           JOIN "devices" d ON d."id" = s."deviceId"
+           WHERE s."festivalId" = $1 AND s."pinned" = true
+             AND s."festivalStarts" = true
+             AND d."liveActivityPushToStartToken" IS NOT NULL
+             AND d."apnsEnvironment" IS NOT NULL
+             AND d."liveActivityId" IS NULL
+           ON CONFLICT ("deviceId", "eventKey") DO UPDATE
+             SET "scheduledAt" = EXCLUDED."scheduledAt",
+                 "nextAttemptAt" = EXCLUDED."nextAttemptAt",
+                 "status" = 'pending', "leaseUntil" = NULL
+           WHERE "notification_deliveries"."status" = 'cancelled'
+              OR ("notification_deliveries"."status" = 'pending'
+                  AND "notification_deliveries"."scheduledAt" <> EXCLUDED."scheduledAt")`,
+          [row.id, `${LIVE_START_PREFIX}${row.id}`, firstStart],
+        );
+      }
     }
   }
 
@@ -226,6 +270,7 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
   }
 
   async deliver(job: Delivery, now = new Date()): Promise<void> {
+    const liveStart = job.eventKey === `${LIVE_START_PREFIX}${job.festivalId}`;
     const packUpdate = job.eventKey.startsWith(
       `pack-updated:${job.festivalId}:`,
     );
@@ -237,9 +282,10 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
         : 'festivalStarts';
     const rows = await this.db.query<DeliveryTarget[]>(
       `
-      SELECT d."apnsToken", d."apnsEnvironment",
+      SELECT d."apnsToken", d."liveActivityPushToStartToken",
+        d."liveActivityId", d."apnsEnvironment",
         f."published"->>'name' AS "name", f."published"->'days' AS "days",
-        f."published"->'checklist' AS "checklist",
+        f."published"->'checklist' AS "checklist", f."published",
         f."publishedVersion" AS "publishedVersion",
         s."packDownloadedVersion" AS "packDownloadedVersion"
       FROM "notification_deliveries" n
@@ -254,6 +300,10 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
       [job.id, job.leaseUntil],
     );
     const target = rows[0];
+    if (liveStart) {
+      await this.deliverLiveActivityStart(job, target, now);
+      return;
+    }
     if (packUpdate) {
       const expectedVersion = Number(
         job.eventKey.slice(`pack-updated:${job.festivalId}:`.length),
@@ -352,6 +402,132 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
           eventKey: job.eventKey,
         },
       ),
+    );
+  }
+
+  private async deliverLiveActivityStart(
+    job: Delivery,
+    target: DeliveryTarget | undefined,
+    now: Date,
+  ): Promise<void> {
+    const start = liveActivityStartAt(validDays(target?.days));
+    const period = festivalPeriod(
+      records(target?.published?.days).sort((left, right) =>
+        String(left.date).localeCompare(String(right.date)),
+      ),
+    );
+    if (
+      !target?.liveActivityPushToStartToken ||
+      !target.apnsEnvironment ||
+      !target.name ||
+      !period ||
+      !start ||
+      start.getTime() < now.getTime() - LATE_GRACE_MS ||
+      target.liveActivityId
+    ) {
+      await this.finish(job, 'cancelled', 'TARGET_UNAVAILABLE');
+      return;
+    }
+    if (start.getTime() !== new Date(job.scheduledAt).getTime()) {
+      await this.db.query(
+        `UPDATE "notification_deliveries"
+         SET "status" = 'pending', "scheduledAt" = $3, "nextAttemptAt" = $3,
+           "leaseUntil" = NULL, "lastErrorCode" = NULL
+         WHERE "id" = $1 AND "status" = 'leased' AND "leaseUntil" = $2`,
+        [job.id, job.leaseUntil, start],
+      );
+      return;
+    }
+    const state = buildLiveActivityContentState({
+      festivalId: job.festivalId,
+      now,
+      festivalStart: period.start,
+      festivalEnd: period.end,
+      sets: publishedSets(target.published, job.festivalId),
+      flagsEnabled: false,
+      flags: [],
+      member: null,
+    });
+    if (state.phase === 'finished') {
+      await this.finish(job, 'cancelled', 'FESTIVAL_FINISHED');
+      return;
+    }
+
+    // Reserve the attempt durably before APNs. A timeout or process crash may
+    // mean APNs accepted the start; replaying it could create a second activity.
+    const reserved = await this.db.query<Array<{ id: string }>>(
+      `UPDATE "notification_deliveries" SET "status" = 'failed',
+         "attempts" = "attempts" + 1, "leaseUntil" = NULL,
+         "lastErrorCode" = 'OUTCOME_UNKNOWN'
+       WHERE "id" = $1 AND "status" = 'leased' AND "leaseUntil" = $2
+       RETURNING "id"`,
+      [job.id, job.leaseUntil],
+    );
+    if (!reserved.length) return;
+
+    let result: Awaited<ReturnType<ApnsService['sendLiveActivityStart']>>;
+    try {
+      result = await this.apns.sendLiveActivityStart(
+        target.liveActivityPushToStartToken,
+        target.apnsEnvironment,
+        {
+          festivalId: job.festivalId,
+          festivalName: target.name,
+          state: { ...state },
+        },
+      );
+    } catch {
+      return;
+    }
+    if (result.accepted) {
+      await this.finishLiveStart(job, 'sent', null);
+      return;
+    }
+    if (result.permanent) {
+      await this.db.query(
+        `UPDATE "devices" SET "liveActivityPushToStartToken" = NULL
+         WHERE "id" = $1 AND "liveActivityPushToStartToken" = $2`,
+        [job.deviceId, target.liveActivityPushToStartToken],
+      );
+      await this.finishLiveStart(
+        job,
+        'failed',
+        result.reason ?? 'APNS_REJECTED',
+      );
+      return;
+    }
+    const reason = result.reason ?? 'APNS_REJECTED';
+    if (reason === 'APNS_NETWORK_ERROR' || reason === 'APNS_HTTP_UNKNOWN')
+      return;
+    if (job.attempts + 1 >= MAX_ATTEMPTS || reason === 'PayloadTooLarge') {
+      await this.finishLiveStart(job, 'failed', reason);
+      return;
+    }
+    const minutes = /^APNS_HTTP_5\d\d$/.test(reason)
+      ? 15
+      : Math.min(2 ** (job.attempts + 1), 60);
+    await this.db.query(
+      `UPDATE "notification_deliveries" SET "status" = 'pending',
+         "nextAttemptAt" = now() + ($2 * interval '1 minute'),
+         "lastErrorCode" = $3
+       WHERE "id" = $1 AND "status" = 'failed'
+         AND "lastErrorCode" = 'OUTCOME_UNKNOWN'`,
+      [job.id, minutes, reason.slice(0, 128)],
+    );
+  }
+
+  private async finishLiveStart(
+    job: Delivery,
+    status: 'sent' | 'failed',
+    reason: string | null,
+  ): Promise<void> {
+    await this.db.query(
+      `UPDATE "notification_deliveries" SET "status" = $2,
+         "sentAt" = CASE WHEN $2 = 'sent' THEN now() ELSE NULL END,
+         "lastErrorCode" = $3
+       WHERE "id" = $1 AND "status" = 'failed'
+         AND "lastErrorCode" = 'OUTCOME_UNKNOWN'`,
+      [job.id, status, reason?.slice(0, 128) ?? null],
     );
   }
 
