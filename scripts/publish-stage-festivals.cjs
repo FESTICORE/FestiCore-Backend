@@ -18,12 +18,17 @@
  *                         다음 공연이 없으면 그 축제는 건너뛴다.
  *
  * 토큰은 출력하지 않는다. 승인된 시간표가 없거나 발행 검증을 통과하지 못하는 축제는 가짜 시간표를 만들지 않고
- * 사유와 함께 건너뛴다. 이미 관리 중인 초안이 있는 축제는 덮어쓰지 않는다.
+ * 사유와 함께 건너뛴다. 이미 가져온 초안이 있는 축제는 관리자가 편집 중일 수 있어 건드리지 않는다.
  */
 const { createHash } = require('node:crypto');
 
 const STAGE_HOST = 'festicore-dev.up.railway.app';
 const PROD_HOST = 'festicore.up.railway.app';
+/** AdminSessionGuard는 변경 요청에 환경별 ADMIN_WEB_URL과 같은 Origin을 요구한다(docs/deployment/RAILWAY.md). */
+const ADMIN_ORIGINS = {
+  [STAGE_HOST]: 'https://festicoreadmin-dev.up.railway.app',
+  [PROD_HOST]: 'https://festicoreadmin.up.railway.app',
+};
 const MAX_STAGES = 8;
 const MAX_STAGE_NAME = 24;
 const MAX_ARTIST = 60;
@@ -70,7 +75,10 @@ function validatedBase(value, allowProd) {
 function createClient(base, token) {
   return async function request(method, path, { body, ifMatch, auth = false } = {}) {
     const headers = { Accept: 'application/json' };
-    if (auth) headers.Authorization = `Bearer ${token}`;
+    if (auth) {
+      headers.Authorization = `Bearer ${token}`;
+      headers.Origin = ADMIN_ORIGINS[new URL(base).host];
+    }
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     if (ifMatch) headers['If-Match'] = ifMatch;
     const response = await fetch(`${base}/api/v1/${path}`, {
@@ -242,13 +250,6 @@ async function draftVersion(request, id) {
   return `"d${(await adminDraft(request, id)).draftVersion}"`;
 }
 
-/** 가져오기 직후 아무도 손대지 않은 초안(무대·공연 없음)만 이어서 진행한다. */
-function isUntouchedImport(data) {
-  const draft = data?.draft ?? {};
-  const empty = (value) => !Array.isArray(value) || value.length === 0;
-  return empty(draft.stages) && empty(draft.sets);
-}
-
 function failureMessage(step, { status, json }) {
   const errors = Array.isArray(json?.data?.errors) ? json.data.errors.join(', ') : '';
   return `${step} 실패 (HTTP ${status}${json?.code ? ` ${json.code}` : ''}) ${errors || json?.message || ''}`.trim();
@@ -258,11 +259,9 @@ class SkipError extends Error {}
 
 async function publish(request, festival, draft) {
   const imported = await request('POST', `admin/festivals/discovered/${festival.id}/import`, { body: {}, auth: true });
-  if (imported.status === 409 && !isUntouchedImport(await adminDraft(request, festival.id))) {
-    throw new SkipError('이미 관리 중인 초안이 있음 (관리자 화면에서 확인)');
-  }
-  if (imported.status === 409) console.log(`  · ${festival.id}: 가져오기만 된 빈 초안을 이어서 진행`);
-  if (![200, 201, 409].includes(imported.status)) throw new Error(failureMessage('가져오기', imported));
+  // 이미 가져온 초안은 관리자 편집인지 이전 실행이 남긴 것인지 구분할 수 없어 건드리지 않고 실패로 보고한다.
+  if (imported.status === 409) throw new Error('이미 가져온 초안이 있어 발행하지 않음 (관리자 화면에서 확인)');
+  if (![200, 201].includes(imported.status)) throw new Error(failureMessage('가져오기', imported));
 
   const patched = await request('PATCH', `admin/festivals/${festival.id}/draft`, {
     body: draft,
@@ -341,4 +340,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { buildDraft, festivalDates, fillEnds, isUntouchedImport, preflight, stageID, validatedBase };
+module.exports = { buildDraft, festivalDates, fillEnds, preflight, stageID, validatedBase };
