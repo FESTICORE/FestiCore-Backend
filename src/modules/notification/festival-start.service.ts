@@ -183,7 +183,7 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
         await this.db.query(
           `INSERT INTO "notification_deliveries"
             ("id", "deviceId", "festivalId", "eventKey", "scheduledAt", "nextAttemptAt")
-           SELECT gen_random_uuid(), s."deviceId", $1, $2, $3::timestamptz, $3::timestamptz
+           SELECT gen_random_uuid(), s."deviceId", $1::varchar, $2::varchar, $3::timestamptz, $3::timestamptz
            FROM "device_subscriptions" s
            JOIN "devices" d ON d."id" = s."deviceId"
            WHERE s."festivalId" = $1 AND s."pinned" = true AND s."reminders" = true
@@ -205,7 +205,7 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
         await this.db.query(
           `INSERT INTO "notification_deliveries"
             ("id", "deviceId", "festivalId", "eventKey", "scheduledAt", "nextAttemptAt")
-           SELECT gen_random_uuid(), s."deviceId", $1, $2, $3::timestamptz, $3::timestamptz
+           SELECT gen_random_uuid(), s."deviceId", $1::varchar, $2::varchar, $3::timestamptz, $3::timestamptz
            FROM "device_subscriptions" s
            JOIN "devices" d ON d."id" = s."deviceId"
            WHERE s."festivalId" = $1 AND s."pinned" = true
@@ -230,7 +230,7 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
         await this.db.query(
           `INSERT INTO "notification_deliveries"
             ("id", "deviceId", "festivalId", "eventKey", "scheduledAt", "nextAttemptAt")
-           SELECT gen_random_uuid(), s."deviceId", $1, $2, $3::timestamptz, $3::timestamptz
+           SELECT gen_random_uuid(), s."deviceId", $1::varchar, $2::varchar, $3::timestamptz, $3::timestamptz
            FROM "device_subscriptions" s
            JOIN "devices" d ON d."id" = s."deviceId"
            WHERE s."festivalId" = $1 AND s."pinned" = true

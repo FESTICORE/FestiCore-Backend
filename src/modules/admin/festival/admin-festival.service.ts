@@ -492,7 +492,7 @@ export class AdminFestivalService {
     const queued = await manager.query<{ id: string }[]>(
       `INSERT INTO "notification_deliveries"
         ("id", "deviceId", "festivalId", "eventKey", "scheduledAt", "nextAttemptAt")
-       SELECT gen_random_uuid(), s."deviceId", $1, $2, now(), now()
+       SELECT gen_random_uuid(), s."deviceId", $1::varchar, $2::varchar, now(), now()
        FROM "device_subscriptions" s
        JOIN "devices" d ON d."id" = s."deviceId"
        WHERE s."festivalId" = $1 AND s."packUpdates" = true
