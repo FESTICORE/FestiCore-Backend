@@ -36,6 +36,7 @@ import {
   FlagStatusEvent,
 } from './flag.entity';
 import {
+  bearerStatusView,
   forcedStatus,
   isRecord,
   nextStatus,
@@ -660,6 +661,7 @@ export class FlagsService {
           ownerId: userId,
           restartDate: null,
           statusUpdatedAt: null,
+          statusUpdatedBy: null,
         });
         flag = await flags.save(flag);
         lockedCode.flagId = flag.id;
@@ -695,11 +697,16 @@ export class FlagsService {
   async bearerView(id: string, userId: string) {
     const flag = await this.bearerFlag(id, userId);
     const bearers = await this.bearers.find({ where: { flagId: id } });
-    const users = await this.users.findByIds(bearers.map((b) => b.userId));
+    const userIds = new Set(bearers.map((b) => b.userId));
+    if (flag.statusUpdatedBy) userIds.add(flag.statusUpdatedBy);
+    const users = await this.users.findByIds([...userIds]);
     const names = new Map(users.map((user) => [user.id, user.nickname]));
     return {
       flag: this.profile(flag),
-      status: statusView(flag),
+      status: bearerStatusView(
+        flag,
+        flag.statusUpdatedBy ? names.get(flag.statusUpdatedBy) : undefined,
+      ),
       planVisible: flag.planVisible,
       followerCount: flag.followerCount,
       coBearers: bearers.map((b) => ({
@@ -816,7 +823,10 @@ export class FlagsService {
           },
           429,
         );
-      Object.assign(flag, next, { statusUpdatedAt: new Date() });
+      Object.assign(flag, next, {
+        statusUpdatedAt: new Date(),
+        statusUpdatedBy: userId,
+      });
       await flags.save(flag);
       await manager.getRepository(FlagStatusEvent).save({
         flagId: id,
@@ -827,7 +837,10 @@ export class FlagsService {
       });
       await this.socialNotifications.enqueueFlagStatus(manager, flag, userId);
       await this.liveActivity.enqueueFestival(flag.festivalId, manager);
-      const response = statusView(flag);
+      const author = await manager
+        .getRepository(User)
+        .findOne({ where: { id: userId } });
+      const response = bearerStatusView(flag, author?.nickname);
       await this.remember(
         manager,
         userId,
@@ -868,7 +881,10 @@ export class FlagsService {
         }
       }
       const before = statusView(flag);
-      Object.assign(flag, next, { statusUpdatedAt: new Date() });
+      Object.assign(flag, next, {
+        statusUpdatedAt: new Date(),
+        statusUpdatedBy: null,
+      });
       await flags.save(flag);
       await manager.getRepository(FlagStatusEvent).save({
         flagId: id,

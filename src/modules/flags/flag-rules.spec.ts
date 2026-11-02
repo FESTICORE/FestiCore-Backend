@@ -1,6 +1,12 @@
 import { ConflictException } from '@nestjs/common';
 import { Flag } from './flag.entity';
-import { forcedStatus, nextStatus, validateProfilePatch } from './flag-rules';
+import {
+  bearerStatusView,
+  forcedStatus,
+  nextStatus,
+  statusView,
+  validateProfilePatch,
+} from './flag-rules';
 
 const now = new Date('2026-11-20T09:00:00.000Z');
 const flag = (status: Flag['status']): Flag =>
@@ -17,6 +23,23 @@ const flag = (status: Flag['status']): Flag =>
   });
 
 describe('Flag status rules', () => {
+  it('shows the last bearer in the bearer view only', () => {
+    const changed = Object.assign(flag('active'), {
+      statusUpdatedBy: 'usr_co',
+    });
+    expect(bearerStatusView(changed, '민지').updatedBy).toEqual({
+      userId: 'usr_co',
+      nickname: '민지',
+    });
+    expect(bearerStatusView(changed, null).updatedBy).toEqual({
+      userId: 'usr_co',
+      nickname: '',
+    });
+    expect(statusView(changed)).not.toHaveProperty('updatedBy');
+    const forced = Object.assign(flag('active'), { statusUpdatedBy: null });
+    expect(bearerStatusView(forced, undefined).updatedBy).toBeNull();
+  });
+
   it('requires zone and activity for first update', () => {
     expect(() =>
       nextStatus(

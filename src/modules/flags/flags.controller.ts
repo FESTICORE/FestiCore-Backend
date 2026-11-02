@@ -466,6 +466,7 @@ export class FlagsController {
         zoneId: 'zone_a',
         activity: 'sing',
         updatedAt: '2026-10-21T00:00:00.000Z',
+        updatedBy: { userId: 'usr_123', nickname: '민지' },
       },
     },
   })

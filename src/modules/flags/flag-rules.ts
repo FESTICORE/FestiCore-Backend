@@ -301,3 +301,16 @@ export function statusView(flag: Flag) {
     updatedAt: (flag.statusUpdatedAt ?? flag.createdAt).toISOString(),
   };
 }
+
+/** 기수 화면용 상태. 마지막으로 바꾼 기수(공동 기수 포함)를 함께 보여 준다. */
+export function bearerStatusView(
+  flag: Flag,
+  nickname: string | null | undefined,
+) {
+  return {
+    ...statusView(flag),
+    updatedBy: flag.statusUpdatedBy
+      ? { userId: flag.statusUpdatedBy, nickname: nickname ?? '' }
+      : null,
+  };
+}
