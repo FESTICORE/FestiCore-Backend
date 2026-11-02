@@ -496,6 +496,7 @@ export class AdminFestivalService {
        FROM "device_subscriptions" s
        JOIN "devices" d ON d."id" = s."deviceId"
        WHERE s."festivalId" = $1 AND s."packUpdates" = true
+         AND d."notifyPackUpdates" = true
          AND d."apnsToken" IS NOT NULL AND d."apnsEnvironment" IS NOT NULL
        ON CONFLICT ("deviceId", "eventKey") DO NOTHING
        RETURNING "id"`,

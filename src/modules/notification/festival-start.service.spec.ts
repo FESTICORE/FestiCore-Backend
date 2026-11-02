@@ -340,6 +340,7 @@ describe('FestivalStartService', () => {
     await service.deliver(update, scheduledAt);
 
     expect(query.mock.calls[0][0]).toContain('s."packUpdates" = true');
+    expect(query.mock.calls[0][0]).toContain('d."notifyPackUpdates" = true');
     expect(sendPackUpdated).toHaveBeenCalledWith(
       'token',
       'production',

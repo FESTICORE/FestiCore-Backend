@@ -107,3 +107,44 @@ export class PackDownloadDto {
   @Min(1)
   packVersion!: number;
 }
+
+export class NotificationSettingsDto {
+  @ApiPropertyOptional({ example: true, description: '팔로우한 깃발 이동' })
+  @IsOptional()
+  @IsBoolean()
+  flagStatus?: boolean;
+
+  @ApiPropertyOptional({ example: true, description: '크루원 상태' })
+  @IsOptional()
+  @IsBoolean()
+  crewStatus?: boolean;
+
+  @ApiPropertyOptional({ example: true, description: '크루 모여! 요청' })
+  @IsOptional()
+  @IsBoolean()
+  crewGather?: boolean;
+
+  @ApiPropertyOptional({
+    example: true,
+    description: '공연 10분 전. 서버 발송 기능 전까지 값만 저장합니다.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  setReminders?: boolean;
+
+  @ApiPropertyOptional({
+    example: true,
+    description: '귀가 알림. 서버 발송 기능 전까지 값만 저장합니다.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  homecoming?: boolean;
+
+  @ApiPropertyOptional({
+    example: true,
+    description: '팩 업데이트. 꺼지면 축제별 packUpdates 구독보다 우선합니다.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  packUpdates?: boolean;
+}

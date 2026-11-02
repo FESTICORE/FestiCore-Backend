@@ -18,9 +18,25 @@ import { LiveActivityService } from '../notification/live-activity.service';
 import {
   DeviceSubscriptionDto,
   LiveActivityDto,
+  NotificationSettingsDto,
   RegisterDeviceDto,
   PackDownloadDto,
 } from './device.dto';
+
+/** API 항목 이름과 devices 열 이름 */
+const NOTIFICATION_SETTING_COLUMNS = {
+  flagStatus: 'notifyFlagStatus',
+  crewStatus: 'notifyCrewStatus',
+  crewGather: 'notifyCrewGather',
+  setReminders: 'notifySetReminders',
+  homecoming: 'notifyHomecoming',
+  packUpdates: 'notifyPackUpdates',
+} as const;
+
+export type NotificationSettings = Record<
+  keyof typeof NOTIFICATION_SETTING_COLUMNS,
+  boolean
+>;
 
 @Injectable()
 export class DeviceService {
@@ -159,6 +175,48 @@ export class DeviceService {
         id,
       ]);
     });
+  }
+
+  async notificationSettings(
+    id: string,
+    principal: DevicePrincipal,
+  ): Promise<NotificationSettings> {
+    return this.settingsView(await this.ownedDevice(id, principal));
+  }
+
+  /** 보낸 항목만 바꾸고 바뀐 전체 설정을 돌려준다. */
+  async updateNotificationSettings(
+    id: string,
+    body: NotificationSettingsDto,
+    principal: DevicePrincipal,
+  ): Promise<NotificationSettings> {
+    const device = await this.ownedDevice(id, principal);
+    const changes: Partial<Device> = {};
+    for (const [key, column] of Object.entries(NOTIFICATION_SETTING_COLUMNS)) {
+      const value = body[key as keyof NotificationSettingsDto];
+      if (typeof value === 'boolean') {
+        changes[column] = value;
+        device[column] = value;
+      }
+    }
+    if (Object.keys(changes).length > 0) {
+      const result = await this.devices.update(
+        this.ownerCondition(id, principal),
+        changes,
+      );
+      if (result.affected !== 1)
+        throw new ForbiddenException('기기 소유권을 확인할 수 없습니다.');
+    }
+    return this.settingsView(device);
+  }
+
+  private settingsView(device: Device): NotificationSettings {
+    return Object.fromEntries(
+      Object.entries(NOTIFICATION_SETTING_COLUMNS).map(([key, column]) => [
+        key,
+        device[column] !== false,
+      ]),
+    ) as NotificationSettings;
   }
 
   async startLiveActivity(

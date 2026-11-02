@@ -595,6 +595,7 @@ describe('pack update delivery queue', () => {
     });
     const calls = query.mock.calls as unknown[][];
     expect(calls[0][0]).toContain('s."packUpdates" = true');
+    expect(calls[0][0]).toContain('d."notifyPackUpdates" = true');
     expect(calls[0][1]).toEqual([draft.id, `pack-updated:${draft.id}:1`]);
     expect(enqueueFestival).toHaveBeenCalledWith(draft.id, manager);
     expect(record).toHaveBeenCalledWith(manager, {

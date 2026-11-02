@@ -216,6 +216,70 @@ describe('DeviceService ownership and pins', () => {
     ).rejects.toBeInstanceOf(ForbiddenException);
   });
 
+  it('returns all notification kinds on for a device saved before settings existed', async () => {
+    devices.findOne.mockResolvedValue({ id, userId: user.userId });
+    await expect(service.notificationSettings(id, user)).resolves.toEqual({
+      flagStatus: true,
+      crewStatus: true,
+      crewGather: true,
+      setReminders: true,
+      homecoming: true,
+      packUpdates: true,
+    });
+  });
+
+  it('updates only the sent notification kinds for the owned device', async () => {
+    devices.findOne.mockResolvedValue({
+      id,
+      deviceTokenId: 'token-a',
+      notifyFlagStatus: true,
+      notifyCrewStatus: true,
+      notifyCrewGather: true,
+      notifySetReminders: true,
+      notifyHomecoming: true,
+      notifyPackUpdates: true,
+    });
+    await expect(
+      service.updateNotificationSettings(
+        id,
+        { crewGather: false, packUpdates: false },
+        device,
+      ),
+    ).resolves.toEqual({
+      flagStatus: true,
+      crewStatus: true,
+      crewGather: false,
+      setReminders: true,
+      homecoming: true,
+      packUpdates: false,
+    });
+    expect(devices.update).toHaveBeenCalledWith(
+      { id, deviceTokenId: 'token-a' },
+      { notifyCrewGather: false, notifyPackUpdates: false },
+    );
+  });
+
+  it('does not write when no notification kind is sent', async () => {
+    devices.findOne.mockResolvedValue({ id, userId: user.userId });
+    await service.updateNotificationSettings(id, {}, user);
+    expect(devices.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects notification settings of another account device', async () => {
+    devices.findOne.mockResolvedValue({ id, userId: 'user-a' });
+    await expect(
+      service.updateNotificationSettings(
+        id,
+        { flagStatus: false },
+        { kind: 'user', userId: 'user-b' },
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(
+      service.notificationSettings(id, anonymous),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(devices.update).not.toHaveBeenCalled();
+  });
+
   it('keeps unpinned rows, preserves pack opt-in meaning and download version', async () => {
     devices.findOne.mockResolvedValue({
       id,
