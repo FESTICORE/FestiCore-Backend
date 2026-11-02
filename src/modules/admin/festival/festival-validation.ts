@@ -47,6 +47,67 @@ function calendarDate(value: unknown): value is string {
   );
 }
 
+const MAX_LAST_DEPARTURES = 31;
+
+/** 귀가 정보: 막차·셔틀 시각은 오프셋이 있는 ISO8601이고 날짜별로 한 번만 둔다. */
+function validateReturnDirections(
+  draft: FestivalDocument,
+  forPublish: boolean,
+): string[] {
+  const errors: string[] = [];
+  const directions = draft.directions as Record<string, unknown>;
+  for (const key of ['lastShuttleAt', 'lastTrainAt']) {
+    const value = directions[key];
+    if (value !== undefined && value !== null && !iso(value))
+      errors.push(`directions.${key}: 오프셋 포함 ISO8601 또는 null 필요`);
+  }
+  const shuttle = directions.shuttle;
+  if (
+    object(shuttle) &&
+    shuttle.stopName !== undefined &&
+    shuttle.stopName !== null &&
+    (typeof shuttle.stopName !== 'string' ||
+      [...shuttle.stopName.trim()].length < 1 ||
+      [...shuttle.stopName].length > 40)
+  )
+    errors.push('directions.shuttle.stopName: 1..40자 또는 null 필요');
+  const departures = directions.lastDepartures;
+  if (departures === undefined) return errors;
+  if (!Array.isArray(departures) || departures.length > MAX_LAST_DEPARTURES) {
+    errors.push(
+      `directions.lastDepartures: 최대 ${MAX_LAST_DEPARTURES}개 배열 필요`,
+    );
+    return errors;
+  }
+  const dayDates = new Set(
+    (Array.isArray(draft.days) ? (draft.days as unknown[]) : [])
+      .filter(object)
+      .map((day) => day.date),
+  );
+  const seen = new Set<string>();
+  departures.forEach((item: unknown, index) => {
+    const at = `directions.lastDepartures[${index}]`;
+    if (!object(item) || !calendarDate(item.date)) {
+      errors.push(`${at}.date: YYYY-MM-DD 필요`);
+      return;
+    }
+    if (seen.has(item.date)) errors.push(`${at}.date: 날짜 중복`);
+    seen.add(item.date);
+    if (forPublish && !dayDates.has(item.date))
+      errors.push(`${at}.date: days에 있는 개최일이어야 함`);
+    const times = ['shuttleAt', 'trainAt'].map((key) => item[key]);
+    times.forEach((value, i) => {
+      if (value !== undefined && value !== null && !iso(value))
+        errors.push(
+          `${at}.${i ? 'trainAt' : 'shuttleAt'}: 오프셋 포함 ISO8601 또는 null 필요`,
+        );
+    });
+    if (times.every((value) => value === undefined || value === null))
+      errors.push(`${at}: shuttleAt 또는 trainAt 중 하나 필요`);
+  });
+  return errors;
+}
+
 export function validateDraft(
   draft: FestivalDocument,
   forPublish = false,
@@ -145,6 +206,8 @@ export function validateDraft(
         'directions.location: 검증된 위도·경도, 공연장 일치 장소명과 HTTPS 출처가 필요',
       );
   }
+  if (object(draft.directions))
+    errors.push(...validateReturnDirections(draft, forPublish));
   if (
     draft.thumbUrl !== undefined &&
     draft.thumbUrl !== null &&

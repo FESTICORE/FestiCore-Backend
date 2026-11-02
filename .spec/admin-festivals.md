@@ -41,3 +41,23 @@
 ## 검증
 
 `src/modules/admin/festival/*.spec.ts`에서 입력 검증·동시 수정·권한·발행·롤백을 확인한다.
+
+## 귀가 정보 입력 (`directions`)
+
+관리자는 `PATCH /:id/draft`의 `directions`로 귀가 정보를 입력하고 발행하면 공개 팩에 반영된다.
+
+```json
+"directions": {
+  "shuttle": { "body": "정문 셔틀 운행", "links": [], "stopName": "정문 셔틀 정류장" },
+  "lastShuttleAt": "2026-10-17T23:40:00+09:00",
+  "lastTrainAt": "2026-10-17T23:52:00+09:00",
+  "lastDepartures": [
+    { "date": "2026-10-17", "shuttleAt": "2026-10-17T23:40:00+09:00", "trainAt": "2026-10-17T23:52:00+09:00" }
+  ]
+}
+```
+
+- 날짜마다 다를 수 있는 막차·마지막 셔틀은 `lastDepartures`에 둔다. 최대 31개이며 `date`는 `YYYY-MM-DD`, 날짜는 중복할 수 없다. `shuttleAt`·`trainAt`은 오프셋을 포함한 ISO8601 또는 null이고 둘 중 하나는 있어야 한다. 자정을 넘는 막차는 다음 날짜의 시각을 그대로 쓴다.
+- 발행할 때는 `lastDepartures[].date`가 `days[].date` 중 하나여야 한다. 초안 저장 시에는 날짜 형식만 검사한다.
+- 단일 값 `lastShuttleAt`·`lastTrainAt`은 기존 앱 호환용으로 남기며 오프셋 포함 ISO8601 또는 null만 허용한다. 자유 문장(예: `23:40`)은 저장할 수 없다.
+- `shuttle.stopName`은 셔틀 정류장 이름 1~40자 또는 null이다. 상세 안내는 기존 `shuttle.body`에 둔다.

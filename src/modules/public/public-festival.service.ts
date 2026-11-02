@@ -105,6 +105,7 @@ function projectDirections(value: unknown, venue: unknown): Document {
     'memo',
     'lastShuttleAt',
     'lastTrainAt',
+    'lastDepartures',
     'mapLinks',
     'location',
     'source',
@@ -115,11 +116,17 @@ function projectDirections(value: unknown, venue: unknown): Document {
         'body',
         'links',
         ...(key === 'transit' ? ['stationName', 'walkMinutes'] : []),
+        ...(key === 'shuttle' ? ['stopName'] : []),
       ]);
       section.links = projectedArray(section.links, ['label', 'url']);
       direction[key] = section;
     }
   }
+  direction.lastDepartures = projectedArray(direction.lastDepartures, [
+    'date',
+    'shuttleAt',
+    'trainAt',
+  ]);
   direction.mapLinks = fields(direction.mapLinks, ['naver', 'kakao']);
   const location = verifiedVenueLocation(direction.location);
   direction.location =

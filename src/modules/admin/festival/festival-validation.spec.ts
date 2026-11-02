@@ -26,6 +26,72 @@ const draft = {
 };
 
 describe('festival draft validation', () => {
+  describe('return directions', () => {
+    const withDirections = (directions: Record<string, unknown>) => ({
+      ...draft,
+      directions,
+    });
+
+    it('accepts per-day last shuttle and train times with offsets', () => {
+      const valid = withDirections({
+        lastShuttleAt: '2026-11-20T23:40:00+09:00',
+        lastTrainAt: null,
+        shuttle: { body: '정문 셔틀', links: [], stopName: '정문 셔틀 정류장' },
+        lastDepartures: [
+          {
+            date: '2026-11-20',
+            shuttleAt: '2026-11-20T23:40:00+09:00',
+            trainAt: '2026-11-21T00:12:00+09:00',
+          },
+        ],
+      });
+      expect(validateDraft(valid)).toEqual([]);
+      expect(validateDraft(valid, true)).toEqual([]);
+    });
+
+    it('rejects free-text times, duplicate or empty days and long stop names', () => {
+      const errors = validateDraft(
+        withDirections({
+          lastShuttleAt: '23:40',
+          lastTrainAt: '2026-11-20T23:52:00',
+          shuttle: { body: '셔틀', links: [], stopName: 'x'.repeat(41) },
+          lastDepartures: [
+            { date: '2026-11-20', shuttleAt: '23:40' },
+            { date: '2026-11-20', trainAt: '2026-11-20T23:52:00+09:00' },
+            { date: '2026-02-30', trainAt: '2026-11-20T23:52:00+09:00' },
+            { date: '2026-11-20' },
+          ],
+        }),
+      );
+      expect(errors).toEqual(
+        expect.arrayContaining([
+          'directions.lastShuttleAt: 오프셋 포함 ISO8601 또는 null 필요',
+          'directions.lastTrainAt: 오프셋 포함 ISO8601 또는 null 필요',
+          'directions.shuttle.stopName: 1..40자 또는 null 필요',
+          'directions.lastDepartures[0].shuttleAt: 오프셋 포함 ISO8601 또는 null 필요',
+          'directions.lastDepartures[1].date: 날짜 중복',
+          'directions.lastDepartures[2].date: YYYY-MM-DD 필요',
+          'directions.lastDepartures[3]: shuttleAt 또는 trainAt 중 하나 필요',
+        ]),
+      );
+    });
+
+    it('requires departure dates to be festival days only when publishing', () => {
+      const other = withDirections({
+        lastDepartures: [
+          { date: '2026-11-21', trainAt: '2026-11-21T23:52:00+09:00' },
+        ],
+      });
+      expect(validateDraft(other)).toEqual([]);
+      expect(validateDraft(other, true)).toContain(
+        'directions.lastDepartures[0].date: days에 있는 개최일이어야 함',
+      );
+      expect(validateDraft(withDirections({ lastDepartures: 'x' }))).toContain(
+        'directions.lastDepartures: 최대 31개 배열 필요',
+      );
+    });
+  });
+
   it('requires a complete verified coordinate pair for directions', () => {
     const location = {
       latitude: 37.66469544695199,

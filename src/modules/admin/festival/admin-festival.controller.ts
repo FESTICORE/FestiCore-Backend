@@ -54,6 +54,7 @@ const draftExample = {
     memo: null,
     lastShuttleAt: null,
     lastTrainAt: null,
+    lastDepartures: [],
     mapLinks: { naver: null, kakao: null },
     location: null,
     source: {
