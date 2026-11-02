@@ -290,6 +290,7 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
         s."packDownloadedVersion" AS "packDownloadedVersion"
       FROM "notification_deliveries" n
       JOIN "devices" d ON d."id" = n."deviceId"
+        ${packUpdate ? 'AND d."notifyPackUpdates" = true' : ''}
       JOIN "device_subscriptions" s ON s."deviceId" = n."deviceId"
         AND s."festivalId" = n."festivalId" AND s."${subscriptionFlag}" = true
         ${packUpdate ? '' : 'AND s."pinned" = true'}

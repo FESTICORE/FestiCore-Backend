@@ -47,6 +47,24 @@ export class Device {
   @Column({ type: 'varchar', length: 256, nullable: true, select: false })
   liveActivityPushToken!: string | null;
 
+  @Column({ type: 'boolean', default: true })
+  notifyFlagStatus!: boolean;
+
+  @Column({ type: 'boolean', default: true })
+  notifyCrewStatus!: boolean;
+
+  @Column({ type: 'boolean', default: true })
+  notifyCrewGather!: boolean;
+
+  @Column({ type: 'boolean', default: true })
+  notifySetReminders!: boolean;
+
+  @Column({ type: 'boolean', default: true })
+  notifyHomecoming!: boolean;
+
+  @Column({ type: 'boolean', default: true })
+  notifyPackUpdates!: boolean;
+
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt!: Date;
 

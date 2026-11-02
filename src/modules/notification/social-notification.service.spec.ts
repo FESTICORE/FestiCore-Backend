@@ -173,6 +173,10 @@ describe('SocialNotificationService', () => {
       'd."userId" = n."recipientUserId"',
     );
     expect(query.mock.calls[0][0]).toContain('"crew_members"');
+    // 기기 알림 설정에서 끈 종류는 발송 대상이 되지 않는다.
+    expect(query.mock.calls[0][0]).toContain('d."notifyFlagStatus" = true');
+    expect(query.mock.calls[0][0]).toContain('d."notifyCrewStatus" = true');
+    expect(query.mock.calls[0][0]).toContain('d."notifyCrewGather" = true');
     expect(sendSocialNotification).not.toHaveBeenCalled();
     expect(query.mock.calls[1][1]).toEqual([
       job.id,

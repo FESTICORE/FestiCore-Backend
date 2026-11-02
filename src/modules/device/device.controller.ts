@@ -24,8 +24,31 @@ import {
   DeviceAuthGuard,
   type DeviceRequest,
 } from './device-auth.guard';
-import { LiveActivityDto, RegisterDeviceDto } from './device.dto';
+import {
+  LiveActivityDto,
+  NotificationSettingsDto,
+  RegisterDeviceDto,
+} from './device.dto';
 import { DeviceService } from './device.service';
+
+const notificationSettingsSchema = {
+  type: 'object',
+  properties: {
+    code: { type: 'string', example: 'SUCCESS' },
+    data: {
+      type: 'object',
+      properties: {
+        flagStatus: { type: 'boolean', example: true },
+        crewStatus: { type: 'boolean', example: true },
+        crewGather: { type: 'boolean', example: true },
+        setReminders: { type: 'boolean', example: true },
+        homecoming: { type: 'boolean', example: true },
+        packUpdates: { type: 'boolean', example: true },
+      },
+    },
+    message: { type: 'string', example: '성공적으로 처리되었습니다.' },
+  },
+};
 
 @ApiTags('Devices')
 @Controller('devices')
@@ -136,6 +159,47 @@ export class DeviceController {
   @ApiResponse({ status: 204, description: '삭제됨' })
   async remove(@Req() request: DeviceRequest) {
     await this.service.remove(this.deviceId(request), request.devicePrincipal);
+  }
+
+  @Get('notification-settings')
+  @ApiOperation({
+    summary: '기기 알림 설정 조회',
+    description:
+      '현재 기기의 알림 종류별 수신 여부를 조회합니다. 처음 등록한 기기는 모두 true입니다.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: '알림 종류별 수신 여부',
+    schema: notificationSettingsSchema,
+  })
+  async notificationSettings(@Req() request: DeviceRequest) {
+    return this.service.notificationSettings(
+      this.deviceId(request),
+      request.devicePrincipal,
+    );
+  }
+
+  @Put('notification-settings')
+  @ApiOperation({
+    summary: '기기 알림 설정 저장',
+    description:
+      '보낸 항목만 바꿉니다. flagStatus·crewStatus·crewGather·packUpdates가 꺼지면 이 기기에 해당 푸시를 보내지 않습니다. setReminders·homecoming은 서버 발송 기능 전까지 값만 저장합니다.',
+  })
+  @ApiBody({ type: NotificationSettingsDto })
+  @ApiResponse({
+    status: 200,
+    description: '저장 후 전체 알림 설정',
+    schema: notificationSettingsSchema,
+  })
+  async updateNotificationSettings(
+    @Body() body: NotificationSettingsDto,
+    @Req() request: DeviceRequest,
+  ) {
+    return this.service.updateNotificationSettings(
+      this.deviceId(request),
+      body,
+      request.devicePrincipal,
+    );
   }
 
   @Put('live-activity')

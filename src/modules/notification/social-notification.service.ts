@@ -300,6 +300,9 @@ export class SocialNotificationService
       `SELECT d."apnsToken", d."apnsEnvironment"
       FROM "social_notification_deliveries" n
       JOIN "devices" d ON d."id" = n."deviceId" AND d."userId" = n."recipientUserId"
+        AND ((n."type" = 'flag.status' AND d."notifyFlagStatus" = true)
+          OR (n."type" = 'crew.status' AND d."notifyCrewStatus" = true)
+          OR (n."type" = 'crew.gather' AND d."notifyCrewGather" = true))
       JOIN "users" u ON u."id" = n."recipientUserId"
         AND (n."type" = 'crew.gather' OR u."pushOptIn" = true)
       WHERE n."id" = $1 AND n."status" = 'leased' AND n."leaseUntil" = $2

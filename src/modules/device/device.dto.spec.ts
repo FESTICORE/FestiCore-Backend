@@ -1,5 +1,5 @@
 import { validate } from 'class-validator';
-import { RegisterDeviceDto } from './device.dto';
+import { NotificationSettingsDto, RegisterDeviceDto } from './device.dto';
 
 describe('RegisterDeviceDto APNs 토큰', () => {
   const make = (apnsToken: string | null) =>
@@ -50,5 +50,19 @@ describe('RegisterDeviceDto APNs 토큰', () => {
     const missing = make(null);
     Reflect.deleteProperty(missing, 'apnsEnvironment');
     expect(await validate(missing)).not.toHaveLength(0);
+  });
+});
+
+describe('NotificationSettingsDto', () => {
+  const make = (values: Record<string, unknown>) =>
+    Object.assign(new NotificationSettingsDto(), values);
+
+  it('알림 종류는 선택 boolean만 받는다', async () => {
+    expect(await validate(make({}))).toHaveLength(0);
+    expect(
+      await validate(make({ flagStatus: false, packUpdates: true })),
+    ).toHaveLength(0);
+    expect(await validate(make({ crewGather: 'false' }))).not.toHaveLength(0);
+    expect(await validate(make({ homecoming: 1 }))).not.toHaveLength(0);
   });
 });
