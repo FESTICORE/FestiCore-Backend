@@ -25,7 +25,11 @@ import { apiSuccess } from '../../common/interfaces/api-response.interface';
 import { Public } from '../auth/decorator/public.decorator';
 import { DeviceAuthGuard } from '../device/device-auth.guard';
 import { DeviceService } from '../device/device.service';
-import { envelopeEtag, PublicFestivalService } from './public-festival.service';
+import {
+  envelopeEtag,
+  packChangesEtag,
+  PublicFestivalService,
+} from './public-festival.service';
 import { PublicLiveService } from './public-live.service';
 
 function matchesEtag(header: string | undefined, etag: string): boolean {
@@ -370,7 +374,7 @@ export class PublicFestivalController {
   @ApiOperation({
     summary: '받은 팩과 현재 발행 팩의 차이',
     description:
-      'from에 앱이 가진 팩 버전을 보내면 현재 발행 버전, 받을 팩 크기(sizeBytes), 바뀐 공연 수(changedSets), 막차·마지막 셔틀 시각 변경을 돌려줍니다. 이전 버전 기록이 없으면 changedSets는 null입니다. 요청 본문은 없습니다.',
+      'from에 앱이 가진 팩 버전을 보내면 현재 발행 버전, 받을 팩 크기(sizeBytes), 바뀐 공연 수(changedSets), 막차·마지막 셔틀 시각 변경(ISO8601), 날짜별 막차 변경(lastDepartures)을 돌려줍니다. 이전 버전 기록이 없으면 changedSets는 null입니다. ETag가 같으면 304입니다. 요청 본문은 없습니다.',
   })
   @ApiParam(festivalId)
   @ApiQuery({
@@ -391,13 +395,32 @@ export class PublicFestivalController {
           toVersion: 13,
           sizeBytes: 524288,
           changedSets: 2,
-          lastShuttleAt: { before: '23:40', after: '23:20' },
+          lastShuttleAt: {
+            before: '2026-10-17T23:40:00+09:00',
+            after: '2026-10-17T23:20:00+09:00',
+          },
           lastTrainAt: null,
+          lastDepartures: [
+            {
+              date: '2026-10-18',
+              before: { shuttleAt: '2026-10-18T23:40:00+09:00', trainAt: null },
+              after: {
+                shuttleAt: '2026-10-18T23:20:00+09:00',
+                trainAt: '2026-10-19T00:12:00+09:00',
+              },
+            },
+          ],
         },
         message: '성공적으로 처리되었습니다.',
       },
     },
   })
+  @ApiHeader({
+    name: 'If-None-Match',
+    required: false,
+    description: '이전 응답의 ETag. 같은 from·현재 버전이면 304.',
+  })
+  @ApiResponse({ status: 304, description: '변경 요약이 바뀌지 않았습니다.' })
   @ApiResponse({
     status: 400,
     description: 'from이 1 이상 정수가 아닙니다.',
@@ -411,6 +434,7 @@ export class PublicFestivalController {
   async packChanges(
     @Param('id') id: string,
     @Query('from') from: string | undefined,
+    @Headers('if-none-match') ifNoneMatch: string | undefined,
     @Res() response: Response,
   ) {
     const fromVersion = Number(from);
@@ -426,7 +450,12 @@ export class PublicFestivalController {
       });
     const body = await this.service.packChanges(id, fromVersion);
     response.setHeader('Cache-Control', 'public, no-cache, must-revalidate');
-    this.send(response, body);
+    this.send(
+      response,
+      body,
+      packChangesEtag(body.fromVersion, body.toVersion),
+      ifNoneMatch,
+    );
   }
 
   @Get(':id/pack')

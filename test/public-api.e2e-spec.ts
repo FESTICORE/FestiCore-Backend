@@ -431,7 +431,17 @@ describe('Public festival API', () => {
               endsAt: '2026-11-20T12:30:00+09:00',
             },
           ],
-          directions: { lastShuttleAt: '23:40', lastTrainAt: null },
+          directions: {
+            lastShuttleAt: '2026-11-20T23:40:00+09:00',
+            lastTrainAt: null,
+            lastDepartures: [
+              {
+                date: '2026-11-20',
+                shuttleAt: '2026-11-20T23:40:00+09:00',
+                trainAt: null,
+              },
+            ],
+          },
         },
       },
     ];
@@ -447,10 +457,27 @@ describe('Public festival API', () => {
       toVersion: 7,
       sizeBytes: expect.any(Number) as number,
       changedSets: 1,
-      lastShuttleAt: { before: '23:40', after: null },
+      lastShuttleAt: { before: '2026-11-20T23:40:00+09:00', after: null },
       lastTrainAt: null,
+      lastDepartures: [
+        {
+          date: '2026-11-20',
+          before: { shuttleAt: '2026-11-20T23:40:00+09:00', trainAt: null },
+          after: null,
+        },
+      ],
     });
     expect(body.sizeBytes).toBeGreaterThan(0);
+    expect(changed.headers.etag).toBe('"cdm4-chg6-v7"');
+    const unchanged = await request(server)
+      .get(`/api/v1/festivals/${pack.id}/pack/changes?from=6`)
+      .set('If-None-Match', changed.headers.etag)
+      .expect(304);
+    expect(unchanged.text).toBe('');
+    await request(server)
+      .get(`/api/v1/festivals/${pack.id}/pack/changes?from=5`)
+      .set('If-None-Match', changed.headers.etag)
+      .expect(200);
 
     const latest = await request(server)
       .get(`/api/v1/festivals/${pack.id}/pack/changes?from=7`)

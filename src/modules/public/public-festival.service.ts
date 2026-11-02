@@ -145,6 +145,17 @@ export interface PackValueChange {
   after: string | null;
 }
 
+export interface DepartureTimes {
+  shuttleAt: string | null;
+  trainAt: string | null;
+}
+
+export interface DepartureChange {
+  date: string;
+  before: DepartureTimes | null;
+  after: DepartureTimes | null;
+}
+
 export interface PackChanges {
   fromVersion: number;
   toVersion: number;
@@ -152,6 +163,7 @@ export interface PackChanges {
   changedSets: number | null;
   lastShuttleAt: PackValueChange | null;
   lastTrainAt: PackValueChange | null;
+  lastDepartures: DepartureChange[] | null;
 }
 
 /** 추가·삭제되었거나 아티스트·무대·시각이 바뀐 공연 수 */
@@ -183,6 +195,47 @@ export function changedDirection(
   const before = value(previous);
   const after = value(current);
   return before === after ? null : { before, after };
+}
+
+/** 날짜별 마지막 셔틀·막차 시각이 추가·삭제·변경된 날짜만 날짜순으로 돌려준다. 변경이 없으면 null */
+export function changedDepartures(
+  previous: Document,
+  current: Document,
+): DepartureChange[] | null {
+  const byDate = (pack: Document) => {
+    const directions = pack.directions as Document | null | undefined;
+    return new Map(
+      requiredArray(directions?.lastDepartures)
+        .filter((item) => typeof item.date === 'string')
+        .map((item) => [
+          item.date as string,
+          {
+            shuttleAt:
+              typeof item.shuttleAt === 'string' ? item.shuttleAt : null,
+            trainAt: typeof item.trainAt === 'string' ? item.trainAt : null,
+          },
+        ]),
+    );
+  };
+  const before = byDate(previous);
+  const after = byDate(current);
+  const changes = [...new Set([...before.keys(), ...after.keys()])]
+    .sort()
+    .flatMap((date) => {
+      const from = before.get(date) ?? null;
+      const to = after.get(date) ?? null;
+      return JSON.stringify(from) === JSON.stringify(to)
+        ? []
+        : [{ date, before: from, after: to }];
+    });
+  return changes.length ? changes : null;
+}
+
+export function packChangesEtag(
+  fromVersion: number,
+  toVersion: number,
+): string {
+  return `"cdm${PUBLIC_PACK_PROJECTION_VERSION}-chg${fromVersion}-v${toVersion}"`;
 }
 
 export function publicPackEtag(packVersion: number): string {
@@ -2017,6 +2070,7 @@ export class PublicFestivalService {
         changedSets: 0,
         lastShuttleAt: null,
         lastTrainAt: null,
+        lastDepartures: null,
       };
     }
     const rows = await this.dataSource.query<{ pack: Document }[]>(
@@ -2032,6 +2086,7 @@ export class PublicFestivalService {
         changedSets: null,
         lastShuttleAt: null,
         lastTrainAt: null,
+        lastDepartures: null,
       };
     }
     const previous = projectPack(rows[0].pack);
@@ -2042,6 +2097,7 @@ export class PublicFestivalService {
       changedSets: changedSetCount(previous, current),
       lastShuttleAt: changedDirection(previous, current, 'lastShuttleAt'),
       lastTrainAt: changedDirection(previous, current, 'lastTrainAt'),
+      lastDepartures: changedDepartures(previous, current),
     };
   }
 
