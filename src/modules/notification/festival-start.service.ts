@@ -8,6 +8,10 @@ import { DataSource } from 'typeorm';
 import { ApnsService } from './apns.service';
 import { buildLiveActivityContentState } from './live-activity-content';
 import {
+  recordUserNotifications,
+  UserNotificationEntry,
+} from './user-notification.service';
+import {
   festivalPeriod,
   publishedSets,
   records,
@@ -41,6 +45,7 @@ interface Delivery {
 }
 
 interface DeliveryTarget {
+  ownerUserId: string | null;
   apnsToken: string | null;
   liveActivityPushToStartToken: string | null;
   liveActivityId: string | null;
@@ -282,7 +287,7 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
         : 'festivalStarts';
     const rows = await this.db.query<DeliveryTarget[]>(
       `
-      SELECT d."apnsToken", d."liveActivityPushToStartToken",
+      SELECT d."userId" AS "ownerUserId", d."apnsToken", d."liveActivityPushToStartToken",
         d."liveActivityId", d."apnsEnvironment",
         f."published"->>'name' AS "name", f."published"->'days' AS "days",
         f."published"->'checklist' AS "checklist", f."published",
@@ -353,14 +358,24 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
         target.packDownloadedVersion !== null &&
         Number(target.packDownloadedVersion) ===
           Number(target.publishedVersion);
+      const title = `${target.name} 준비물`;
+      const body = `준비물 확인했어요?${checklistSummary(target.checklist)}${hasPack ? '' : ' 지금 팩을 받아 두세요.'}`;
+      await this.recordInbox(job, target, {
+        type: 'festival.reminder',
+        festivalId: job.festivalId,
+        title,
+        body,
+        route: hasPack ? `/festivals/${job.festivalId}/checklist` : '/',
+        subject: {},
+      });
       await this.sendDelivery(job, () =>
         this.apns.sendReminderNotification(
           target.apnsToken!,
           target.apnsEnvironment!,
           {
             festivalId: job.festivalId,
-            title: `${target.name} 준비물`,
-            body: `준비물 확인했어요?${checklistSummary(target.checklist)}${hasPack ? '' : ' 지금 팩을 받아 두세요.'}`,
+            title,
+            body,
             eventKey: job.eventKey,
             hasPack,
           },
@@ -392,6 +407,14 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
       );
       return;
     }
+    await this.recordInbox(job, target, {
+      type: 'festival.start',
+      festivalId: job.festivalId,
+      title: `${target.name} 시작`,
+      body: '페스티벌이 시작됐어요.',
+      route: `/festivals/${job.festivalId}/live`,
+      subject: {},
+    });
     await this.sendDelivery(job, () =>
       this.apns.sendStartNotification(
         target.apnsToken!,
@@ -403,6 +426,23 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
         },
       ),
     );
+  }
+
+  /** 알림함 기록 실패가 푸시 발송을 막지 않게 한다. 같은 eventKey는 계정당 한 번만 남는다. */
+  private async recordInbox(
+    job: Delivery,
+    target: DeliveryTarget,
+    entry: Omit<UserNotificationEntry, 'dedupeKey'>,
+  ): Promise<void> {
+    if (!target.ownerUserId) return;
+    try {
+      await recordUserNotifications(this.db, [target.ownerUserId], {
+        ...entry,
+        dedupeKey: job.eventKey,
+      });
+    } catch {
+      this.logger.error('축제 알림의 알림함 기록에 실패했습니다.');
+    }
   }
 
   private async deliverLiveActivityStart(

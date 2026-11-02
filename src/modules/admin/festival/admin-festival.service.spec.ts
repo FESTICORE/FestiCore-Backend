@@ -556,7 +556,10 @@ describe('pack update delivery queue', () => {
       save: jest.fn(),
       findOneBy: jest.fn().mockResolvedValue({ pack: draft }),
     };
-    const query = jest.fn().mockResolvedValue([{ id: 'one' }, { id: 'two' }]);
+    const query = jest.fn().mockResolvedValue([
+      { id: 'one', userId: '11111111-1111-4111-8111-111111111111', name: 'F' },
+      { id: 'two', userId: '22222222-2222-4222-8222-222222222222', name: 'F' },
+    ]);
     const record = jest.fn().mockResolvedValue(undefined);
     const invalidatePack = jest.fn().mockResolvedValue(undefined);
     const enqueueFestival = jest.fn().mockResolvedValue(undefined);
@@ -596,6 +599,22 @@ describe('pack update delivery queue', () => {
     const calls = query.mock.calls as unknown[][];
     expect(calls[0][0]).toContain('s."packUpdates" = true');
     expect(calls[0][1]).toEqual([draft.id, `pack-updated:${draft.id}:1`]);
+    expect(calls[1][0]).toContain('d."userId" IS NOT NULL');
+    expect(calls[2][0]).toContain('INSERT INTO "user_notifications"');
+    expect(calls[2][0]).toContain('DO NOTHING');
+    expect(calls[2][1]).toEqual([
+      [
+        '11111111-1111-4111-8111-111111111111',
+        '22222222-2222-4222-8222-222222222222',
+      ],
+      'pack.updated',
+      draft.id,
+      'F 정보 업데이트',
+      '새 축제 정보가 준비됐어요. 앱에서 팩을 받아 두세요.',
+      `/festivals/${draft.id}`,
+      JSON.stringify({ packVersion: '1' }),
+      `pack.updated:${draft.id}:1`,
+    ]);
     expect(enqueueFestival).toHaveBeenCalledWith(draft.id, manager);
     expect(record).toHaveBeenCalledWith(manager, {
       actor: null,
@@ -616,7 +635,7 @@ describe('pack update delivery queue', () => {
       'transaction failed',
     );
     expect(invalidatePack).toHaveBeenCalledTimes(2);
-    expect(calls[1][1]).toEqual([draft.id, `pack-updated:${draft.id}:2`]);
+    expect(calls[3][1]).toEqual([draft.id, `pack-updated:${draft.id}:2`]);
     expect(record).toHaveBeenCalledWith(manager, {
       actor: null,
       action: 'festival.rolled_back',

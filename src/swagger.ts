@@ -13,6 +13,7 @@ import { CrewModule } from './modules/crews/crew.module';
 import { ScheduleModule } from './modules/schedule/schedule.module';
 import { CrawlModule } from './modules/admin/crawl/crawl.module';
 import { DeviceModule } from './modules/device/device.module';
+import { NotificationModule } from './modules/notification/notification.module';
 import { MetricsModule } from './modules/metrics/metrics.module';
 import { AdminAuditModule } from './modules/admin/audit/admin-audit.module';
 import { AdminPushModule } from './modules/admin/push/admin-push.module';
@@ -36,6 +37,7 @@ const MODULES_BY_SLUG: Record<string, ModuleClass[]> = {
   schedule: [ScheduleModule],
   devices: [DeviceModule],
   notifications: [DeviceModule],
+  'me-notifications': [NotificationModule],
   metrics: [MetricsModule],
   'admin-metrics': [MetricsModule],
   'admin-audit': [AdminAuditModule],
