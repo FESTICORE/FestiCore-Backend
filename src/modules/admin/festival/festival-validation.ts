@@ -48,6 +48,36 @@ function calendarDate(value: unknown): value is string {
 }
 
 const MAX_LAST_DEPARTURES = 31;
+const LEGACY_RETURN_TIME_KEYS = ['lastShuttleAt', 'lastTrainAt'] as const;
+
+/**
+ * 형식이 정해지기 전에 저장된 막차·셔틀 단일 값(예: "23:40")은 ISO8601이 아니어도
+ * 초안 PATCH와 발행을 막지 않도록 null로 바꾼다. 이번 요청이 직접 보낸 값은 바꾸지 않아
+ * 새 자유 문장 입력은 그대로 검증 오류가 된다.
+ */
+export function normalizeLegacyReturnTimes(
+  draft: FestivalDocument,
+  patch?: unknown,
+): FestivalDocument {
+  const directions = draft.directions;
+  if (!object(directions)) return draft;
+  const sent =
+    object(patch) && object(patch.directions) ? patch.directions : {};
+  const stale = LEGACY_RETURN_TIME_KEYS.filter(
+    (key) =>
+      typeof directions[key] === 'string' &&
+      !iso(directions[key]) &&
+      sent[key] === undefined,
+  );
+  if (!stale.length) return draft;
+  return {
+    ...draft,
+    directions: {
+      ...directions,
+      ...Object.fromEntries(stale.map((key) => [key, null])),
+    },
+  };
+}
 
 /** 귀가 정보: 막차·셔틀 시각은 오프셋이 있는 ISO8601이고 날짜별로 한 번만 둔다. */
 function validateReturnDirections(

@@ -568,6 +568,8 @@ describe('Public festival API', () => {
             secret: 'SHUTTLE_SECRET',
             stopName: '정문 셔틀 정류장',
           },
+          lastShuttleAt: '23:40',
+          lastTrainAt: '2026-11-20T23:52:00+09:00',
           lastDepartures: [
             {
               date: '2026-11-20',
@@ -622,6 +624,10 @@ describe('Public festival API', () => {
       body: 'Shuttle',
       links: [{ label: 'Map', url: 'https://example.com' }],
       stopName: '정문 셔틀 정류장',
+    });
+    expect(directions).toMatchObject({
+      lastShuttleAt: null,
+      lastTrainAt: '2026-11-20T23:52:00+09:00',
     });
     expect(directions.lastDepartures).toEqual([
       {

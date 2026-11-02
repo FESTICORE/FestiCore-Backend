@@ -1,5 +1,9 @@
 import { BadRequestException } from '@nestjs/common';
-import { mergeDraft, validateDraft } from './festival-validation';
+import {
+  mergeDraft,
+  normalizeLegacyReturnTimes,
+  validateDraft,
+} from './festival-validation';
 
 const draft = {
   id: 'fst_12345678',
@@ -74,6 +78,46 @@ describe('festival draft validation', () => {
           'directions.lastDepartures[3]: shuttleAt 또는 trainAt 중 하나 필요',
         ]),
       );
+    });
+
+    it('turns legacy free-text return times into null instead of blocking PATCH or publish', () => {
+      const legacy = withDirections({
+        lastShuttleAt: '23:40',
+        lastTrainAt: '막차 23시 52분',
+        memo: '기존 메모',
+      });
+      expect(validateDraft(legacy)).toContain(
+        'directions.lastShuttleAt: 오프셋 포함 ISO8601 또는 null 필요',
+      );
+      const patch = { name: 'Renamed' };
+      const next = normalizeLegacyReturnTimes(mergeDraft(legacy, patch), patch);
+      expect(validateDraft(next)).toEqual([]);
+      expect(validateDraft(normalizeLegacyReturnTimes(legacy), true)).toEqual(
+        [],
+      );
+      expect(next.directions).toEqual({
+        lastShuttleAt: null,
+        lastTrainAt: null,
+        memo: '기존 메모',
+      });
+      expect(legacy.directions).toMatchObject({ lastShuttleAt: '23:40' });
+    });
+
+    it('still rejects free text sent in the same PATCH', () => {
+      const legacy = withDirections({ lastShuttleAt: '23:40' });
+      const patch = { directions: { lastShuttleAt: '23:50' } };
+      const next = normalizeLegacyReturnTimes(mergeDraft(legacy, patch), patch);
+      expect(validateDraft(next)).toContain(
+        'directions.lastShuttleAt: 오프셋 포함 ISO8601 또는 null 필요',
+      );
+    });
+
+    it('keeps valid ISO values and drafts without directions unchanged', () => {
+      const valid = withDirections({
+        lastShuttleAt: '2026-11-20T23:40:00+09:00',
+      });
+      expect(normalizeLegacyReturnTimes(valid)).toBe(valid);
+      expect(normalizeLegacyReturnTimes(draft as never)).toBe(draft);
     });
 
     it('requires departure dates to be festival days only when publishing', () => {

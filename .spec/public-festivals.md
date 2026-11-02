@@ -50,5 +50,5 @@
 
 - 공개 팩 `directions`에 `lastDepartures: [{ date, shuttleAt, trainAt }]`를 항상 넣는다. 입력이 없으면 빈 배열이다. 각 시각은 오프셋 포함 ISO8601 또는 null이다.
 - `directions.shuttle`이 있으면 `body`, `links`와 함께 선택 `stopName`을 제공한다.
-- `lastShuttleAt`·`lastTrainAt`은 기존 형식 그대로 제공한다. 입력 형식과 검증은 [admin-festivals.md](admin-festivals.md)의 귀가 정보 입력을 따른다.
+- `lastShuttleAt`·`lastTrainAt`은 오프셋 포함 ISO8601이면 그대로, 형식 확정 전의 자유 문장이면 null로 제공한다. 입력 형식과 검증은 [admin-festivals.md](admin-festivals.md)의 귀가 정보 입력을 따른다.
 - 이 필드 추가로 팩 투영 버전을 4로 올렸다. 이전 `cdm3-` ETag는 일치하지 않아 앱이 새 팩을 한 번 다시 받는다.
