@@ -70,8 +70,11 @@ describe('Public festival API', () => {
   let discoveryRows: { candidate: Record<string, unknown> }[] = [];
   let storedOriginImages: { originUrl: string; id: string }[] = [];
   let rateLimitCount = 1;
+  let previousPackRows: { pack: Record<string, unknown> }[] = [];
   const dataSource = {
     query: jest.fn((sql: string) => {
+      if (sql.includes('FROM "admin_festival_versions"'))
+        return Promise.resolve(previousPackRows);
       if (sql.includes('INSERT INTO public_live_rate_limits'))
         return Promise.resolve([{ count: rateLimitCount }]);
       if (sql.includes('WITH candidates AS'))
@@ -411,6 +414,68 @@ describe('Public festival API', () => {
       .get('/api/v1/festivals/fst_unknown/pack')
       .expect(404);
     expect(errorData<null>(missing.body, 'FESTIVAL_NOT_FOUND')).toBeNull();
+  });
+
+  it('summarizes changes between the stored and published pack versions', async () => {
+    previousPackRows = [
+      {
+        pack: {
+          ...pack,
+          packVersion: 6,
+          sets: [
+            {
+              id: 'set_removed',
+              stageId: 'stg_a',
+              artist: '지난 밴드',
+              startsAt: '2026-11-20T12:00:00+09:00',
+              endsAt: '2026-11-20T12:30:00+09:00',
+            },
+          ],
+          directions: { lastShuttleAt: '23:40', lastTrainAt: null },
+        },
+      },
+    ];
+    const changed = await request(server)
+      .get(`/api/v1/festivals/${pack.id}/pack/changes?from=6`)
+      .expect(200);
+    expect(changed.headers['cache-control']).toBe(
+      'public, no-cache, must-revalidate',
+    );
+    const body = successData<Record<string, unknown>>(changed.body);
+    expect(body).toEqual({
+      fromVersion: 6,
+      toVersion: 7,
+      sizeBytes: expect.any(Number) as number,
+      changedSets: 1,
+      lastShuttleAt: { before: '23:40', after: null },
+      lastTrainAt: null,
+    });
+    expect(body.sizeBytes).toBeGreaterThan(0);
+
+    const latest = await request(server)
+      .get(`/api/v1/festivals/${pack.id}/pack/changes?from=7`)
+      .expect(200);
+    expect(successData<{ changedSets: number }>(latest.body).changedSets).toBe(
+      0,
+    );
+
+    previousPackRows = [];
+    const unknown = await request(server)
+      .get(`/api/v1/festivals/${pack.id}/pack/changes?from=3`)
+      .expect(200);
+    expect(
+      successData<{ changedSets: number | null }>(unknown.body).changedSets,
+    ).toBeNull();
+
+    for (const from of ['', 'abc', '0', '1.5']) {
+      const invalid = await request(server)
+        .get(`/api/v1/festivals/${pack.id}/pack/changes?from=${from}`)
+        .expect(400);
+      expect(errorData<null>(invalid.body, 'VALIDATION')).toBeNull();
+    }
+    await request(server)
+      .get('/api/v1/festivals/fst_unknown/pack/changes?from=1')
+      .expect(404);
   });
 
   it('returns a discovered festival detail with stored poster and artist images', async () => {

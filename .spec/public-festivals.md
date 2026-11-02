@@ -11,6 +11,7 @@
 | `GET /api/v1/festivals`                  | `after=YYYY-MM-DD` 또는 이전 응답의 `nextCursor`, `limit=1..50`(기본 20), 선택 `If-None-Match` | `items`(ID, 이름, 장소, 날짜, 팩 버전, 상태, 썸네일, `artistNames`, 발견 항목의 `sourceUrl`), `nextCursor` |
 | `GET /api/v1/festivals/:id`              | 목록에서 받은 축제 ID, 본문 없음                                                               | 발행 축제는 공개 팩과 공연별 날짜·무대명·시간·보관 이미지가 포함된 `timetable` 및 공연별 출연진에서 중복을 제거한 `artists`, 발견 축제는 확인된 날짜·장소·출처·저장 포스터·출연진과 빈 `timetable`  |
 | `GET /api/v1/festivals/:id/pack/version` | 선택 `If-None-Match`                                                                           | `packVersion`, `packUpdatedAt`, `etag`                                                      |
+| `GET /api/v1/festivals/:id/pack/changes` | 필수 `from`(앱에 저장된 팩 버전, 1 이상 정수) | `fromVersion`, `toVersion`, `sizeBytes`, `changedSets`, `lastShuttleAt`, `lastTrainAt` |
 | `GET /api/v1/festivals/:id/pack`         | 선택 `If-None-Match`, `Accept-Encoding: br` 또는 `gzip`                                        | 발행된 팩 전체 JSON 및 공연별 출연진에서 중복을 제거한 `artists`                            |
 | `GET /api/v1/festivals/:id/flags`        | 선택 `tag=slam&tag=calm`처럼 반복, OR 필터                                                     | `items`(공개 깃발 프로필), `packVersion`                                                    |
 | `GET /api/v1/festivals/:id/live`         | 필수 `X-Device-Id: UUID`, 선택 `Authorization: Bearer <access-token>` 및 `If-None-Match`       | `festivalId`, `setOverrides`, `activeFlags`, `me`, `serverAt`                               |
@@ -24,6 +25,8 @@
 발견 항목은 `status: "discovered"`, `packVersion: 0`, `flagsEnabled: false`로 구분한다. 보관된 공식 포스터가 없으면 `thumbUrl`은 `null`이다. 공식 행사 페이지가 직접 연결한 계정이 있으면 `officialInstagramUrl`을 포함하며 주최자 공통 계정을 행사 계정으로 표시하지 않는다. 이 ID의 팩·버전·깃발·라이브 요청은 발행 전 404 `FESTIVAL_NOT_FOUND`다. 앱은 마지막 성공 목록과 발행 팩을 기기 저장소에 보관하고, 재연결 시 ETag와 팩 버전을 비교해 갱신한다. 오프라인 중 서버의 새 데이터는 도착할 수 없다. 자세한 발견 항목 계약은 [수집 축제 공개 목록](crawl-catalog.md)을 따른다.
 
 목록·상세·발행 팩은 `thumbUrl`과 `ticketLinks`를 제공한다. `thumbUrl`은 HTTPS 썸네일, 서버에 보관한 `/api/v1/festivals/images/…` 경로 또는 `null`이다. `ticketLinks`는 최대 5개의 `{label, url}` 항목이며 `label`은 1~20자, `url`은 HTTPS 주소다. 발견 축제의 예매처 링크는 중복 제거해 합치고, 공식 행사 페이지에서 확인된 Instagram 계정 링크를 포함할 수 있다. 발행 팩의 링크는 관리자 초안에서 검증한 값만 공개한다.
+
+`/pack/changes`는 앱 팩 관리 화면의 업데이트 안내에 쓴다. `sizeBytes`는 현재 발행 팩 JSON 크기, `changedSets`는 `from` 버전 대비 추가·삭제되었거나 아티스트·무대·시작·종료 시각이 바뀐 공연 수다. `lastShuttleAt`·`lastTrainAt`은 `directions`의 값이 바뀐 경우에만 `{ "before", "after" }`이고 아니면 `null`이다. `from`이 현재 버전 이상이면 `changedSets`는 0, 버전 기록이 없으면 `null`이다. `from`이 정수가 아니면 400 `VALIDATION`, 발행 전 축제는 404 `FESTIVAL_NOT_FOUND`다. 응답은 `public, no-cache, must-revalidate`다.
 
 `/pack`의 ETag는 JSON 응답 형식 변경을 구분하는 `"cdm4-v{packVersion}"`이다. `/pack/version`의 응답 헤더와 본문 `etag`도 같은 값을 반환한다. 두 경로 모두 `If-None-Match`가 일치하면 본문 없이 304를 반환한다. 이전 형식의 ETag는 일치하지 않아 새 본문을 다시 받는다. 압축별 응답은 `Vary: Accept-Encoding`으로 구분한다. 목록과 라이브도 조건부 조회를 지원한다. 축제 목록은 `public, no-cache, must-revalidate`로 저장을 허용하되 매 요청 공유 캐시 재검증을 요구한다. 이전 `max-age=3600` 응답은 Railway CDN이 요청의 `Cache-Control: no-cache`를 무시하고 오래된 304를 반환했다. 앱은 이전 목록 ETag를 `If-None-Match`로 보내 변경이 없을 때 304를 받을 수 있다. `live`의 `X-Poll-After: 30`은 최소 권장 폴링 간격이며, 기기당 분당 4회 초과 시 429와 `Retry-After`를 보낸다. 지난 요청 제한 기록 정리가 실패하면 새 제한 기록을 만들지 않고 503을 반환하며, 5분 간격으로 정리를 재시도한다.
 

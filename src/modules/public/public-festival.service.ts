@@ -140,6 +140,51 @@ function projectDirections(value: unknown, venue: unknown): Document {
   return direction;
 }
 
+export interface PackValueChange {
+  before: string | null;
+  after: string | null;
+}
+
+export interface PackChanges {
+  fromVersion: number;
+  toVersion: number;
+  sizeBytes: number;
+  changedSets: number | null;
+  lastShuttleAt: PackValueChange | null;
+  lastTrainAt: PackValueChange | null;
+}
+
+/** 추가·삭제되었거나 아티스트·무대·시각이 바뀐 공연 수 */
+export function changedSetCount(previous: Document, current: Document): number {
+  const key = (set: Document) =>
+    JSON.stringify([set.artist, set.stageId, set.startsAt, set.endsAt]);
+  const before = new Map(
+    requiredArray(previous.sets).map((set) => [String(set.id), key(set)]),
+  );
+  const after = new Map(
+    requiredArray(current.sets).map((set) => [String(set.id), key(set)]),
+  );
+  let count = 0;
+  for (const [id, value] of after) if (before.get(id) !== value) count += 1;
+  for (const id of before.keys()) if (!after.has(id)) count += 1;
+  return count;
+}
+
+export function changedDirection(
+  previous: Document,
+  current: Document,
+  field: 'lastShuttleAt' | 'lastTrainAt',
+): PackValueChange | null {
+  const value = (pack: Document) => {
+    const directions = pack.directions as Document | null | undefined;
+    const raw = directions?.[field];
+    return typeof raw === 'string' ? raw : null;
+  };
+  const before = value(previous);
+  const after = value(current);
+  return before === after ? null : { before, after };
+}
+
 export function publicPackEtag(packVersion: number): string {
   return `"cdm${PUBLIC_PACK_PROJECTION_VERSION}-v${packVersion}"`;
 }
@@ -1954,6 +1999,50 @@ export class PublicFestivalService {
         ? `${floor}~${ordered[limit - 1].sortAt}~${ordered[limit - 1].id}`
         : null;
     return { items, nextCursor };
+  }
+
+  /**
+   * 앱이 가진 팩 버전과 현재 발행 팩의 차이를 요약한다.
+   * 이전 버전 기록이 없으면 비교 값은 null이다.
+   */
+  async packChanges(id: string, fromVersion: number): Promise<PackChanges> {
+    const { document: current } = await this.publishedWithEtag(id);
+    const toVersion = current.packVersion as number;
+    const sizeBytes = Buffer.byteLength(JSON.stringify(current));
+    if (fromVersion >= toVersion) {
+      return {
+        fromVersion,
+        toVersion,
+        sizeBytes,
+        changedSets: 0,
+        lastShuttleAt: null,
+        lastTrainAt: null,
+      };
+    }
+    const rows = await this.dataSource.query<{ pack: Document }[]>(
+      `SELECT "pack" FROM "admin_festival_versions"
+       WHERE "festivalId" = $1 AND "packVersion" = $2`,
+      [id, fromVersion],
+    );
+    if (!rows[0]?.pack) {
+      return {
+        fromVersion,
+        toVersion,
+        sizeBytes,
+        changedSets: null,
+        lastShuttleAt: null,
+        lastTrainAt: null,
+      };
+    }
+    const previous = projectPack(rows[0].pack);
+    return {
+      fromVersion,
+      toVersion,
+      sizeBytes,
+      changedSets: changedSetCount(previous, current),
+      lastShuttleAt: changedDirection(previous, current, 'lastShuttleAt'),
+      lastTrainAt: changedDirection(previous, current, 'lastTrainAt'),
+    };
   }
 
   async version(id: string) {

@@ -366,6 +366,69 @@ export class PublicFestivalController {
     this.send(response, body, body.etag, ifNoneMatch);
   }
 
+  @Get(':id/pack/changes')
+  @ApiOperation({
+    summary: '받은 팩과 현재 발행 팩의 차이',
+    description:
+      'from에 앱이 가진 팩 버전을 보내면 현재 발행 버전, 받을 팩 크기(sizeBytes), 바뀐 공연 수(changedSets), 막차·마지막 셔틀 시각 변경을 돌려줍니다. 이전 버전 기록이 없으면 changedSets는 null입니다. 요청 본문은 없습니다.',
+  })
+  @ApiParam(festivalId)
+  @ApiQuery({
+    name: 'from',
+    required: true,
+    description: '앱에 저장된 팩 버전(1 이상 정수)',
+    example: 12,
+  })
+  @ApiResponse({
+    status: 200,
+    description: '팩 변경 요약',
+    schema: {
+      type: 'object',
+      example: {
+        code: 'SUCCESS',
+        data: {
+          fromVersion: 12,
+          toVersion: 13,
+          sizeBytes: 524288,
+          changedSets: 2,
+          lastShuttleAt: { before: '23:40', after: '23:20' },
+          lastTrainAt: null,
+        },
+        message: '성공적으로 처리되었습니다.',
+      },
+    },
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'from이 1 이상 정수가 아닙니다.',
+    schema: jsonErrorSchema('VALIDATION'),
+  })
+  @ApiResponse({
+    status: 404,
+    description: '발행된 축제가 없습니다.',
+    schema: jsonErrorSchema('FESTIVAL_NOT_FOUND'),
+  })
+  async packChanges(
+    @Param('id') id: string,
+    @Query('from') from: string | undefined,
+    @Res() response: Response,
+  ) {
+    const fromVersion = Number(from);
+    if (
+      !from ||
+      !/^\d+$/.test(from) ||
+      !Number.isSafeInteger(fromVersion) ||
+      fromVersion < 1
+    )
+      throw new BadRequestException({
+        code: 'VALIDATION',
+        message: 'from은 1 이상 정수여야 합니다.',
+      });
+    const body = await this.service.packChanges(id, fromVersion);
+    response.setHeader('Cache-Control', 'public, no-cache, must-revalidate');
+    this.send(response, body);
+  }
+
   @Get(':id/pack')
   @ApiOperation({
     summary: '발행 축제 팩',
