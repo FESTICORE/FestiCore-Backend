@@ -35,6 +35,8 @@ const MAX_ARTIST = 60;
 const MAX_SETS = 400;
 const MAX_DAY_HOURS = 18;
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2})$/;
+/** 초안 검증이 허용하는 보관 출연진 이미지 경로. 공개 여부·출처는 발행본 조회 시 서버가 다시 거른다. */
+const STORED_IMAGE = /^\/api\/v1\/festivals\/images\/[0-9a-f-]{36}\.webp$/;
 
 function parseArgs(argv) {
   const options = {
@@ -198,12 +200,13 @@ function festivalDates(festival) {
 
 /** 공개 상세 timetable로 초안의 days·stages·sets를 만든다. 만들 수 없으면 사유 문자열을 반환한다. */
 function buildDraft(detail, fillMissingEnds) {
-  let sets = (detail.timetable ?? []).map(({ artist, date, stageName, startsAt, endsAt }) => ({
+  let sets = (detail.timetable ?? []).map(({ artist, date, stageName, startsAt, endsAt, imageUrl }) => ({
     artist,
     date,
     stageName,
     startsAt,
     endsAt,
+    imageUrl: STORED_IMAGE.test(imageUrl ?? '') ? imageUrl : undefined,
   }));
   if (sets.length === 0) return '승인된 시간표 없음';
   if (sets.some((set) => !set.endsAt)) {
@@ -236,6 +239,7 @@ function buildDraft(detail, fillMissingEnds) {
       artist: set.artist,
       startsAt: set.startsAt,
       endsAt: set.endsAt,
+      ...(set.imageUrl ? { imageUrl: set.imageUrl } : {}),
     })),
   };
 }
