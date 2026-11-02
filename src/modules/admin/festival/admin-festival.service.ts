@@ -20,7 +20,10 @@ import { CacheService } from '../../redis/service/cache.service';
 import { PublicFestivalService } from '../../public/public-festival.service';
 import { DiscoverySummary } from '../../public/crawl-catalog';
 import { LiveActivityService } from '../../notification/live-activity.service';
-import { recordUserNotifications } from '../../notification/user-notification.service';
+import {
+  recordUserNotifications,
+  withInboxSavepoint,
+} from '../../notification/user-notification.service';
 
 const alphabet = '0123456789abcdefghjkmnpqrstvwxyz';
 const SOURCE_STALE_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
@@ -503,29 +506,32 @@ export class AdminFestivalService {
        RETURNING "id"`,
       [id, `pack-updated:${id}:${version}`],
     );
-    const owners = await manager.query<
-      Array<{ userId: string; name: string | null }>
-    >(
-      `SELECT DISTINCT d."userId", f."published"->>'name' AS "name"
-       FROM "device_subscriptions" s
-       JOIN "devices" d ON d."id" = s."deviceId" AND d."userId" IS NOT NULL
-       JOIN "admin_festivals" f ON f."id" = s."festivalId"
-       WHERE s."festivalId" = $1::varchar AND s."packUpdates" = true`,
-      [id],
-    );
-    await recordUserNotifications(
-      manager,
-      owners.map((row) => row.userId),
-      {
-        type: 'pack.updated',
-        festivalId: id,
-        title: `${owners[0]?.name ?? '축제'} 정보 업데이트`,
-        body: '새 축제 정보가 준비됐어요. 앱에서 팩을 받아 두세요.',
-        route: `/festivals/${id}`,
-        subject: { packVersion: String(version) },
-        dedupeKey: `pack.updated:${id}:${version}`,
-      },
-    );
+    await withInboxSavepoint(manager, async () => {
+      // 알림함은 푸시 설정과 무관하게 이 축제를 핀한 로그인 계정에 남긴다.
+      const owners = await manager.query<
+        Array<{ userId: string; name: string | null }>
+      >(
+        `SELECT DISTINCT d."userId", f."published"->>'name' AS "name"
+         FROM "device_subscriptions" s
+         JOIN "devices" d ON d."id" = s."deviceId" AND d."userId" IS NOT NULL
+         JOIN "admin_festivals" f ON f."id" = s."festivalId"
+         WHERE s."festivalId" = $1::varchar AND s."pinned" = true`,
+        [id],
+      );
+      await recordUserNotifications(
+        manager,
+        owners.map((row) => row.userId),
+        {
+          type: 'pack.updated',
+          festivalId: id,
+          title: `${owners[0]?.name ?? '축제'} 정보 업데이트`,
+          body: '새 축제 정보가 준비됐어요. 앱에서 팩을 받아 두세요.',
+          route: `/festivals/${id}`,
+          subject: { packVersion: String(version) },
+          dedupeKey: `pack.updated:${id}:${version}`,
+        },
+      );
+    });
     return queued.length;
   }
 

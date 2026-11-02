@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { DataSource } from 'typeorm';
 import { UserNotifications1792500095000 } from '../../database/migrations/1792500095000-user-notifications';
+import { UserNotificationsCreatedIndex1792500100000 } from '../../database/migrations/1792500100000-user-notifications-created-index';
 import {
   recordUserNotifications,
   UserNotificationEntry,
   UserNotificationService,
+  withInboxSavepoint,
 } from './user-notification.service';
 
 const url = process.env.LIVE_ACTIVITY_PG_URL;
@@ -42,9 +44,11 @@ describePostgres('UserNotificationService (PostgreSQL)', () => {
     });
     await db.initialize();
     await db.query('CREATE TABLE "users" ("id" uuid PRIMARY KEY)');
+    await db.query('CREATE TABLE "source_writes" ("id" int PRIMARY KEY)');
     const runner = db.createQueryRunner();
     try {
       await new UserNotifications1792500095000().up(runner);
+      await new UserNotificationsCreatedIndex1792500100000().up(runner);
     } finally {
       await runner.release();
     }
@@ -53,7 +57,7 @@ describePostgres('UserNotificationService (PostgreSQL)', () => {
   });
 
   beforeEach(async () => {
-    await db.query('TRUNCATE "user_notifications"');
+    await db.query('TRUNCATE "user_notifications", "source_writes"');
   });
 
   afterAll(async () => {
@@ -154,6 +158,28 @@ describePostgres('UserNotificationService (PostgreSQL)', () => {
     );
     expect(Number(after[0].count)).toBe(0);
     await db.query('INSERT INTO "users" ("id") VALUES ($1)', [me]);
+  });
+
+  it('commits the source write when the inbox write fails inside a savepoint', async () => {
+    await db.transaction(async (manager) => {
+      await manager.query('INSERT INTO "source_writes" ("id") VALUES (1)');
+      await withInboxSavepoint(manager, async () => {
+        await recordUserNotifications(manager, [me], entry(1));
+        await recordUserNotifications(manager, ['not-a-uuid'], entry(2));
+      });
+      await manager.query('INSERT INTO "source_writes" ("id") VALUES (2)');
+      await withInboxSavepoint(manager, () =>
+        recordUserNotifications(manager, [me], entry(3)),
+      );
+    });
+    const writes = await db.query<Array<{ id: number }>>(
+      'SELECT "id" FROM "source_writes" ORDER BY "id"',
+    );
+    expect(writes.map((row) => row.id)).toEqual([1, 2]);
+    const keys = await db.query<Array<{ dedupeKey: string }>>(
+      'SELECT "dedupeKey" FROM "user_notifications"',
+    );
+    expect(keys.map((row) => row.dedupeKey)).toEqual(['crew.gather:3']);
   });
 
   it('rolls back with the caller transaction', async () => {

@@ -420,6 +420,10 @@ export class AuthService {
           [userId],
         );
         await manager.query(
+          `UPDATE "flags" SET "statusUpdatedBy" = NULL WHERE "statusUpdatedBy" = $1`,
+          [userId],
+        );
+        await manager.query(
           `UPDATE "flag_bearer_codes" SET "usedBy" = NULL, "expiresAt" = now()
          WHERE "usedBy" = $1`,
           [userId],

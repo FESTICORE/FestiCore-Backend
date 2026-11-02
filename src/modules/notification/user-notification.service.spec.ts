@@ -1,6 +1,7 @@
 import {
   recordUserNotifications,
   UserNotificationService,
+  withInboxSavepoint,
 } from './user-notification.service';
 
 const userId = '11111111-1111-4111-8111-111111111111';
@@ -71,6 +72,33 @@ describe('recordUserNotifications', () => {
     const sql = (query.mock.calls[0] as [string])[0];
     expect(sql).toContain('DO UPDATE SET');
     expect(sql).toContain('"createdAt" = now(), "readAt" = NULL');
+  });
+});
+
+describe('withInboxSavepoint', () => {
+  it('releases the savepoint after a successful inbox write', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const work = jest.fn().mockResolvedValue(undefined);
+    await withInboxSavepoint({ query }, work);
+    expect(work).toHaveBeenCalledTimes(1);
+    expect(query.mock.calls.map(([sql]) => sql as string)).toEqual([
+      'SAVEPOINT "user_notifications_record"',
+      'RELEASE SAVEPOINT "user_notifications_record"',
+    ]);
+  });
+
+  it('rolls back only the inbox part and does not rethrow', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    await expect(
+      withInboxSavepoint({ query }, () =>
+        Promise.reject(new Error('inbox down')),
+      ),
+    ).resolves.toBeUndefined();
+    expect(query.mock.calls.map(([sql]) => sql as string)).toEqual([
+      'SAVEPOINT "user_notifications_record"',
+      'ROLLBACK TO SAVEPOINT "user_notifications_record"',
+      'RELEASE SAVEPOINT "user_notifications_record"',
+    ]);
   });
 });
 

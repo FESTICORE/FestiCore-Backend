@@ -600,10 +600,14 @@ describe('pack update delivery queue', () => {
     expect(calls[0][0]).toContain('s."packUpdates" = true');
     expect(calls[0][0]).toContain('d."notifyPackUpdates" = true');
     expect(calls[0][1]).toEqual([draft.id, `pack-updated:${draft.id}:1`]);
-    expect(calls[1][0]).toContain('d."userId" IS NOT NULL');
-    expect(calls[2][0]).toContain('INSERT INTO "user_notifications"');
-    expect(calls[2][0]).toContain('DO NOTHING');
-    expect(calls[2][1]).toEqual([
+    expect(calls[1][0]).toBe('SAVEPOINT "user_notifications_record"');
+    expect(calls[2][0]).toContain('d."userId" IS NOT NULL');
+    expect(calls[2][0]).toContain('s."pinned" = true');
+    expect(calls[2][0]).not.toContain('packUpdates');
+    expect(calls[3][0]).toContain('INSERT INTO "user_notifications"');
+    expect(calls[3][0]).toContain('DO NOTHING');
+    expect(calls[4][0]).toBe('RELEASE SAVEPOINT "user_notifications_record"');
+    expect(calls[3][1]).toEqual([
       [
         '11111111-1111-4111-8111-111111111111',
         '22222222-2222-4222-8222-222222222222',
@@ -636,7 +640,7 @@ describe('pack update delivery queue', () => {
       'transaction failed',
     );
     expect(invalidatePack).toHaveBeenCalledTimes(2);
-    expect(calls[3][1]).toEqual([draft.id, `pack-updated:${draft.id}:2`]);
+    expect(calls[5][1]).toEqual([draft.id, `pack-updated:${draft.id}:2`]);
     expect(record).toHaveBeenCalledWith(manager, {
       actor: null,
       action: 'festival.rolled_back',

@@ -27,7 +27,7 @@ JSON 응답은 공통 `{ "code", "data", "message" }` 형식을 따른다. 204�
 
 ## 예약·발송 규칙
 
-- 기기 알림 설정([devices.md](./devices.md#알림-설정))에서 끈 종류는 등록과 발송 직전 확인에서 제외한다.
+- 기기 알림 설정([devices.md](./devices.md#알림-설정))에서 끈 종류는 발송 직전에 다시 확인해 보내지 않는다. `pack.updated`만 등록 단계에서도 제외한다. `flag.status`·`crew.status`·`crew.gather` 작업은 설정과 무관하게 등록되고 발송 직전에 취소된다. 축제 시작·D-1 리마인더는 기기 설정이 아니라 축제별 구독의 `festivalStarts`·`reminders`를 따른다.
 
 - 발행된 축제 팩의 날짜와 시작 시각만 기준으로 예약한다. 시작 시각이 바뀌면 미발송 작업의 시간을 갱신한다.
 - `(deviceId, eventKey)`를 유일하게 저장한다. `eventKey`는 `festival-start:{festivalId}:{YYYY-MM-DD}`다.

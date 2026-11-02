@@ -6,6 +6,7 @@ import { Column, Entity, Index, PrimaryColumn } from 'typeorm';
   unique: true,
 })
 @Index('IDX_user_notifications_user_created', ['userId', 'createdAt', 'id'])
+@Index('IDX_user_notifications_created', ['createdAt'])
 export class UserNotification {
   @PrimaryColumn({
     type: 'varchar',
