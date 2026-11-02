@@ -56,7 +56,7 @@ describe('SocialNotificationService', () => {
       } as never,
       actorUserId,
     );
-    expect(query).toHaveBeenCalledTimes(6);
+    expect(query).toHaveBeenCalledTimes(8);
     expect(query.mock.calls[0][0]).toContain('pg_advisory_xact_lock');
     expect(query.mock.calls[1][0]).toContain('ACTOR_CHANGED');
     expect(query.mock.calls[2][0]).toContain('SUPERSEDED');
@@ -189,6 +189,38 @@ describe('SocialNotificationService', () => {
         JSON.stringify({ flagId: 'flag_123' }),
         'flag.status:flag_123',
       ]);
+    });
+
+    it('keeps the status push queue when the inbox write fails', async () => {
+      const { service } = setup();
+      const query = jest.fn((sql: string) =>
+        sql.startsWith('SELECT "userId" FROM "flag_follows"')
+          ? Promise.reject(new Error('inbox down'))
+          : Promise.resolve([]),
+      );
+      await expect(
+        service.enqueueFlagStatus(
+          { query } as never,
+          {
+            id: 'flag_123',
+            festivalId: 'fst_2026',
+            visibility: 'public',
+            hidden: false,
+            status: 'active',
+          } as never,
+          actorUserId,
+        ),
+      ).resolves.toBeUndefined();
+      const sqls = query.mock.calls.map(([sql]) => sql);
+      expect(
+        sqls.some((sql) =>
+          sql.includes('INSERT INTO "social_notification_deliveries"'),
+        ),
+      ).toBe(true);
+      expect(sqls).toContain(
+        'ROLLBACK TO SAVEPOINT "user_notifications_record"',
+      );
+      expect(inboxCall(query)).toBeUndefined();
     });
 
     it('does not record hidden or resting flags', async () => {

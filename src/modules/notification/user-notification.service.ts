@@ -137,6 +137,26 @@ export async function recordUserNotifications(
   );
 }
 
+const inboxLogger = new Logger('UserNotifications');
+
+/**
+ * 원본 쓰기 트랜잭션 안에서 알림함 작업을 SAVEPOINT로 격리한다.
+ * 알림함 조회·기록이 실패하면 그 부분만 되돌리고 원본 쓰기는 계속 커밋한다.
+ */
+export async function withInboxSavepoint(
+  manager: Queryable,
+  work: () => Promise<void>,
+): Promise<void> {
+  await manager.query('SAVEPOINT "user_notifications_record"');
+  try {
+    await work();
+  } catch {
+    await manager.query('ROLLBACK TO SAVEPOINT "user_notifications_record"');
+    inboxLogger.error('알림함 기록에 실패해 원본 쓰기만 저장합니다.');
+  }
+  await manager.query('RELEASE SAVEPOINT "user_notifications_record"');
+}
+
 @Injectable()
 export class UserNotificationService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(UserNotificationService.name);

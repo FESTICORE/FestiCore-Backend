@@ -836,6 +836,16 @@ describe('AuthService 회원 탈퇴의 깃발과 Apple 재시도', () => {
     );
   });
 
+  it('탈퇴한 사용자가 마지막 상태 변경자인 깃발의 updatedBy를 지운다', async () => {
+    const { service, query } = setup();
+    await service.withdraw(userId);
+
+    expect(query).toHaveBeenCalledWith(
+      'UPDATE "flags" SET "statusUpdatedBy" = NULL WHERE "statusUpdatedBy" = $1',
+      [userId],
+    );
+  });
+
   it('탈퇴한 사용자의 신고와 팔로우 집계를 함께 다시 계산한다', async () => {
     const { service, query } = setup();
     await service.withdraw(userId);

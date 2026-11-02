@@ -30,7 +30,9 @@
 
 - `GET /flags/:flagId/bearer`의 `status`와 `POST /flags/:flagId/status` 응답은
   `updatedBy: { userId, nickname } | null`을 포함한다. 공동 기수를 포함해 마지막으로 상태를 바꾼
-  기수다. 관리자 강제 변경 뒤와 아직 바뀐 적 없는 깃발은 `null`이다. 탈퇴 등으로 닉네임이 없으면 `""`다.
+  기수다. 관리자 강제 변경 뒤와 아직 바뀐 적 없는 깃발은 `null`이다. 변경한 기수가 탈퇴하면 `null`로 바꾼다.
+  닉네임을 찾지 못하면 `""`다. 컬럼 추가 전에 바뀐 깃발은 마이그레이션 `1792500099000`이 최신 상태 이력의
+  사용자로 채운다. 그 이력이 관리자 변경이거나 탈퇴로 지워졌으면 `null`로 둔다.
 - 공개 상세(`GET /flags/:flagId`)와 라이브 보드의 상태에는 넣지 않는다.
 - 기수 코드 등록 422 `BEARER_CODE_INVALID`는 `data.remainingAttempts`, 423 `BEARER_CODE_LOCKED`는
   `data.retryAfter`(초)를 준다.

@@ -613,7 +613,14 @@ export class BearerController {
   @ApiResponse({
     status: 422,
     description:
-      '유효하지 않거나 만료/사용된 코드. 남은 시도 횟수를 반환할 수 있음',
+      '유효하지 않거나 만료/사용된 코드. data.remainingAttempts에 남은 시도 횟수를 반환',
+    schema: {
+      example: {
+        code: 'BEARER_CODE_INVALID',
+        data: { remainingAttempts: 2 },
+        message: '유효하지 않은 코드입니다.',
+      },
+    },
   })
   @ApiResponse({
     status: 423,
