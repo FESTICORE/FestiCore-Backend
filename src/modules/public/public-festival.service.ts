@@ -236,6 +236,24 @@ function projectPack(pack: Document): Document {
   return result;
 }
 
+const MAX_ARTIST_NAMES = 50;
+
+/** 목록 검색용 출연진 이름. 표기 변형은 첫 표기만 남기고 최대 50개로 자른다. */
+function artistNames(artists: unknown): string[] {
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const artist of requiredArray(artists)) {
+    if (typeof artist.name !== 'string') continue;
+    const name = artist.name.trim();
+    const keys = name ? artistNameKeys(name) : [];
+    if (!keys.length || keys.some((key) => seen.has(key))) continue;
+    keys.forEach((key) => seen.add(key));
+    names.push(name);
+    if (names.length === MAX_ARTIST_NAMES) break;
+  }
+  return names;
+}
+
 function requiredArray(value: unknown): Document[] {
   return Array.isArray(value)
     ? value.filter(
@@ -1816,6 +1834,7 @@ export class PublicFestivalService {
               .find((url) => url !== null) ??
             null,
           ticketLinks: projectedArray(pack.ticketLinks, ['label', 'url']),
+          artistNames: artistNames(projectPack(pack).artists),
           status:
             today < firstDate
               ? 'upcoming'
@@ -1908,6 +1927,10 @@ export class PublicFestivalService {
       flagsEnabled: summary.flagsEnabled,
       thumbUrl: summary.thumbUrl,
       ticketLinks: summary.ticketLinks,
+      artistNames:
+        'artistNames' in summary
+          ? summary.artistNames
+          : artistNames(summary.artists),
       status: summary.status,
       ...('sourceUrl' in summary ? { sourceUrl: summary.sourceUrl } : {}),
       ...('officialInstagramUrl' in summary

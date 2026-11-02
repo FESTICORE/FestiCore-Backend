@@ -8,7 +8,7 @@
 
 | 경로                                     | 쿼리·헤더                                                                                      | 200 응답                                                                                    |
 | ---------------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `GET /api/v1/festivals`                  | `after=YYYY-MM-DD` 또는 이전 응답의 `nextCursor`, `limit=1..50`(기본 20), 선택 `If-None-Match` | `items`(ID, 이름, 장소, 날짜, 팩 버전, 상태, 썸네일, 발견 항목의 `sourceUrl`), `nextCursor` |
+| `GET /api/v1/festivals`                  | `after=YYYY-MM-DD` 또는 이전 응답의 `nextCursor`, `limit=1..50`(기본 20), 선택 `If-None-Match` | `items`(ID, 이름, 장소, 날짜, 팩 버전, 상태, 썸네일, `artistNames`, 발견 항목의 `sourceUrl`), `nextCursor` |
 | `GET /api/v1/festivals/:id`              | 목록에서 받은 축제 ID, 본문 없음                                                               | 발행 축제는 공개 팩과 공연별 날짜·무대명·시간·보관 이미지가 포함된 `timetable` 및 공연별 출연진에서 중복을 제거한 `artists`, 발견 축제는 확인된 날짜·장소·출처·저장 포스터·출연진과 빈 `timetable`  |
 | `GET /api/v1/festivals/:id/pack/version` | 선택 `If-None-Match`                                                                           | `packVersion`, `packUpdatedAt`, `etag`                                                      |
 | `GET /api/v1/festivals/:id/pack`         | 선택 `If-None-Match`, `Accept-Encoding: br` 또는 `gzip`                                        | 발행된 팩 전체 JSON 및 공연별 출연진에서 중복을 제거한 `artists`                            |
@@ -37,3 +37,11 @@
 ## 검증
 
 `test/public-api.e2e-spec.ts`에서 발행·발견 목록, 커서, 비공개 조회, 버전/팩 캐시, 압축 협상, 깃발 필터·사진 URL, 익명/로그인 라이브, 잘못된 요청 및 요청 제한을 검증한다.
+
+## 목록 출연진 이름 (`artistNames`)
+
+- `GET /api/v1/festivals`의 모든 항목에 `artistNames: string[]`를 넣는다. 앱은 받아 둔 목록으로 아티스트 이름 검색을 오프라인에서도 할 수 있다.
+- 발행 축제는 공개 팩 `artists`와 같은 출처(시간표 `sets[].artist`)를, 발견 항목은 목록에 이미 쓰는 출연진(승인된 `crawl_lineup_revisions` 포함)을 쓴다.
+- 앞뒤 공백을 지우고 `artistNameKeys`로 같은 이름·한영 병기 표기를 한 번만 남긴다. 처음 나온 표기를 유지하고 최대 50개로 자른다. 출연진을 모르면 빈 배열이다.
+- 목록 ETag는 응답 본문 해시이므로 출연진이 바뀌면 ETag도 바뀐다.
+- 검증: `public-festival-artist-names.spec.ts`가 중복·빈 이름 제거, 한영 병기 병합, 50개 제한, 빈 배열을 확인한다.
