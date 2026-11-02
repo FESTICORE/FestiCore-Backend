@@ -8,6 +8,8 @@ import { DataSource, EntityManager } from 'typeorm';
 import { Crew, CrewGather } from '../crews/crew.entity';
 import { Flag } from '../flags/flag.entity';
 import { ApnsService } from './apns.service';
+import { socialAlertText } from './social-notification-text';
+import { recordUserNotifications } from './user-notification.service';
 
 type SocialType = 'flag.status' | 'crew.status' | 'crew.gather';
 type DeliveryStatus = 'sent' | 'cancelled' | 'failed';
@@ -74,21 +76,38 @@ export class SocialNotificationService
       );
       return;
     }
+    const payload = {
+      flagId: flag.id,
+      status: flag.status,
+      zoneId: flag.zoneId,
+      activity: flag.activity,
+      actorUserId,
+    };
     await this.enqueueStatus(
       manager,
       'flag.status',
       flag.id,
       actorUserId,
       5,
-      {
-        flagId: flag.id,
-        status: flag.status,
-        zoneId: flag.zoneId,
-        activity: flag.activity,
-        actorUserId,
-      },
+      payload,
       '"flag_follows" r',
       'r."flagId" = $1 AND r."userId" <> $2',
+    );
+    const followers = await manager.query<Array<{ userId: string }>>(
+      `SELECT "userId" FROM "flag_follows" WHERE "flagId" = $1 AND "userId" <> $2`,
+      [flag.id, actorUserId],
+    );
+    await recordUserNotifications(
+      manager,
+      followers.map((row) => row.userId),
+      {
+        type: 'flag.status',
+        festivalId: flag.festivalId,
+        ...socialAlertText('flag.status', payload),
+        subject: { flagId: flag.id },
+        dedupeKey: `flag.status:${flag.id}`,
+      },
+      true,
     );
   }
 
@@ -105,22 +124,71 @@ export class SocialNotificationService
     );
     const actor = members[0];
     if (!actor || crew.archivedAt) return;
+    const payload = {
+      crewId: crew.id,
+      actorUserId,
+      nickname: actor.nickname,
+      zoneId: actor.zoneId,
+      state: actor.state,
+    };
     await this.enqueueStatus(
       manager,
       'crew.status',
       crew.id,
       actorUserId,
       1,
-      {
-        crewId: crew.id,
-        actorUserId,
-        nickname: actor.nickname,
-        zoneId: actor.zoneId,
-        state: actor.state,
-      },
+      payload,
       '"crew_members" r',
       'r."crewId" = $1 AND r."userId" <> $2',
     );
+    await recordUserNotifications(
+      manager,
+      await this.otherMembers(manager, crew.id, actorUserId),
+      {
+        type: 'crew.status',
+        festivalId: crew.festivalId,
+        ...socialAlertText('crew.status', payload),
+        subject: { crewId: crew.id, userId: actorUserId },
+        dedupeKey: `crew.status:${crew.id}:${actorUserId}`,
+      },
+      true,
+    );
+  }
+
+  /** 새 크루원 합류는 푸시 없이 다른 크루원의 알림함에만 남긴다. */
+  async enqueueCrewMemberJoined(
+    manager: EntityManager,
+    crew: Crew,
+    joinedUserId: string,
+    nickname: string,
+  ): Promise<void> {
+    if (crew.archivedAt) return;
+    await recordUserNotifications(
+      manager,
+      await this.otherMembers(manager, crew.id, joinedUserId),
+      {
+        type: 'crew.member_joined',
+        festivalId: crew.festivalId,
+        title: '새 크루원 합류',
+        body: `${nickname}님이 크루에 합류했어요.`,
+        route: `/crews/${crew.id}`,
+        subject: { crewId: crew.id, userId: joinedUserId },
+        dedupeKey: `crew.member_joined:${crew.id}:${joinedUserId}`,
+      },
+      true,
+    );
+  }
+
+  private async otherMembers(
+    manager: EntityManager,
+    crewId: string,
+    userId: string,
+  ): Promise<string[]> {
+    const rows = await manager.query<Array<{ userId: string }>>(
+      `SELECT "userId" FROM "crew_members" WHERE "crewId" = $1 AND "userId" <> $2`,
+      [crewId, userId],
+    );
+    return rows.map((row) => row.userId);
   }
 
   async enqueueCrewGather(
@@ -157,6 +225,17 @@ export class SocialNotificationService
         JSON.stringify(payload),
       ],
     );
+    await recordUserNotifications(
+      manager,
+      await this.otherMembers(manager, crew.id, actorUserId),
+      {
+        type: 'crew.gather',
+        festivalId: crew.festivalId,
+        ...socialAlertText('crew.gather', payload),
+        subject: { crewId: crew.id, gatherId: gather.id },
+        dedupeKey: `crew.gather:${gather.id}`,
+      },
+    );
   }
 
   async enqueueCrewDissolved(
@@ -187,6 +266,17 @@ export class SocialNotificationService
         `crew.status:dissolved:${crew.id}`,
         JSON.stringify({ crewId: crew.id, dissolved: true }),
       ],
+    );
+    await recordUserNotifications(
+      manager,
+      await this.otherMembers(manager, crew.id, actorUserId),
+      {
+        type: 'crew.status',
+        festivalId: crew.festivalId,
+        ...socialAlertText('crew.status', { crewId: crew.id, dissolved: true }),
+        subject: { crewId: crew.id },
+        dedupeKey: `crew.status:dissolved:${crew.id}`,
+      },
     );
   }
 

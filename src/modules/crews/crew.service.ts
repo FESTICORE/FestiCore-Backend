@@ -440,6 +440,12 @@ export class CrewService {
             statusUpdatedAt: null,
           }),
         );
+        await this.socialNotifications.enqueueCrewMemberJoined(
+          manager,
+          row,
+          userId,
+          nickname,
+        );
         await this.liveActivity.enqueueCrewMembers(
           row.id,
           row.festivalId,

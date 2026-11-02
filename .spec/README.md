@@ -22,6 +22,7 @@
 - [schedule.md](./schedule.md) — 축제별 개인 일정 조회·수정
 - [devices.md](./devices.md) — 기기 등록·조회·삭제와 Live Activity 토큰
 - [notifications.md](./notifications.md) — 축제 알림 구독·예약·APNs 발송
+- [user-notifications.md](./user-notifications.md) — 내 알림함 목록·새 알림 개수·읽음·삭제
 - [metrics.md](./metrics.md) — 앱 이벤트 수집과 관리자 지표 집계
 - [map-upload.md](./map-upload.md) — 관리자 축제 지도 업로드와 공개 WebP 제공
 - [force-status.md](./force-status.md) — 관리자 깃발 상태 강제 변경과 감사 기록

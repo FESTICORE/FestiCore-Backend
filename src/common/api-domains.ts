@@ -86,6 +86,12 @@ export const API_DOMAINS: ApiDomain[] = [
     pathPrefix: 'notifications',
   },
   {
+    slug: 'me-notifications',
+    title: 'Me Notifications',
+    description: '내 알림함 목록·새 알림 개수·읽음·삭제',
+    pathPrefix: 'me/notifications',
+  },
+  {
     slug: 'metrics',
     title: 'Metrics',
     description: '앱 관측 이벤트 일괄 수집',

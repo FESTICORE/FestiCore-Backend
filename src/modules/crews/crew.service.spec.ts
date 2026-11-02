@@ -57,6 +57,7 @@ function setup() {
     enqueueCrewStatus: jest.fn().mockResolvedValue(undefined),
     enqueueCrewGather: jest.fn().mockResolvedValue(undefined),
     enqueueCrewDissolved: jest.fn().mockResolvedValue(undefined),
+    enqueueCrewMemberJoined: jest.fn().mockResolvedValue(undefined),
   };
   const liveActivity = {
     enqueueCrewMembers: jest.fn().mockResolvedValue(undefined),

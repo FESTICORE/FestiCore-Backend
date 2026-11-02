@@ -307,6 +307,75 @@ describe('FestivalStartService', () => {
     expect(sendStartNotification).toHaveBeenCalledTimes(1);
   });
 
+  it('records the D-1 reminder once in the device owner inbox before sending', async () => {
+    const { service, query, sendReminderNotification } = setup();
+    const ownerUserId = '55555555-5555-4555-8555-555555555555';
+    query
+      .mockResolvedValueOnce([
+        {
+          ownerUserId,
+          apnsToken: 'token',
+          apnsEnvironment: 'production',
+          name: '축제',
+          days: [{ date: '2026-11-20', startsAt: '2026-11-20T12:00:00+09:00' }],
+          checklist: [],
+          publishedVersion: 3,
+          packDownloadedVersion: 3,
+        },
+      ])
+      .mockResolvedValue([]);
+    sendReminderNotification.mockResolvedValueOnce({ accepted: true });
+
+    await service.deliver(
+      {
+        ...job,
+        eventKey: `festival-reminder:${festivalId}`,
+        scheduledAt: new Date('2026-11-19T09:00:00Z'),
+      },
+      new Date('2026-11-19T09:01:00Z'),
+    );
+
+    const insert = query.mock.calls.find(([sql]) =>
+      String(sql).includes('INSERT INTO "user_notifications"'),
+    ) as [string, unknown[]];
+    expect(insert[0]).toContain('DO NOTHING');
+    expect(insert[1]).toEqual([
+      [ownerUserId],
+      'festival.reminder',
+      festivalId,
+      '축제 준비물',
+      '준비물 확인했어요?',
+      `/festivals/${festivalId}/checklist`,
+      '{}',
+      `festival-reminder:${festivalId}`,
+    ]);
+    expect(sendReminderNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it('still sends the start push when the inbox write fails', async () => {
+    const { service, query, sendStartNotification } = setup();
+    query
+      .mockResolvedValueOnce([
+        {
+          ownerUserId: '55555555-5555-4555-8555-555555555555',
+          apnsToken: 'token',
+          apnsEnvironment: 'production',
+          name: '축제',
+          days: [{ date: '2026-11-20', startsAt: '2026-11-20T12:00:00+09:00' }],
+        },
+      ])
+      .mockRejectedValueOnce(new Error('inbox down'))
+      .mockResolvedValue([]);
+    sendStartNotification.mockResolvedValueOnce({ accepted: true });
+
+    await service.deliver(job, new Date(scheduledAt.getTime() + 60_000));
+
+    expect(query.mock.calls[1][1]).toEqual(
+      expect.arrayContaining(['festival.start', job.eventKey]),
+    );
+    expect(sendStartNotification).toHaveBeenCalledTimes(1);
+  });
+
   it('rechecks subscription and published schedule before sending', async () => {
     const { service, query, sendStartNotification } = setup();
     query.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
