@@ -18,6 +18,7 @@ import {
 } from './published-image-overlay';
 import { Flag } from '../flags/flag.entity';
 import { artistNameKeys, normalizeArtistName } from '../../common/artist-name';
+import { isIsoInstant } from '../../common/iso-instant';
 import {
   venueLabelMatches,
   verifiedVenueLocation,
@@ -105,6 +106,7 @@ function projectDirections(value: unknown, venue: unknown): Document {
     'memo',
     'lastShuttleAt',
     'lastTrainAt',
+    'lastDepartures',
     'mapLinks',
     'location',
     'source',
@@ -115,11 +117,21 @@ function projectDirections(value: unknown, venue: unknown): Document {
         'body',
         'links',
         ...(key === 'transit' ? ['stationName', 'walkMinutes'] : []),
+        ...(key === 'shuttle' ? ['stopName'] : []),
       ]);
       section.links = projectedArray(section.links, ['label', 'url']);
       direction[key] = section;
     }
   }
+  // 형식이 정해지기 전에 발행된 자유 문장은 앱이 시각으로 해석하지 않도록 null로 보낸다.
+  for (const key of ['lastShuttleAt', 'lastTrainAt'] as const)
+    if (key in direction && !isIsoInstant(direction[key]))
+      direction[key] = null;
+  direction.lastDepartures = projectedArray(direction.lastDepartures, [
+    'date',
+    'shuttleAt',
+    'trainAt',
+  ]);
   direction.mapLinks = fields(direction.mapLinks, ['naver', 'kakao']);
   const location = verifiedVenueLocation(direction.location);
   direction.location =

@@ -3,6 +3,7 @@ import {
   venueLabelMatches,
   verifiedVenueLocation,
 } from '../../../common/festival-location';
+import { isIsoInstant as iso } from '../../../common/iso-instant';
 import type { FestivalDocument } from './festival.entity';
 
 const keys = new Set([
@@ -29,14 +30,6 @@ function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function iso(value: unknown): value is string {
-  return (
-    typeof value === 'string' &&
-    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2})$/.test(value) &&
-    !Number.isNaN(Date.parse(value))
-  );
-}
-
 function calendarDate(value: unknown): value is string {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value))
     return false;
@@ -45,6 +38,97 @@ function calendarDate(value: unknown): value is string {
     !Number.isNaN(parsed.getTime()) &&
     parsed.toISOString().slice(0, 10) === value
   );
+}
+
+const MAX_LAST_DEPARTURES = 31;
+const LEGACY_RETURN_TIME_KEYS = ['lastShuttleAt', 'lastTrainAt'] as const;
+
+/**
+ * 형식이 정해지기 전에 저장된 막차·셔틀 단일 값(예: "23:40")은 ISO8601이 아니어도
+ * 초안 PATCH와 발행을 막지 않도록 null로 바꾼다. 이번 요청이 직접 보낸 값은 바꾸지 않아
+ * 새 자유 문장 입력은 그대로 검증 오류가 된다.
+ */
+export function normalizeLegacyReturnTimes(
+  draft: FestivalDocument,
+  patch?: unknown,
+): FestivalDocument {
+  const directions = draft.directions;
+  if (!object(directions)) return draft;
+  const sent =
+    object(patch) && object(patch.directions) ? patch.directions : {};
+  const stale = LEGACY_RETURN_TIME_KEYS.filter(
+    (key) =>
+      typeof directions[key] === 'string' &&
+      !iso(directions[key]) &&
+      sent[key] === undefined,
+  );
+  if (!stale.length) return draft;
+  return {
+    ...draft,
+    directions: {
+      ...directions,
+      ...Object.fromEntries(stale.map((key) => [key, null])),
+    },
+  };
+}
+
+/** 귀가 정보: 막차·셔틀 시각은 오프셋이 있는 ISO8601이고 날짜별로 한 번만 둔다. */
+function validateReturnDirections(
+  draft: FestivalDocument,
+  forPublish: boolean,
+): string[] {
+  const errors: string[] = [];
+  const directions = draft.directions as Record<string, unknown>;
+  for (const key of ['lastShuttleAt', 'lastTrainAt']) {
+    const value = directions[key];
+    if (value !== undefined && value !== null && !iso(value))
+      errors.push(`directions.${key}: 오프셋 포함 ISO8601 또는 null 필요`);
+  }
+  const shuttle = directions.shuttle;
+  if (
+    object(shuttle) &&
+    shuttle.stopName !== undefined &&
+    shuttle.stopName !== null &&
+    (typeof shuttle.stopName !== 'string' ||
+      [...shuttle.stopName.trim()].length < 1 ||
+      [...shuttle.stopName].length > 40)
+  )
+    errors.push('directions.shuttle.stopName: 1..40자 또는 null 필요');
+  const departures = directions.lastDepartures;
+  if (departures === undefined) return errors;
+  if (!Array.isArray(departures) || departures.length > MAX_LAST_DEPARTURES) {
+    errors.push(
+      `directions.lastDepartures: 최대 ${MAX_LAST_DEPARTURES}개 배열 필요`,
+    );
+    return errors;
+  }
+  const dayDates = new Set(
+    (Array.isArray(draft.days) ? (draft.days as unknown[]) : [])
+      .filter(object)
+      .map((day) => day.date),
+  );
+  const seen = new Set<string>();
+  departures.forEach((item: unknown, index) => {
+    const at = `directions.lastDepartures[${index}]`;
+    if (!object(item) || !calendarDate(item.date)) {
+      errors.push(`${at}.date: YYYY-MM-DD 필요`);
+      return;
+    }
+    if (seen.has(item.date)) errors.push(`${at}.date: 날짜 중복`);
+    seen.add(item.date);
+    if (forPublish && !dayDates.has(item.date))
+      errors.push(`${at}.date: days에 있는 개최일이어야 함`);
+    const times = ['shuttleAt', 'trainAt'].map((key) => item[key]);
+    times.forEach((value, i) => {
+      if (value !== undefined && value !== null && !iso(value))
+        errors.push(
+          `${at}.${i ? 'trainAt' : 'shuttleAt'}: 오프셋 포함 ISO8601 또는 null 필요`,
+        );
+    });
+    if (times.every((value) => value === undefined || value === null))
+      errors.push(`${at}: shuttleAt 또는 trainAt 중 하나 필요`);
+  });
+  return errors;
 }
 
 export function validateDraft(
@@ -145,6 +229,8 @@ export function validateDraft(
         'directions.location: 검증된 위도·경도, 공연장 일치 장소명과 HTTPS 출처가 필요',
       );
   }
+  if (object(draft.directions))
+    errors.push(...validateReturnDirections(draft, forPublish));
   if (
     draft.thumbUrl !== undefined &&
     draft.thumbUrl !== null &&

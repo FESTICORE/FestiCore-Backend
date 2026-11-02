@@ -14,7 +14,11 @@ import {
   AdminFestivalVersion,
   FestivalDocument,
 } from './festival.entity';
-import { mergeDraft, validateDraft } from './festival-validation';
+import {
+  mergeDraft,
+  normalizeLegacyReturnTimes,
+  validateDraft,
+} from './festival-validation';
 import { AdminAuditService } from '../audit/admin-audit.service';
 import { CacheService } from '../../redis/service/cache.service';
 import { PublicFestivalService } from '../../public/public-festival.service';
@@ -286,7 +290,10 @@ export class AdminFestivalService {
       });
       if (!row) throw new NotFoundException('페스티벌을 찾을 수 없습니다.');
       if (row.draftVersion !== expected) conflict(row);
-      const next = mergeDraft(row.draft, patch);
+      const next = normalizeLegacyReturnTimes(
+        mergeDraft(row.draft, patch),
+        patch,
+      );
       const errors = validateDraft(next);
       if (errors.length)
         throw new BadRequestException({
@@ -358,7 +365,8 @@ export class AdminFestivalService {
       });
       if (!row) throw new NotFoundException('페스티벌을 찾을 수 없습니다.');
       if (row.draftVersion !== expected) conflict(row);
-      const errors = validateDraft(row.draft, true);
+      const draft = normalizeLegacyReturnTimes(row.draft);
+      const errors = validateDraft(draft, true);
       if (errors.length)
         throw new BadRequestException({
           code: 'VALIDATION',
@@ -367,7 +375,7 @@ export class AdminFestivalService {
         });
       const packVersion = row.publishedVersion + 1;
       const pack = {
-        ...row.draft,
+        ...draft,
         packVersion,
         packUpdatedAt: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
       };
