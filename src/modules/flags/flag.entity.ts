@@ -42,6 +42,8 @@ export class Flag {
   @Column({ type: 'date', nullable: true }) restartDate!: string | null;
   @Column({ type: 'timestamptz', nullable: true })
   statusUpdatedAt!: Date | null;
+  /** 마지막으로 현장 상태를 바꾼 기수. 관리자 강제 변경이면 null이다. */
+  @Column({ type: 'uuid', nullable: true }) statusUpdatedBy!: string | null;
   @CreateDateColumn({ type: 'timestamptz' }) createdAt!: Date;
   @UpdateDateColumn({ type: 'timestamptz' }) updatedAt!: Date;
 }

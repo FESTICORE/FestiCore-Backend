@@ -26,6 +26,15 @@
 | GET | `/api/v1/me/follows` | 앱 JWT | 내 팔로우 목록, 선택 `festivalId` |
 | PUT | `/api/v1/me/pinned-flag` | 앱 JWT | 내 대표 깃발 지정 |
 
+### 기수 상태의 마지막 변경자
+
+- `GET /flags/:flagId/bearer`의 `status`와 `POST /flags/:flagId/status` 응답은
+  `updatedBy: { userId, nickname } | null`을 포함한다. 공동 기수를 포함해 마지막으로 상태를 바꾼
+  기수다. 관리자 강제 변경 뒤와 아직 바뀐 적 없는 깃발은 `null`이다. 탈퇴 등으로 닉네임이 없으면 `""`다.
+- 공개 상세(`GET /flags/:flagId`)와 라이브 보드의 상태에는 넣지 않는다.
+- 기수 코드 등록 422 `BEARER_CODE_INVALID`는 `data.remainingAttempts`, 423 `BEARER_CODE_LOCKED`는
+  `data.retryAfter`(초)를 준다.
+
 ## 관리자 API
 
 | 메서드 | 경로 | 최소 역할 | 결과 |

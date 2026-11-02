@@ -104,6 +104,9 @@ describe('관리자 깃발 상태 강제 변경', () => {
       zoneId: 'zone_main',
       activity: 'sing',
     });
+    expect(saveFlag).toHaveBeenCalledWith(
+      expect.objectContaining({ statusUpdatedBy: null }),
+    );
   });
 
   it('발행된 축제에 없는 존은 상태를 저장하지 않는다', async () => {
