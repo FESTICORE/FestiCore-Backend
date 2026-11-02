@@ -7,6 +7,7 @@ import {
   Res,
 } from '@nestjs/common';
 import { ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { DataSource } from 'typeorm';
 import { ImageStorageService } from '../storage/image-storage.service';
@@ -17,6 +18,8 @@ import { PublicFestivalService } from './public-festival.service';
 
 @ApiTags('Public Festivals')
 @Public()
+// 한 상세 화면이 출연진 사진을 수십 장 요청하므로 전역 API 한도(분당 100회) 대신 이미지 전용 한도를 둔다.
+@Throttle({ default: { ttl: 60_000, limit: 600 } })
 @Controller('festivals')
 export class PublicFestivalMapController {
   constructor(
