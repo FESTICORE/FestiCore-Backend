@@ -15,7 +15,10 @@ import {
   AdminFestival,
   FestivalDocument,
 } from '../../festival/festival.entity';
-import { validateDraft } from '../../festival/festival-validation';
+import {
+  normalizeLegacyReturnTimes,
+  validateDraft,
+} from '../../festival/festival-validation';
 import { AdminAuditService } from '../../audit/admin-audit.service';
 import { Proposal, ProposalItem } from '../entity/proposal.entity';
 import { CrawlSource } from '../entity/crawl-source.entity';
@@ -436,9 +439,10 @@ export class ProposalService {
                 };
               }
             }
-            const errors = validateDraft(next);
+            const normalized = normalizeLegacyReturnTimes(next);
+            const errors = validateDraft(normalized);
             if (errors.length) throw new Error(errors.join('; '));
-            draft = next;
+            draft = normalized;
             changed = true;
           } catch (error) {
             conflicts.push({

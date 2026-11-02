@@ -18,6 +18,7 @@ import {
 } from './published-image-overlay';
 import { Flag } from '../flags/flag.entity';
 import { artistNameKeys, normalizeArtistName } from '../../common/artist-name';
+import { isIsoInstant } from '../../common/iso-instant';
 import {
   venueLabelMatches,
   verifiedVenueLocation,
@@ -97,14 +98,6 @@ function artistImageForName(
   return images.size === 1 ? [...images][0] : null;
 }
 
-function isoInstant(value: unknown): boolean {
-  return (
-    typeof value === 'string' &&
-    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2})$/.test(value) &&
-    !Number.isNaN(Date.parse(value))
-  );
-}
-
 function projectDirections(value: unknown, venue: unknown): Document {
   const direction = fields(value, [
     'shuttle',
@@ -132,7 +125,8 @@ function projectDirections(value: unknown, venue: unknown): Document {
   }
   // 형식이 정해지기 전에 발행된 자유 문장은 앱이 시각으로 해석하지 않도록 null로 보낸다.
   for (const key of ['lastShuttleAt', 'lastTrainAt'] as const)
-    if (key in direction && !isoInstant(direction[key])) direction[key] = null;
+    if (key in direction && !isIsoInstant(direction[key]))
+      direction[key] = null;
   direction.lastDepartures = projectedArray(direction.lastDepartures, [
     'date',
     'shuttleAt',
