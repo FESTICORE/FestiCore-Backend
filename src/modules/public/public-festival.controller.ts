@@ -25,7 +25,11 @@ import { apiSuccess } from '../../common/interfaces/api-response.interface';
 import { Public } from '../auth/decorator/public.decorator';
 import { DeviceAuthGuard } from '../device/device-auth.guard';
 import { DeviceService } from '../device/device.service';
-import { envelopeEtag, PublicFestivalService } from './public-festival.service';
+import {
+  envelopeEtag,
+  packChangesEtag,
+  PublicFestivalService,
+} from './public-festival.service';
 import { PublicLiveService } from './public-live.service';
 
 function matchesEtag(header: string | undefined, etag: string): boolean {
@@ -364,6 +368,98 @@ export class PublicFestivalController {
     const body = await this.service.version(id);
     response.setHeader('Cache-Control', 'public, no-cache, must-revalidate');
     this.send(response, body, body.etag, ifNoneMatch);
+  }
+
+  @Get(':id/pack/changes')
+  @ApiOperation({
+    summary: '받은 팩과 현재 발행 팩의 차이',
+    description:
+      'from에 앱이 가진 팩 버전을 보내면 현재 발행 버전, 받을 팩 크기(sizeBytes), 바뀐 공연 수(changedSets), 막차·마지막 셔틀 시각 변경(ISO8601), 날짜별 막차 변경(lastDepartures)을 돌려줍니다. 이전 버전 기록이 없으면 changedSets는 null입니다. ETag가 같으면 304입니다. 요청 본문은 없습니다.',
+  })
+  @ApiParam(festivalId)
+  @ApiQuery({
+    name: 'from',
+    required: true,
+    description: '앱에 저장된 팩 버전(1 이상 정수)',
+    example: 12,
+  })
+  @ApiResponse({
+    status: 200,
+    description: '팩 변경 요약',
+    schema: {
+      type: 'object',
+      example: {
+        code: 'SUCCESS',
+        data: {
+          fromVersion: 12,
+          toVersion: 13,
+          sizeBytes: 524288,
+          changedSets: 2,
+          lastShuttleAt: {
+            before: '2026-10-17T23:40:00+09:00',
+            after: '2026-10-17T23:20:00+09:00',
+          },
+          lastTrainAt: null,
+          lastDepartures: [
+            {
+              date: '2026-10-18',
+              before: { shuttleAt: '2026-10-18T23:40:00+09:00', trainAt: null },
+              after: {
+                shuttleAt: '2026-10-18T23:20:00+09:00',
+                trainAt: '2026-10-19T00:12:00+09:00',
+              },
+            },
+          ],
+        },
+        message: '성공적으로 처리되었습니다.',
+      },
+    },
+  })
+  @ApiHeader({
+    name: 'If-None-Match',
+    required: false,
+    description:
+      '이전 응답의 ETag. from과 현재 공개 팩(버전·이미지 승인 상태)이 같으면 304.',
+  })
+  @ApiResponse({ status: 304, description: '변경 요약이 바뀌지 않았습니다.' })
+  @ApiResponse({
+    status: 400,
+    description: 'from이 1 이상 정수가 아닙니다.',
+    schema: jsonErrorSchema('VALIDATION'),
+  })
+  @ApiResponse({
+    status: 404,
+    description: '발행된 축제가 없습니다.',
+    schema: jsonErrorSchema('FESTIVAL_NOT_FOUND'),
+  })
+  async packChanges(
+    @Param('id') id: string,
+    @Query('from') from: string | undefined,
+    @Headers('if-none-match') ifNoneMatch: string | undefined,
+    @Res() response: Response,
+  ) {
+    const fromVersion = Number(from);
+    if (
+      !from ||
+      !/^\d+$/.test(from) ||
+      !Number.isSafeInteger(fromVersion) ||
+      fromVersion < 1
+    )
+      throw new BadRequestException({
+        code: 'VALIDATION',
+        message: 'from은 1 이상 정수여야 합니다.',
+      });
+    const { changes, packEtag } = await this.service.packChanges(
+      id,
+      fromVersion,
+    );
+    response.setHeader('Cache-Control', 'public, no-cache, must-revalidate');
+    this.send(
+      response,
+      changes,
+      packChangesEtag(fromVersion, packEtag),
+      ifNoneMatch,
+    );
   }
 
   @Get(':id/pack')

@@ -140,6 +140,106 @@ function projectDirections(value: unknown, venue: unknown): Document {
   return direction;
 }
 
+export interface PackValueChange {
+  before: string | null;
+  after: string | null;
+}
+
+export interface DepartureTimes {
+  shuttleAt: string | null;
+  trainAt: string | null;
+}
+
+export interface DepartureChange {
+  date: string;
+  before: DepartureTimes | null;
+  after: DepartureTimes | null;
+}
+
+export interface PackChanges {
+  fromVersion: number;
+  toVersion: number;
+  sizeBytes: number;
+  changedSets: number | null;
+  lastShuttleAt: PackValueChange | null;
+  lastTrainAt: PackValueChange | null;
+  lastDepartures: DepartureChange[] | null;
+}
+
+/** 추가·삭제되었거나 아티스트·무대·시각이 바뀐 공연 수 */
+export function changedSetCount(previous: Document, current: Document): number {
+  const key = (set: Document) =>
+    JSON.stringify([set.artist, set.stageId, set.startsAt, set.endsAt]);
+  const before = new Map(
+    requiredArray(previous.sets).map((set) => [String(set.id), key(set)]),
+  );
+  const after = new Map(
+    requiredArray(current.sets).map((set) => [String(set.id), key(set)]),
+  );
+  let count = 0;
+  for (const [id, value] of after) if (before.get(id) !== value) count += 1;
+  for (const id of before.keys()) if (!after.has(id)) count += 1;
+  return count;
+}
+
+export function changedDirection(
+  previous: Document,
+  current: Document,
+  field: 'lastShuttleAt' | 'lastTrainAt',
+): PackValueChange | null {
+  const value = (pack: Document) => {
+    const directions = pack.directions as Document | null | undefined;
+    const raw = directions?.[field];
+    return typeof raw === 'string' ? raw : null;
+  };
+  const before = value(previous);
+  const after = value(current);
+  return before === after ? null : { before, after };
+}
+
+/** 날짜별 마지막 셔틀·막차 시각이 추가·삭제·변경된 날짜만 날짜순으로 돌려준다. 변경이 없으면 null */
+export function changedDepartures(
+  previous: Document,
+  current: Document,
+): DepartureChange[] | null {
+  const byDate = (pack: Document) => {
+    const directions = pack.directions as Document | null | undefined;
+    return new Map(
+      requiredArray(directions?.lastDepartures)
+        .filter((item) => typeof item.date === 'string')
+        .map((item) => [
+          item.date as string,
+          {
+            shuttleAt:
+              typeof item.shuttleAt === 'string' ? item.shuttleAt : null,
+            trainAt: typeof item.trainAt === 'string' ? item.trainAt : null,
+          },
+        ]),
+    );
+  };
+  const before = byDate(previous);
+  const after = byDate(current);
+  const changes = [...new Set([...before.keys(), ...after.keys()])]
+    .sort()
+    .flatMap((date) => {
+      const from = before.get(date) ?? null;
+      const to = after.get(date) ?? null;
+      return JSON.stringify(from) === JSON.stringify(to)
+        ? []
+        : [{ date, before: from, after: to }];
+    });
+  return changes.length ? changes : null;
+}
+
+/**
+ * 변경 요약 ETag. 현재 팩 ETag를 키에 넣어, 같은 packVersion이라도
+ * 이미지 승인으로 공개 팩 본문·sizeBytes가 바뀌면 함께 바뀐다.
+ */
+export function packChangesEtag(fromVersion: number, packEtag: string): string {
+  const pack = packEtag.replace(/^W\//, '').replace(/^"|"$/g, '');
+  return `"cdm${PUBLIC_PACK_PROJECTION_VERSION}-chg${fromVersion}-${pack}"`;
+}
+
 export function publicPackEtag(packVersion: number): string {
   return `"cdm${PUBLIC_PACK_PROJECTION_VERSION}-v${packVersion}"`;
 }
@@ -1954,6 +2054,55 @@ export class PublicFestivalService {
         ? `${floor}~${ordered[limit - 1].sortAt}~${ordered[limit - 1].id}`
         : null;
     return { items, nextCursor };
+  }
+
+  /**
+   * 앱이 가진 팩 버전과 현재 발행 팩의 차이를 요약한다.
+   * 이전 버전 기록이 없으면 비교 값은 null이다.
+   */
+  async packChanges(
+    id: string,
+    fromVersion: number,
+  ): Promise<{ changes: PackChanges; packEtag: string }> {
+    const { document: current, etag: packEtag } =
+      await this.publishedWithEtag(id);
+    const toVersion = current.packVersion as number;
+    const base = {
+      fromVersion,
+      toVersion,
+      sizeBytes: Buffer.byteLength(JSON.stringify(current)),
+    };
+    const unchanged = {
+      lastShuttleAt: null,
+      lastTrainAt: null,
+      lastDepartures: null,
+    };
+    if (fromVersion >= toVersion)
+      return {
+        packEtag,
+        changes: { ...base, changedSets: 0, ...unchanged },
+      };
+    const rows = await this.dataSource.query<{ pack: Document }[]>(
+      `SELECT "pack" FROM "admin_festival_versions"
+       WHERE "festivalId" = $1 AND "packVersion" = $2`,
+      [id, fromVersion],
+    );
+    if (!rows[0]?.pack)
+      return {
+        packEtag,
+        changes: { ...base, changedSets: null, ...unchanged },
+      };
+    const previous = projectPack(rows[0].pack);
+    return {
+      packEtag,
+      changes: {
+        ...base,
+        changedSets: changedSetCount(previous, current),
+        lastShuttleAt: changedDirection(previous, current, 'lastShuttleAt'),
+        lastTrainAt: changedDirection(previous, current, 'lastTrainAt'),
+        lastDepartures: changedDepartures(previous, current),
+      },
+    };
   }
 
   async version(id: string) {
