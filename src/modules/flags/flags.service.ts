@@ -40,6 +40,7 @@ import {
   forcedStatus,
   isRecord,
   nextStatus,
+  repeatsAppliedStatus,
   statusView,
   validateProfilePatch,
 } from './flag-rules';
@@ -662,6 +663,7 @@ export class FlagsService {
           restartDate: null,
           statusUpdatedAt: null,
           statusUpdatedBy: null,
+          statusClientAt: null,
         });
         flag = await flags.save(flag);
         lockedCode.flagId = flag.id;
@@ -792,6 +794,23 @@ export class FlagsService {
         .where('flag.id = :id', { id })
         .getOne();
       if (!flag) throw new NotFoundException({ code: 'NOT_FOUND' });
+      if (repeatsAppliedStatus(flag, input)) {
+        const author = flag.statusUpdatedBy
+          ? await manager
+              .getRepository(User)
+              .findOne({ where: { id: flag.statusUpdatedBy } })
+          : null;
+        const repeated = bearerStatusView(flag, author?.nickname);
+        await this.remember(
+          manager,
+          userId,
+          key,
+          `status:${id}`,
+          input,
+          repeated,
+        );
+        return repeated;
+      }
       const next = nextStatus(flag, input);
       if (next.zoneId) {
         const festival = await manager
@@ -881,9 +900,14 @@ export class FlagsService {
         }
       }
       const before = statusView(flag);
+      // 관리자 변경보다 먼저 누른 기수 변경은 오래된 변경으로 막는다. 기준값은 낮추지 않는다.
+      const forcedAt = new Date();
       Object.assign(flag, next, {
-        statusUpdatedAt: new Date(),
+        statusUpdatedAt: forcedAt,
         statusUpdatedBy: null,
+        statusClientAt: new Date(
+          Math.max(forcedAt.getTime(), flag.statusClientAt?.getTime() ?? 0),
+        ),
       });
       await flags.save(flag);
       await manager.getRepository(FlagStatusEvent).save({

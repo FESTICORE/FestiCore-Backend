@@ -92,7 +92,10 @@ export function nextStatus(
   flag: Flag,
   input: unknown,
   now = new Date(),
-): Pick<Flag, 'status' | 'zoneId' | 'activity' | 'restartDate'> {
+): Pick<
+  Flag,
+  'status' | 'zoneId' | 'activity' | 'restartDate' | 'statusClientAt'
+> {
   if (
     !isRecord(input) ||
     !Object.keys(input).every((key) =>
@@ -115,7 +118,9 @@ export function nextStatus(
       code: 'VALIDATION',
       message: 'clientAt이 미래입니다.',
     });
-  if (flag.statusUpdatedAt && clientTime < flag.statusUpdatedAt.getTime())
+  // 서버 처리 시각이 아니라 마지막으로 반영한 clientAt과 비교한다. 오프라인에서 쌓인 변경을
+  // 순서대로 보내도 통과하고, 다른 기기의 더 최신 변경보다 오래된 변경만 막는다.
+  if (flag.statusClientAt && clientTime < flag.statusClientAt.getTime())
     throw new ConflictException({
       code: 'STATUS_STALE',
       current: statusView(flag),
@@ -231,7 +236,30 @@ export function nextStatus(
     zoneId: nextZone,
     activity: nextActivity,
     restartDate,
+    // 허용한 미래 시각(최대 5분)을 그대로 남기면 다른 기수의 정상 변경이 그동안 막히므로 서버 시각으로 자른다.
+    statusClientAt: new Date(Math.min(clientTime, now.getTime())),
   };
+}
+
+/**
+ * 마지막으로 반영한 변경과 같은 clientAt으로 같은 상태를 다시 보낸 요청인지.
+ * 새 멱등키로 재전송돼도 이벤트·알림·분당 한도를 다시 쓰지 않고 현재 상태를 돌려준다.
+ */
+export function repeatsAppliedStatus(flag: Flag, input: unknown): boolean {
+  if (!isRecord(input) || typeof input.clientAt !== 'string') return false;
+  const clientTime = Date.parse(input.clientAt);
+  if (
+    !flag.statusClientAt ||
+    Number.isNaN(clientTime) ||
+    clientTime !== flag.statusClientAt.getTime()
+  )
+    return false;
+  const { zoneId, activity, status } = input;
+  return (
+    (status === undefined || status === flag.status) &&
+    (zoneId === undefined || zoneId === flag.zoneId) &&
+    (activity === undefined || activity === flag.activity)
+  );
 }
 
 /** 관리자 강제 변경은 일반 기수의 전이 제한을 우회하되 상태 조합은 검증한다. */

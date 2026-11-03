@@ -67,6 +67,7 @@ describe('관리자 깃발 상태 강제 변경', () => {
   it('상태·이벤트·감사 기록을 같은 트랜잭션에 저장한다', async () => {
     const {
       service,
+      flag,
       manager,
       transaction,
       saveFlag,
@@ -107,6 +108,21 @@ describe('관리자 깃발 상태 강제 변경', () => {
     expect(saveFlag).toHaveBeenCalledWith(
       expect.objectContaining({ statusUpdatedBy: null }),
     );
+    expect(flag.statusClientAt?.getTime()).toBe(
+      flag.statusUpdatedAt?.getTime(),
+    );
+  });
+
+  it('관리자 변경은 기존 clientAt 기준값을 낮추지 않는다', async () => {
+    const { service, flag } = setup();
+    const later = new Date(Date.now() + 60_000);
+    flag.statusClientAt = later;
+    await service.forceStatus('flg_1', 'admin_1', {
+      status: 'active',
+      zoneId: 'zone_main',
+      activity: 'sing',
+    });
+    expect(flag.statusClientAt?.getTime()).toBe(later.getTime());
   });
 
   it('발행된 축제에 없는 존은 상태를 저장하지 않는다', async () => {
