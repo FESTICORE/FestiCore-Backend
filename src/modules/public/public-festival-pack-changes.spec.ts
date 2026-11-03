@@ -51,7 +51,7 @@ describe('pack change summary helpers', () => {
     expect(changedDepartures(pack(null), pack({}))).toBeNull();
   });
 
-  it('reports single-value direction changes and keys the ETag by from and to versions', () => {
+  it('reports single-value direction changes and keys the ETag by from and the current pack ETag', () => {
     expect(
       changedDirection(
         pack({ lastTrainAt: at('23:52') }),
@@ -59,8 +59,15 @@ describe('pack change summary helpers', () => {
         'lastTrainAt',
       ),
     ).toEqual({ before: at('23:52'), after: null });
-    expect(packChangesEtag(6, 7)).toBe(
-      `"cdm${PUBLIC_PACK_PROJECTION_VERSION}-chg6-v7"`,
+    const p = PUBLIC_PACK_PROJECTION_VERSION;
+    expect(packChangesEtag(6, `"cdm${p}-v7"`)).toBe(
+      `"cdm${p}-chg6-cdm${p}-v7"`,
+    );
+    expect(packChangesEtag(6, `W/"${'a'.repeat(64)}"`)).toBe(
+      `"cdm${p}-chg6-${'a'.repeat(64)}"`,
+    );
+    expect(packChangesEtag(6, `"${'a'.repeat(64)}"`)).not.toBe(
+      packChangesEtag(6, `"${'b'.repeat(64)}"`),
     );
   });
 });

@@ -231,11 +231,13 @@ export function changedDepartures(
   return changes.length ? changes : null;
 }
 
-export function packChangesEtag(
-  fromVersion: number,
-  toVersion: number,
-): string {
-  return `"cdm${PUBLIC_PACK_PROJECTION_VERSION}-chg${fromVersion}-v${toVersion}"`;
+/**
+ * 변경 요약 ETag. 현재 팩 ETag를 키에 넣어, 같은 packVersion이라도
+ * 이미지 승인으로 공개 팩 본문·sizeBytes가 바뀌면 함께 바뀐다.
+ */
+export function packChangesEtag(fromVersion: number, packEtag: string): string {
+  const pack = packEtag.replace(/^W\//, '').replace(/^"|"$/g, '');
+  return `"cdm${PUBLIC_PACK_PROJECTION_VERSION}-chg${fromVersion}-${pack}"`;
 }
 
 export function publicPackEtag(packVersion: number): string {
@@ -2058,46 +2060,48 @@ export class PublicFestivalService {
    * 앱이 가진 팩 버전과 현재 발행 팩의 차이를 요약한다.
    * 이전 버전 기록이 없으면 비교 값은 null이다.
    */
-  async packChanges(id: string, fromVersion: number): Promise<PackChanges> {
-    const { document: current } = await this.publishedWithEtag(id);
+  async packChanges(
+    id: string,
+    fromVersion: number,
+  ): Promise<{ changes: PackChanges; packEtag: string }> {
+    const { document: current, etag: packEtag } =
+      await this.publishedWithEtag(id);
     const toVersion = current.packVersion as number;
-    const sizeBytes = Buffer.byteLength(JSON.stringify(current));
-    if (fromVersion >= toVersion) {
+    const base = {
+      fromVersion,
+      toVersion,
+      sizeBytes: Buffer.byteLength(JSON.stringify(current)),
+    };
+    const unchanged = {
+      lastShuttleAt: null,
+      lastTrainAt: null,
+      lastDepartures: null,
+    };
+    if (fromVersion >= toVersion)
       return {
-        fromVersion,
-        toVersion,
-        sizeBytes,
-        changedSets: 0,
-        lastShuttleAt: null,
-        lastTrainAt: null,
-        lastDepartures: null,
+        packEtag,
+        changes: { ...base, changedSets: 0, ...unchanged },
       };
-    }
     const rows = await this.dataSource.query<{ pack: Document }[]>(
       `SELECT "pack" FROM "admin_festival_versions"
        WHERE "festivalId" = $1 AND "packVersion" = $2`,
       [id, fromVersion],
     );
-    if (!rows[0]?.pack) {
+    if (!rows[0]?.pack)
       return {
-        fromVersion,
-        toVersion,
-        sizeBytes,
-        changedSets: null,
-        lastShuttleAt: null,
-        lastTrainAt: null,
-        lastDepartures: null,
+        packEtag,
+        changes: { ...base, changedSets: null, ...unchanged },
       };
-    }
     const previous = projectPack(rows[0].pack);
     return {
-      fromVersion,
-      toVersion,
-      sizeBytes,
-      changedSets: changedSetCount(previous, current),
-      lastShuttleAt: changedDirection(previous, current, 'lastShuttleAt'),
-      lastTrainAt: changedDirection(previous, current, 'lastTrainAt'),
-      lastDepartures: changedDepartures(previous, current),
+      packEtag,
+      changes: {
+        ...base,
+        changedSets: changedSetCount(previous, current),
+        lastShuttleAt: changedDirection(previous, current, 'lastShuttleAt'),
+        lastTrainAt: changedDirection(previous, current, 'lastTrainAt'),
+        lastDepartures: changedDepartures(previous, current),
+      },
     };
   }
 

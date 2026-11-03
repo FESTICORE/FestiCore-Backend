@@ -418,7 +418,8 @@ export class PublicFestivalController {
   @ApiHeader({
     name: 'If-None-Match',
     required: false,
-    description: '이전 응답의 ETag. 같은 from·현재 버전이면 304.',
+    description:
+      '이전 응답의 ETag. from과 현재 공개 팩(버전·이미지 승인 상태)이 같으면 304.',
   })
   @ApiResponse({ status: 304, description: '변경 요약이 바뀌지 않았습니다.' })
   @ApiResponse({
@@ -448,12 +449,15 @@ export class PublicFestivalController {
         code: 'VALIDATION',
         message: 'from은 1 이상 정수여야 합니다.',
       });
-    const body = await this.service.packChanges(id, fromVersion);
+    const { changes, packEtag } = await this.service.packChanges(
+      id,
+      fromVersion,
+    );
     response.setHeader('Cache-Control', 'public, no-cache, must-revalidate');
     this.send(
       response,
-      body,
-      packChangesEtag(body.fromVersion, body.toVersion),
+      changes,
+      packChangesEtag(fromVersion, packEtag),
       ifNoneMatch,
     );
   }

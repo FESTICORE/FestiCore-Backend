@@ -71,6 +71,7 @@ describe('Public festival API', () => {
   let storedOriginImages: { originUrl: string; id: string }[] = [];
   let rateLimitCount = 1;
   let previousPackRows: { pack: Record<string, unknown> }[] = [];
+  let packImageRows: Record<string, unknown>[] = [];
   const dataSource = {
     query: jest.fn((sql: string) => {
       if (sql.includes('FROM "admin_festival_versions"'))
@@ -81,7 +82,7 @@ describe('Public festival API', () => {
         return Promise.resolve(discoveryRows);
       if (sql.includes('FROM crawl_images image')) {
         if (sql.includes('image.id = ANY($2::uuid[])'))
-          return Promise.resolve([{ id: storedPackImageId, seed: null }]);
+          return Promise.resolve(packImageRows);
         if (sql.includes('image.id = ANY($1::uuid[])'))
           return Promise.resolve([{ id: storedPackImageId, seed: null }]);
         if (sql.includes('image."originUrl" = ANY($1::text[])'))
@@ -180,6 +181,7 @@ describe('Public festival API', () => {
   beforeEach(() => {
     discoveryRows = [];
     storedOriginImages = [];
+    packImageRows = [{ id: storedPackImageId, seed: null }];
     rateLimitCount = 1;
   });
 
@@ -468,7 +470,13 @@ describe('Public festival API', () => {
       ],
     });
     expect(body.sizeBytes).toBeGreaterThan(0);
-    expect(changed.headers.etag).toBe('"cdm4-chg6-v7"');
+    const packVersion = await request(server)
+      .get(`/api/v1/festivals/${pack.id}/pack/version`)
+      .expect(200);
+    const packEtag = String(packVersion.headers.etag);
+    expect(changed.headers.etag).toBe(
+      `"cdm4-chg6-${packEtag.replace(/"/g, '')}"`,
+    );
     const unchanged = await request(server)
       .get(`/api/v1/festivals/${pack.id}/pack/changes?from=6`)
       .set('If-None-Match', changed.headers.etag)
@@ -478,6 +486,24 @@ describe('Public festival API', () => {
       .get(`/api/v1/festivals/${pack.id}/pack/changes?from=5`)
       .set('If-None-Match', changed.headers.etag)
       .expect(200);
+
+    // 같은 packVersion에서 이미지 승인 상태만 바뀌면 /pack ETag와 함께 바뀐다.
+    packImageRows = [
+      { id: storedPackImageId, seed: null, rightsRunId: 'run_relicensed' },
+    ];
+    const overlaid = await request(server)
+      .get(`/api/v1/festivals/${pack.id}/pack/changes?from=6`)
+      .set('If-None-Match', changed.headers.etag)
+      .expect(200);
+    expect(successData<{ toVersion: number }>(overlaid.body).toVersion).toBe(7);
+    expect(overlaid.headers.etag).not.toBe(changed.headers.etag);
+    const overlaidPack = await request(server)
+      .get(`/api/v1/festivals/${pack.id}/pack/version`)
+      .expect(200);
+    expect(overlaidPack.headers.etag).not.toBe(packEtag);
+    expect(overlaid.headers.etag).toBe(
+      `"cdm4-chg6-${String(overlaidPack.headers.etag).replace(/"/g, '')}"`,
+    );
 
     const latest = await request(server)
       .get(`/api/v1/festivals/${pack.id}/pack/changes?from=7`)
