@@ -4,6 +4,7 @@ import {
   bearerStatusView,
   forcedStatus,
   nextStatus,
+  repeatsAppliedStatus,
   statusView,
   validateProfilePatch,
 } from './flag-rules';
@@ -110,6 +111,53 @@ describe('Flag status rules', () => {
         now,
       ),
     ).toMatchObject({ zoneId: 'zon_b' });
+  });
+
+  it('clamps a future clientAt so other bearers are not blocked', () => {
+    const future = nextStatus(
+      flag('active'),
+      { zoneId: 'zon_b', clientAt: '2026-11-20T09:03:00.000Z' },
+      now,
+    );
+    expect(future.statusClientAt).toEqual(now);
+    const afterFuture = Object.assign(flag('active'), {
+      statusClientAt: future.statusClientAt,
+    });
+    expect(
+      nextStatus(
+        afterFuture,
+        { activity: 'sing', clientAt: now.toISOString() },
+        now,
+      ),
+    ).toMatchObject({ activity: 'sing' });
+  });
+
+  it('accepts a clientAt equal to the last applied one and detects a repeat', () => {
+    const applied = flag('active');
+    expect(
+      nextStatus(
+        applied,
+        { zoneId: 'zon_b', clientAt: '2026-11-20T08:59:00.000Z' },
+        now,
+      ),
+    ).toMatchObject({ zoneId: 'zon_b' });
+    const same = { zoneId: 'zon_a', clientAt: '2026-11-20T08:59:00.000Z' };
+    expect(repeatsAppliedStatus(applied, same)).toBe(true);
+    expect(repeatsAppliedStatus(applied, { ...same, zoneId: 'zon_b' })).toBe(
+      false,
+    );
+    expect(
+      repeatsAppliedStatus(applied, {
+        ...same,
+        clientAt: '2026-11-20T08:59:01.000Z',
+      }),
+    ).toBe(false);
+    expect(
+      repeatsAppliedStatus(
+        Object.assign(flag('active'), { statusClientAt: null }),
+        same,
+      ),
+    ).toBe(false);
   });
 
   it('rejects stale client updates and repeated daily restart', () => {

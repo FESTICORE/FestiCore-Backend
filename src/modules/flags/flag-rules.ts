@@ -236,8 +236,30 @@ export function nextStatus(
     zoneId: nextZone,
     activity: nextActivity,
     restartDate,
-    statusClientAt: new Date(clientTime),
+    // 허용한 미래 시각(최대 5분)을 그대로 남기면 다른 기수의 정상 변경이 그동안 막히므로 서버 시각으로 자른다.
+    statusClientAt: new Date(Math.min(clientTime, now.getTime())),
   };
+}
+
+/**
+ * 마지막으로 반영한 변경과 같은 clientAt으로 같은 상태를 다시 보낸 요청인지.
+ * 새 멱등키로 재전송돼도 이벤트·알림·분당 한도를 다시 쓰지 않고 현재 상태를 돌려준다.
+ */
+export function repeatsAppliedStatus(flag: Flag, input: unknown): boolean {
+  if (!isRecord(input) || typeof input.clientAt !== 'string') return false;
+  const clientTime = Date.parse(input.clientAt);
+  if (
+    !flag.statusClientAt ||
+    Number.isNaN(clientTime) ||
+    clientTime !== flag.statusClientAt.getTime()
+  )
+    return false;
+  const { zoneId, activity, status } = input;
+  return (
+    (status === undefined || status === flag.status) &&
+    (zoneId === undefined || zoneId === flag.zoneId) &&
+    (activity === undefined || activity === flag.activity)
+  );
 }
 
 /** 관리자 강제 변경은 일반 기수의 전이 제한을 우회하되 상태 조합은 검증한다. */

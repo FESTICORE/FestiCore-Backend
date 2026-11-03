@@ -107,16 +107,35 @@ describe('깃발 상태를 바꾼 기수', () => {
 
   it('상태를 바꾸면 요청한 기수를 저장하고 응답에 담는다', async () => {
     const { service, saveFlag } = setup();
+    const clientAt = new Date().toISOString();
     const result = await service.status('flg_1', 'usr_co', 'key-1', {
-      clientAt: new Date().toISOString(),
+      clientAt,
       zoneId: 'zone_b',
     });
     expect(saveFlag).toHaveBeenCalledWith(
       expect.objectContaining({ zoneId: 'zone_b', statusUpdatedBy: 'usr_co' }),
     );
+    expect(saveFlag.mock.calls[0][0].statusClientAt?.getTime()).toBe(
+      Date.parse(clientAt),
+    );
     expect(result).toMatchObject({
       zoneId: 'zone_b',
       updatedBy: { userId: 'usr_co', nickname: '민지' },
+    });
+  });
+
+  it('같은 clientAt으로 같은 상태를 다시 보내면 쓰지 않고 현재 상태를 돌려준다', async () => {
+    const { service, flag, saveFlag } = setup();
+    const clientAt = new Date('2026-10-20T00:00:00.000Z');
+    flag.statusClientAt = clientAt;
+    const result = await service.status('flg_1', 'usr_co', 'key-2', {
+      clientAt: clientAt.toISOString(),
+      zoneId: 'zone_a',
+    });
+    expect(saveFlag).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      zoneId: 'zone_a',
+      updatedBy: { userId: 'usr_owner' },
     });
   });
 });
