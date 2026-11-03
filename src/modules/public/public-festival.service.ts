@@ -10,6 +10,7 @@ import { AdminFestival } from '../admin/festival/festival.entity';
 import { festivalSetId } from '../admin/festival/festival-set-id';
 import { CrawlTimetableSet } from '../admin/crawl/entity/crawl-timetable-revision.entity';
 import { PUBLIC_CRAWL_IMAGE_SQL } from './crawl-image-policy';
+import { projectSearchArtists } from './public-artist-search';
 import {
   invalidStoredImagePath,
   overlayPublishedImages,
@@ -2029,7 +2030,21 @@ export class PublicFestivalService {
       (a, b) =>
         Date.parse(a.sortAt) - Date.parse(b.sortAt) || a.id.localeCompare(b.id),
     );
-    const items = ordered.slice(0, limit).map((summary) => ({
+    const page = ordered.slice(0, limit);
+    const pageIds = page.map((summary) => summary.id);
+    const publishedRows = rows
+      .filter((row) => pageIds.includes(row.id) && row.published)
+      .map((row) => ({ id: row.id, published: row.published as Document }));
+    const publishedIds = new Set(publishedRows.map((row) => row.id));
+    const artistsById = await projectSearchArtists(
+      this.dataSource,
+      pageIds,
+      publishedRows,
+      discovered.filter(
+        (entry) => pageIds.includes(entry.id) && !publishedIds.has(entry.id),
+      ),
+    );
+    const items = page.map((summary) => ({
       id: summary.id,
       name: summary.name,
       venue: summary.venue,
@@ -2039,11 +2054,11 @@ export class PublicFestivalService {
       flagsEnabled: summary.flagsEnabled,
       thumbUrl: summary.thumbUrl,
       ticketLinks: summary.ticketLinks,
-      artistNames:
-        'artistNames' in summary
-          ? summary.artistNames
-          : artistNames(summary.artists),
+      artistNames: (artistsById.get(summary.id) ?? [])
+        .map((artist) => artist.name)
+        .slice(0, 50),
       status: summary.status,
+      artists: artistsById.get(summary.id) ?? [],
       ...('sourceUrl' in summary ? { sourceUrl: summary.sourceUrl } : {}),
       ...('officialInstagramUrl' in summary
         ? { officialInstagramUrl: summary.officialInstagramUrl }
