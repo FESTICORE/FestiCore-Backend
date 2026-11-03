@@ -662,6 +662,7 @@ export class FlagsService {
           restartDate: null,
           statusUpdatedAt: null,
           statusUpdatedBy: null,
+          statusClientAt: null,
         });
         flag = await flags.save(flag);
         lockedCode.flagId = flag.id;
@@ -881,9 +882,12 @@ export class FlagsService {
         }
       }
       const before = statusView(flag);
+      // 관리자 변경보다 먼저 누른 기수 변경은 오래된 변경으로 막는다.
+      const forcedAt = new Date();
       Object.assign(flag, next, {
-        statusUpdatedAt: new Date(),
+        statusUpdatedAt: forcedAt,
         statusUpdatedBy: null,
+        statusClientAt: forcedAt,
       });
       await flags.save(flag);
       await manager.getRepository(FlagStatusEvent).save({

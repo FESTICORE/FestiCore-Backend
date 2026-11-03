@@ -26,6 +26,14 @@
 | GET | `/api/v1/me/follows` | 앱 JWT | 내 팔로우 목록, 선택 `festivalId` |
 | PUT | `/api/v1/me/pinned-flag` | 앱 JWT | 내 대표 깃발 지정 |
 
+### 상태 변경의 오래됨 판단
+
+- `POST /flags/:flagId/status`는 `clientAt`이 마지막으로 반영한 기수 변경의 `clientAt`(`flags."statusClientAt"`)보다
+  이르면 409 `STATUS_STALE`이다. 서버 처리 시각(`statusUpdatedAt`)과 비교하지 않으므로, 오프라인에서 쌓인 변경을
+  누른 순서대로 보내면 모두 반영된다. 다른 기기가 더 나중에 누른 변경이 먼저 반영됐으면 이전 변경은 막힌다.
+- 관리자 강제 변경은 처리 시각을 `statusClientAt`으로 저장해 그 전에 누른 기수 변경을 막는다.
+- 열이 없던 이전 깃발(`statusClientAt` null)은 첫 변경을 오래됨 검사 없이 받는다.
+
 ### 기수 상태의 마지막 변경자
 
 - `GET /flags/:flagId/bearer`의 `status`와 `POST /flags/:flagId/status` 응답은

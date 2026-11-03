@@ -44,6 +44,9 @@ export class Flag {
   statusUpdatedAt!: Date | null;
   /** 마지막으로 현장 상태를 바꾼 기수. 관리자 강제 변경이면 null이다. */
   @Column({ type: 'uuid', nullable: true }) statusUpdatedBy!: string | null;
+  /** 마지막으로 반영한 기수 변경의 clientAt. 오래된 변경(STATUS_STALE) 판단 기준이다. */
+  @Column({ type: 'timestamptz', nullable: true })
+  statusClientAt!: Date | null;
   @CreateDateColumn({ type: 'timestamptz' }) createdAt!: Date;
   @UpdateDateColumn({ type: 'timestamptz' }) updatedAt!: Date;
 }

@@ -67,6 +67,7 @@ describe('관리자 깃발 상태 강제 변경', () => {
   it('상태·이벤트·감사 기록을 같은 트랜잭션에 저장한다', async () => {
     const {
       service,
+      flag,
       manager,
       transaction,
       saveFlag,
@@ -107,6 +108,7 @@ describe('관리자 깃발 상태 강제 변경', () => {
     expect(saveFlag).toHaveBeenCalledWith(
       expect.objectContaining({ statusUpdatedBy: null }),
     );
+    expect(flag.statusClientAt).toBeInstanceOf(Date);
   });
 
   it('발행된 축제에 없는 존은 상태를 저장하지 않는다', async () => {

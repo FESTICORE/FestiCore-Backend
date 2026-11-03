@@ -92,7 +92,10 @@ export function nextStatus(
   flag: Flag,
   input: unknown,
   now = new Date(),
-): Pick<Flag, 'status' | 'zoneId' | 'activity' | 'restartDate'> {
+): Pick<
+  Flag,
+  'status' | 'zoneId' | 'activity' | 'restartDate' | 'statusClientAt'
+> {
   if (
     !isRecord(input) ||
     !Object.keys(input).every((key) =>
@@ -115,7 +118,9 @@ export function nextStatus(
       code: 'VALIDATION',
       message: 'clientAt이 미래입니다.',
     });
-  if (flag.statusUpdatedAt && clientTime < flag.statusUpdatedAt.getTime())
+  // 서버 처리 시각이 아니라 마지막으로 반영한 clientAt과 비교한다. 오프라인에서 쌓인 변경을
+  // 순서대로 보내도 통과하고, 다른 기기의 더 최신 변경보다 오래된 변경만 막는다.
+  if (flag.statusClientAt && clientTime < flag.statusClientAt.getTime())
     throw new ConflictException({
       code: 'STATUS_STALE',
       current: statusView(flag),
@@ -231,6 +236,7 @@ export function nextStatus(
     zoneId: nextZone,
     activity: nextActivity,
     restartDate,
+    statusClientAt: new Date(clientTime),
   };
 }
 
