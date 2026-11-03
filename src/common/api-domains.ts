@@ -86,6 +86,12 @@ export const API_DOMAINS: ApiDomain[] = [
     pathPrefix: 'notifications',
   },
   {
+    slug: 'notices',
+    title: 'Notices',
+    description: '게시된 서비스 공지사항 목록·상세',
+    pathPrefix: 'notices',
+  },
+  {
     slug: 'me-notifications',
     title: 'Me Notifications',
     description: '내 알림함 목록·새 알림 개수·읽음·삭제',
@@ -114,6 +120,12 @@ export const API_DOMAINS: ApiDomain[] = [
     title: 'Admin Legal',
     description: '개인정보처리방침 조회·수정',
     pathPrefix: 'admin/legal',
+  },
+  {
+    slug: 'admin-notices',
+    title: 'Admin Notices',
+    description: '서비스 공지사항 조회·작성·수정·게시',
+    pathPrefix: 'admin/notices',
   },
   {
     slug: 'admin-push',

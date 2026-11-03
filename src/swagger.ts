@@ -19,6 +19,7 @@ import { AdminAuditModule } from './modules/admin/audit/admin-audit.module';
 import { AdminPushModule } from './modules/admin/push/admin-push.module';
 import { AdminAnalyticsModule } from './modules/admin/analytics/admin-analytics.module';
 import { LegalModule } from './modules/legal/legal.module';
+import { NoticesModule } from './modules/notices/notices.module';
 
 /** SwaggerModule.createDocument 의 include 가 받는 모듈 클래스 타입. */
 type ModuleClass = new (...args: never[]) => unknown;
@@ -37,11 +38,13 @@ const MODULES_BY_SLUG: Record<string, ModuleClass[]> = {
   schedule: [ScheduleModule],
   devices: [DeviceModule],
   notifications: [DeviceModule],
+  notices: [NoticesModule],
   'me-notifications': [NotificationModule],
   metrics: [MetricsModule],
   'admin-metrics': [MetricsModule],
   'admin-audit': [AdminAuditModule],
   'admin-legal': [LegalModule],
+  'admin-notices': [NoticesModule],
   'admin-push': [AdminPushModule],
   'admin-analytics': [AdminAnalyticsModule],
 };
