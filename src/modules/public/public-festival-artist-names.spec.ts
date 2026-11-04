@@ -28,7 +28,7 @@ describe('PublicFestivalService list artistNames', () => {
     return Object.assign(service, { testBuilder: builder });
   }
 
-  it('lists date-only published metadata and uses the same Seoul midnight in cursors', async () => {
+  it('lists date-only published metadata and keeps its date in v2 cursors', async () => {
     const rows = ['fst_a', 'fst_b'].map((id) => ({
       id,
       publishedVersion: 1,
@@ -55,9 +55,9 @@ describe('PublicFestivalService list artistNames', () => {
       artists: [{ name: '밴드', performances: [] }],
     });
     expect(page.items[0]).not.toHaveProperty('startsAt');
-    expect(page.nextCursor).toContain('2026-11-19T00:00:00+09:00~fst_a');
+    expect(page.nextCursor).toBe('2026-09-22~v2~2026-10-22~1~2026-11-19~fst_a');
     expect(service.testBuilder.orderBy).toHaveBeenCalledWith(
-      expect.stringContaining("'T00:00:00+09:00')::timestamptz"),
+      expect.stringContaining('THEN 0 WHEN'),
       'ASC',
     );
     service.testBuilder.getMany.mockResolvedValue(rows.slice(1));
@@ -65,7 +65,7 @@ describe('PublicFestivalService list artistNames', () => {
     expect(next.items.map((item) => item.id)).toEqual(['fst_b']);
     expect(service.testBuilder.andWhere).toHaveBeenCalledWith(
       expect.stringContaining('festival.id > :cursorId'),
-      { cursorAt: '2026-11-19T00:00:00+09:00', cursorId: 'fst_a' },
+      { cursorBucket: 1, cursorDate: '2026-11-19', cursorId: 'fst_a' },
     );
   });
 
