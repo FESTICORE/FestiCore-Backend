@@ -148,6 +148,7 @@ export class ApnsService {
       festivalId: string;
       festivalName: string;
       state: Record<string, unknown>;
+      alertBody?: string;
     },
   ): Promise<ApnsSendResult> {
     const timestamp = Math.floor(Date.now() / 1000);
@@ -167,7 +168,7 @@ export class ApnsService {
           'content-state': input.state,
           alert: {
             title: input.festivalName,
-            body: '축제가 시작됐어요.',
+            body: input.alertBody ?? '축제가 시작됐어요.',
           },
         },
       },
@@ -183,6 +184,7 @@ export class ApnsService {
     token: string,
     environment: 'sandbox' | 'production',
     state: Record<string, unknown>,
+    dismissImmediately = false,
   ): Promise<ApnsSendResult> {
     return this.send(
       token,
@@ -192,6 +194,9 @@ export class ApnsService {
           timestamp: Math.floor(Date.now() / 1000),
           event: 'end',
           'content-state': state,
+          ...(dismissImmediately
+            ? { 'dismissal-date': Math.floor(Date.now() / 1000) - 1 }
+            : {}),
         },
       },
       {

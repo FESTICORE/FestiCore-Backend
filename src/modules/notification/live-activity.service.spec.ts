@@ -39,6 +39,35 @@ describe('LiveActivityService durable queue', () => {
     });
   });
 
+  it('ends the current Activity with no personal content before disabling its update queue', async () => {
+    query.mockResolvedValueOnce([
+      { liveActivityPushToken: 'activity-token', apnsEnvironment: 'sandbox' },
+    ]);
+    await service.endDeviceForUnbind(deviceId, manager as never);
+    expect(apns.sendLiveActivityEnd).toHaveBeenCalledWith(
+      'activity-token',
+      'sandbox',
+      expect.objectContaining({
+        phase: 'finished',
+        nextMine: null,
+        crewSummary: null,
+      }),
+      true,
+    );
+    expect(query.mock.calls[1][0]).toContain('"live_activity_deliveries"');
+    apns.sendLiveActivityEnd.mockResolvedValueOnce({
+      accepted: false,
+      permanent: false,
+    });
+    query.mockResolvedValueOnce([
+      { liveActivityPushToken: 'activity-token', apnsEnvironment: 'sandbox' },
+    ]);
+    await expect(
+      service.endDeviceForUnbind(deviceId, manager as never),
+    ).rejects.toThrow();
+    expect(query.mock.calls).toHaveLength(3);
+  });
+
   it('records business refreshes without touching delivery rows', async () => {
     await service.enqueueDevice(deviceId);
     await service.enqueueUser('user-one', 'fst_one');

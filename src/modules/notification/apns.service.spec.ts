@@ -293,6 +293,23 @@ describe('ApnsService', () => {
     expect(typeof payload.aps.timestamp).toBe('number');
   });
 
+  it('requests immediate Lock Screen dismissal when ending an unbound device Activity', async () => {
+    const { stream } = mockResponse(200);
+    const service = new ApnsService(config(credentials));
+    await service.sendLiveActivityEnd(
+      DEVICE_TOKEN,
+      'sandbox',
+      { phase: 'finished', nextMine: null },
+      true,
+    );
+    const payload = JSON.parse(
+      (stream.end.mock.calls as unknown[][])[0][0] as string,
+    ) as { aps: Record<string, unknown> };
+    expect(payload.aps['dismissal-date']).toBeLessThan(
+      payload.aps.timestamp as number,
+    );
+  });
+
   it('starts a Live Activity with matching iOS attributes and requests an update token', async () => {
     const { session, stream } = mockResponse(200);
     const service = new ApnsService(config(credentials));
@@ -342,6 +359,23 @@ describe('ApnsService', () => {
     });
     expect(payload.aps.timestamp).toBeGreaterThanOrEqual(before);
     expect(payload.aps.timestamp).toBeLessThanOrEqual(after);
+  });
+
+  it('uses the performance reminder text in a push-to-start alert', async () => {
+    const { stream } = mockResponse(200);
+    const service = new ApnsService(config(credentials));
+    await service.sendLiveActivityStart(DEVICE_TOKEN, 'sandbox', {
+      festivalId: 'fst_12345678',
+      festivalName: '원더리벳',
+      state: { phase: 'upcoming' },
+      alertBody: '밴드 공연이 2시간 후 시작돼요.',
+    });
+    const payload = JSON.parse(
+      (stream.end.mock.calls as unknown[][])[0][0] as string,
+    ) as {
+      aps: { alert: { body: string } };
+    };
+    expect(payload.aps.alert.body).toBe('밴드 공연이 2시간 후 시작돼요.');
   });
 
   it('rejects an oversized Live Activity update before connecting', async () => {

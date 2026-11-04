@@ -235,6 +235,168 @@ describe('FestivalStartService', () => {
     ]);
   });
 
+  it('schedules a saved performance two hours early without a pin or festival-start opt-in', async () => {
+    const { service, query } = setup();
+    query.mockResolvedValueOnce([
+      {
+        id: festivalId,
+        name: '축제',
+        days: [],
+        sets: [
+          {
+            id: 'set_a1b2c3d4',
+            stageId: 'main',
+            artist: '밴드',
+            startsAt: '2026-11-20T15:00:00+09:00',
+          },
+        ],
+      },
+    ]);
+    query.mockResolvedValueOnce([
+      { userId: deviceId, festivalId, setIds: ['set_a1b2c3d4'] },
+    ]);
+    query.mockResolvedValue([]);
+
+    await service.schedulePublished(new Date('2026-11-19T00:00:00Z'));
+
+    expect(query).toHaveBeenCalledTimes(3);
+    expect(query.mock.calls[1][0]).toContain('FROM "user_schedules"');
+    expect(query.mock.calls[2][0]).not.toContain('device_subscriptions');
+    expect(query.mock.calls[2][0]).toContain(
+      'ON CONFLICT ("deviceId", "eventKey")',
+    );
+    expect(JSON.parse(query.mock.calls[2][1]?.[0] as string)).toEqual([
+      {
+        userId: deviceId,
+        festivalId,
+        setId: 'set_a1b2c3d4',
+        scheduledAt: '2026-11-20T04:00:00.000Z',
+      },
+    ]);
+  });
+
+  it('uses one device-and-festival job for multiple saved performances, ending at the earliest start', async () => {
+    const { service, query } = setup();
+    query.mockResolvedValueOnce([
+      {
+        id: festivalId,
+        name: '축제',
+        days: [],
+        sets: [
+          {
+            id: 'set_a1b2c3d4',
+            stageId: 'main',
+            artist: '첫 공연',
+            startsAt: '2026-11-20T15:00:00+09:00',
+          },
+          {
+            id: 'set_b1b2c3d4',
+            stageId: 'main',
+            artist: '다음 공연',
+            startsAt: '2026-11-20T18:00:00+09:00',
+          },
+        ],
+      },
+    ]);
+    query.mockResolvedValueOnce([
+      {
+        userId: deviceId,
+        festivalId,
+        setIds: ['set_a1b2c3d4', 'set_b1b2c3d4'],
+      },
+    ]);
+    query.mockResolvedValue([]);
+    await service.schedulePublished(new Date('2026-11-19T00:00:00Z'));
+    expect(query).toHaveBeenCalledTimes(3);
+    expect(JSON.parse(query.mock.calls[2][1]?.[0] as string)).toEqual([
+      {
+        userId: deviceId,
+        festivalId,
+        setId: 'set_a1b2c3d4',
+        scheduledAt: '2026-11-20T04:00:00.000Z',
+      },
+    ]);
+  });
+
+  it('uses a fixed two-query performance path for hundreds of published sets', async () => {
+    const { service, query } = setup();
+    const sets = Array.from({ length: 500 }, (_, index) => ({
+      id: `set_${index.toString(36).padStart(8, '0')}`,
+      stageId: 'main',
+      artist: `Artist ${index}`,
+      startsAt: new Date(
+        Date.parse('2026-11-20T15:00:00+09:00') + index * 60_000,
+      ).toISOString(),
+    }));
+    query.mockResolvedValueOnce([{ id: festivalId, days: [], sets }]);
+    query.mockResolvedValueOnce([
+      { userId: deviceId, festivalId, setIds: [sets[0].id, sets[499].id] },
+    ]);
+    query.mockResolvedValue([]);
+    await service.schedulePublished(new Date('2026-11-19T00:00:00Z'));
+    expect(query).toHaveBeenCalledTimes(3);
+    expect(
+      query.mock.calls.filter(([sql]) =>
+        sql.includes('INSERT INTO "notification_deliveries"'),
+      ),
+    ).toHaveLength(1);
+    expect(JSON.parse(query.mock.calls[2][1]?.[0] as string)).toEqual([
+      {
+        userId: deviceId,
+        festivalId,
+        setId: sets[0].id,
+        scheduledAt: '2026-11-20T04:00:00.000Z',
+      },
+    ]);
+  });
+
+  it('cancels removed performances and the festival start when a personal schedule is saved', async () => {
+    const { service } = setup();
+    const query = jest
+      .fn<Promise<unknown>, [string, unknown[]?]>()
+      .mockResolvedValue([]);
+    const manager = { query };
+    const published = {
+      sets: [
+        {
+          id: 'set_a1b2c3d4',
+          stageId: 'main',
+          artist: '밴드',
+          startsAt: '2099-11-20T15:00:00+09:00',
+        },
+      ],
+    };
+
+    await service.syncUserSchedule(
+      deviceId,
+      festivalId,
+      ['set_a1b2c3d4'],
+      published,
+      manager as never,
+    );
+
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(query.mock.calls[0][1]?.[2]).toBe(
+      `live-activity-start:${festivalId}`,
+    );
+    expect(query.mock.calls[1][1]?.[2]).toEqual(
+      new Date('2099-11-20T04:00:00Z'),
+    );
+
+    query.mockClear();
+    await service.syncUserSchedule(
+      deviceId,
+      festivalId,
+      [],
+      published,
+      manager as never,
+    );
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(query.mock.calls[0][1]?.[2]).toBe(
+      `live-activity-performance:${festivalId}`,
+    );
+  });
+
   it('claims due jobs with SKIP LOCKED and a lease', async () => {
     const { service, query } = setup();
     query.mockResolvedValueOnce([job]);
@@ -586,6 +748,123 @@ describe('FestivalStartService', () => {
       sets: [],
     },
   };
+
+  const performanceJob = {
+    ...liveStartJob,
+    eventKey: `live-activity-performance:${festivalId}`,
+    scheduledAt: new Date('2026-11-20T04:00:00Z'),
+  };
+  const performanceTarget = {
+    ...liveStartTarget,
+    hasActiveSession: true,
+    savedSetIds: ['set_a1b2c3d4'],
+    published: {
+      days: liveStartTarget.days,
+      sets: [
+        {
+          id: 'set_a1b2c3d4',
+          stageId: 'main',
+          artist: '밴드',
+          startsAt: '2026-11-20T15:00:00+09:00',
+        },
+      ],
+    },
+  };
+
+  it('starts a saved performance once at the two-hour boundary', async () => {
+    const { service, query, sendLiveActivityStart } = setup();
+    query.mockResolvedValueOnce([performanceTarget]);
+    query.mockResolvedValueOnce([{ id: job.id }]);
+    query.mockResolvedValueOnce([]);
+    sendLiveActivityStart.mockResolvedValueOnce({
+      accepted: true,
+      permanent: false,
+    });
+
+    await service.deliver(performanceJob, performanceJob.scheduledAt);
+
+    expect(sendLiveActivityStart).toHaveBeenCalledTimes(1);
+    expect(query.mock.calls[0][0]).toContain(
+      'LEFT JOIN "device_subscriptions"',
+    );
+    expect(sendLiveActivityStart).toHaveBeenCalledWith(
+      performanceTarget.liveActivityPushToStartToken,
+      'sandbox',
+      expect.objectContaining({
+        alertBody: '밴드 공연이 2시간 후 시작돼요.',
+      }),
+    );
+    const calls = sendLiveActivityStart.mock.calls as unknown as Array<
+      [string, string, { state: { nextMine: unknown } }]
+    >;
+    const payload = calls[0][2];
+    expect(payload.state.nextMine).toEqual({
+      setId: 'set_a1b2c3d4',
+      stageId: 'main',
+      artist: '밴드',
+      startsAt: '2026-11-20T15:00:00+09:00',
+    });
+    expect(query.mock.calls[1][0]).toContain("'OUTCOME_UNKNOWN'");
+  });
+
+  it('cancels a removed performance or duplicate festival start before APNs', async () => {
+    const { service, query, sendLiveActivityStart } = setup();
+    query
+      .mockResolvedValueOnce([{ ...performanceTarget, savedSetIds: [] }])
+      .mockResolvedValueOnce([]);
+    await service.deliver(performanceJob, performanceJob.scheduledAt);
+    expect(sendLiveActivityStart).not.toHaveBeenCalled();
+    expect(query.mock.calls[1][1]).toEqual([
+      job.id,
+      leaseUntil,
+      'cancelled',
+      'TARGET_UNAVAILABLE',
+    ]);
+
+    query.mockClear();
+    query.mockResolvedValueOnce([performanceTarget]).mockResolvedValueOnce([]);
+    await service.deliver(liveStartJob, scheduledAt);
+    expect(sendLiveActivityStart).not.toHaveBeenCalled();
+  });
+
+  it('cancels a personal start when the account has no active refresh session', async () => {
+    const { service, query, sendLiveActivityStart } = setup();
+    query.mockResolvedValueOnce([
+      { ...performanceTarget, hasActiveSession: false },
+    ]);
+    await service.deliver(performanceJob, performanceJob.scheduledAt);
+    expect(sendLiveActivityStart).not.toHaveBeenCalled();
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining('"hasActiveSession"'),
+      expect.any(Array),
+    );
+  });
+
+  it('reschedules a shifted performance before reserving the APNs attempt', async () => {
+    const { service, query, sendLiveActivityStart } = setup();
+    const shifted = {
+      ...performanceTarget,
+      published: {
+        ...performanceTarget.published,
+        sets: [
+          {
+            id: 'set_a1b2c3d4',
+            stageId: 'main',
+            artist: '밴드',
+            startsAt: '2026-11-20T16:00:00+09:00',
+          },
+        ],
+      },
+    };
+    query.mockResolvedValueOnce([shifted]).mockResolvedValueOnce([]);
+    await service.deliver(performanceJob, performanceJob.scheduledAt);
+    expect(sendLiveActivityStart).not.toHaveBeenCalled();
+    expect(query.mock.calls[1][1]).toEqual([
+      job.id,
+      leaseUntil,
+      new Date('2026-11-20T05:00:00Z'),
+    ]);
+  });
 
   it('uses only the push-to-start token after durable reservation', async () => {
     const { service, query, sendLiveActivityStart, sendStartNotification } =

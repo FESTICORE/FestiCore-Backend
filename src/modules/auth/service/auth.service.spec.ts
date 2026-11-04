@@ -60,11 +60,16 @@ describe('AuthService logout account devices', () => {
     );
     expect(query).toHaveBeenNthCalledWith(
       3,
-      expect.stringContaining('UPDATE "refresh_token_sessions"'),
+      expect.stringContaining("'live-activity-performance:%'"),
       [userId],
     );
     expect(query).toHaveBeenNthCalledWith(
       4,
+      expect.stringContaining('UPDATE "refresh_token_sessions"'),
+      [userId],
+    );
+    expect(query).toHaveBeenNthCalledWith(
+      5,
       expect.stringContaining('UPDATE "refresh_tokens"'),
       [userId],
     );

@@ -23,11 +23,15 @@ describe('ScheduleService', () => {
     transaction: jest.fn((fn: (value: unknown) => unknown) => fn(manager)),
   };
   const liveActivity = { enqueueUser: jest.fn().mockResolvedValue(undefined) };
+  const festivalStart = {
+    syncUserSchedule: jest.fn().mockResolvedValue(undefined),
+  };
   const service = new ScheduleService(
     schedules as never,
     festivals as never,
     db as never,
     liveActivity as never,
+    festivalStart as never,
   );
 
   beforeEach(() => {
@@ -55,6 +59,7 @@ describe('ScheduleService', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(repo.save).not.toHaveBeenCalled();
     expect(liveActivity.enqueueUser).not.toHaveBeenCalled();
+    expect(festivalStart.syncUserSchedule).not.toHaveBeenCalled();
   });
 
   it('rejects a stale offline replay', async () => {
@@ -92,6 +97,13 @@ describe('ScheduleService', () => {
     expect(liveActivity.enqueueUser).toHaveBeenCalledWith(
       'user',
       'fst_festival',
+      manager,
+    );
+    expect(festivalStart.syncUserSchedule).toHaveBeenCalledWith(
+      'user',
+      'fst_festival',
+      [],
+      { sets: [{ id: 'set_a1b2c3d4' }] },
       manager,
     );
   });
