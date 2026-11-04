@@ -9,7 +9,8 @@ export class AnalyticsFetchError extends Error {
       | 'empty_environment'
       | 'empty_issues'
       | 'unauthorized'
-      | 'forbidden',
+      | 'forbidden'
+      | 'incomplete_export',
   ) {
     super(kind);
   }

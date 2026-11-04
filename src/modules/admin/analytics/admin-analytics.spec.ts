@@ -335,6 +335,57 @@ describe('admin analytics', () => {
     },
   );
 
+  it.each([
+    'terminated early\n',
+    `${JSON.stringify({ event: 'app_open', properties: { time: Date.parse('2026-10-20T00:00:00Z') / 1000 } })}\nterminated early\n`,
+  ])(
+    'rejects a terminated Mixpanel export without returning partial counts',
+    async (body) => {
+      global.fetch = jest.fn(() =>
+        Promise.resolve(new Response(body, { status: 200 })),
+      ) as typeof fetch;
+      const service = new AdminAnalyticsService(
+        config({
+          MIXPANEL_SERVICE_ACCOUNT_USERNAME: 'reader',
+          MIXPANEL_SERVICE_ACCOUNT_SECRET: 'private-secret',
+        }),
+      );
+      const result = await service.mixpanel(range());
+      expect(result).toEqual({
+        status: 'error',
+        reason: 'incomplete_export',
+        scope: 'shared',
+        totalEvents: null,
+        series: [],
+        topEvents: [],
+        truncated: false,
+      });
+      expect(JSON.stringify(result)).not.toContain('terminated early');
+      expect(JSON.stringify(result)).not.toContain('app_open');
+      expect(JSON.stringify(result)).not.toContain('private-secret');
+    },
+  );
+
+  it('keeps a successful blank Mixpanel export as zero events', async () => {
+    global.fetch = jest.fn(() =>
+      Promise.resolve(new Response('\n  \n', { status: 200 })),
+    ) as typeof fetch;
+    const service = new AdminAnalyticsService(
+      config({
+        MIXPANEL_SERVICE_ACCOUNT_USERNAME: 'reader',
+        MIXPANEL_SERVICE_ACCOUNT_SECRET: 'secret',
+      }),
+    );
+    expect(await service.mixpanel(range())).toEqual({
+      status: 'ok',
+      scope: 'shared',
+      totalEvents: 0,
+      series: [],
+      topEvents: [],
+      truncated: false,
+    });
+  });
+
   it.each([429, 500])(
     'does not misclassify Mixpanel HTTP %i as a credential failure',
     async (status) => {
