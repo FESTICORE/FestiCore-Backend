@@ -7,6 +7,7 @@ import { PRUGIO_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/prugio-profile';
 import { CDF_LOW_HIGH_LOW_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/cdf-low-high-low-profile';
 import { SOHYANG_COMMONS_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/sohyang-commons-profile';
 import { COMMONS_APPROVED_PUBLIC_IMAGE_SQL } from './commons-approved-image-policy';
+import { PRUGIO_PORTRAIT_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/prugio-portraits';
 
 // Both the image lookup and the download endpoint must apply this condition.
 
@@ -36,6 +37,7 @@ export const PUBLIC_CRAWL_IMAGE_SQL = `(
     AND source."parserConfig"->>'seed' IS DISTINCT FROM 'cdf-low-high-low-profile'
     AND source."parserConfig"->>'seed' IS DISTINCT FROM 'sohyang-commons-profile'
     AND source."parserConfig"->>'seed' IS DISTINCT FROM 'commons-approved-profile'
+    AND source."parserConfig"->>'seed' IS DISTINCT FROM 'prugio-official-portraits'
     AND source."parserConfig"->>'festivalSourceUrl' ~ '^https://(ticket[.]melon[.]com|ticket[.]yes24[.]com|nol[.]yanolja[.]com|mintpaper[.]co[.]kr)/'
     AND (source."parserConfig"->>'seed' IS DISTINCT FROM 'official-artist-gallery'
       OR (split_part(image."originUrl", '?', 1) =
@@ -110,6 +112,9 @@ export const PUBLIC_CRAWL_IMAGE_SQL = `(
     AND (
       ${PRUGIO_PUBLIC_IMAGE_SQL}
     ))
+  OR (
+    ${PRUGIO_PORTRAIT_PUBLIC_IMAGE_SQL}
+  )
   OR (source.kind = 'artist-image'
     AND source.enabled = true
     AND source."parserConfig"->>'seed' = 'cdf-low-high-low-profile'

@@ -50,6 +50,7 @@ import {
   COMMONS_DISCOVERY_SEED,
   COMMONS_DISCOVERY_URL,
 } from './commons-image-discovery';
+import { TOUR_API_SOURCE } from './tour-api';
 
 type PrivateCrawl = {
   onModuleInit(): void;
@@ -510,6 +511,7 @@ function harness() {
     timetableRevisions as never,
     publicFestivals as never,
     autoPublish as never,
+    { get: (name: string) => process.env[name] } as never,
   ) as unknown as PrivateCrawl;
   const execute = jest.spyOn(service, 'execute').mockResolvedValue(undefined);
   return {
@@ -5031,4 +5033,224 @@ describe('CrawlService proposal changes', () => {
       expect.objectContaining({ id: 'owned', op: 'remove', path: '/sets/0' }),
     ]);
   });
+});
+
+describe('TourAPI collection', () => {
+  it('fetches TourAPI pages without persisting the service key in source or body', async () => {
+    const previous = process.env.TOUR_API_SERVICE_KEY;
+    process.env.TOUR_API_SERVICE_KEY = 'test-service-key';
+    try {
+      const { service, source } = harness();
+      source.url = TOUR_API_SOURCE;
+      const crawler = service as unknown as {
+        limitedGet(url: URL): Promise<{ status: number; body: string }>;
+      };
+      const page = (items: unknown[]) =>
+        JSON.stringify({
+          response: {
+            header: { resultCode: '0000' },
+            body: { totalCount: 2, items: { item: items } },
+          },
+        });
+      const get = jest
+        .spyOn(crawler, 'limitedGet')
+        .mockResolvedValueOnce({
+          status: 200,
+          body: page([{ contentid: '1' }]),
+        })
+        .mockResolvedValueOnce({
+          status: 200,
+          body: page([{ contentid: '2' }]),
+        });
+
+      const result = await service.getListing(source);
+
+      expect(JSON.parse(result.body)).toEqual([
+        { contentid: '1' },
+        { contentid: '2' },
+      ]);
+      expect(result.body).not.toContain('test-service-key');
+      expect(source.url).toBe(TOUR_API_SOURCE);
+      expect(
+        get.mock.calls.map(([url]) => url.searchParams.get('pageNo')),
+      ).toEqual(['1', '2']);
+      expect(get.mock.calls[0][0].searchParams.get('serviceKey')).toBe(
+        'test-service-key',
+      );
+    } finally {
+      if (previous === undefined) delete process.env.TOUR_API_SERVICE_KEY;
+      else process.env.TOUR_API_SERVICE_KEY = previous;
+    }
+  });
+});
+
+describe('TourAPI completeness', () => {
+  it.each([true, false])(
+    'rejects an incomplete listing (empty page: %s)',
+    async (empty) => {
+      const previous = process.env.TOUR_API_SERVICE_KEY;
+      process.env.TOUR_API_SERVICE_KEY = 'test-service-key';
+      try {
+        const { service, source } = harness();
+        source.url = TOUR_API_SOURCE;
+        const crawler = service as unknown as {
+          limitedGet(url: URL): Promise<{ status: number; body: string }>;
+        };
+        let page = 0;
+        const get = jest.spyOn(crawler, 'limitedGet').mockImplementation(() =>
+          Promise.resolve({
+            status: 200,
+            body: JSON.stringify({
+              response: {
+                header: { resultCode: '0000' },
+                body: {
+                  totalCount: 1001,
+                  items: { item: empty ? [] : [{ contentid: String(++page) }] },
+                },
+              },
+            }),
+          }),
+        );
+        await expect(service.getListing(source)).rejects.toThrow(
+          empty ? '총건수 전에' : '페이지 상한',
+        );
+        expect(get).toHaveBeenCalledTimes(empty ? 1 : 10);
+      } finally {
+        if (previous === undefined) delete process.env.TOUR_API_SERVICE_KEY;
+        else process.env.TOUR_API_SERVICE_KEY = previous;
+      }
+    },
+  );
+});
+
+describe('Prugio portrait completion preserves administrator edits', () => {
+  it.each([false, true])(
+    'keeps a concurrent disable and parser edit (capture fails: %s)',
+    async (fails) => {
+      const { service, source, run, sourcesRepo, runsRepo, dataSource } =
+        harness();
+      const seed = 'prugio-official-portraits';
+      const child = {
+        ...source,
+        id: 'portrait-child',
+        kind: 'artist-image',
+        parserConfig: { seed, artistName: '홍길동' },
+      } as CrawlSource;
+      const persisted = { ...child, parserConfig: { ...child.parserConfig } };
+      const builder = {
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getOneOrFail: jest.fn().mockResolvedValue(child),
+      };
+      const save = jest.fn((value: CrawlSource) => {
+        Object.assign(persisted, value);
+        return Promise.resolve(value);
+      });
+      Object.assign(sourcesRepo, { createQueryBuilder: () => builder, save });
+      Object.assign(runsRepo, { create: (value: unknown) => value });
+      dataSource.query.mockImplementation((sql: string) => {
+        if (sql.startsWith('SELECT id'))
+          return Promise.resolve([{ id: child.id, seed }]);
+        if (sql.startsWith('UPDATE crawl_sources')) {
+          expect(sql).toContain(
+            'CASE WHEN "enabled" = false THEN \'disabled\'',
+          );
+          expect(sql).not.toContain('"parserConfig" =');
+          expect(sql).not.toContain('"enabled" = $');
+          persisted.status = persisted.enabled ? 'ok' : 'disabled';
+        }
+        return Promise.resolve([]);
+      });
+      let release!: () => void;
+      let started!: () => void;
+      const pending = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const entered = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const portraits = service as unknown as {
+        captureImages(): Promise<string[]>;
+        savePrugioPortraits(
+          gallery: CrawlSource,
+          run: CrawlRun,
+          collected: {
+            url: URL;
+            portraits: { artistName: string; body: Buffer }[];
+          },
+        ): Promise<void>;
+      };
+      jest.spyOn(portraits, 'captureImages').mockImplementation(async () => {
+        started();
+        await pending;
+        if (fails) throw new Error('capture failed');
+        return ['stored.jpg'];
+      });
+      const result = portraits.savePrugioPortraits(source, run, {
+        url: new URL('https://cdnticket.melon.co.kr/poster.jpg'),
+        portraits: [{ artistName: '홍길동', body: Buffer.from('photo') }],
+      });
+      const checked = fails
+        ? expect(result).rejects.toThrow('capture failed')
+        : expect(result).resolves.toBeUndefined();
+      await entered;
+      persisted.enabled = false;
+      persisted.status = 'disabled';
+      persisted.parserConfig = {
+        seed: 'administrator-edited',
+        artistName: '김수정',
+      };
+      release();
+      await checked;
+      expect(persisted).toMatchObject({
+        enabled: false,
+        status: 'disabled',
+        parserConfig: { seed: 'administrator-edited', artistName: '김수정' },
+      });
+      expect(save).not.toHaveBeenCalled();
+      expect(
+        dataSource.query.mock.calls.some(([sql]) =>
+          String(sql).startsWith('UPDATE crawl_sources'),
+        ),
+      ).toBe(true);
+    },
+  );
+});
+
+describe('TourAPI stable pagination', () => {
+  it.each([false, true])(
+    'rejects repeated IDs or changed totals (total changes: %s)',
+    async (changedTotal) => {
+      const previous = process.env.TOUR_API_SERVICE_KEY;
+      process.env.TOUR_API_SERVICE_KEY = 'test-service-key';
+      try {
+        const { service, source } = harness();
+        source.url = TOUR_API_SOURCE;
+        const crawler = service as unknown as {
+          limitedGet(url: URL): Promise<{ status: number; body: string }>;
+        };
+        const page = (totalCount: number, contentid: string) => ({
+          status: 200,
+          body: JSON.stringify({
+            response: {
+              header: { resultCode: '0000' },
+              body: { totalCount, items: { item: [{ contentid }] } },
+            },
+          }),
+        });
+        jest
+          .spyOn(crawler, 'limitedGet')
+          .mockResolvedValueOnce(page(2, '1'))
+          .mockResolvedValueOnce(
+            page(changedTotal ? 1 : 2, changedTotal ? '2' : '1'),
+          );
+        await expect(service.getListing(source)).rejects.toThrow(
+          changedTotal ? '총건수가 변경' : '중복',
+        );
+      } finally {
+        if (previous === undefined) delete process.env.TOUR_API_SERVICE_KEY;
+        else process.env.TOUR_API_SERVICE_KEY = previous;
+      }
+    },
+  );
 });
