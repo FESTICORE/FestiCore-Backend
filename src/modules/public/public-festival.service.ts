@@ -58,6 +58,34 @@ import {
 
 type Document = Record<string, unknown>;
 
+type ListSortKey = { bucket: 0 | 1 | 2; date: string; id: string };
+
+function listSortKey(
+  entry: { id: string; firstDate: string; lastDate: string },
+  today: string,
+): ListSortKey {
+  const bucket =
+    entry.firstDate <= today && entry.lastDate >= today
+      ? 0
+      : entry.firstDate > today
+        ? 1
+        : 2;
+  return {
+    bucket,
+    date: bucket === 2 ? entry.lastDate : entry.firstDate,
+    id: entry.id,
+  };
+}
+
+function compareListSortKeys(a: ListSortKey, b: ListSortKey): number {
+  const dateOrder = a.date < b.date ? -1 : a.date > b.date ? 1 : 0;
+  return (
+    a.bucket - b.bucket ||
+    (a.bucket === 2 ? -dateOrder : dateOrder) ||
+    (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+  );
+}
+
 function object(value: unknown): value is Document {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -1897,20 +1925,33 @@ export class PublicFestivalService {
         message: 'limit은 단일 정수여야 합니다.',
       });
     const cursor = after?.match(
-      /^(\d{4}-\d{2}-\d{2})~([^~]+)~(fst_[0-9a-z]+)$/,
+      /^(\d{4}-\d{2}-\d{2})~v2~(\d{4}-\d{2}-\d{2})~([012])~(\d{4}-\d{2}-\d{2})~(fst_[0-9a-z]+)$/,
+    );
+    const legacyCursor = after?.match(
+      /^(\d{4}-\d{2}-\d{2})~(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2}))~(fst_[0-9a-z]+)$/,
     );
     if (
-      cursor &&
-      (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2})$/.test(
-        cursor[2],
-      ) ||
-        Number.isNaN(Date.parse(cursor[2])))
+      after?.includes('~') &&
+      !cursor &&
+      (!legacyCursor || Number.isNaN(Date.parse(legacyCursor[2])))
     )
       throw new BadRequestException({
         code: 'VALIDATION',
-        message: 'after 커서의 시작 시각이 올바르지 않습니다.',
+        message: '지원하지 않는 after 커서입니다.',
       });
-    const afterDate = cursor?.[1] ?? after;
+    if (
+      cursor &&
+      ![cursor[2], cursor[4]].every(
+        (date) =>
+          !Number.isNaN(Date.parse(`${date}T00:00:00Z`)) &&
+          new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) === date,
+      )
+    )
+      throw new BadRequestException({
+        code: 'VALIDATION',
+        message: 'after 커서의 날짜가 올바르지 않습니다.',
+      });
+    const afterDate = cursor?.[1] ?? legacyCursor?.[1] ?? after;
     if (afterDate !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(afterDate))
       throw new BadRequestException({
         code: 'VALIDATION',
@@ -1937,27 +1978,38 @@ export class PublicFestivalService {
       });
 
     const today = dateInSeoul(now);
+    const sortToday = cursor?.[2] ?? today;
     const floor =
       afterDate ??
       new Date(Date.parse(`${today}T00:00:00Z`) - 30 * 86_400_000)
         .toISOString()
         .slice(0, 10);
-    const firstStartsAt = `festival.published->'days'->0->>'startsAt'`;
-    const firstInstant = `COALESCE((${firstStartsAt})::timestamptz, ((festival.published->'eventPeriod'->>'firstDate') || 'T00:00:00+09:00')::timestamptz)`;
+    const firstDate = `COALESCE(festival.published->'days'->0->>'date', festival.published->'eventPeriod'->>'firstDate')`;
     const lastDate = `COALESCE(festival.published->'days'->-1->>'date', festival.published->'eventPeriod'->>'lastDate')`;
+    const bucket = `CASE WHEN ${firstDate} <= '${sortToday}' AND ${lastDate} >= '${sortToday}' THEN 0 WHEN ${firstDate} > '${sortToday}' THEN 1 ELSE 2 END`;
+    const sortDate = `CASE WHEN ${bucket} = 2 THEN ${lastDate} ELSE ${firstDate} END`;
     const query = this.festivals
       .createQueryBuilder('festival')
       .where('festival.published IS NOT NULL')
       .andWhere('festival.publishedVersion > 0')
       .andWhere(`${lastDate} >= :floor`, { floor });
     if (cursor) {
+      const cursorBucket = Number(cursor[3]);
       query.andWhere(
-        `(${firstInstant} > CAST(:cursorAt AS timestamptz) OR (${firstInstant} = CAST(:cursorAt AS timestamptz) AND festival.id > :cursorId))`,
-        { cursorAt: cursor[2], cursorId: cursor[3] },
+        `(${bucket} > :cursorBucket OR (${bucket} = :cursorBucket AND (${sortDate} ${cursorBucket === 2 ? '<' : '>'} :cursorDate OR (${sortDate} = :cursorDate AND festival.id > :cursorId))))`,
+        { cursorBucket, cursorDate: cursor[4], cursorId: cursor[5] },
       );
     }
     const rows = await query
-      .orderBy(firstInstant, 'ASC')
+      .orderBy(bucket, 'ASC')
+      .addOrderBy(
+        `CASE WHEN ${bucket} = 2 THEN NULL ELSE ${firstDate} END`,
+        'ASC',
+      )
+      .addOrderBy(
+        `CASE WHEN ${bucket} = 2 THEN ${lastDate} ELSE NULL END`,
+        'DESC',
+      )
       .addOrderBy('festival.id', 'ASC')
       .take(limit + 1)
       .getMany();
@@ -1982,10 +2034,6 @@ export class PublicFestivalService {
           venue: pack.venue,
           firstDate,
           ...(typeof startsAt === 'string' ? { startsAt } : {}),
-          sortAt:
-            typeof startsAt === 'string'
-              ? startsAt
-              : `${firstDate}T00:00:00+09:00`,
           lastDate,
           packVersion: row.publishedVersion,
           flagsEnabled: pack.flagsEnabled,
@@ -2079,16 +2127,20 @@ export class PublicFestivalService {
       if (canonicalFestivalId(entry.id) !== entry.id) return false;
       if (entry.lastDate < floor) return false;
       if (!cursor) return true;
-      const sort = Date.parse(entry.sortAt) - Date.parse(cursor[2]);
-      return sort > 0 || (sort === 0 && entry.id > cursor[3]);
+      return (
+        compareListSortKeys(listSortKey(entry, sortToday), {
+          bucket: Number(cursor[3]) as 0 | 1 | 2,
+          date: cursor[4],
+          id: cursor[5],
+        }) > 0
+      );
     });
     await this.attachStoredImages(discovered);
     const ordered = [
       ...summaries.filter((summary) => !(summary.id in FESTIVAL_ALIASES)),
       ...discovered,
-    ].sort(
-      (a, b) =>
-        Date.parse(a.sortAt) - Date.parse(b.sortAt) || a.id.localeCompare(b.id),
+    ].sort((a, b) =>
+      compareListSortKeys(listSortKey(a, sortToday), listSortKey(b, sortToday)),
     );
     const page = ordered.slice(0, limit);
     const pageIds = page.map((summary) => summary.id);
@@ -2124,9 +2176,12 @@ export class PublicFestivalService {
         ? { officialInstagramUrl: summary.officialInstagramUrl }
         : {}),
     }));
+    const lastKey = page.length
+      ? listSortKey(page[page.length - 1], sortToday)
+      : null;
     const nextCursor =
-      ordered.length > limit
-        ? `${floor}~${ordered[limit - 1].sortAt}~${ordered[limit - 1].id}`
+      ordered.length > limit && lastKey
+        ? `${floor}~v2~${sortToday}~${lastKey.bucket}~${lastKey.date}~${lastKey.id}`
         : null;
     return { items, nextCursor };
   }

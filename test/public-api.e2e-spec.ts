@@ -846,7 +846,7 @@ describe('Public festival API', () => {
       .expect(400);
   });
 
-  it('paginates by first day start time then ID without skipping a same-day festival', async () => {
+  it('paginates by festival date then ID without skipping a same-day festival', async () => {
     queryBuilder.getMany.mockResolvedValueOnce([
       published,
       {
@@ -867,7 +867,7 @@ describe('Public festival API', () => {
     );
     expect(body.items[0].id).toBe('fst_12345678');
     expect(body.nextCursor).toBe(
-      '2026-10-21~2026-11-20T12:00:00+09:00~fst_12345678',
+      '2026-10-21~v2~2026-11-04~1~2026-11-20~fst_12345678',
     );
     queryBuilder.getMany.mockResolvedValueOnce([
       {
@@ -890,16 +890,16 @@ describe('Public festival API', () => {
     ).toBe('fst_87654321');
     expect(queryBuilder.andWhere).toHaveBeenCalledWith(
       expect.stringContaining('festival.id > :cursorId'),
-      { cursorAt: '2026-11-20T12:00:00+09:00', cursorId: 'fst_12345678' },
+      { cursorBucket: 1, cursorDate: '2026-11-20', cursorId: 'fst_12345678' },
     );
     expect(queryBuilder.orderBy).toHaveBeenCalledWith(
-      "COALESCE((festival.published->'days'->0->>'startsAt')::timestamptz, ((festival.published->'eventPeriod'->>'firstDate') || 'T00:00:00+09:00')::timestamptz)",
+      expect.stringContaining('THEN 0 WHEN'),
       'ASC',
     );
   });
 
   it('lists, paginates and downloads published metadata without inventing performance times', async () => {
-    const metadata = ['fst_metadata1', 'fst_metadata2'].map((id) => ({
+    const metadata = ['fst_000metadata1', 'fst_000metadata2'].map((id) => ({
       id,
       publishedVersion: 1,
       published: {
@@ -920,7 +920,7 @@ describe('Public festival API', () => {
       items: Record<string, unknown>[];
       nextCursor: string | null;
     };
-    // Both metadata packs sort at Seoul midnight, before a real noon schedule.
+    // Same-day metadata packs sort before the published pack by ID.
     queryBuilder.getMany.mockResolvedValueOnce([...metadata, published]);
     const first = await request(server)
       .get('/api/v1/festivals?after=2026-10-21&limit=1')
@@ -928,7 +928,7 @@ describe('Public festival API', () => {
     const firstPage = successData<ListPage>(first.body);
     expect(firstPage.items).toHaveLength(1);
     expect(firstPage.items[0]).toMatchObject({
-      id: 'fst_metadata1',
+      id: 'fst_000metadata1',
       packVersion: 1,
       firstDate: '2026-11-20',
       lastDate: '2026-11-21',
@@ -936,7 +936,7 @@ describe('Public festival API', () => {
     });
     expect(firstPage.items[0]).not.toHaveProperty('startsAt');
     expect(firstPage.nextCursor).toBe(
-      '2026-10-21~2026-11-20T00:00:00+09:00~fst_metadata1',
+      '2026-10-21~v2~2026-11-04~1~2026-11-20~fst_000metadata1',
     );
 
     queryBuilder.andWhere.mockClear();
@@ -947,15 +947,19 @@ describe('Public festival API', () => {
       )
       .expect(200);
     const secondPage = successData<ListPage>(second.body);
-    expect(secondPage.items.map((item) => item.id)).toEqual(['fst_metadata2']);
+    expect(secondPage.items.map((item) => item.id)).toEqual([
+      'fst_000metadata2',
+    ]);
     expect(secondPage.nextCursor).toBe(
-      '2026-10-21~2026-11-20T00:00:00+09:00~fst_metadata2',
+      '2026-10-21~v2~2026-11-04~1~2026-11-20~fst_000metadata2',
     );
-    const sortInstant =
-      "COALESCE((festival.published->'days'->0->>'startsAt')::timestamptz, ((festival.published->'eventPeriod'->>'firstDate') || 'T00:00:00+09:00')::timestamptz)";
     expect(queryBuilder.andWhere).toHaveBeenCalledWith(
-      `(${sortInstant} > CAST(:cursorAt AS timestamptz) OR (${sortInstant} = CAST(:cursorAt AS timestamptz) AND festival.id > :cursorId))`,
-      { cursorAt: '2026-11-20T00:00:00+09:00', cursorId: 'fst_metadata1' },
+      expect.stringContaining('festival.id > :cursorId'),
+      {
+        cursorBucket: 1,
+        cursorDate: '2026-11-20',
+        cursorId: 'fst_000metadata1',
+      },
     );
     queryBuilder.getMany.mockResolvedValueOnce([published]);
     const third = await request(server)
@@ -970,11 +974,11 @@ describe('Public festival API', () => {
 
     repo.findOne.mockResolvedValueOnce(metadata[0]);
     const downloaded = await request(server)
-      .get('/api/v1/festivals/fst_metadata1/pack')
+      .get('/api/v1/festivals/fst_000metadata1/pack')
       .expect(200);
     const document = successData<Record<string, unknown>>(downloaded.body);
     expect(document).toMatchObject({
-      id: 'fst_metadata1',
+      id: 'fst_000metadata1',
       packVersion: 1,
       eventPeriod: { firstDate: '2026-11-20', lastDate: '2026-11-21' },
       timetableStatus: 'pending',
@@ -989,12 +993,12 @@ describe('Public festival API', () => {
     expect(downloaded.headers.etag).toMatch(/^"[0-9a-f]{64}"$/);
     repo.findOne.mockResolvedValueOnce(metadata[0]);
     await request(server)
-      .get('/api/v1/festivals/fst_metadata1/pack')
+      .get('/api/v1/festivals/fst_000metadata1/pack')
       .set('If-None-Match', downloaded.headers.etag)
       .expect(304);
   });
 
-  it('orders different ISO offsets by instant and preserves the original cursor', async () => {
+  it('orders same-day festivals by ID regardless of start time offset', async () => {
     const later = {
       id: 'fst_87654321',
       published: {
@@ -1013,7 +1017,7 @@ describe('Public festival API', () => {
     );
     expect(body.items[0].id).toBe('fst_12345678');
     expect(body.nextCursor).toBe(
-      '2026-10-21~2026-11-20T12:00:00+09:00~fst_12345678',
+      '2026-10-21~v2~2026-11-04~1~2026-11-20~fst_12345678',
     );
     queryBuilder.getMany.mockResolvedValueOnce([later]);
     await request(server)
@@ -1022,8 +1026,8 @@ describe('Public festival API', () => {
       )
       .expect(200);
     expect(queryBuilder.andWhere).toHaveBeenCalledWith(
-      expect.stringContaining('CAST(:cursorAt AS timestamptz)'),
-      { cursorAt: '2026-11-20T12:00:00+09:00', cursorId: 'fst_12345678' },
+      expect.stringContaining('festival.id > :cursorId'),
+      { cursorBucket: 1, cursorDate: '2026-11-20', cursorId: 'fst_12345678' },
     );
   });
 
