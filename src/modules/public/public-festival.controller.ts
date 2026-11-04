@@ -114,7 +114,7 @@ export class PublicFestivalController {
   @ApiOperation({
     summary: '축제 목록',
     description:
-      '발행 축제와 판매처에서 발견한 축제를 함께 조회합니다. 각 항목의 ticketLinks(최대 5개)는 예매처·공식 링크이며 thumbUrl은 썸네일입니다. artistNames(최대 50개)는 앱 검색용 출연진 이름입니다. 발견 항목은 status=discovered, packVersion=0이며 팩은 아직 없습니다. 발견 항목의 날짜는 공연 날짜만 뜻하고 시작 시각은 확인되지 않았습니다. 요청 본문은 없습니다.',
+      '발행 축제와 판매처에서 발견한 축제를 함께 조회합니다. artists는 검색용 출연진 이름과 확인된 전체 공연 일정이며 사진 정보는 포함하지 않습니다. artistNames는 같은 출연진 이름 중 최대 50개입니다. 각 항목의 ticketLinks(최대 5개)는 예매처·공식 링크이며 thumbUrl은 썸네일입니다. 발견 항목은 status=discovered, packVersion=0이며 팩은 아직 없습니다. 발견 항목의 날짜는 공연 날짜만 뜻하고 시작 시각은 확인되지 않았습니다. 요청 본문은 없습니다.',
   })
   @ApiQuery({
     name: 'after',
@@ -154,6 +154,18 @@ export class PublicFestivalController {
               firstDate: '2026-10-24',
               lastDate: '2026-10-24',
               packVersion: 1,
+              artists: [
+                {
+                  name: '샘플 밴드',
+                  performances: [
+                    {
+                      startsAt: '2026-10-24T19:00:00+09:00',
+                      date: '2026-10-24',
+                      stageName: '메인 무대',
+                    },
+                  ],
+                },
+              ],
               thumbUrl: 'https://example.com/festival.webp',
               ticketLinks: [
                 { label: '예스24', url: 'https://ticket.yes24.com/Perf/12345' },

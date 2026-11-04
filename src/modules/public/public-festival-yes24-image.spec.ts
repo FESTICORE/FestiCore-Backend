@@ -14,7 +14,11 @@ function serviceWithQuery(query: jest.Mock) {
   return new PublicFestivalService(
     { createQueryBuilder: () => builder } as never,
     {} as never,
-    publicFestivalTestDataSource(query) as never,
+    publicFestivalTestDataSource((sql, params) =>
+      sql.startsWith('SELECT DISTINCT ON (revision."sourceId")')
+        ? []
+        : query(sql, params),
+    ) as never,
     {} as never,
   );
 }

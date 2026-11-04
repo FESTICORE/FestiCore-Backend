@@ -49,6 +49,34 @@ describe('PublicFestivalService list artistNames', () => {
     ]);
     const { items } = await service.list(undefined, '20', now);
     expect(items[0].artistNames).toEqual(['노이즈캔디', '삼보마스터']);
+    expect(items[0].artists).toEqual([
+      {
+        name: '노이즈캔디',
+        performances: [
+          {
+            startsAt: '2026-11-19T13:00:00+09:00',
+            date: '2026-11-19',
+            stageName: null,
+          },
+          {
+            startsAt: '2026-11-19T15:00:00+09:00',
+            date: '2026-11-19',
+            stageName: null,
+          },
+        ],
+      },
+      {
+        name: '삼보마스터',
+        performances: [
+          {
+            startsAt: '2026-11-19T14:00:00+09:00',
+            date: '2026-11-19',
+            stageName: null,
+          },
+        ],
+      },
+    ]);
+    expect(JSON.stringify(items[0].artists)).not.toContain('imageUrl');
   });
 
   it('uses discovered lineup names, merges alias spellings and caps at 50', async () => {
