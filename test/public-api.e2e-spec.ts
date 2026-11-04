@@ -977,7 +977,7 @@ describe('Public festival API', () => {
       id: 'fst_metadata1',
       packVersion: 1,
       eventPeriod: { firstDate: '2026-11-20', lastDate: '2026-11-21' },
-      timetableStatus: 'unpublished',
+      timetableStatus: 'pending',
       days: [],
       stages: [],
       sets: [],

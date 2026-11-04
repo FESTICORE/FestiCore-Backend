@@ -3,6 +3,7 @@ import {
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
+import { IsNull } from 'typeorm';
 import { DeviceService } from './device.service';
 import type { DevicePrincipal } from './device-auth.guard';
 
@@ -435,6 +436,7 @@ describe('DeviceService ownership and pins', () => {
   it('updates only the sent notification kinds for the owned device', async () => {
     devices.findOne.mockResolvedValue({
       id,
+      userId: null,
       deviceTokenId: 'token-a',
       notifyFlagStatus: true,
       notifyCrewStatus: true,
@@ -458,7 +460,11 @@ describe('DeviceService ownership and pins', () => {
       packUpdates: false,
     });
     expect(devices.update).toHaveBeenCalledWith(
-      { id, deviceTokenId: 'token-a' },
+      {
+        id,
+        userId: IsNull(),
+        deviceTokenId: 'token-a',
+      },
       { notifyCrewGather: false, notifyPackUpdates: false },
     );
   });

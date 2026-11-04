@@ -56,14 +56,15 @@ describe('NOL festival poster', () => {
       '50',
       new Date('2026-10-22T00:00:00Z'),
     );
-    expect(result.items).toHaveLength(3);
+    expect(result.items).toHaveLength(2);
     expect(
       result.items.find((item) => item.sourceUrl === festivalUrl)?.ticketLinks,
     ).toEqual([
       { label: '공식 사이트', url: festivalUrl },
       { label: '예스24', url: yes24 },
     ]);
-    for (const url of [yes24, english]) {
+    expect(result.items.some((item) => item.sourceUrl === english)).toBe(false);
+    for (const url of [yes24]) {
       const detail = result.items.find((item) => item.sourceUrl === url);
       expect(detail).toBeDefined();
       const fetched = await service.discovered(detail!.id);

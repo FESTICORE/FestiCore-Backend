@@ -257,17 +257,20 @@ describe('festival draft validation', () => {
       ...draft,
       eventPeriod: { firstDate: '2026-10-23', lastDate: '2026-11-08' },
       days: [],
+      stages: [],
+      sets: [],
+      timetableStatus: 'unpublished',
     };
     expect(validateDraft(dateOnly)).toEqual([]);
-    expect(validateDraft({ ...dateOnly, stages: [], sets: [] }, true)).toEqual(
-      [],
-    );
+    expect(validateDraft(dateOnly, true)).toEqual([]);
     expect(
       validateDraft(
         { ...dateOnly, stages: [], sets: [{ stageId: 'stg_12345678' }] },
         true,
       ),
-    ).toContain('sets: 날짜 전용 발행에는 공연 세트를 포함할 수 없음');
+    ).toContain(
+      'timetableStatus: 미공개 일정은 유효한 eventPeriod와 빈 days/stages/sets 필요',
+    );
     expect(() =>
       mergeDraft(dateOnly, { eventPeriod: { firstDate: '2026-10-24' } }),
     ).toThrow(BadRequestException);

@@ -2,6 +2,48 @@ import { HttpException } from '@nestjs/common';
 import { AdminFestivalService } from './admin-festival.service';
 import { AdminFestival } from './festival.entity';
 
+describe('automatic pack publication', () => {
+  it('preserves a manually owned unpublished draft', async () => {
+    const row = {
+      id: 'fst_0123456789abcdef',
+      draft: { name: '관리자 초안' },
+      published: null,
+      publishedVersion: 0,
+    };
+    const findOne = jest.fn().mockResolvedValue(row);
+    const query = jest.fn().mockResolvedValue([]);
+    const save = jest.fn();
+    const service = new AdminFestivalService(
+      {} as never,
+      {} as never,
+      {
+        transaction: (callback: (manager: unknown) => Promise<unknown>) =>
+          callback({ query, getRepository: () => ({ findOne, save }) }),
+      } as never,
+      {} as never,
+      { invalidatePack: jest.fn() } as never,
+      {} as never,
+      {} as never,
+    );
+    await expect(
+      service.publishCrawled(
+        {
+          id: row.id,
+          name: '수집 항목',
+          venue: '공연장',
+          firstDate: '2026-12-31',
+          lastDate: '2027-01-01',
+          sourceUrl: 'https://mintpaper.co.kr/festivals/178',
+          ticketLinks: [],
+        },
+        null,
+      ),
+    ).resolves.toEqual({ packVersion: 0, changed: false });
+    expect(save).not.toHaveBeenCalled();
+    expect(row.draft).toEqual({ name: '관리자 초안' });
+  });
+});
+
 describe('AdminFestivalService optimistic edits', () => {
   it('lists festivals before the crawler proposal table exists', async () => {
     const query = jest.fn().mockResolvedValue([{ present: null }]);
@@ -316,6 +358,7 @@ describe('date-only draft publication', () => {
         timezone: 'Asia/Seoul',
         eventPeriod: { firstDate: '2026-10-23', lastDate: '2026-11-08' },
         days: [],
+        timetableStatus: 'unpublished',
         flagsEnabled: false,
         stages: [],
         sets: [],

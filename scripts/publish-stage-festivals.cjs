@@ -57,9 +57,9 @@ function parseArgs(argv) {
     else if (arg === '--fill-missing-ends') options.fillMissingEnds = true;
     else if (arg === '--audit-file') {
       options.auditFile = argv[(i += 1)];
-      if (!options.auditFile || options.auditFile.startsWith('--')) throw new Error('--audit-file에는 파일 경로가 필요합니다.');
-    }
-    else if (arg === '--base') options.base = argv[(i += 1)];
+      if (!options.auditFile || options.auditFile.startsWith('--'))
+        throw new Error('--audit-file에는 파일 경로가 필요합니다.');
+    } else if (arg === '--base') options.base = argv[(i += 1)];
     else if (arg === '--only')
       options.only = new Set(argv[(i += 1)].split(',').map((id) => id.trim()));
     else throw new Error(`알 수 없는 옵션: ${arg}`);
@@ -242,14 +242,16 @@ function festivalDates(festival) {
 
 /** 공개 상세 timetable로 초안의 days·stages·sets를 만든다. 만들 수 없으면 사유 문자열을 반환한다. */
 function buildDraft(detail, fillMissingEnds) {
-  let sets = (detail.timetable ?? []).map(({ artist, date, stageName, startsAt, endsAt, imageUrl }) => ({
-    artist,
-    date,
-    stageName,
-    startsAt,
-    endsAt,
-    imageUrl: STORED_IMAGE.test(imageUrl ?? '') ? imageUrl : undefined,
-  }));
+  let sets = (detail.timetable ?? []).map(
+    ({ artist, date, stageName, startsAt, endsAt, imageUrl }) => ({
+      artist,
+      date,
+      stageName,
+      startsAt,
+      endsAt,
+      imageUrl: STORED_IMAGE.test(imageUrl ?? '') ? imageUrl : undefined,
+    }),
+  );
   if (sets.length === 0) return dateOnlyDraft(detail);
   if (sets.some((set) => !set.endsAt)) {
     if (!fillMissingEnds)
@@ -439,7 +441,11 @@ async function main(
   };
   for (const festival of festivals) {
     const label = `${festival.id} ${festival.name}`;
-    const entry = { id: festival.id, name: festival.name, sourceUrl: festival.sourceUrl ?? null };
+    const entry = {
+      id: festival.id,
+      name: festival.name,
+      sourceUrl: festival.sourceUrl ?? null,
+    };
     if (festival.packVersion > 0) {
       console.log(
         `- 건너뜀 ${label}: 이미 발행됨 (팩 버전 ${festival.packVersion})`,
@@ -494,7 +500,11 @@ async function main(
       console.log(
         `- 발행 ${label}: ${shape}, 팩 버전 ${result?.packVersion ?? '?'}`,
       );
-      audit.published.push({ ...entry, shape, packVersion: result?.packVersion ?? null });
+      audit.published.push({
+        ...entry,
+        shape,
+        packVersion: result?.packVersion ?? null,
+      });
       summary.published += 1;
     } catch (error) {
       if (error instanceof SkipError) {
@@ -508,7 +518,10 @@ async function main(
       }
     }
   }
-  if (options.auditFile) writeFileSync(options.auditFile, `${JSON.stringify(audit, null, 2)}\n`, { flag: 'w' });
+  if (options.auditFile)
+    writeFileSync(options.auditFile, `${JSON.stringify(audit, null, 2)}\n`, {
+      flag: 'w',
+    });
   console.log(
     options.apply
       ? `완료: 발행 ${summary.published}, 건너뜀 ${summary.skipped}, 실패 ${summary.failed}`

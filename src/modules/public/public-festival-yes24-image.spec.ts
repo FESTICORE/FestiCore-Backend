@@ -30,8 +30,8 @@ describe('YES24 English festival poster', () => {
       .mockResolvedValueOnce([
         {
           candidate: {
-            name: 'COUNTDOWN FANTASY 2026-2027',
-            url: 'https://ticket.yes24.com/English/Perf/60590',
+            name: 'SAMPLE FESTIVAL 2026',
+            url: 'https://ticket.yes24.com/English/Perf/99999',
             date: 'Dec 31, 2026',
             venue: 'KINTEX HALL 7·8',
           },
@@ -41,8 +41,8 @@ describe('YES24 English festival poster', () => {
       .mockResolvedValueOnce([
         {
           originUrl:
-            'https://stkfile.yes24.com/upload2/PerfBlog/202610/20261012/20261012-60590.jpg',
-          id: 'poster-60590',
+            'https://stkfile.yes24.com/upload2/PerfBlog/202610/20261012/20261012-99999.jpg',
+          id: 'poster-99999',
         },
       ]);
     const service = serviceWithQuery(query);
@@ -53,8 +53,8 @@ describe('YES24 English festival poster', () => {
     );
     expect(result.items).toEqual([
       expect.objectContaining({
-        sourceUrl: 'https://ticket.yes24.com/English/Perf/60590',
-        thumbUrl: '/api/v1/festivals/images/poster-60590.webp',
+        sourceUrl: 'https://ticket.yes24.com/English/Perf/99999',
+        thumbUrl: '/api/v1/festivals/images/poster-99999.webp',
       }),
     ]);
     expect(query).toHaveBeenCalledTimes(3);

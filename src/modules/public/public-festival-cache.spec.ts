@@ -80,7 +80,7 @@ describe('PublicFestivalService published cache', () => {
     const pack = await service.published(id);
     expect(pack).toMatchObject({
       eventPeriod: { firstDate: '2026-11-19', lastDate: '2026-11-20' },
-      timetableStatus: 'unpublished',
+      timetableStatus: 'pending',
       days: [],
       stages: [],
       sets: [],
