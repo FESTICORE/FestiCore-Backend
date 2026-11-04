@@ -3,6 +3,7 @@ import {
   Logger,
   OnModuleDestroy,
   OnModuleInit,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { DataSource, EntityManager } from 'typeorm';
@@ -289,6 +290,49 @@ export class LiveActivityService implements OnModuleInit, OnModuleDestroy {
       WHERE "deviceId" = $1`,
       [deviceId],
     );
+  }
+
+  async endDeviceForUnbind(
+    deviceId: string,
+    manager: EntityManager,
+  ): Promise<void> {
+    const rows = await manager.query<
+      Array<{
+        liveActivityPushToken: string | null;
+        apnsEnvironment: 'sandbox' | 'production' | null;
+      }>
+    >(
+      `SELECT "liveActivityPushToken", "apnsEnvironment" FROM "devices"
+       WHERE "id" = $1 FOR NO KEY UPDATE`,
+      [deviceId],
+    );
+    const target = rows[0];
+    if (target?.liveActivityPushToken) {
+      if (!target.apnsEnvironment || !this.apns.isConfigured())
+        throw new ServiceUnavailableException(
+          'Live Activity 종료를 재시도해야 합니다.',
+        );
+      const result = await this.apns.sendLiveActivityEnd(
+        target.liveActivityPushToken,
+        target.apnsEnvironment,
+        {
+          phase: 'finished',
+          startDate: 0,
+          endDate: 0,
+          nowStages: [],
+          nextMine: null,
+          pinnedFlag: null,
+          crewSummary: null,
+          leaveAt: null,
+        },
+        true,
+      );
+      if (!result.accepted && !result.permanent)
+        throw new ServiceUnavailableException(
+          'Live Activity 종료를 재시도해야 합니다.',
+        );
+    }
+    await this.stopDevice(deviceId, manager);
   }
 
   async tick(): Promise<void> {

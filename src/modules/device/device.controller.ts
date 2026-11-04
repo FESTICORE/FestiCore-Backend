@@ -21,6 +21,7 @@ import {
 import { Public } from '../auth/decorator/public.decorator';
 import {
   ALLOW_ANONYMOUS_DEVICE_REGISTRATION,
+  ALLOW_DEVICE_BINDING_RECOVERY,
   DeviceAuthGuard,
   type DeviceRequest,
 } from './device-auth.guard';
@@ -118,6 +119,51 @@ export class DeviceController {
       this.deviceId(request),
       body,
       (request as DeviceRequest).devicePrincipal,
+    );
+  }
+
+  @Put('bind-user')
+  @ApiHeader({
+    name: 'X-Device-Access-Token',
+    required: true,
+    description: '현재 기기에 발급된 익명 deviceAccessToken',
+  })
+  @ApiOperation({ summary: '익명 기기를 로그인한 사용자에게 연결' })
+  @ApiResponse({ status: 200, description: '연결된 기기 ID와 사용자 ID' })
+  async bindUser(@Req() request: DeviceRequest) {
+    return this.service.bindUser(
+      this.deviceId(request),
+      request.header('x-device-access-token') ?? '',
+      request.devicePrincipal,
+    );
+  }
+
+  @Delete('bind-user')
+  @ApiHeader({
+    name: 'X-Device-Unbind-Key',
+    required: true,
+    description: '연결 해제 전에 기기에 저장한 UUID v4 재시도 키',
+  })
+  @ApiOperation({ summary: '로그아웃한 기기의 사용자 연결 해제' })
+  @ApiResponse({ status: 200, description: '새 익명 deviceAccessToken' })
+  async unbindUser(@Req() request: DeviceRequest) {
+    return this.service.unbindUser(
+      this.deviceId(request),
+      request.header('x-device-unbind-key') ?? '',
+      request.devicePrincipal,
+    );
+  }
+
+  @Delete('bind-user/recover')
+  @SetMetadata(ALLOW_DEVICE_BINDING_RECOVERY, true)
+  @ApiHeader({ name: 'X-Device-Unbind-Key', required: true })
+  @ApiOperation({ summary: '사용자 세션 만료 후 기기 소유 연결 해제' })
+  @ApiResponse({ status: 200, description: '새 익명 deviceAccessToken' })
+  async recoverUnbindUser(@Req() request: DeviceRequest) {
+    return this.service.recoverUnbindUser(
+      this.deviceId(request),
+      request.header('x-device-unbind-key') ?? '',
+      request.devicePrincipal,
     );
   }
 

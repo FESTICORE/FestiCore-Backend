@@ -49,6 +49,7 @@ CORS_ORIGINS=https://<환경별-AdminWeb-도메인> # 쉼표 구분
 ADMIN_WEB_URL=https://<환경별-AdminWeb-도메인>  # develop/production 각각 위 표 사용
 WS_MAX_CLIENTS=5000                         # 공개 축제 팩 WebSocket 인스턴스별 연결 상한
 WS_MAX_CLIENTS_PER_IP=500                  # 공용 Wi-Fi/NAT를 고려한 IP별 상한
+AUTO_PUBLISH_PACKS=false                    # 초기 운영 팩 발행·검증 후 true. 발견 축제를 매시간 자동 발행
 JWT_ACCESS_SECRET=<랜덤>                    # 필수
 JWT_REFRESH_SECRET=<다른 랜덤>              # 필수, access 와 달라야 함(같으면 부팅 실패)
 JWT_ACCESS_TTL=30m
@@ -99,6 +100,44 @@ AWS_S3_URL_STYLE=virtual                    # 엔드포인트가 경로 방식�
 유지한다. `pack.updated`는 새 버전 힌트이므로 앱이 `pack.get`으로 실제 팩을
 받아야 한다. 상세 메시지 계약은 [팩 WebSocket 수신 계약](../api/pack-websocket-transfer.spec.md)을 참조한다.
 Railway 프록시의 실제 WSS 연결과 모바일 재접속은 각 환경에 배포된 뒤 확인한다.
+
+## 축제 팩 초기 발행과 자동 점검
+
+운영에는 먼저 날짜와 이름·장소가 일치하는 Stage의 승인 시간표를 적용한다. 다음 명령은
+기본적으로 읽기 전용 미리보기이며, `--apply`와 관리자 액세스 토큰이 함께 있어야
+관리 초안 생성·발행을 수행한다. 토큰을 로그나 저장소에 남기지 않는다.
+
+```sh
+node scripts/publish-stage-festivals.cjs --base https://festicore.up.railway.app --allow-prod
+FESTICORE_ADMIN_TOKEN=<단기 관리자 토큰> node scripts/publish-stage-festivals.cjs --base https://festicore.up.railway.app --allow-prod --apply
+```
+
+스크립트는 운영 발견 항목과 Stage 발행본의 ID·이름·장소·첫날·마지막 날이 모두
+같을 때만 Stage 공개 시간표를 사용한다. 시간표가 없으면 시각을 만들지 않고
+`eventPeriod`와 빈 `days`·`stages`·`sets`를 가진 날짜 전용 팩을 발행한다.
+시간표가 있으나 날짜·무대·종료 시각 등 발행 검증에 실패하면 해당 축제는 발행을
+보류한다. 이 상태를 날짜 전용 팩으로 대체하지 않으므로 증거를 수정한 뒤 다시 실행할 수 있다.
+공개 목록은 이 경우에도 `packVersion > 0`과 축제 날짜를 표시하며, 상세의
+`timetableStatus`는 `pending`이다. 이미 발행한 항목이나 관리자가 편집 중인
+초안은 건너뛴다. 실행 후 공개 목록의 발행 수와 해당 팩의 버전을 확인한다.
+
+COUNTDOWN FANTASY 2026-2027은 YES24 영문·국문 수집 ID 두 개와 공식 Mint Paper
+ID가 같은 상품 60590을 가리킨다. 공식 ID `fst_c39663182b10a105`만 발행한다.
+공개 목록은 중복 두 건을 숨기고 이전 ID의 상세·팩·버전·라이브 조회를 공식 ID로
+연결한다. 기존 구독·저장 데이터의 외래 키는 삭제하지 않으며 공개 목록의 핀은
+이전 ID에서도 공식 항목으로 합산한다. `--only`에 세 ID를 함께 넣어도 공식 ID를
+한 번만 처리한다. 새 중복 사례는 출처를 검토한 뒤 별칭 목록에 추가한다.
+
+초기 운영 발행과 앱 확인이 끝난 뒤 Railway 서비스 변수 `AUTO_PUBLISH_PACKS=true`를
+설정한다. 백엔드는 부팅 5분 후부터 매시간 공개 카탈로그의 **새 발견 항목만**
+점검한다. 승인된 시간표가 있으면 포함하고 없으면 날짜 전용으로 발행한다.
+관리자 초안·이미 발행한 팩은 자동 작업이 수정하지 않는다. 여러 인스턴스의
+동시 점검은 관리 축제 ID의 고유 제약으로 중복 발행을 막고 건너뜀·실패 수를
+로그에 남긴다. `AUTO_PUBLISH_PACKS`가 없거나 `false`면 자동 발행은 꺼진다.
+
+날짜 전용 팩 발행 후 승인 시간표가 들어오면 관리자가 출처와 시간을 검토하고
+기존 초안의 `days`·`stages`·`sets`를 수정한 뒤 새 팩 버전으로 재발행한다.
+자동 점검은 기존 팩을 덮어쓰지 않는다.
 
 Google 웹은 Google Identity Services에서 받은 ID 토큰을 모바일 앱과 동일한
 `POST /api/v1/auth/login`에 `{ "provider": "google", "token": "<idToken>" }`으로 보낸다.

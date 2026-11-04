@@ -246,21 +246,30 @@ describe('festival draft validation', () => {
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 
-  it('requires at least one stage to publish', () => {
+  it('requires a stage when publishing timed days', () => {
     expect(validateDraft({ ...draft, stages: [] }, true)).toContain(
       'stages: 배열 크기 오류',
     );
   });
 
-  it('keeps a 17-day date-only source as a valid private draft but blocks publication', () => {
+  it('publishes a date-only pack with an honest empty timetable', () => {
     const dateOnly = {
       ...draft,
       eventPeriod: { firstDate: '2026-10-23', lastDate: '2026-11-08' },
       days: [],
+      stages: [],
+      sets: [],
+      timetableStatus: 'unpublished',
     };
     expect(validateDraft(dateOnly)).toEqual([]);
-    expect(validateDraft(dateOnly, true)).toContain(
-      'days: 발행하려면 검증된 시작/종료 시각 필요',
+    expect(validateDraft(dateOnly, true)).toEqual([]);
+    expect(
+      validateDraft(
+        { ...dateOnly, stages: [], sets: [{ stageId: 'stg_12345678' }] },
+        true,
+      ),
+    ).toContain(
+      'timetableStatus: 미공개 일정은 유효한 eventPeriod와 빈 days/stages/sets 필요',
     );
     expect(() =>
       mergeDraft(dateOnly, { eventPeriod: { firstDate: '2026-10-24' } }),

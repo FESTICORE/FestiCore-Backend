@@ -20,6 +20,7 @@ const { buildDraft } =
     ) => string | CrawledFestivalTimetable;
   };
 const POLL_MS = 5 * 60 * 1000;
+const PROD_POLL_MS = 60 * 60 * 1000;
 const DEBOUNCE_MS = 1_000;
 
 @Injectable()
@@ -28,6 +29,7 @@ export class AutoPublishVerifiedService
 {
   private readonly logger = new Logger(AutoPublishVerifiedService.name);
   private timer?: NodeJS.Timeout;
+  private startupTimer?: NodeJS.Timeout;
   private pendingTimer?: NodeJS.Timeout;
   private running?: Promise<void>;
   private pending = false;
@@ -40,30 +42,52 @@ export class AutoPublishVerifiedService
   ) {}
 
   private enabled(): boolean {
+    if (this.stopped) return false;
+    const url = this.config.get<string>('PUBLIC_URL');
+    if (url === 'https://festicore-dev.up.railway.app')
+      return (
+        this.config.get<string>('AUTO_PUBLISH_VERIFIED_TIMETABLE') !== 'false'
+      );
     return (
-      !this.stopped &&
-      this.config.get<string>('PUBLIC_URL') ===
-        'https://festicore-dev.up.railway.app' &&
-      this.config.get<string>('AUTO_PUBLISH_VERIFIED_TIMETABLE') !== 'false'
+      url === 'https://festicore.up.railway.app' &&
+      this.config.get<string>('AUTO_PUBLISH_PACKS') === 'true'
     );
   }
 
   onModuleInit() {
     if (!this.enabled()) return;
-    this.timer = setInterval(() => void this.tick(), POLL_MS);
-    this.timer.unref();
-    void this.tick();
+    const production =
+      this.config.get<string>('PUBLIC_URL') ===
+      'https://festicore.up.railway.app';
+    if (production) {
+      this.startupTimer = setTimeout(() => {
+        void this.tick();
+        this.timer = setInterval(() => void this.tick(), PROD_POLL_MS);
+        this.timer.unref();
+      }, POLL_MS);
+      this.startupTimer.unref();
+    } else {
+      this.timer = setInterval(() => void this.tick(), POLL_MS);
+      this.timer.unref();
+      void this.tick();
+    }
   }
 
   onModuleDestroy() {
     this.stopped = true;
     if (this.timer) clearInterval(this.timer);
+    if (this.startupTimer) clearTimeout(this.startupTimer);
     if (this.pendingTimer) clearTimeout(this.pendingTimer);
   }
 
   /** 실행·소스 저장까지 끝난 성공 크롤만 호출한다. 연속 성공은 한 번의 재조회로 합친다. */
   requestAfterCrawl(): void {
     if (!this.enabled()) return;
+    if (
+      this.config.get<string>('PUBLIC_URL') ===
+      'https://festicore.up.railway.app'
+    )
+      return;
     if (this.running) {
       this.pending = true;
       return;
@@ -96,30 +120,51 @@ export class AutoPublishVerifiedService
     try {
       const festivals = await this.publicFestivals.crawlCandidates();
       let changed = 0;
+      let skipped = 0;
+      let failed = 0;
       for (const festival of festivals) {
         if (!this.enabled()) break;
+        if (
+          this.config.get<string>('PUBLIC_URL') ===
+            'https://festicore.up.railway.app' &&
+          festival.packVersion > 0
+        ) {
+          skipped += 1;
+          continue;
+        }
         try {
           const detail = await this.publicFestivals.crawlDetail(festival.id);
-          if (!detail) continue;
+          if (!detail) {
+            skipped += 1;
+            continue;
+          }
           const timetable = buildDraft(detail, false);
+          if (typeof timetable === 'string') {
+            this.logger.warn(`자동 발행 보류 ${festival.id}: ${timetable}`);
+            skipped += 1;
+            continue;
+          }
           const result = await this.adminFestivals.publishCrawled(
             detail,
-            typeof timetable === 'string' ? null : timetable,
+            timetable.days.length === 0 ? null : timetable,
           );
           if (result.changed) {
             changed += 1;
             this.logger.log(
               `자동 발행 ${festival.id}: 팩 버전 ${result.packVersion}`,
             );
+          } else {
+            skipped += 1;
           }
         } catch (error) {
+          failed += 1;
           this.logger.warn(
             `자동 발행 실패 ${festival.id}: ${error instanceof Error ? error.message : String(error)}`,
           );
         }
       }
       this.logger.log(
-        `자동 발행 점검 완료: ${festivals.length}개 확인, ${changed}개 갱신`,
+        `자동 발행 점검 완료: ${festivals.length}개 확인, ${changed}개 갱신, ${skipped}개 건너뜀, ${failed}개 실패`,
       );
     } catch (error) {
       this.logger.error(

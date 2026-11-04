@@ -34,6 +34,19 @@ describe('기기 API 경로와 헤더 계약', () => {
   const storedDevice = { findOne: jest.fn().mockResolvedValue(null) };
   const service = {
     register: jest.fn().mockResolvedValue({ deviceId: 'device-id' }),
+    bindUser: jest
+      .fn()
+      .mockResolvedValue({ deviceId: 'device-id', userId: 'user-a' }),
+    unbindUser: jest.fn().mockResolvedValue({
+      deviceId: 'device-id',
+      userId: null,
+      deviceAccessToken: 'new-token',
+    }),
+    recoverUnbindUser: jest.fn().mockResolvedValue({
+      deviceId: 'device-id',
+      userId: null,
+      deviceAccessToken: 'new-token',
+    }),
     get: jest.fn().mockResolvedValue({ deviceId: 'device-id' }),
     remove: jest.fn().mockResolvedValue(undefined),
     startLiveActivity: jest.fn().mockResolvedValue(undefined),
@@ -121,6 +134,75 @@ describe('기기 API 경로와 헤더 계약', () => {
       .expect(404);
   });
 
+  it('requires a user Bearer and forwards the current device token for account binding', async () => {
+    await request(app.getHttpServer() as App)
+      .put('/api/v1/devices/bind-user')
+      .set('X-Device-Id', 'header-device')
+      .set('X-Device-Access-Token', 'device-secret')
+      .expect(401);
+    await request(app.getHttpServer() as App)
+      .put('/api/v1/devices/bind-user')
+      .set('X-Device-Id', 'header-device')
+      .set('X-Device-Access-Token', 'device-secret')
+      .set('Authorization', 'Bearer valid')
+      .expect(200);
+    expect(service.bindUser).toHaveBeenCalledWith(
+      'header-device',
+      'device-secret',
+      {
+        kind: 'user',
+        userId: 'user-a',
+      },
+    );
+  });
+
+  it('requires a user Bearer for unbinding and returns a new device token', async () => {
+    await request(app.getHttpServer() as App)
+      .delete('/api/v1/devices/bind-user')
+      .set('X-Device-Id', 'header-device')
+      .set('X-Device-Unbind-Key', 'cac664e6-d768-4073-9acd-14d36b6ae01b')
+      .expect(401);
+    const response = await request(app.getHttpServer() as App)
+      .delete('/api/v1/devices/bind-user')
+      .set('X-Device-Id', 'header-device')
+      .set('X-Device-Unbind-Key', 'cac664e6-d768-4073-9acd-14d36b6ae01b')
+      .set('Authorization', 'Bearer valid')
+      .expect(200);
+    expect(response.body).toMatchObject({ deviceAccessToken: 'new-token' });
+    expect(service.unbindUser).toHaveBeenCalledWith(
+      'header-device',
+      'cac664e6-d768-4073-9acd-14d36b6ae01b',
+      {
+        kind: 'user',
+        userId: 'user-a',
+      },
+    );
+  });
+
+  it('accepts a bound device credential only on the recovery route', async () => {
+    storedDevice.findOne.mockResolvedValue({
+      id: 'device-a',
+      userId: 'user-a',
+      deviceTokenId: 'token-a',
+    });
+    await request(app.getHttpServer() as App)
+      .get('/api/v1/devices')
+      .set('X-Device-Id', 'device-a')
+      .set('Authorization', 'Bearer device-valid')
+      .expect(401);
+    await request(app.getHttpServer() as App)
+      .delete('/api/v1/devices/bind-user/recover')
+      .set('X-Device-Id', 'device-a')
+      .set('X-Device-Unbind-Key', 'cac664e6-d768-4073-9acd-14d36b6ae01b')
+      .set('Authorization', 'Bearer device-valid')
+      .expect(200);
+    expect(service.recoverUnbindUser).toHaveBeenCalledWith(
+      'device-a',
+      'cac664e6-d768-4073-9acd-14d36b6ae01b',
+      { kind: 'device', deviceId: 'device-a', tokenId: 'token-a' },
+    );
+  });
+
   it('Swagger에 헤더를 중복 표기하거나 deviceId 경로 변수를 남기지 않는다', () => {
     const document = SwaggerModule.createDocument(
       app,
@@ -159,6 +241,8 @@ describe('기기 API 경로와 헤더 계약', () => {
   it('rejects missing and invalid Bearer tokens on every device route', async () => {
     const routes = [
       ['get', '/api/v1/devices'],
+      ['put', '/api/v1/devices/bind-user'],
+      ['delete', '/api/v1/devices/bind-user'],
       ['delete', '/api/v1/devices'],
       ['put', '/api/v1/devices/live-activity'],
       ['delete', '/api/v1/devices/live-activity'],
@@ -185,6 +269,7 @@ describe('기기 API 경로와 헤더 계약', () => {
   it('binds an anonymous device Bearer to the stored device and header ID', async () => {
     storedDevice.findOne.mockResolvedValue({
       id: 'device-a',
+      userId: null,
       deviceTokenId: 'token-a',
     });
     await request(app.getHttpServer() as App)

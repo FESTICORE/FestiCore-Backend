@@ -4,7 +4,7 @@ import {
   OnModuleDestroy,
   OnModuleInit,
 } from '@nestjs/common';
-import { DataSource } from 'typeorm';
+import { DataSource, EntityManager } from 'typeorm';
 import { ApnsService } from './apns.service';
 import { buildLiveActivityContentState } from './live-activity-content';
 import {
@@ -27,6 +27,13 @@ interface PublishedRow {
   id: string;
   name: string;
   days: unknown;
+  sets: unknown;
+}
+
+interface SavedScheduleRow {
+  userId: string;
+  festivalId: string;
+  setIds: unknown;
 }
 
 interface Day {
@@ -56,10 +63,14 @@ interface DeliveryTarget {
   checklist: unknown;
   packDownloadedVersion: number | null;
   published: Record<string, unknown>;
+  savedSetIds: unknown;
+  hasActiveSession: boolean;
 }
 
 const REMINDER_PREFIX = 'festival-reminder:';
 const LIVE_START_PREFIX = 'live-activity-start:';
+const PERFORMANCE_START_PREFIX = 'live-activity-performance:';
+const PERFORMANCE_LEAD_MS = 2 * 60 * 60_000;
 
 function liveActivityStartAt(days: Day[]): Date | null {
   const first = [...days].sort((left, right) =>
@@ -178,9 +189,11 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
 
   async schedulePublished(now = new Date()): Promise<void> {
     const rows = await this.db.query<PublishedRow[]>(`
-      SELECT "id", "published"->>'name' AS "name", "published"->'days' AS "days"
+      SELECT "id", "published"->>'name' AS "name", "published"->'days' AS "days",
+        "published"->'sets' AS "sets"
       FROM "admin_festivals"
       WHERE "published" IS NOT NULL AND "publishedVersion" > 0`);
+    const eligibleSets = new Map<string, Map<string, Date>>();
     for (const row of rows) {
       const days = validDays(row.days);
       const reminder = reminderAt(days);
@@ -243,6 +256,11 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
              AND d."liveActivityPushToStartToken" IS NOT NULL
              AND d."apnsEnvironment" IS NOT NULL
              AND d."liveActivityId" IS NULL
+             AND NOT EXISTS (
+               SELECT 1 FROM "user_schedules" us
+               WHERE us."userId" = d."userId" AND us."festivalId" = $1
+                 AND jsonb_array_length(us."setIds") > 0
+             )
            ON CONFLICT ("deviceId", "eventKey") DO UPDATE
              SET "scheduledAt" = EXCLUDED."scheduledAt",
                  "nextAttemptAt" = EXCLUDED."nextAttemptAt",
@@ -253,7 +271,161 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
           [row.id, `${LIVE_START_PREFIX}${row.id}`, firstStart],
         );
       }
+      const sets = new Map<string, Date>();
+      for (const set of publishedSets({ sets: row.sets }, row.id)) {
+        const start = Date.parse(set.startsAt);
+        if (!Number.isFinite(start) || start <= now.getTime()) continue;
+        const scheduledAt = new Date(start - PERFORMANCE_LEAD_MS);
+        if (scheduledAt.getTime() < now.getTime() - LATE_GRACE_MS) continue;
+        sets.set(set.id, scheduledAt);
+      }
+      if (sets.size) eligibleSets.set(row.id, sets);
     }
+    if (!eligibleSets.size) return;
+    const schedules = await this.db.query<SavedScheduleRow[]>(
+      `SELECT "userId", "festivalId", "setIds" FROM "user_schedules"
+       WHERE "festivalId" = ANY($1::varchar[])
+         AND jsonb_array_length("setIds") > 0`,
+      [[...eligibleSets.keys()]],
+    );
+    const plans = new Map<
+      string,
+      { userId: string; festivalId: string; setId: string; scheduledAt: Date }
+    >();
+    for (const schedule of schedules) {
+      const festivalSets = eligibleSets.get(schedule.festivalId);
+      if (!festivalSets || !Array.isArray(schedule.setIds)) continue;
+      const starts = schedule.setIds
+        .filter((id): id is string => typeof id === 'string')
+        .map((id) => ({ id, date: festivalSets.get(id) }))
+        .filter(
+          (item): item is { id: string; date: Date } => item.date !== undefined,
+        )
+        .sort((left, right) => left.date.getTime() - right.date.getTime());
+      if (!starts.length) continue;
+      const scheduledAt = starts[0].date;
+      const setId = starts[0].id;
+      const key = `${schedule.userId}:${schedule.festivalId}`;
+      const previous = plans.get(key);
+      if (!previous || scheduledAt < previous.scheduledAt)
+        plans.set(key, {
+          userId: schedule.userId,
+          festivalId: schedule.festivalId,
+          setId,
+          scheduledAt,
+        });
+    }
+    if (!plans.size) return;
+    await this.db.query(
+      `INSERT INTO "notification_deliveries"
+         ("id", "deviceId", "festivalId", "eventKey", "scheduledAt", "nextAttemptAt")
+       SELECT gen_random_uuid(), d."id", p."festivalId",
+         'live-activity-performance:' || p."festivalId", p."scheduledAt", p."scheduledAt"
+       FROM jsonb_to_recordset($1::jsonb) AS p("userId" uuid, "festivalId" varchar, "setId" text, "scheduledAt" timestamptz)
+       JOIN "devices" d ON d."userId" = p."userId"
+       JOIN "user_schedules" us ON us."userId" = p."userId"
+         AND us."festivalId" = p."festivalId" AND us."setIds" ? p."setId"
+       WHERE d."liveActivityPushToStartToken" IS NOT NULL
+         AND d."apnsEnvironment" IS NOT NULL AND d."liveActivityId" IS NULL
+       ON CONFLICT ("deviceId", "eventKey") DO UPDATE
+         SET "scheduledAt" = EXCLUDED."scheduledAt",
+             "nextAttemptAt" = EXCLUDED."nextAttemptAt",
+             "status" = 'pending', "leaseUntil" = NULL
+       WHERE "notification_deliveries"."status" = 'cancelled'
+          OR ("notification_deliveries"."status" = 'pending'
+              AND "notification_deliveries"."scheduledAt" <> EXCLUDED."scheduledAt")`,
+      [JSON.stringify([...plans.values()])],
+    );
+  }
+
+  async syncUserSchedule(
+    userId: string,
+    festivalId: string,
+    setIds: string[],
+    published: Record<string, unknown>,
+    manager: EntityManager,
+  ): Promise<void> {
+    const now = new Date();
+    const selected = publishedSets(published, festivalId)
+      .filter(
+        (set) =>
+          setIds.includes(set.id) && Date.parse(set.startsAt) > now.getTime(),
+      )
+      .sort(
+        (left, right) => Date.parse(left.startsAt) - Date.parse(right.startsAt),
+      );
+    if (!selected.length) {
+      await manager.query(
+        `UPDATE "notification_deliveries" n SET "status" = 'cancelled',
+           "leaseUntil" = NULL, "lastErrorCode" = 'SCHEDULE_CHANGED'
+         FROM "devices" d
+         WHERE n."deviceId" = d."id" AND d."userId" = $1
+           AND n."festivalId" = $2 AND n."eventKey" = $3
+           AND n."status" IN ('pending', 'leased')`,
+        [userId, festivalId, `${PERFORMANCE_START_PREFIX}${festivalId}`],
+      );
+    }
+    if (setIds.length) {
+      await manager.query(
+        `UPDATE "notification_deliveries" n SET "status" = 'cancelled',
+           "leaseUntil" = NULL, "lastErrorCode" = 'SCHEDULE_CHANGED'
+         FROM "devices" d
+         WHERE n."deviceId" = d."id" AND d."userId" = $1
+           AND n."festivalId" = $2 AND n."eventKey" = $3
+           AND n."status" IN ('pending', 'leased')`,
+        [userId, festivalId, `${LIVE_START_PREFIX}${festivalId}`],
+      );
+    }
+    if (selected.length) {
+      const set = selected[0];
+      const start = Date.parse(set.startsAt);
+      const scheduledAt = new Date(start - PERFORMANCE_LEAD_MS);
+      if (scheduledAt.getTime() >= now.getTime() - LATE_GRACE_MS) {
+        await this.schedulePerformanceStart(
+          festivalId,
+          set.id,
+          scheduledAt,
+          manager,
+          userId,
+        );
+      }
+    }
+  }
+
+  private async schedulePerformanceStart(
+    festivalId: string,
+    setId: string,
+    scheduledAt: Date,
+    executor: DataSource | EntityManager,
+    userId?: string,
+  ): Promise<void> {
+    await executor.query(
+      `INSERT INTO "notification_deliveries"
+         ("id", "deviceId", "festivalId", "eventKey", "scheduledAt", "nextAttemptAt")
+       SELECT gen_random_uuid(), d."id", $1::varchar, $2::varchar,
+         $3::timestamptz, $3::timestamptz
+       FROM "devices" d
+       JOIN "user_schedules" us ON us."userId" = d."userId"
+         AND us."festivalId" = $1
+       WHERE d."liveActivityPushToStartToken" IS NOT NULL
+         AND d."apnsEnvironment" IS NOT NULL AND d."liveActivityId" IS NULL
+         AND us."setIds" ? $4::text
+         AND ($5::uuid IS NULL OR d."userId" = $5::uuid)
+       ON CONFLICT ("deviceId", "eventKey") DO UPDATE
+         SET "scheduledAt" = EXCLUDED."scheduledAt",
+             "nextAttemptAt" = EXCLUDED."nextAttemptAt",
+             "status" = 'pending', "leaseUntil" = NULL
+       WHERE "notification_deliveries"."status" = 'cancelled'
+          OR ("notification_deliveries"."status" = 'pending'
+              AND "notification_deliveries"."scheduledAt" <> EXCLUDED."scheduledAt")`,
+      [
+        festivalId,
+        `${PERFORMANCE_START_PREFIX}${festivalId}`,
+        scheduledAt,
+        setId,
+        userId ?? null,
+      ],
+    );
   }
 
   /** One SQL statement claims a due job; SKIP LOCKED excludes concurrent workers. */
@@ -275,7 +447,11 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
   }
 
   async deliver(job: Delivery, now = new Date()): Promise<void> {
-    const liveStart = job.eventKey === `${LIVE_START_PREFIX}${job.festivalId}`;
+    const performanceStart =
+      job.eventKey === `${PERFORMANCE_START_PREFIX}${job.festivalId}`;
+    const liveStart =
+      performanceStart ||
+      job.eventKey === `${LIVE_START_PREFIX}${job.festivalId}`;
     const packUpdate = job.eventKey.startsWith(
       `pack-updated:${job.festivalId}:`,
     );
@@ -292,13 +468,26 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
         f."published"->>'name' AS "name", f."published"->'days' AS "days",
         f."published"->'checklist' AS "checklist", f."published",
         f."publishedVersion" AS "publishedVersion",
+        us."setIds" AS "savedSetIds",
+        EXISTS (
+          SELECT 1 FROM "refresh_tokens" rt
+          WHERE rt."userId" = d."userId" AND rt."revokedAt" IS NULL
+            AND rt."expiresAt" > now()
+        ) AS "hasActiveSession",
         s."packDownloadedVersion" AS "packDownloadedVersion"
       FROM "notification_deliveries" n
       JOIN "devices" d ON d."id" = n."deviceId"
         ${packUpdate ? 'AND d."notifyPackUpdates" = true' : ''}
-      JOIN "device_subscriptions" s ON s."deviceId" = n."deviceId"
-        AND s."festivalId" = n."festivalId" AND s."${subscriptionFlag}" = true
-        ${packUpdate ? '' : 'AND s."pinned" = true'}
+      LEFT JOIN "user_schedules" us ON us."userId" = d."userId"
+        AND us."festivalId" = n."festivalId"
+      ${
+        performanceStart
+          ? `LEFT JOIN "device_subscriptions" s ON s."deviceId" = n."deviceId"
+             AND s."festivalId" = n."festivalId"`
+          : `JOIN "device_subscriptions" s ON s."deviceId" = n."deviceId"
+             AND s."festivalId" = n."festivalId" AND s."${subscriptionFlag}" = true
+             ${packUpdate ? '' : 'AND s."pinned" = true'}`
+      }
       JOIN "admin_festivals" f ON f."id" = n."festivalId"
         AND f."published" IS NOT NULL AND f."publishedVersion" > 0
       WHERE n."id" = $1 AND n."status" = 'leased'
@@ -307,7 +496,7 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
     );
     const target = rows[0];
     if (liveStart) {
-      await this.deliverLiveActivityStart(job, target, now);
+      await this.deliverLiveActivityStart(job, target, now, performanceStart);
       return;
     }
     if (packUpdate) {
@@ -450,8 +639,27 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
     job: Delivery,
     target: DeliveryTarget | undefined,
     now: Date,
+    performanceStart: boolean,
   ): Promise<void> {
-    const start = liveActivityStartAt(validDays(target?.days));
+    const saved = Array.isArray(target?.savedSetIds) ? target.savedSetIds : [];
+    const selectedSet = performanceStart
+      ? publishedSets(target?.published ?? {}, job.festivalId)
+          .filter(
+            (set) =>
+              saved.includes(set.id) &&
+              Date.parse(set.startsAt) > now.getTime(),
+          )
+          .sort(
+            (left, right) =>
+              Date.parse(left.startsAt) - Date.parse(right.startsAt),
+          )[0]
+      : null;
+    const performanceAt = selectedSet ? Date.parse(selectedSet.startsAt) : NaN;
+    const start = performanceStart
+      ? Number.isFinite(performanceAt)
+        ? new Date(performanceAt - PERFORMANCE_LEAD_MS)
+        : null
+      : liveActivityStartAt(validDays(target?.days));
     const period = festivalPeriod(
       records(target?.published?.days).sort((left, right) =>
         String(left.date).localeCompare(String(right.date)),
@@ -464,6 +672,11 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
       !period ||
       !start ||
       start.getTime() < now.getTime() - LATE_GRACE_MS ||
+      (performanceStart && !selectedSet) ||
+      (performanceStart && !target.hasActiveSession) ||
+      (!performanceStart &&
+        Array.isArray(target.savedSetIds) &&
+        target.savedSetIds.length > 0) ||
       target.liveActivityId
     ) {
       await this.finish(job, 'cancelled', 'TARGET_UNAVAILABLE');
@@ -487,7 +700,16 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
       sets: publishedSets(target.published, job.festivalId),
       flagsEnabled: false,
       flags: [],
-      member: null,
+      member: selectedSet
+        ? {
+            savedSetIds: saved.filter(
+              (id): id is string => typeof id === 'string',
+            ),
+            followedFlagIds: [],
+            pinnedFlagId: null,
+            crew: null,
+          }
+        : null,
     });
     if (state.phase === 'finished') {
       await this.finish(job, 'cancelled', 'FESTIVAL_FINISHED');
@@ -515,6 +737,9 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
           festivalId: job.festivalId,
           festivalName: target.name,
           state: { ...state },
+          alertBody: selectedSet
+            ? `${selectedSet.artist} 공연이 2시간 후 시작돼요.`
+            : undefined,
         },
       );
     } catch {

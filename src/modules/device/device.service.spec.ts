@@ -3,11 +3,13 @@ import {
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
+import { IsNull } from 'typeorm';
 import { DeviceService } from './device.service';
 import type { DevicePrincipal } from './device-auth.guard';
 
 describe('DeviceService ownership and pins', () => {
   const id = 'aa9ad155-9145-46e7-9dd4-eb172dc522d1';
+  const unbindKey = 'cac664e6-d768-4073-9acd-14d36b6ae01b';
   const user: DevicePrincipal = { kind: 'user', userId: 'user-a' };
   const anonymous: DevicePrincipal = { kind: 'anonymous' };
   const device: DevicePrincipal = {
@@ -45,14 +47,20 @@ describe('DeviceService ownership and pins', () => {
       void payload;
       return Promise.resolve('issued-device-token');
     }),
+    verifyAsync: jest.fn(),
   };
   const config = { get: jest.fn().mockReturnValue('test-secret') };
   const transactionManager = {
     delete: jest.fn(),
     update: jest.fn(),
     query: jest.fn(),
+    findOne: jest.fn(),
   };
-  const liveActivity = { enqueueDevice: jest.fn(), stopDevice: jest.fn() };
+  const liveActivity = {
+    enqueueDevice: jest.fn(),
+    stopDevice: jest.fn(),
+    endDeviceForUnbind: jest.fn(),
+  };
   const dataSource = {
     query: jest.fn().mockResolvedValue([{ count: 1 }]),
     transaction: jest.fn(
@@ -81,11 +89,208 @@ describe('DeviceService ownership and pins', () => {
     transactionManager.query.mockResolvedValue([]);
     liveActivity.enqueueDevice.mockResolvedValue(undefined);
     liveActivity.stopDevice.mockResolvedValue(undefined);
+    liveActivity.endDeviceForUnbind.mockResolvedValue(undefined);
     festivals.findOne.mockResolvedValue({
       published: true,
       publishedVersion: 1,
     });
     dataSource.query.mockResolvedValue([{ count: 1 }]);
+    jwt.verifyAsync.mockResolvedValue({
+      typ: 'device',
+      sub: id,
+      jti: 'token-a',
+    });
+  });
+
+  it('binds a matching anonymous device token to the user and reserves it for recovery only', async () => {
+    const result = await service.bindUser(id, 'device-secret', user);
+    expect(result).toEqual({ deviceId: id, userId: user.userId });
+    expect(jwt.verifyAsync).toHaveBeenCalledWith('device-secret', {
+      secret: 'test-secret',
+    });
+    expect(devices.update).toHaveBeenCalledWith(
+      expect.objectContaining({ id, deviceTokenId: 'token-a' }),
+      { userId: user.userId },
+    );
+    const updateCalls = devices.update.mock.calls as unknown as Array<
+      [{ userId: unknown }, unknown]
+    >;
+    const condition = updateCalls[0][0];
+    expect(condition.userId).toEqual(
+      expect.objectContaining({ _type: 'isNull' }),
+    );
+  });
+
+  it('rejects anonymous, invalid, mismatched, or already claimed device bindings', async () => {
+    await expect(
+      service.bindUser(id, 'device-secret', device),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(jwt.verifyAsync).not.toHaveBeenCalled();
+    jwt.verifyAsync.mockRejectedValueOnce(new Error('bad signature'));
+    await expect(service.bindUser(id, 'bad', user)).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+    jwt.verifyAsync.mockResolvedValueOnce({
+      typ: 'device',
+      sub: 'other',
+      jti: 'token-a',
+    });
+    await expect(
+      service.bindUser(id, 'wrong-device', user),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    devices.update.mockResolvedValueOnce({ affected: 0 });
+    await expect(
+      service.bindUser(id, 'stale-device', user),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(devices.update).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries a completed bind only for the same user and original device credential', async () => {
+    devices.update.mockResolvedValueOnce({ affected: 0 });
+    devices.findOne.mockResolvedValueOnce({
+      id,
+      userId: user.userId,
+      deviceTokenId: 'token-a',
+    });
+    await expect(service.bindUser(id, 'device-secret', user)).resolves.toEqual({
+      deviceId: id,
+      userId: user.userId,
+    });
+    devices.update.mockResolvedValueOnce({ affected: 0 });
+    devices.findOne.mockResolvedValueOnce(null);
+    await expect(
+      service.bindUser(id, 'device-secret', user),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('unbinds only the authenticated owner and cancels pending performance starts atomically', async () => {
+    const result = await service.unbindUser(id, unbindKey, user);
+    expect(result).toMatchObject({
+      deviceId: id,
+      userId: null,
+      deviceAccessToken: 'issued-device-token',
+    });
+    expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+    expect(transactionManager.update).toHaveBeenCalledWith(
+      expect.anything(),
+      { id, userId: user.userId },
+      expect.objectContaining({ userId: null }),
+    );
+    expect(transactionManager.query).toHaveBeenCalledWith(
+      expect.stringContaining("'live-activity-performance:%'"),
+      [id],
+    );
+    expect(liveActivity.endDeviceForUnbind).toHaveBeenCalledWith(
+      id,
+      transactionManager,
+    );
+    expect(transactionManager.update).toHaveBeenCalledWith(
+      expect.anything(),
+      { id, deviceTokenId: unbindKey },
+      expect.objectContaining({
+        apnsToken: null,
+        liveActivityPushToStartToken: null,
+        liveActivityPushToken: null,
+        liveActivityFestivalId: null,
+        liveActivityId: null,
+      }),
+    );
+    const updateCalls = transactionManager.update.mock
+      .calls as unknown as Array<[unknown, unknown, { deviceTokenId: string }]>;
+    const values = updateCalls[0][2];
+    expect(values.deviceTokenId).toBe(unbindKey);
+    expect(jwt.signAsync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        typ: 'device',
+        sub: id,
+        jti: values.deviceTokenId,
+      }),
+      expect.objectContaining({ secret: 'test-secret' }),
+    );
+  });
+
+  it('does not unbind with a device token or another user', async () => {
+    await expect(
+      service.unbindUser(id, unbindKey, device),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    transactionManager.update.mockResolvedValueOnce({ affected: 0 });
+    await expect(
+      service.unbindUser(id, unbindKey, { kind: 'user', userId: 'other' }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(transactionManager.query).not.toHaveBeenCalled();
+    expect(liveActivity.endDeviceForUnbind).not.toHaveBeenCalled();
+  });
+
+  it('does not clear ownership or tokens when the remote Activity cannot be ended', async () => {
+    liveActivity.endDeviceForUnbind.mockRejectedValueOnce(
+      new Error('APNs unavailable'),
+    );
+    await expect(service.unbindUser(id, unbindKey, user)).rejects.toThrow(
+      'APNs unavailable',
+    );
+    expect(transactionManager.update).toHaveBeenCalledTimes(1);
+    expect(transactionManager.query).not.toHaveBeenCalled();
+  });
+
+  it('recovers an expired session with the original device credential and retries with the saved unbind key', async () => {
+    const result = await service.recoverUnbindUser(id, unbindKey, device);
+    expect(result.deviceAccessToken).toBe('issued-device-token');
+    expect(transactionManager.update).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ id, deviceTokenId: 'token-a' }),
+      { userId: null, deviceTokenId: unbindKey },
+    );
+    expect(transactionManager.query).toHaveBeenCalledWith(
+      expect.stringContaining("'live-activity-performance:%'"),
+      [id],
+    );
+    transactionManager.update.mockResolvedValueOnce({ affected: 0 });
+    transactionManager.findOne.mockResolvedValueOnce({
+      id,
+      userId: null,
+      deviceTokenId: unbindKey,
+    });
+    await expect(
+      service.recoverUnbindUser(id, unbindKey, anonymous),
+    ).resolves.toMatchObject({ deviceAccessToken: 'issued-device-token' });
+    transactionManager.findOne.mockResolvedValueOnce(null);
+    await expect(
+      service.recoverUnbindUser(
+        id,
+        '470c581d-bb9a-45ca-a0f7-0ac4fe1b65a8',
+        anonymous,
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('reissues a device token only for the same persisted unbind key after a lost response', async () => {
+    transactionManager.update.mockResolvedValue({ affected: 0 });
+    transactionManager.findOne.mockResolvedValue({
+      id,
+      userId: null,
+      deviceTokenId: unbindKey,
+    });
+    await expect(service.unbindUser(id, unbindKey, user)).resolves.toEqual({
+      deviceId: id,
+      userId: null,
+      deviceAccessToken: 'issued-device-token',
+    });
+    const findOneCalls = transactionManager.findOne.mock
+      .calls as unknown as Array<
+      [unknown, { where: { id: string; deviceTokenId: string } }]
+    >;
+    expect(findOneCalls[0][1].where).toMatchObject({
+      id,
+      deviceTokenId: unbindKey,
+    });
+    expect(transactionManager.query).not.toHaveBeenCalled();
+    transactionManager.findOne.mockResolvedValueOnce(null);
+    await expect(
+      service.unbindUser(id, '470c581d-bb9a-45ca-a0f7-0ac4fe1b65a8', user),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(service.unbindUser(id, 'guess', user)).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
   });
 
   it('enqueues activity registration in the same transaction as the owned device update', async () => {
@@ -196,7 +401,7 @@ describe('DeviceService ownership and pins', () => {
       { id: string; deviceTokenId: string },
       Record<string, unknown>,
     ];
-    expect(condition).toEqual({ id, deviceTokenId: 'token-a' });
+    expect(condition).toMatchObject({ id, deviceTokenId: 'token-a' });
     expect(values).not.toHaveProperty('deviceTokenId');
     expect(jwt.signAsync).toHaveBeenCalledWith(
       expect.objectContaining({ jti: 'token-a' }),
@@ -231,6 +436,7 @@ describe('DeviceService ownership and pins', () => {
   it('updates only the sent notification kinds for the owned device', async () => {
     devices.findOne.mockResolvedValue({
       id,
+      userId: null,
       deviceTokenId: 'token-a',
       notifyFlagStatus: true,
       notifyCrewStatus: true,
@@ -254,7 +460,11 @@ describe('DeviceService ownership and pins', () => {
       packUpdates: false,
     });
     expect(devices.update).toHaveBeenCalledWith(
-      { id, deviceTokenId: 'token-a' },
+      {
+        id,
+        userId: IsNull(),
+        deviceTokenId: 'token-a',
+      },
       { notifyCrewGather: false, notifyPackUpdates: false },
     );
   });

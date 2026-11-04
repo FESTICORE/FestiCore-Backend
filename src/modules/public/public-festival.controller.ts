@@ -21,6 +21,7 @@ import {
 } from '@nestjs/swagger';
 import { brotliCompressSync, gzipSync } from 'zlib';
 import type { Request, Response } from 'express';
+import { canonicalFestivalId } from '../../../scripts/festival-aliases.cjs';
 import { apiSuccess } from '../../common/interfaces/api-response.interface';
 import { Public } from '../auth/decorator/public.decorator';
 import { DeviceAuthGuard } from '../device/device-auth.guard';
@@ -227,9 +228,11 @@ export class PublicFestivalController {
           deviceId,
           principal,
         );
-        const pins = new Map(
-          items.map((item) => [item.festivalId, item.pinned]),
-        );
+        const pins = new Map<string, boolean>();
+        for (const item of items) {
+          const canonical = canonicalFestivalId(item.festivalId);
+          pins.set(canonical, (pins.get(canonical) ?? false) || item.pinned);
+        }
         body.items = body.items.map((item) => ({
           ...item,
           pinned: pins.get(item.id) ?? false,
@@ -673,7 +676,7 @@ export class PublicFestivalController {
   ) {
     try {
       const { body, etag } = await this.liveService.board(
-        id,
+        canonicalFestivalId(id),
         deviceId,
         authorization,
       );

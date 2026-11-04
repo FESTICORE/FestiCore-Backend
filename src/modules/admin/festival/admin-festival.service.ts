@@ -463,6 +463,9 @@ export class AdminFestivalService {
         where: { id },
         lock: { mode: 'pessimistic_write' },
       });
+      // 관리자가 보유한 미발행 초안은 자동 발행으로 덮어쓰지 않는다.
+      if (row && !row.published)
+        return { id, packVersion: row.publishedVersion, changed: false };
       const previous = row?.published;
       const previousSource = previous?.source as
         { verifiedAt?: string } | undefined;

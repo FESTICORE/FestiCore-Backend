@@ -5,6 +5,10 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
+import {
+  canonicalFestivalId,
+  FESTIVAL_ALIASES,
+} from '../../../scripts/festival-aliases.cjs';
 import { DataSource, Repository } from 'typeorm';
 import { AdminFestival } from '../admin/festival/festival.entity';
 import { festivalSetId } from '../admin/festival/festival-set-id';
@@ -251,6 +255,7 @@ function projectPack(pack: Document): Document {
     'name',
     'venue',
     'timezone',
+    'eventPeriod',
     'flagsEnabled',
     'packVersion',
     'packUpdatedAt',
@@ -321,6 +326,8 @@ function projectPack(pack: Document): Document {
           : null,
       stageName: stageNames.get(set.stageId) ?? null,
     }));
+  result.timetableStatus =
+    requiredArray(result.sets).length > 0 ? 'available' : 'pending';
   result.zones = projectedArray(pack.zones, [
     'id',
     'name',
@@ -728,6 +735,7 @@ export class PublicFestivalService {
   private async publishedWithEtag(
     id: string,
   ): Promise<{ document: Document; etag: string }> {
+    id = canonicalFestivalId(id);
     const pack = await this.cachedPublished(id);
     const rows = await this.publicImageRows([id], this.storedImageIds(pack));
     // Check the current roster once even if Redis still holds an older pack.
@@ -1290,6 +1298,7 @@ export class PublicFestivalService {
   }
 
   async discovered(id: string): Promise<DiscoverySummary | null> {
+    if (canonicalFestivalId(id) !== id) return null;
     const entry = (await this.discoveryCatalog()).find(
       (item) => item.id === id,
     );
@@ -1659,6 +1668,7 @@ export class PublicFestivalService {
   }
 
   async detail(id: string): Promise<Document> {
+    id = canonicalFestivalId(id);
     if (!/^fst_[0-9a-z]+$/.test(id))
       throw new NotFoundException({
         code: 'FESTIVAL_NOT_FOUND',
@@ -1673,7 +1683,9 @@ export class PublicFestivalService {
 
   /** Internal reconciliation view, including festivals that already have a pack. */
   async crawlCandidates(): Promise<DiscoverySummary[]> {
-    return this.discoveryCatalog(true);
+    return (await this.discoveryCatalog(true)).filter(
+      (entry) => canonicalFestivalId(entry.id) === entry.id,
+    );
   }
 
   async crawlDetail(id: string) {
@@ -2064,13 +2076,17 @@ export class PublicFestivalService {
       }
     }
     const discovered = (await this.discoveryCatalog()).filter((entry) => {
+      if (canonicalFestivalId(entry.id) !== entry.id) return false;
       if (entry.lastDate < floor) return false;
       if (!cursor) return true;
       const sort = Date.parse(entry.sortAt) - Date.parse(cursor[2]);
       return sort > 0 || (sort === 0 && entry.id > cursor[3]);
     });
     await this.attachStoredImages(discovered);
-    const ordered = [...summaries, ...discovered].sort(
+    const ordered = [
+      ...summaries.filter((summary) => !(summary.id in FESTIVAL_ALIASES)),
+      ...discovered,
+    ].sort(
       (a, b) =>
         Date.parse(a.sortAt) - Date.parse(b.sortAt) || a.id.localeCompare(b.id),
     );
@@ -2174,6 +2190,7 @@ export class PublicFestivalService {
   }
 
   async flags(id: string, tags: string[] | undefined) {
+    id = canonicalFestivalId(id);
     const pack = await this.published(id);
     const valid = new Set(['slam', 'sing', 'train', 'calm', 'newbie']);
     if (tags?.some((tag) => !valid.has(tag)))

@@ -152,6 +152,14 @@ export class AuthService {
         [userId],
       );
       await manager.query(
+        `UPDATE "notification_deliveries" SET "status" = 'cancelled',
+           "leaseUntil" = NULL, "lastErrorCode" = 'USER_LOGGED_OUT'
+         WHERE "deviceId" IN (SELECT "id" FROM "devices" WHERE "userId" = $1)
+           AND "eventKey" LIKE 'live-activity-performance:%'
+           AND "status" IN ('pending', 'leased')`,
+        [userId],
+      );
+      await manager.query(
         `UPDATE "refresh_token_sessions" SET "revokedAt" = now()
          WHERE "id" IN (SELECT "sessionId" FROM "refresh_tokens" WHERE "userId" = $1)
            AND "revokedAt" IS NULL`,

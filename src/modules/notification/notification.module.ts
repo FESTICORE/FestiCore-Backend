@@ -19,6 +19,10 @@ import { UserNotificationService } from './user-notification.service';
     LiveActivityService,
     UserNotificationService,
   ],
-  exports: [SocialNotificationService, LiveActivityService],
+  exports: [
+    SocialNotificationService,
+    LiveActivityService,
+    FestivalStartService,
+  ],
 })
 export class NotificationModule {}
