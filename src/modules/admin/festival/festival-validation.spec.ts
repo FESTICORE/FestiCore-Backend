@@ -359,3 +359,33 @@ describe('festival draft validation', () => {
     ).toContain('ticketLinks: 최대 5개, 1..20자 라벨과 HTTPS URL 필요');
   });
 });
+
+describe('metadata publication', () => {
+  const metadata = {
+    ...draft,
+    eventPeriod: { firstDate: '2026-11-20', lastDate: '2026-11-21' },
+    timetableStatus: 'unpublished',
+    days: [],
+    stages: [],
+    sets: [],
+  };
+  it('publishes an explicit date-only pack', () => {
+    expect(validateDraft(metadata, true)).toEqual([]);
+  });
+  it.each([
+    { timetableStatus: undefined },
+    { timetableStatus: 'verified' },
+    { eventPeriod: undefined },
+    { eventPeriod: { firstDate: '2026-02-30', lastDate: '2026-03-01' } },
+    { days: draft.days },
+    { stages: draft.stages },
+    { sets: [{ artist: 'Unknown' }] },
+  ])('rejects ambiguous or partially populated metadata %j', (patch) => {
+    expect(
+      validateDraft({ ...metadata, ...patch }, true).length,
+    ).toBeGreaterThan(0);
+  });
+  it('keeps the legacy complete schedule valid', () => {
+    expect(validateDraft(draft, true)).toEqual([]);
+  });
+});

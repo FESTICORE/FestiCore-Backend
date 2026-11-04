@@ -4,19 +4,23 @@ import {
   OnModuleDestroy,
   OnModuleInit,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { PublicFestivalService } from '../../public/public-festival.service';
-import { AdminFestivalService } from './admin-festival.service';
+import {
+  AdminFestivalService,
+  CrawledFestivalTimetable,
+} from './admin-festival.service';
 
-/* eslint-disable @typescript-eslint/no-require-imports -- 배포 이미지에도 포함되는 기존 발행 스크립트의 검증 함수를 공유한다. */
+/* eslint-disable @typescript-eslint/no-require-imports -- 기존 시간표 검증을 수동 발행 스크립트와 공유한다. */
 const { buildDraft } =
   require('../../../../scripts/publish-stage-festivals.cjs') as {
     buildDraft: (
       detail: unknown,
       fillMissingEnds: boolean,
-    ) => string | { days: unknown[]; stages: unknown[]; sets: unknown[] };
+    ) => string | CrawledFestivalTimetable;
   };
-
-const POLL_MS = 60 * 60 * 1000;
+const POLL_MS = 5 * 60 * 1000;
+const DEBOUNCE_MS = 1_000;
 
 @Injectable()
 export class AutoPublishVerifiedService
@@ -24,107 +28,103 @@ export class AutoPublishVerifiedService
 {
   private readonly logger = new Logger(AutoPublishVerifiedService.name);
   private timer?: NodeJS.Timeout;
-  private running = false;
+  private pendingTimer?: NodeJS.Timeout;
+  private running?: Promise<void>;
+  private pending = false;
+  private stopped = false;
 
   constructor(
     private readonly publicFestivals: PublicFestivalService,
     private readonly adminFestivals: AdminFestivalService,
+    private readonly config: ConfigService,
   ) {}
 
+  private enabled(): boolean {
+    return (
+      !this.stopped &&
+      this.config.get<string>('PUBLIC_URL') ===
+        'https://festicore-dev.up.railway.app' &&
+      this.config.get<string>('AUTO_PUBLISH_VERIFIED_TIMETABLE') !== 'false'
+    );
+  }
+
   onModuleInit() {
-    if (
-      process.env.AUTO_PUBLISH_VERIFIED_TIMETABLE !== 'true' ||
-      process.env.PUBLIC_URL !== 'https://festicore-dev.up.railway.app'
-    )
-      return;
+    if (!this.enabled()) return;
     this.timer = setInterval(() => void this.tick(), POLL_MS);
     this.timer.unref();
     void this.tick();
   }
 
   onModuleDestroy() {
+    this.stopped = true;
     if (this.timer) clearInterval(this.timer);
+    if (this.pendingTimer) clearTimeout(this.pendingTimer);
   }
 
-  async tick() {
-    if (this.running) return;
-    this.running = true;
+  /** 실행·소스 저장까지 끝난 성공 크롤만 호출한다. 연속 성공은 한 번의 재조회로 합친다. */
+  requestAfterCrawl(): void {
+    if (!this.enabled()) return;
+    if (this.running) {
+      this.pending = true;
+      return;
+    }
+    if (this.pendingTimer) return;
+    this.pendingTimer = setTimeout(() => {
+      this.pendingTimer = undefined;
+      void this.tick();
+    }, DEBOUNCE_MS);
+    this.pendingTimer.unref();
+  }
+
+  async tick(): Promise<void> {
+    if (!this.enabled()) return;
+    if (this.running) {
+      this.pending = true;
+      return this.running;
+    }
+    this.running = this.reconcile().finally(() => {
+      this.running = undefined;
+      if (this.pending) {
+        this.pending = false;
+        this.requestAfterCrawl();
+      }
+    });
+    return this.running;
+  }
+
+  private async reconcile(): Promise<void> {
     try {
-      let after: string | undefined;
-      const discovered: { id: string; name: string; firstDate: string }[] = [];
-      for (let page = 0; page < 100; page += 1) {
-        const result = await this.publicFestivals.list(after, '50');
-        discovered.push(
-          ...result.items.filter(
-            (
-              item,
-            ): item is (typeof result.items)[number] & {
-              status: 'discovered';
-              name: string;
-            } => item.status === 'discovered' && typeof item.name === 'string',
-          ),
-        );
-        after = result.nextCursor ?? undefined;
-        if (!after) break;
-        if (page === 99) throw new Error('축제 목록 100페이지 제한 초과');
-      }
-      const counts = new Map<string, number>();
-      const keyFor = (festival: { name: string; firstDate: string }) =>
-        `${festival.name.trim().toLocaleLowerCase()}\u0000${festival.firstDate}`;
-      for (const festival of discovered) {
-        const key = keyFor(festival);
-        counts.set(key, (counts.get(key) ?? 0) + 1);
-      }
-      for (const festival of discovered) {
-        if ((counts.get(keyFor(festival)) ?? 0) > 1) {
-          this.logger.warn(
-            `자동 발행 보류 ${festival.id}: 동일 이름·시작일의 발견 축제가 중복됨`,
-          );
-          continue;
-        }
+      const festivals = await this.publicFestivals.crawlCandidates();
+      let changed = 0;
+      for (const festival of festivals) {
+        if (!this.enabled()) break;
         try {
-          const detail = await this.publicFestivals.detail(festival.id);
-          if (detail.status !== 'discovered') continue;
-          const draft = buildDraft(detail, false);
-          if (typeof draft === 'string') {
-            this.logger.log(`자동 발행 보류 ${festival.id}: ${draft}`);
-            continue;
+          const detail = await this.publicFestivals.crawlDetail(festival.id);
+          if (!detail) continue;
+          const timetable = buildDraft(detail, false);
+          const result = await this.adminFestivals.publishCrawled(
+            detail,
+            typeof timetable === 'string' ? null : timetable,
+          );
+          if (result.changed) {
+            changed += 1;
+            this.logger.log(
+              `자동 발행 ${festival.id}: 팩 버전 ${result.packVersion}`,
+            );
           }
-          // 가져오기에서 이미 관리 중인 ID는 충돌로 중단한다. 관리자의 초안은 수정하지 않는다.
-          const imported = await this.adminFestivals.importDiscovered(
-            festival.id,
-            {},
-            null,
-          );
-          const patched = await this.adminFestivals.patch(
-            festival.id,
-            draft,
-            `"d${imported.draftVersion}"`,
-            null,
-          );
-          const published = await this.adminFestivals.publish(
-            festival.id,
-            '공개 상세의 승인된 공식 시간표 자동 발행',
-            `"d${patched.draftVersion}"`,
-            null,
-          );
-          this.logger.log(
-            `자동 발행 ${festival.id}: 팩 버전 ${published.packVersion}`,
-          );
         } catch (error) {
-          // 실패한 신규 초안도 자동 재수정하지 않고 관리자 검토를 기다린다.
           this.logger.warn(
-            `자동 발행 보류 ${festival.id}: ${error instanceof Error ? error.message : String(error)}`,
+            `자동 발행 실패 ${festival.id}: ${error instanceof Error ? error.message : String(error)}`,
           );
         }
       }
-      this.logger.log(`자동 발행 점검 완료: 발견 축제 ${discovered.length}개`);
+      this.logger.log(
+        `자동 발행 점검 완료: ${festivals.length}개 확인, ${changed}개 갱신`,
+      );
     } catch (error) {
       this.logger.error(
         `자동 발행 점검 실패: ${error instanceof Error ? error.message : String(error)}`,
       );
-    } finally {
-      this.running = false;
     }
   }
 }

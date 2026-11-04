@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { AdminFestivalModule } from '../festival/admin-festival.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ImageStorageService } from '../../storage/image-storage.service';
 import { AdminAuditModule } from '../audit/admin-audit.module';
@@ -27,6 +28,7 @@ import { PublicFestivalModule } from '../../public/public-festival.module';
 
 @Module({
   imports: [
+    AdminFestivalModule,
     AdminAuditModule,
     PublicFestivalModule,
     TypeOrmModule.forFeature([

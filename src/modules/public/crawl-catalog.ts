@@ -207,7 +207,9 @@ function verifiedArtists(
     } = { name: name.trim() };
     if (
       ['mintpaper.co.kr', 'www.mintpaper.co.kr'].includes(sourceHost) &&
-      source.pathname === '/posts/4819'
+      ['/posts/4819', '/posts/4870', '/festivals/178/notice/4870'].includes(
+        source.pathname,
+      )
     ) {
       const profile = officialInstagramUrl(
         (value as Record<string, unknown>).profileUrl,

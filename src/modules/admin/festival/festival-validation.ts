@@ -165,6 +165,22 @@ export function validateDraft(
       lastDate = period.lastDate;
     }
   }
+  const metadataOnly =
+    firstDate !== null &&
+    draft.timetableStatus === 'unpublished' &&
+    ['days', 'stages', 'sets'].every(
+      (key) => Array.isArray(draft[key]) && draft[key].length === 0,
+    );
+  if (
+    draft.timetableStatus !== undefined &&
+    draft.timetableStatus !== 'unpublished' &&
+    draft.timetableStatus !== 'verified'
+  )
+    errors.push('timetableStatus: unpublished 또는 verified 필요');
+  if (draft.timetableStatus === 'unpublished' && !metadataOnly)
+    errors.push(
+      'timetableStatus: 미공개 일정은 유효한 eventPeriod와 빈 days/stages/sets 필요',
+    );
   const days = draft.days;
   if (
     !Array.isArray(days) ||
@@ -175,7 +191,7 @@ export function validateDraft(
       'days: 1..32개 필요 (날짜 전용 초안은 eventPeriod와 빈 배열 허용)',
     );
   else {
-    if (forPublish && days.length === 0)
+    if (forPublish && !metadataOnly && days.length === 0)
       errors.push('days: 발행하려면 검증된 시작/종료 시각 필요');
     let previous = '';
     for (const [index, day] of days.entries()) {
@@ -269,7 +285,7 @@ export function validateDraft(
     if (
       !Array.isArray(value) ||
       value.length > max ||
-      (name === 'stages' && forPublish && value.length < 1)
+      (name === 'stages' && forPublish && !metadataOnly && value.length < 1)
     )
       errors.push(`${name}: 배열 크기 오류`);
   }
@@ -291,7 +307,7 @@ export function validateDraft(
       errors.push(`stages[${i}]: ID/이름/순서 오류`);
   }
   const sets = Array.isArray(draft.sets) ? draft.sets : [];
-  if (forPublish && hasPeriod && sets.length === 0)
+  if (forPublish && !metadataOnly && hasPeriod && sets.length === 0)
     errors.push('sets: 날짜 전용 수집 초안은 검증된 공연 세트가 필요');
   const byStage = new Map<unknown, { starts: number; ends: number }[]>();
   for (const [i, set] of sets.entries()) {
