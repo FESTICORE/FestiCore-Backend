@@ -14,6 +14,7 @@
  *   --allow-prod          운영 호스트(festicore.up.railway.app)를 허용한다.
  *   --apply               실제로 가져오기·초안 수정·발행을 실행한다. 없으면 미리보기만 한다.
  *   --only <id,id,...>    지정한 축제 ID만 처리한다.
+ *   --audit-file <path>   발견 축제별 누락/발행 가능/발행 결과를 JSON으로 기록한다.
  *   --fill-missing-ends   종료 시각이 없는 공연을 같은 날·같은 무대의 다음 공연 시작 시각으로 채운다.
  *                         다음 공연이 없으면 그 축제는 건너뛴다.
  *
@@ -21,6 +22,7 @@
  * 사유와 함께 건너뛴다. 이미 가져온 초안이 있는 축제는 관리자가 편집 중일 수 있어 건드리지 않는다.
  */
 const { createHash } = require('node:crypto');
+const { writeFileSync } = require('node:fs');
 
 const STAGE_HOST = 'festicore-dev.up.railway.app';
 const PROD_HOST = 'festicore.up.railway.app';
@@ -45,12 +47,17 @@ function parseArgs(argv) {
     apply: false,
     only: null,
     fillMissingEnds: false,
+    auditFile: null,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--apply') options.apply = true;
     else if (arg === '--allow-prod') options.allowProd = true;
     else if (arg === '--fill-missing-ends') options.fillMissingEnds = true;
+    else if (arg === '--audit-file') {
+      options.auditFile = argv[(i += 1)];
+      if (!options.auditFile || options.auditFile.startsWith('--')) throw new Error('--audit-file에는 파일 경로가 필요합니다.');
+    }
     else if (arg === '--base') options.base = argv[(i += 1)];
     else if (arg === '--only') options.only = new Set(argv[(i += 1)].split(',').map((id) => id.trim()));
     else throw new Error(`알 수 없는 옵션: ${arg}`);
@@ -294,41 +301,59 @@ async function main() {
     : (await discoveredFestivals(request)).filter((festival) => festival.status === 'discovered');
   console.log(`${options.apply ? '실행' : '미리보기'}: ${options.base}, 발견 축제 ${festivals.length}개`);
   const summary = { published: 0, ready: 0, skipped: 0, failed: 0 };
+  const audit = {
+    checkedAt: new Date().toISOString(),
+    base: options.base,
+    discoveredCount: festivals.length,
+    missingTimetable: [],
+    skipped: [],
+    ready: [],
+    published: [],
+    failed: [],
+  };
   for (const festival of festivals) {
     const label = `${festival.id} ${festival.name}`;
+    const entry = { id: festival.id, name: festival.name, sourceUrl: festival.sourceUrl ?? null };
     let draft;
     try {
       draft = buildDraft(await publicDetail(request, festival.id), options.fillMissingEnds);
     } catch (error) {
       console.log(`- 실패 ${label}: ${error.message}`);
+      audit.failed.push({ ...entry, reason: error.message });
       summary.failed += 1;
       continue;
     }
     if (typeof draft === 'string') {
       console.log(`- 건너뜀 ${label}: ${draft}`);
+      (draft === '승인된 시간표 없음' ? audit.missingTimetable : audit.skipped).push({ ...entry, reason: draft });
       summary.skipped += 1;
       continue;
     }
     const shape = `${draft.days.length}일, 무대 ${draft.stages.length}개, 공연 ${draft.sets.length}개`;
     if (!options.apply) {
       console.log(`- 발행 가능 ${label}: ${shape}`);
+      audit.ready.push({ ...entry, shape });
       summary.ready += 1;
       continue;
     }
     try {
       const result = await publish(request, festival, draft);
       console.log(`- 발행 ${label}: ${shape}, 팩 버전 ${result?.packVersion ?? '?'}`);
+      audit.published.push({ ...entry, shape, packVersion: result?.packVersion ?? null });
       summary.published += 1;
     } catch (error) {
       if (error instanceof SkipError) {
         console.log(`- 건너뜀 ${label}: ${error.message}`);
+        audit.skipped.push({ ...entry, reason: error.message });
         summary.skipped += 1;
       } else {
         console.log(`- 실패 ${label}: ${error.message}`);
+        audit.failed.push({ ...entry, reason: error.message });
         summary.failed += 1;
       }
     }
   }
+  if (options.auditFile) writeFileSync(options.auditFile, `${JSON.stringify(audit, null, 2)}\n`, { flag: 'w' });
   console.log(
     options.apply
       ? `완료: 발행 ${summary.published}, 건너뜀 ${summary.skipped}, 실패 ${summary.failed}`

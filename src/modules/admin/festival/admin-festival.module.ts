@@ -4,6 +4,7 @@ import { AdminFestivalController } from './admin-festival.controller';
 import { AdminFestivalMapController } from './admin-festival-map.controller';
 import { AdminFestivalImageController } from './admin-festival-image.controller';
 import { AdminFestivalService } from './admin-festival.service';
+import { AutoPublishVerifiedService } from './auto-publish-verified.service';
 import { TimetableImageService } from './timetable-image.service';
 import { AdminFestival, AdminFestivalVersion } from './festival.entity';
 import { ImageStorageService } from '../../storage/image-storage.service';
@@ -23,7 +24,12 @@ import { NotificationModule } from '../../notification/notification.module';
     AdminFestivalMapController,
     AdminFestivalImageController,
   ],
-  providers: [AdminFestivalService, ImageStorageService, TimetableImageService],
+  providers: [
+    AdminFestivalService,
+    AutoPublishVerifiedService,
+    ImageStorageService,
+    TimetableImageService,
+  ],
   exports: [AdminFestivalService],
 })
 export class AdminFestivalModule {}
