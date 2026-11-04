@@ -44,6 +44,7 @@ IPv6 주소만 제공하는 환경에서도 연결할 수 있다.
 ```
 PORT=3000
 PUBLIC_URL=https://<환경별-도메인>          # Swagger 서버 표기용
+AUTO_PUBLISH_VERIFIED_TIMETABLE=false       # develop에서만 true: 승인된 완전한 시간표의 발견 축제를 매시간 자동 발행
 CORS_ORIGINS=https://<환경별-AdminWeb-도메인> # 쉼표 구분
 ADMIN_WEB_URL=https://<환경별-AdminWeb-도메인>  # develop/production 각각 위 표 사용
 WS_MAX_CLIENTS=5000                         # 공개 축제 팩 WebSocket 인스턴스별 연결 상한
