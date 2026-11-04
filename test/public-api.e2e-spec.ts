@@ -475,7 +475,7 @@ describe('Public festival API', () => {
       .expect(200);
     const packEtag = String(packVersion.headers.etag);
     expect(changed.headers.etag).toBe(
-      `"cdm4-chg6-${packEtag.replace(/"/g, '')}"`,
+      `"cdm5-chg6-${packEtag.replace(/"/g, '')}"`,
     );
     const unchanged = await request(server)
       .get(`/api/v1/festivals/${pack.id}/pack/changes?from=6`)
@@ -502,7 +502,7 @@ describe('Public festival API', () => {
       .expect(200);
     expect(overlaidPack.headers.etag).not.toBe(packEtag);
     expect(overlaid.headers.etag).toBe(
-      `"cdm4-chg6-${String(overlaidPack.headers.etag).replace(/"/g, '')}"`,
+      `"cdm5-chg6-${String(overlaidPack.headers.etag).replace(/"/g, '')}"`,
     );
 
     const latest = await request(server)
@@ -893,9 +893,105 @@ describe('Public festival API', () => {
       { cursorAt: '2026-11-20T12:00:00+09:00', cursorId: 'fst_12345678' },
     );
     expect(queryBuilder.orderBy).toHaveBeenCalledWith(
-      "(festival.published->'days'->0->>'startsAt')::timestamptz",
+      "COALESCE((festival.published->'days'->0->>'startsAt')::timestamptz, ((festival.published->'eventPeriod'->>'firstDate') || 'T00:00:00+09:00')::timestamptz)",
       'ASC',
     );
+  });
+
+  it('lists, paginates and downloads published metadata without inventing performance times', async () => {
+    const metadata = ['fst_metadata1', 'fst_metadata2'].map((id) => ({
+      id,
+      publishedVersion: 1,
+      published: {
+        ...pack,
+        id,
+        packVersion: 1,
+        flagsEnabled: false,
+        flags: [],
+        eventPeriod: { firstDate: '2026-11-20', lastDate: '2026-11-21' },
+        timetableStatus: 'unpublished',
+        days: [],
+        stages: [],
+        sets: [],
+        artists: [{ name: 'Official Band' }],
+      },
+    }));
+    type ListPage = {
+      items: Record<string, unknown>[];
+      nextCursor: string | null;
+    };
+    // Both metadata packs sort at Seoul midnight, before a real noon schedule.
+    queryBuilder.getMany.mockResolvedValueOnce([...metadata, published]);
+    const first = await request(server)
+      .get('/api/v1/festivals?after=2026-10-21&limit=1')
+      .expect(200);
+    const firstPage = successData<ListPage>(first.body);
+    expect(firstPage.items).toHaveLength(1);
+    expect(firstPage.items[0]).toMatchObject({
+      id: 'fst_metadata1',
+      packVersion: 1,
+      firstDate: '2026-11-20',
+      lastDate: '2026-11-21',
+      artists: [{ name: 'Official Band', performances: [] }],
+    });
+    expect(firstPage.items[0]).not.toHaveProperty('startsAt');
+    expect(firstPage.nextCursor).toBe(
+      '2026-10-21~2026-11-20T00:00:00+09:00~fst_metadata1',
+    );
+
+    queryBuilder.andWhere.mockClear();
+    queryBuilder.getMany.mockResolvedValueOnce([metadata[1], published]);
+    const second = await request(server)
+      .get(
+        `/api/v1/festivals?after=${encodeURIComponent(firstPage.nextCursor!)}&limit=1`,
+      )
+      .expect(200);
+    const secondPage = successData<ListPage>(second.body);
+    expect(secondPage.items.map((item) => item.id)).toEqual(['fst_metadata2']);
+    expect(secondPage.nextCursor).toBe(
+      '2026-10-21~2026-11-20T00:00:00+09:00~fst_metadata2',
+    );
+    const sortInstant =
+      "COALESCE((festival.published->'days'->0->>'startsAt')::timestamptz, ((festival.published->'eventPeriod'->>'firstDate') || 'T00:00:00+09:00')::timestamptz)";
+    expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+      `(${sortInstant} > CAST(:cursorAt AS timestamptz) OR (${sortInstant} = CAST(:cursorAt AS timestamptz) AND festival.id > :cursorId))`,
+      { cursorAt: '2026-11-20T00:00:00+09:00', cursorId: 'fst_metadata1' },
+    );
+    queryBuilder.getMany.mockResolvedValueOnce([published]);
+    const third = await request(server)
+      .get(
+        `/api/v1/festivals?after=${encodeURIComponent(secondPage.nextCursor!)}&limit=1`,
+      )
+      .expect(200);
+    expect(
+      successData<ListPage>(third.body).items.map((item) => item.id),
+    ).toEqual([pack.id]);
+    expect(successData<ListPage>(third.body).nextCursor).toBeNull();
+
+    repo.findOne.mockResolvedValueOnce(metadata[0]);
+    const downloaded = await request(server)
+      .get('/api/v1/festivals/fst_metadata1/pack')
+      .expect(200);
+    const document = successData<Record<string, unknown>>(downloaded.body);
+    expect(document).toMatchObject({
+      id: 'fst_metadata1',
+      packVersion: 1,
+      eventPeriod: { firstDate: '2026-11-20', lastDate: '2026-11-21' },
+      timetableStatus: 'unpublished',
+      days: [],
+      stages: [],
+      sets: [],
+      timetable: [],
+      artists: [{ name: 'Official Band', imageUrl: null }],
+    });
+    expect(JSON.stringify(document)).not.toContain('startsAt');
+    expect(JSON.stringify(document)).not.toContain('endsAt');
+    expect(downloaded.headers.etag).toMatch(/^"[0-9a-f]{64}"$/);
+    repo.findOne.mockResolvedValueOnce(metadata[0]);
+    await request(server)
+      .get('/api/v1/festivals/fst_metadata1/pack')
+      .set('If-None-Match', downloaded.headers.etag)
+      .expect(304);
   });
 
   it('orders different ISO offsets by instant and preserves the original cursor', async () => {
@@ -951,7 +1047,7 @@ describe('Public festival API', () => {
       .get(`/api/v1/festivals?after=${encodeURIComponent(cursor)}&limit=1`)
       .expect(200);
     expect(queryBuilder.andWhere).toHaveBeenCalledWith(
-      expect.stringContaining("->>'date' >= :floor"),
+      "COALESCE(festival.published->'days'->-1->>'date', festival.published->'eventPeriod'->>'lastDate') >= :floor",
       { floor: '2025-01-01' },
     );
   });
