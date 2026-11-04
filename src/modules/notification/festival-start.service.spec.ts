@@ -24,8 +24,25 @@ describe('FestivalStartService', () => {
     const sendReminderNotification = jest.fn();
     const sendLiveActivityStart = jest.fn();
     const isConfigured = jest.fn().mockReturnValue(true);
+    const conflictingStart = jest.fn<Promise<Array<{ id: string }>>, []>();
+    conflictingStart.mockResolvedValue([]);
+    const transaction = jest.fn(
+      (
+        work: (manager: {
+          query: (sql: string, params?: unknown[]) => Promise<unknown>;
+        }) => Promise<unknown>,
+      ) =>
+        work({
+          query: (sql, params) => {
+            if (sql.includes('FOR UPDATE'))
+              return Promise.resolve([{ id: deviceId }]);
+            if (sql.includes('"eventKey" IN')) return conflictingStart();
+            return query(sql, params);
+          },
+        }),
+    );
     const service = new FestivalStartService(
-      { query } as never,
+      { query, transaction } as never,
       {
         sendStartNotification,
         sendPackUpdated,
@@ -42,6 +59,7 @@ describe('FestivalStartService', () => {
       sendReminderNotification,
       sendLiveActivityStart,
       isConfigured,
+      conflictingStart,
     };
   }
 
@@ -838,6 +856,22 @@ describe('FestivalStartService', () => {
       expect.stringContaining('"hasActiveSession"'),
       expect.any(Array),
     );
+  });
+
+  it('cancels a saved-performance start when the festival-day start was already reserved', async () => {
+    const { service, query, conflictingStart, sendLiveActivityStart } = setup();
+    query.mockResolvedValueOnce([performanceTarget]).mockResolvedValueOnce([]);
+    conflictingStart.mockResolvedValueOnce([{ id: 'festival-start-job' }]);
+
+    await service.deliver(performanceJob, performanceJob.scheduledAt);
+
+    expect(sendLiveActivityStart).not.toHaveBeenCalled();
+    expect(query.mock.calls[1][1]).toEqual([
+      job.id,
+      leaseUntil,
+      'cancelled',
+      'ACTIVITY_ALREADY_STARTED',
+    ]);
   });
 
   it('reschedules a shifted performance before reserving the APNs attempt', async () => {
