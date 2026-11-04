@@ -266,6 +266,7 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
                  "nextAttemptAt" = EXCLUDED."nextAttemptAt",
                  "status" = 'pending', "leaseUntil" = NULL
            WHERE "notification_deliveries"."status" = 'cancelled'
+              AND "notification_deliveries"."lastErrorCode" IS DISTINCT FROM 'ACTIVITY_ALREADY_STARTED'
               OR ("notification_deliveries"."status" = 'pending'
                   AND "notification_deliveries"."scheduledAt" <> EXCLUDED."scheduledAt")`,
           [row.id, `${LIVE_START_PREFIX}${row.id}`, firstStart],
@@ -332,6 +333,7 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
              "nextAttemptAt" = EXCLUDED."nextAttemptAt",
              "status" = 'pending', "leaseUntil" = NULL
        WHERE "notification_deliveries"."status" = 'cancelled'
+          AND "notification_deliveries"."lastErrorCode" IS DISTINCT FROM 'ACTIVITY_ALREADY_STARTED'
           OR ("notification_deliveries"."status" = 'pending'
               AND "notification_deliveries"."scheduledAt" <> EXCLUDED."scheduledAt")`,
       [JSON.stringify([...plans.values()])],
@@ -416,6 +418,7 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
              "nextAttemptAt" = EXCLUDED."nextAttemptAt",
              "status" = 'pending', "leaseUntil" = NULL
        WHERE "notification_deliveries"."status" = 'cancelled'
+          AND "notification_deliveries"."lastErrorCode" IS DISTINCT FROM 'ACTIVITY_ALREADY_STARTED'
           OR ("notification_deliveries"."status" = 'pending'
               AND "notification_deliveries"."scheduledAt" <> EXCLUDED."scheduledAt")`,
       [
@@ -718,15 +721,43 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
 
     // Reserve the attempt durably before APNs. A timeout or process crash may
     // mean APNs accepted the start; replaying it could create a second activity.
-    const reserved = await this.db.query<Array<{ id: string }>>(
-      `UPDATE "notification_deliveries" SET "status" = 'failed',
-         "attempts" = "attempts" + 1, "leaseUntil" = NULL,
-         "lastErrorCode" = 'OUTCOME_UNKNOWN'
-       WHERE "id" = $1 AND "status" = 'leased' AND "leaseUntil" = $2
-       RETURNING "id"`,
-      [job.id, job.leaseUntil],
-    );
-    if (!reserved.length) return;
+    const reservation = await this.db.transaction(async (manager) => {
+      // Serialize start reservations for the same device, including the
+      // festival-day and saved-performance paths.
+      await manager.query(
+        'SELECT "id" FROM "devices" WHERE "id" = $1 FOR UPDATE',
+        [job.deviceId],
+      );
+      const other = await manager.query<Array<{ id: string }>>(
+        `SELECT "id" FROM "notification_deliveries"
+         WHERE "deviceId" = $1 AND "festivalId" = $2 AND "id" <> $3
+           AND "eventKey" IN ($4, $5)
+           AND ("status" = 'sent' OR ("status" = 'failed'
+             AND "lastErrorCode" = 'OUTCOME_UNKNOWN')) LIMIT 1`,
+        [
+          job.deviceId,
+          job.festivalId,
+          job.id,
+          `${LIVE_START_PREFIX}${job.festivalId}`,
+          `${PERFORMANCE_START_PREFIX}${job.festivalId}`,
+        ],
+      );
+      if (other.length) return 'conflict';
+      const reserved = await manager.query<Array<{ id: string }>>(
+        `UPDATE "notification_deliveries" SET "status" = 'failed',
+           "attempts" = "attempts" + 1, "leaseUntil" = NULL,
+           "lastErrorCode" = 'OUTCOME_UNKNOWN'
+         WHERE "id" = $1 AND "status" = 'leased' AND "leaseUntil" = $2
+         RETURNING "id"`,
+        [job.id, job.leaseUntil],
+      );
+      return reserved.length ? 'reserved' : 'lost';
+    });
+    if (reservation === 'conflict') {
+      await this.finish(job, 'cancelled', 'ACTIVITY_ALREADY_STARTED');
+      return;
+    }
+    if (reservation === 'lost') return;
 
     let result: Awaited<ReturnType<ApnsService['sendLiveActivityStart']>>;
     try {
