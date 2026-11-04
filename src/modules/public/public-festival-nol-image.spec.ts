@@ -538,6 +538,7 @@ describe('NOL festival poster', () => {
       'https://mintpaper.s3.ap-northeast-2.amazonaws.com/cdf-cover.jpg';
     const query = jest
       .fn()
+      .mockResolvedValue([])
       .mockResolvedValueOnce([
         {
           candidate: {
@@ -593,6 +594,7 @@ describe('NOL festival poster', () => {
       'https://ticketimage.interpark.com/Play/image/large/26/26013406_p.gif';
     const query = jest
       .fn()
+      .mockResolvedValue([])
       .mockResolvedValueOnce([
         {
           candidate: {
@@ -633,8 +635,9 @@ describe('NOL festival poster', () => {
         thumbUrl: '/api/v1/festivals/images/poster-26013406.webp',
       }),
     ]);
-    expect(query).toHaveBeenCalledTimes(3);
-    expect(query).toHaveBeenLastCalledWith(
+    expect(query).toHaveBeenCalledTimes(4);
+    expect(query).toHaveBeenNthCalledWith(
+      3,
       expect.stringContaining(
         "substring(source.url from '^https://nol[.]yanolja[.]com/ticket/products/([0-9]+)$')",
       ),
