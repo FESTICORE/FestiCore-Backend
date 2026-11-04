@@ -52,6 +52,45 @@ describe('PublicFestivalService published cache', () => {
     return { service, cache, findOne, visibleRows, dataSource };
   }
 
+  it('preserves metadata dates and lineup without exposing unverified artist times or remote images', async () => {
+    const { service, findOne } = setup();
+    findOne.mockResolvedValue({
+      publishedVersion: 1,
+      published: {
+        id,
+        packVersion: 1,
+        eventPeriod: {
+          firstDate: '2026-11-19',
+          lastDate: '2026-11-20',
+          private: 'secret',
+        },
+        timetableStatus: 'unpublished',
+        days: [],
+        stages: [],
+        sets: [],
+        artists: [
+          {
+            name: 'Band',
+            startsAt: 'invented',
+            imageUrl: 'https://example.com/image.jpg',
+          },
+        ],
+      },
+    });
+    const pack = await service.published(id);
+    expect(pack).toMatchObject({
+      eventPeriod: { firstDate: '2026-11-19', lastDate: '2026-11-20' },
+      timetableStatus: 'unpublished',
+      days: [],
+      stages: [],
+      sets: [],
+      timetable: [],
+      artists: [{ name: 'Band', imageUrl: null }],
+    });
+    expect(pack.eventPeriod).not.toHaveProperty('private');
+    expect(JSON.stringify(pack)).not.toContain('invented');
+  });
+
   it('serves a hit without querying the database', async () => {
     const { service, cache, findOne } = setup();
     await service.published(id);

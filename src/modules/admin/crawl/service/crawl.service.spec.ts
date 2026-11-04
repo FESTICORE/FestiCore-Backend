@@ -496,6 +496,7 @@ function harness() {
   const publicFestivals = {
     missingArtistImages: jest.fn().mockResolvedValue([]),
   };
+  const autoPublish = { requestAfterCrawl: jest.fn() };
   const service = new CrawlService(
     sourcesRepo as never,
     runsRepo as never,
@@ -508,6 +509,7 @@ function harness() {
     audit as never,
     timetableRevisions as never,
     publicFestivals as never,
+    autoPublish as never,
   ) as unknown as PrivateCrawl;
   const execute = jest.spyOn(service, 'execute').mockResolvedValue(undefined);
   return {
@@ -524,6 +526,7 @@ function harness() {
     audit,
     timetableRevisions,
     publicFestivals,
+    autoPublish,
     insertQb,
     insertResult,
     updateQb,
@@ -531,6 +534,75 @@ function harness() {
     execute,
   };
 }
+
+describe('CrawlService auto publication after persisted crawl', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  function prepared() {
+    const fixture = harness();
+    fixture.execute.mockRestore();
+    jest.spyOn(fixture.service, 'checkRobots').mockResolvedValue();
+    jest
+      .spyOn(fixture.service, 'getListing')
+      .mockResolvedValue({ status: 200, body: '<html>official</html>' });
+    jest
+      .spyOn(
+        fixture.service as unknown as { captureImages(): Promise<string[]> },
+        'captureImages',
+      )
+      .mockResolvedValue([]);
+    jest.spyOn(crawlParser, 'parseCrawl').mockResolvedValue([]);
+    fixture.runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(null),
+    }));
+    return fixture;
+  }
+
+  it('requests publication only after both run and source saves complete', async () => {
+    const { service, run, source, runsRepo, dataSource, autoPublish } =
+      prepared();
+    autoPublish.requestAfterCrawl.mockImplementation(() => {
+      expect(runsRepo.save).toHaveBeenCalledWith(run);
+      expect(dataSource.query).toHaveBeenCalledWith(
+        expect.stringContaining('UPDATE crawl_sources SET'),
+        expect.any(Array),
+      );
+    });
+    await service.execute(run, source);
+    expect(run.result).toBe('nochange-parsed');
+    expect(autoPublish.requestAfterCrawl).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not request publication after a failed fetch', async () => {
+    const { service, run, source, autoPublish } = prepared();
+    jest
+      .spyOn(service, 'getListing')
+      .mockResolvedValue({ status: 503, body: '' });
+    await service.execute(run, source);
+    expect(run.result).toBe('failed');
+    expect(autoPublish.requestAfterCrawl).not.toHaveBeenCalled();
+  });
+
+  it.each(['run', 'source'])(
+    'does not request publication when the %s save fails',
+    async (target) => {
+      const { service, run, source, runsRepo, dataSource, autoPublish } =
+        prepared();
+      if (target === 'run')
+        runsRepo.save.mockRejectedValueOnce(new Error('save failed'));
+      else
+        dataSource.query.mockImplementation((sql: string) => {
+          if (sql.includes('UPDATE crawl_sources SET'))
+            return Promise.reject(new Error('save failed'));
+          return Promise.resolve([]);
+        });
+      await expect(service.execute(run, source)).rejects.toThrow('save failed');
+      expect(autoPublish.requestAfterCrawl).not.toHaveBeenCalled();
+    },
+  );
+});
 
 describe('CrawlService scheduled runs', () => {
   beforeEach(() =>
@@ -4725,6 +4797,56 @@ describe('CrawlService manual runs and snapshots', () => {
 });
 
 describe('CrawlService proposal changes', () => {
+  it('persists corrected dates for imported packs and compares only the latest pending evidence', async () => {
+    const { service, source, dataSource } = harness();
+    const url = 'https://ticket.yes24.com/Perf/60785';
+    const entry = {
+      url,
+      name: '썸띵 뉴',
+      venue: '수원',
+      date: '2026.12.26~2026.12.27',
+    };
+    dataSource.query.mockResolvedValueOnce([
+      { url, value: { ...entry, date: '2026.12.26' }, proposalId: 'latest' },
+      { url, value: null, festivalId: 'existing', draft: { source: { url } } },
+    ]);
+    const result = await service.proposalItems(source, [entry]);
+    expect(result.items).toEqual([expect.objectContaining({ after: entry })]);
+    const sql = (
+      dataSource.query.mock.calls as unknown as [string, unknown[]][]
+    )[0][0];
+    expect(sql).toContain("DISTINCT ON (item->'after'->>'url')");
+    expect(sql).toContain('p."createdAt" DESC, p.id DESC');
+  });
+
+  it('does not let a location proposal consume changed complete festival metadata', async () => {
+    const { service, source, dataSource } = harness();
+    source.url = 'https://ticket.melon.com/performance/index.htm?prodId=213793';
+    const entry = {
+      url: source.url,
+      name: 'Festival',
+      venue: 'KINTEX',
+      date: '2026.11.20~2026.11.21',
+      location: {
+        latitude: 37.66469544695199,
+        longitude: 126.742064181796,
+        label: 'KINTEX',
+      },
+    };
+    dataSource.query.mockResolvedValueOnce([
+      {
+        url: source.url,
+        value: null,
+        festivalId: 'existing',
+        draft: { venue: 'KINTEX', directions: {}, source: { url: source.url } },
+      },
+    ]);
+    const result = await service.proposalItems(source, [entry]);
+    expect(result.kind).toBe('festival.new');
+    expect(result.items).toEqual([expect.objectContaining({ after: entry })]);
+    expect(dataSource.query).toHaveBeenCalledTimes(1);
+  });
+
   it('proposes reviewed coordinates for a same-source accepted Melon draft only once', async () => {
     const { service, source, dataSource } = harness();
     source.url = 'https://ticket.melon.com/performance/index.htm?prodId=213793';
@@ -4786,7 +4908,7 @@ describe('CrawlService proposal changes', () => {
     const duplicate = await service.proposalItems(source, [
       { name: 'WONDERLIVET 2026', url: source.url, location: point },
     ]);
-    expect(duplicate.items).toEqual([]);
+    expect(duplicate.items).toHaveLength(1);
     expect(duplicate.kind).toBe('festival.new');
 
     dataSource.query.mockResolvedValueOnce([
@@ -4795,10 +4917,10 @@ describe('CrawlService proposal changes', () => {
     const mismatch = await service.proposalItems(source, [
       { name: 'WONDERLIVET 2026', url: source.url, location: point },
     ]);
-    expect(mismatch.items).toEqual([]);
+    expect(mismatch.items).toHaveLength(1);
   });
 
-  it('omits festival URLs already proposed or present in a draft', async () => {
+  it('keeps rediscovery evidence even when the source URL already has a draft', async () => {
     const { service, source, dataSource } = harness();
     dataSource.query.mockResolvedValueOnce([
       { url: 'https://tickets.example.com/one', value: null },
@@ -4810,6 +4932,9 @@ describe('CrawlService proposal changes', () => {
     ]);
 
     expect(result.items).toEqual([
+      expect.objectContaining({
+        after: { name: '기존 축제', url: 'https://tickets.example.com/one' },
+      }),
       expect.objectContaining({
         after: { name: '새 축제', url: 'https://tickets.example.com/two' },
       }),
@@ -4863,7 +4988,7 @@ describe('CrawlService proposal changes', () => {
       { url, value: null, proposalId: null },
     ]);
     const draftOnly = await service.proposalItems(source, [entry]);
-    expect(draftOnly.items).toEqual([]);
+    expect(draftOnly.items).toHaveLength(1);
     expect(draftOnly.matchedProposalId).toBeUndefined();
 
     dataSource.query.mockResolvedValueOnce([

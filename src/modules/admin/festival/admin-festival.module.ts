@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AdminFestivalController } from './admin-festival.controller';
 import { AdminFestivalMapController } from './admin-festival-map.controller';
@@ -14,6 +15,7 @@ import { NotificationModule } from '../../notification/notification.module';
 
 @Module({
   imports: [
+    ConfigModule,
     TypeOrmModule.forFeature([AdminFestival, AdminFestivalVersion]),
     AdminAuditModule,
     PublicFestivalModule,
@@ -30,6 +32,6 @@ import { NotificationModule } from '../../notification/notification.module';
     ImageStorageService,
     TimetableImageService,
   ],
-  exports: [AdminFestivalService],
+  exports: [AdminFestivalService, AutoPublishVerifiedService],
 })
 export class AdminFestivalModule {}

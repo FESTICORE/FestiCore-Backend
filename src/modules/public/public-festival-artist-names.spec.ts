@@ -25,8 +25,49 @@ describe('PublicFestivalService list artistNames', () => {
     };
     jest.spyOn(internals, 'discoveryCatalog').mockResolvedValue(discovered);
     jest.spyOn(internals, 'attachStoredImages').mockResolvedValue(new Map());
-    return service;
+    return Object.assign(service, { testBuilder: builder });
   }
+
+  it('lists date-only published metadata and uses the same Seoul midnight in cursors', async () => {
+    const rows = ['fst_a', 'fst_b'].map((id) => ({
+      id,
+      publishedVersion: 1,
+      published: {
+        id,
+        name: 'Metadata',
+        venue: 'Venue',
+        days: [],
+        sets: [],
+        stages: [],
+        eventPeriod: { firstDate: '2026-11-19', lastDate: '2026-11-20' },
+        timetableStatus: 'unpublished',
+        artists: [{ name: '밴드' }],
+      },
+    }));
+    const service = setup(rows);
+    const page = await service.list(undefined, '1', now);
+    expect(page.items).toHaveLength(1);
+    expect(page.items[0]).toMatchObject({
+      id: 'fst_a',
+      firstDate: '2026-11-19',
+      lastDate: '2026-11-20',
+      packVersion: 1,
+      artists: [{ name: '밴드', performances: [] }],
+    });
+    expect(page.items[0]).not.toHaveProperty('startsAt');
+    expect(page.nextCursor).toContain('2026-11-19T00:00:00+09:00~fst_a');
+    expect(service.testBuilder.orderBy).toHaveBeenCalledWith(
+      expect.stringContaining("'T00:00:00+09:00')::timestamptz"),
+      'ASC',
+    );
+    service.testBuilder.getMany.mockResolvedValue(rows.slice(1));
+    const next = await service.list(page.nextCursor!, '1', now);
+    expect(next.items.map((item) => item.id)).toEqual(['fst_b']);
+    expect(service.testBuilder.andWhere).toHaveBeenCalledWith(
+      expect.stringContaining('festival.id > :cursorId'),
+      { cursorAt: '2026-11-19T00:00:00+09:00', cursorId: 'fst_a' },
+    );
+  });
 
   it('lists distinct published set artists in timetable order', async () => {
     const service = setup([

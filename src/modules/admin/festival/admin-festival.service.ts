@@ -9,6 +9,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { randomBytes } from 'crypto';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 import { brotliCompressSync } from 'zlib';
+import { verifiedVenueLocation } from '../../../common/festival-location';
 import {
   AdminFestival,
   AdminFestivalVersion,
@@ -28,6 +29,43 @@ import {
   recordUserNotifications,
   withInboxSavepoint,
 } from '../../notification/user-notification.service';
+
+export interface CrawledFestivalDetail {
+  id: string;
+  name: string;
+  venue: string;
+  firstDate: string;
+  lastDate: string;
+  sourceUrl: string;
+  thumbUrl?: string | null;
+  ticketLinks: { label: string; url: string }[];
+  artists?: unknown[];
+  location?: unknown;
+  officialInstagramUrl?: string | null;
+}
+
+export interface CrawledFestivalTimetable {
+  days: unknown[];
+  stages: unknown[];
+  sets: unknown[];
+}
+
+function contentKey(document: FestivalDocument): string {
+  return JSON.stringify(publicationContent(document), (_key, value: unknown) =>
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? Object.fromEntries(
+          Object.entries(value).sort(([a], [b]) => a.localeCompare(b)),
+        )
+      : value,
+  );
+}
+
+function publicationContent(document: FestivalDocument): FestivalDocument {
+  const content = { ...document };
+  delete content.packVersion;
+  delete content.packUpdatedAt;
+  return content;
+}
 
 const alphabet = '0123456789abcdefghjkmnpqrstvwxyz';
 const SOURCE_STALE_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
@@ -294,6 +332,21 @@ export class AdminFestivalService {
         mergeDraft(row.draft, patch),
         patch,
       );
+      // Metadata drafts must remain editable through the ordinary admin API.
+      // A partial schedule is a draft, not an unpublished metadata pack.
+      if (
+        next.timetableStatus === 'unpublished' &&
+        ['days', 'stages', 'sets'].some(
+          (key) => Array.isArray(next[key]) && next[key].length > 0,
+        )
+      )
+        delete next.timetableStatus;
+      if (
+        next.eventPeriod &&
+        next.timetableStatus === undefined &&
+        validateDraft(next, true).length === 0
+      )
+        next.timetableStatus = 'verified';
       const errors = validateDraft(next);
       if (errors.length)
         throw new BadRequestException({
@@ -373,52 +426,202 @@ export class AdminFestivalService {
           message: errors.join('; '),
           errors,
         });
-      const packVersion = row.publishedVersion + 1;
-      const pack = {
-        ...draft,
-        packVersion,
-        packUpdatedAt: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
-      };
-      if (
-        brotliCompressSync(Buffer.from(JSON.stringify(pack))).length >
-        200 * 1024
-      )
-        throw new BadRequestException('압축된 팩이 200KB를 초과합니다.');
-      const sizeBytes = Buffer.byteLength(JSON.stringify(pack));
-      const previousVersion = row.publishedVersion;
-      row.published = pack;
-      row.publishedVersion = packVersion;
-      await repo.save(row);
-      await manager.getRepository(AdminFestivalVersion).save({
-        festivalId: id,
-        packVersion,
-        pack,
-        publishedBy: actor,
-        note,
-        sizeBytes,
-      });
-      const pushedDevices = await this.queuePackUpdate(
-        manager,
-        id,
-        packVersion,
-      );
-      await this.liveActivity.enqueueFestival(id, manager);
-      await this.audit.record(manager, {
-        actor,
-        action: 'festival.published',
-        target: `festival:${id}`,
-        before: { packVersion: previousVersion },
-        after: { packVersion, note },
-      });
-      return {
-        packVersion,
-        etag: `"v${packVersion}"`,
-        pushedDevices,
-        warnings: sourceWarnings(row.draft),
-      };
+      return this.writePublication(manager, row, draft, note, actor);
     });
     await this.cache.invalidatePack(id);
     return result;
+  }
+
+  async publishCrawled(
+    detail: CrawledFestivalDetail,
+    timetable: CrawledFestivalTimetable | null,
+  ): Promise<{ packVersion: number; changed: boolean }> {
+    if (!/^fst_[0-9a-f]{16}$/.test(detail.id))
+      throw new BadRequestException('수집된 축제 ID가 올바르지 않습니다.');
+    const result = await this.dataSource.transaction(async (manager) => {
+      // Serialize corrections to the same source before resolving its stable ID.
+      await manager.query(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+        [`crawl-source:${detail.sourceUrl}`],
+      );
+      const matches = await manager.query<{ id: string }[]>(
+        `SELECT "id" FROM "admin_festivals"
+         WHERE "published"->'source'->>'url' = $1
+            OR ("published" IS NULL AND "draft"->'source'->>'url' = $1)`,
+        [detail.sourceUrl],
+      );
+      if (matches.length > 1)
+        throw new ConflictException('같은 출처의 관리 축제가 여러 개입니다.');
+      const id = matches[0]?.id ?? detail.id;
+      // Covers absent rows; manual publishers take the same existing-row lock.
+      await manager.query(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+        [id],
+      );
+      const repo = manager.getRepository(AdminFestival);
+      let row = await repo.findOne({
+        where: { id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      const previous = row?.published;
+      const previousSource = previous?.source as
+        { verifiedAt?: string } | undefined;
+      const source = {
+        name: '공개 수집 카탈로그',
+        url: detail.sourceUrl,
+        verifiedAt:
+          previousSource?.verifiedAt ??
+          new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+      };
+      const document = previous
+        ? publicationContent(previous)
+        : draftFor(id, { ...detail, days: [] }, source);
+      Object.assign(document, {
+        name: detail.name,
+        venue: detail.venue,
+        eventPeriod: { firstDate: detail.firstDate, lastDate: detail.lastDate },
+        thumbUrl: detail.thumbUrl ?? null,
+        ticketLinks: detail.ticketLinks,
+        source,
+      });
+      // Date corrections cannot invalidate a retained verified timetable.
+      // Adopt their new period only together with its complete replacement.
+      if (!timetable && Array.isArray(previous?.days) && previous.days.length) {
+        if (previous.eventPeriod === undefined) delete document.eventPeriod;
+        else document.eventPeriod = previous.eventPeriod;
+      }
+      if (detail.artists !== undefined) document.artists = detail.artists;
+      if (detail.officialInstagramUrl !== undefined)
+        document.officialInstagramUrl = detail.officialInstagramUrl;
+      if (detail.location !== undefined) {
+        const directions = document.directions as Record<string, unknown>;
+        const oldLocation = verifiedVenueLocation(directions?.location);
+        const nextLocation = verifiedVenueLocation(detail.location);
+        const stableLocation =
+          oldLocation?.source && nextLocation?.source
+            ? {
+                ...nextLocation,
+                source: {
+                  ...nextLocation.source,
+                  verifiedAt: oldLocation.source.verifiedAt,
+                },
+              }
+            : nextLocation;
+        document.directions = {
+          ...directions,
+          location:
+            oldLocation &&
+            stableLocation &&
+            contentKey(oldLocation) === contentKey(stableLocation)
+              ? oldLocation
+              : detail.location,
+        };
+      }
+      if (timetable) {
+        if (
+          !timetable.days.length ||
+          !timetable.stages.length ||
+          !timetable.sets.length
+        )
+          throw new BadRequestException('완전한 검증 시간표가 필요합니다.');
+        Object.assign(document, timetable, { timetableStatus: 'verified' });
+      } else if (!Array.isArray(document.days) || !document.days.length) {
+        Object.assign(document, {
+          days: [],
+          stages: [],
+          sets: [],
+          timetableStatus: 'unpublished',
+        });
+      }
+      const errors = validateDraft(document, true);
+      if (errors.length)
+        throw new BadRequestException({
+          code: 'VALIDATION',
+          message: errors.join('; '),
+          errors,
+        });
+      if (previous && contentKey(previous) === contentKey(document))
+        return { id, packVersion: row!.publishedVersion, changed: false };
+      if (!row) {
+        row = repo.create({
+          id,
+          draft: document,
+          draftVersion: 1,
+          draftUpdatedBy: null,
+          published: null,
+          publishedVersion: 0,
+        });
+        // A concurrent manual import does not take our advisory lock. Insert
+        // explicitly so its draft wins instead of save() updating that row.
+        await manager.query(
+          `INSERT INTO "admin_festivals"
+           ("id", "draft", "draftVersion", "draftUpdatedBy", "published", "publishedVersion")
+           VALUES ($1, $2::jsonb, 1, NULL, NULL, 0)`,
+          [id, JSON.stringify(document)],
+        );
+      }
+      // Existing drafts belong to their editors, even when actor is null.
+      const published = await this.writePublication(
+        manager,
+        row,
+        document,
+        '공개 수집 정보 자동 발행',
+        null,
+      );
+      return { id, packVersion: published.packVersion, changed: true };
+    });
+    if (result.changed) await this.cache.invalidatePack(result.id);
+    return { packVersion: result.packVersion, changed: result.changed };
+  }
+
+  private async writePublication(
+    manager: EntityManager,
+    row: AdminFestival,
+    draft: FestivalDocument,
+    note: string,
+    actor: string | null,
+  ) {
+    const id = row.id;
+    const repo = manager.getRepository(AdminFestival);
+    const packVersion = row.publishedVersion + 1;
+    const pack = {
+      ...draft,
+      packVersion,
+      packUpdatedAt: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+    };
+    if (
+      brotliCompressSync(Buffer.from(JSON.stringify(pack))).length >
+      200 * 1024
+    )
+      throw new BadRequestException('압축된 팩이 200KB를 초과합니다.');
+    const sizeBytes = Buffer.byteLength(JSON.stringify(pack));
+    const previousVersion = row.publishedVersion;
+    row.published = pack;
+    row.publishedVersion = packVersion;
+    await repo.save(row);
+    await manager.getRepository(AdminFestivalVersion).save({
+      festivalId: id,
+      packVersion,
+      pack,
+      publishedBy: actor,
+      note,
+      sizeBytes,
+    });
+    const pushedDevices = await this.queuePackUpdate(manager, id, packVersion);
+    await this.liveActivity.enqueueFestival(id, manager);
+    await this.audit.record(manager, {
+      actor,
+      action: 'festival.published',
+      target: `festival:${id}`,
+      before: { packVersion: previousVersion },
+      after: { packVersion, note },
+    });
+    return {
+      packVersion,
+      etag: `"v${packVersion}"`,
+      pushedDevices,
+      warnings: sourceWarnings(row.draft),
+    };
   }
 
   async versionsList(id: string) {

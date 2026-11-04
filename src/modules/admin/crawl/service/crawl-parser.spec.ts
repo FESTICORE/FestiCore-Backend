@@ -1048,6 +1048,83 @@ describe('crawl parsers', () => {
     await expect(parseCrawl(city, html)).rejects.toThrow('공개 예매 링크');
   });
 
+  it('reads the second official CDF notice with 20 plain-text Instagram handles', async () => {
+    const mint = source('ticket-list', 'discovery', {
+      festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',
+    });
+    mint.url = 'https://mintpaper.co.kr/festivals/178/notice/4870';
+    const names = [
+      ['극동아시아타이거즈', 'far_east_asian_tigers'],
+      ['까치산', 'kachisanrecords'],
+      ['Dragon Pony', 'dragonpony_'],
+      ['Lacuna', 'band_lacuna'],
+      ['LOW HIGH LOW', 'band_lowhighlow'],
+      ['Redoor', 'band_redoor'],
+      ['THE SOLUTIONS', 'the_solutions'],
+      ['실리카겔', 'silicagel.official'],
+      ['CNBLUE', 'cnblue.official'],
+      ['AxMxP', 'axmxp_official'],
+      ['FTISLAND', 'ftisland'],
+      ['OYSTERS', 'oysters.999'],
+      ['ONEWE', 'official_onewe'],
+      ['IDIOTAPE', 'idiotapeofficial'],
+      ['지소쿠리클럽', 'jisokuryclub'],
+      ['KARDI', 'bandkardi_'],
+      ['캔트비블루', 'cant_beblue'],
+      ['터치드', 'touched_official'],
+      ['포져군단', 'poseridiott'],
+      ['혁오', 'hyukohofficial'],
+    ];
+    const html = `<h1>COUNTDOWN FANTASY 2026-2027 2차 라인업 공개</h1>
+      <div class="PostContent_content__1w8Py">𝟭𝟮.𝟯𝟭 𝙏𝙃𝙐<br>
+      ${names.map(([name, handle]) => `<span>${name}&nbsp;@${handle} ᴺ</span>`).join('<br>')}
+      <br>and many more...<br>주최 @countdownfantasy</div>`;
+    const candidates = await parseCrawl(mint, html);
+    expect(candidates).toEqual([
+      {
+        name: 'COUNTDOWN FANTASY 2026-2027',
+        url: mint.url,
+        artists: names.map(([name, handle]) => ({
+          name,
+          profileUrl: `https://www.instagram.com/${handle}/`,
+        })),
+      },
+    ]);
+    expect(JSON.stringify(candidates)).not.toContain('startsAt');
+    await expect(
+      parseCrawl(mint, html.replace('@hyukohofficial', 'missing')),
+    ).rejects.toThrow();
+  });
+
+  it('uses Something New event dates and eight official names without turning operating hours into slots', async () => {
+    const nol = source('ticket-list', 'discovery');
+    nol.url = 'https://nol.yanolja.com/ticket/products/26015181';
+    const html = `<h1>썸띵 뉴 뮤직 페스티벌 2026</h1>
+      <dl><dt>장소</dt><dd>수원컨벤션센터</dd><dt>기간</dt><dd>2026.12.26 ~ 2026.12.27</dd></dl>
+      <h2>공지사항</h2><p>[1차 라인업] 10CM, 거니, 과카몰리, 로시, 선우정아, 이오욱(LOW), 카더가든, 퓨처피어클럽</p>
+      <h2>상품 상세</h2><p>운영 시간 2026년 12월 26일 오후 1시, 12월 27일 오후 1시</p>`;
+    const candidates = await parseCrawl(nol, html);
+    expect(candidates).toEqual([
+      {
+        name: '썸띵 뉴 뮤직 페스티벌 2026',
+        url: nol.url,
+        date: '2026.12.26 - 2026.12.27',
+        venue: '수원컨벤션센터',
+        artists: [
+          '10CM',
+          '거니',
+          '과카몰리',
+          '로시',
+          '선우정아',
+          '이오욱(LOW)',
+          '카더가든',
+          '퓨처피어클럽',
+        ].map((name) => ({ name })),
+      },
+    ]);
+    expect(JSON.stringify(candidates)).not.toContain('startsAt');
+  });
+
   it('extracts 12 CDF performers from the official Mint Paper post HTML', async () => {
     const mint = source('ticket-list', 'discovery', {
       festivalSourceUrl: 'https://mintpaper.co.kr/festivals/178',

@@ -598,7 +598,9 @@ function officialLineupCandidates(
   const isMintPost =
     (source.hostname === 'mintpaper.co.kr' ||
       source.hostname === 'www.mintpaper.co.kr') &&
-    source.pathname === '/posts/4819';
+    ['/posts/4819', '/posts/4870', '/festivals/178/notice/4870'].includes(
+      source.pathname,
+    );
   const isOnewayNotice =
     source.hostname === 'ticket.melon.com' &&
     source.pathname === '/csoon/detail.htm' &&
@@ -627,7 +629,7 @@ function officialLineupCandidates(
     if (!title || !article) return [];
     const name = plainText(title)
       .normalize('NFKC')
-      .replace(/\s*1차 라인업 공개\s*$/, '')
+      .replace(/\s*[12]차 라인업 공개\s*$/, '')
       .trim();
     if (!/^COUNTDOWN FANTASY 20\d{2}-20\d{2}$/.test(name)) return [];
     const lineup = article.split(/<br\s*\/?\s*>/i);
@@ -635,6 +637,7 @@ function officialLineupCandidates(
       /12[.．]31/i.test(plainText(line).normalize('NFKC')),
     );
     if (day < 0) return [];
+    const secondLineup = source.pathname.endsWith('/4870');
     const artists: { name: string; profileUrl: string }[] = [];
     for (const line of lineup.slice(day + 1, day + 81)) {
       if (/and\s+many\s+more/i.test(plainText(line).normalize('NFKC'))) break;
@@ -642,17 +645,27 @@ function officialLineupCandidates(
         /<a\b[^>]*\bhref=["'](https:\/\/www\.instagram\.com\/[A-Za-z0-9._]+\/?)["'][^>]*>/i.exec(
           line,
         )?.[1];
-      if (!profile) continue;
-      const artistName = plainText(line.split(/<a\b/i)[0])
+      const handleLine = secondLineup
+        ? /^(.+?)\s+@([A-Za-z0-9._]+)(?:\s+N)?$/.exec(
+            plainText(line).normalize('NFKC').trim(),
+          )
+        : null;
+      const profileUrl =
+        profile ??
+        (handleLine ? `https://www.instagram.com/${handleLine[2]}/` : null);
+      if (!profileUrl) continue;
+      const artistName = (
+        handleLine ? handleLine[1] : plainText(line.split(/<a\b/i)[0])
+      )
         .normalize('NFKC')
         .trim();
       if (artistName && artistName.length <= 160)
         artists.push({
           name: artistName,
-          profileUrl: `${profile.replace(/\/$/, '')}/`,
+          profileUrl: `${profileUrl.replace(/\/$/, '')}/`,
         });
     }
-    if (artists.length !== 12) return [];
+    if (artists.length !== (secondLineup ? 20 : 12)) return [];
     return [{ name, url: source.toString(), artists }];
   }
 
@@ -1204,6 +1217,16 @@ function nolDetailCandidates(
     venue,
   };
   const artists = eventPerformers(event, base);
+  // This product publishes its official lineup as notice text, not timed sets.
+  if (!artists.length && source.pathname === '/ticket/products/26015181') {
+    const lineup = /\[1차 라인업\]\s*(.+?)(?=\s+상품\s*상세|$)/.exec(text)?.[1];
+    const names = lineup?.split(/\s*,\s*/).map((name) => name.trim());
+    if (
+      names?.length === 8 &&
+      names.every((name) => name.length > 0 && name.length <= 160)
+    )
+      artists.push(...names.map((name) => ({ name })));
+  }
   if (artists.length) candidate.artists = artists;
   const poster = nolPosterUrl(body, source);
   if (poster) candidate.posterUrl = poster;

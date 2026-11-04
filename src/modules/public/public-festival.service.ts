@@ -258,6 +258,13 @@ function projectPack(pack: Document): Document {
     'mapImageUrl',
     'mapAspect',
   ]);
+  if (object(pack.eventPeriod))
+    result.eventPeriod = fields(pack.eventPeriod, ['firstDate', 'lastDate']);
+  if (
+    pack.timetableStatus === 'unpublished' ||
+    pack.timetableStatus === 'verified'
+  )
+    result.timetableStatus = pack.timetableStatus;
   result.thumbUrl = publicImageUrl(pack.thumbUrl);
   result.ticketLinks = projectedArray(pack.ticketLinks, ['label', 'url']);
   result.days = projectedArray(pack.days, ['date', 'startsAt', 'endsAt']);
@@ -285,6 +292,18 @@ function projectPack(pack: Document): Document {
     const existing = artists.get(key);
     if (!existing) artists.set(key, { name, imageUrl });
     else if (!existing.imageUrl && imageUrl) existing.imageUrl = imageUrl;
+  }
+  if (requiredArray(result.sets).length === 0) {
+    for (const artist of requiredArray(pack.artists)) {
+      if (typeof artist.name !== 'string' || !artist.name.trim()) continue;
+      const name = artist.name.trim();
+      const key = artistNameKeys(name)[0];
+      if (!artists.has(key))
+        artists.set(key, {
+          name,
+          imageUrl: storedArtistImageUrl(artist.imageUrl),
+        });
+    }
   }
   result.artists = [...artists.values()];
   const stageNames = new Map(
@@ -808,7 +827,9 @@ export class PublicFestivalService {
     return this.publishedWithEtag(id);
   }
 
-  private async discoveryCatalog(): Promise<DiscoverySummary[]> {
+  private async discoveryCatalog(
+    includePublished = false,
+  ): Promise<DiscoverySummary[]> {
     const discoveryRows = await this.dataSource.transaction(
       'REPEATABLE READ',
       async (manager) => {
@@ -900,7 +921,11 @@ export class PublicFestivalService {
                AND "proposalStatus" IS DISTINCT FROM 'rejected'
                AND regexp_replace(candidate->>'url', '[?#].*$', '') IN (
                  'https://www.mintpaper.co.kr/posts/4819',
-                 'https://mintpaper.co.kr/posts/4819')
+                 'https://mintpaper.co.kr/posts/4819',
+                 'https://www.mintpaper.co.kr/posts/4870',
+                 'https://mintpaper.co.kr/posts/4870',
+                 'https://www.mintpaper.co.kr/festivals/178/notice/4870',
+                 'https://mintpaper.co.kr/festivals/178/notice/4870')
                AND jsonb_array_length(CASE WHEN jsonb_typeof(candidate->'artists') = 'array'
                  THEN candidate->'artists' ELSE '[]'::jsonb END) > 0))[1] AS "officialProfileArtists",
            (array_agg(jsonb_build_object(
@@ -961,13 +986,16 @@ export class PublicFestivalService {
     const publishedRows = await this.dataSource.query<PublishedDiscoveryRow[]>(
       `SELECT published->>'name' AS name,
          published->>'venue' AS venue,
-         published->'days'->0->>'date' AS "firstDate",
-         published->'days'->-1->>'date' AS "lastDate",
+         COALESCE(published->'days'->0->>'date', published->'eventPeriod'->>'firstDate') AS "firstDate",
+         COALESCE(published->'days'->-1->>'date', published->'eventPeriod'->>'lastDate') AS "lastDate",
          published->'source'->>'url' AS "sourceUrl"
        FROM admin_festivals
        WHERE published IS NOT NULL AND "publishedVersion" > 0`,
     );
-    const summaries = discoverySummaries(discoveryRows, publishedRows);
+    const summaries = discoverySummaries(
+      discoveryRows,
+      includePublished ? [] : publishedRows,
+    );
     attachPrugioLineup(summaries, discoveryRows[0]?.prugioCandidate);
     await this.attachVerifiedWonderlivetTicket(summaries);
     const festivalSourceUrl = 'https://mintpaper.co.kr/festivals/178';
@@ -1630,7 +1658,7 @@ export class PublicFestivalService {
       });
   }
 
-  async detail(id: string) {
+  async detail(id: string): Promise<Document> {
     if (!/^fst_[0-9a-z]+$/.test(id))
       throw new NotFoundException({
         code: 'FESTIVAL_NOT_FOUND',
@@ -1640,7 +1668,20 @@ export class PublicFestivalService {
     if (published?.published && published.publishedVersion > 0) {
       return this.published(id);
     }
-    const entry = (await this.discoveryCatalog()).find(
+    return this.discoveryDetail(id);
+  }
+
+  /** Internal reconciliation view, including festivals that already have a pack. */
+  async crawlCandidates(): Promise<DiscoverySummary[]> {
+    return this.discoveryCatalog(true);
+  }
+
+  async crawlDetail(id: string) {
+    return this.discoveryDetail(id, true);
+  }
+
+  private async discoveryDetail(id: string, includePublished = false) {
+    const entry = (await this.discoveryCatalog(includePublished)).find(
       (item) => item.id === id,
     );
     if (!entry)
@@ -1890,8 +1931,8 @@ export class PublicFestivalService {
         .toISOString()
         .slice(0, 10);
     const firstStartsAt = `festival.published->'days'->0->>'startsAt'`;
-    const firstInstant = `(${firstStartsAt})::timestamptz`;
-    const lastDate = `festival.published->'days'->-1->>'date'`;
+    const firstInstant = `COALESCE((${firstStartsAt})::timestamptz, ((festival.published->'eventPeriod'->>'firstDate') || 'T00:00:00+09:00')::timestamptz)`;
+    const lastDate = `COALESCE(festival.published->'days'->-1->>'date', festival.published->'eventPeriod'->>'lastDate')`;
     const query = this.festivals
       .createQueryBuilder('festival')
       .where('festival.published IS NOT NULL')
@@ -1912,12 +1953,12 @@ export class PublicFestivalService {
       const pack = row.published;
       if (!pack || row.publishedVersion < 1) return [];
       const days = requiredArray(pack.days);
-      const firstDate = days[0]?.date;
+      const period = object(pack.eventPeriod) ? pack.eventPeriod : {};
+      const firstDate = days[0]?.date ?? period.firstDate;
       const startsAt = days[0]?.startsAt;
-      const lastDate = days[days.length - 1]?.date;
+      const lastDate = days[days.length - 1]?.date ?? period.lastDate;
       if (
         typeof firstDate !== 'string' ||
-        typeof startsAt !== 'string' ||
         typeof lastDate !== 'string' ||
         lastDate < floor
       )
@@ -1928,8 +1969,11 @@ export class PublicFestivalService {
           name: pack.name,
           venue: pack.venue,
           firstDate,
-          startsAt,
-          sortAt: startsAt,
+          ...(typeof startsAt === 'string' ? { startsAt } : {}),
+          sortAt:
+            typeof startsAt === 'string'
+              ? startsAt
+              : `${firstDate}T00:00:00+09:00`,
           lastDate,
           packVersion: row.publishedVersion,
           flagsEnabled: pack.flagsEnabled,

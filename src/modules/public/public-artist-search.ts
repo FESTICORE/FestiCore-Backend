@@ -89,6 +89,8 @@ export async function projectSearchArtists(
 
   for (const { id, published: pack } of published) {
     if (!result.has(id)) continue;
+    if (records(pack.sets).length === 0)
+      for (const artist of records(pack.artists)) add(id, artist.name);
     const stageNames = new Map(
       records(pack.stages)
         .filter(

@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { AutoPublishVerifiedService } from '../../festival/auto-publish-verified.service';
 import { isDeepStrictEqual } from 'node:util';
 import {
   ConflictException,
@@ -396,6 +397,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     private readonly audit: AdminAuditService,
     private readonly timetableRevisions: CrawlTimetableRevisionService,
     private readonly publicFestivals: PublicFestivalService,
+    private readonly autoPublish: AutoPublishVerifiedService,
   ) {}
 
   onModuleInit() {
@@ -1442,7 +1444,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
                 : source.url ===
                     'https://ticket.yes24.com/English/Genre/Concert'
                   ? 'ticket-list:v4'
-                  : /^https:\/\/(?:www\.)?mintpaper\.co\.kr\/posts\/4819(?:[?#]|$)/.test(
+                  : /^https:\/\/(?:www\.)?mintpaper\.co\.kr\/(?:posts\/(?:4819|4870)|festivals\/178\/notice\/4870)(?:[?#]|$)/.test(
                         source.url,
                       )
                     ? 'ticket-list:v4'
@@ -2122,6 +2124,8 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       );
       if (locationParserCompleted && run.result !== 'failed')
         source.parserConfig.locationParserVersion = '1';
+      if (['unchanged', 'proposed', 'nochange-parsed'].includes(run.result))
+        this.autoPublish.requestAfterCrawl();
       if (
         run.result === 'failed' &&
         Number(updated[0]?.[0]?.consecutiveFailures) === 3
@@ -3039,13 +3043,17 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
           draft?: FestivalDocument | null;
         }[]
       >(
-        `SELECT item->'after'->>'url' AS url, item->'after' AS value,
+        `SELECT * FROM (
+         SELECT DISTINCT ON (item->'after'->>'url')
+           item->'after'->>'url' AS url, item->'after' AS value,
            p.id AS "proposalId", NULL::varchar AS "festivalId",
            NULL::jsonb AS draft
          FROM crawl_proposals p, jsonb_array_elements(p.items) item
          WHERE "sourceId" = $1 AND kind = 'festival.new'
            AND status IN ('open', 'partial')
            AND item->>'decision' = 'pending'
+         ORDER BY item->'after'->>'url', p."createdAt" DESC, p.id DESC
+         ) latest_pending
          UNION ALL
          SELECT draft->'source'->>'url' AS url, NULL::jsonb AS value,
            NULL::uuid AS "proposalId", id AS "festivalId", draft
@@ -3053,11 +3061,30 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
          WHERE draft->'source'->>'url' IS NOT NULL`,
         [source.id],
       );
+      const isDuplicate = (entry: unknown) =>
+        !!entry &&
+        typeof entry === 'object' &&
+        known.some(
+          (row) =>
+            row.value !== null &&
+            row.url === (entry as Record<string, unknown>).url &&
+            isDeepStrictEqual(row.value, entry),
+        );
+      // A location-only proposal must not consume changed catalog metadata.
+      const hasNewDiscovery = parsed.some(
+        (entry: Record<string, unknown>) =>
+          entry &&
+          entry.name &&
+          entry.venue &&
+          entry.date &&
+          !isDuplicate(entry),
+      );
       if (
         /^https:\/\/ticket\.melon\.com\/performance\/index\.htm\?prodId=\d+$/.test(
           source.url,
         ) &&
-        parsed.length === 1
+        parsed.length === 1 &&
+        !hasNewDiscovery
       ) {
         const entry = parsed[0] as Record<string, unknown> | null;
         const point = venuePoint(entry?.location);
@@ -3108,11 +3135,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
           entry && typeof entry === 'object'
             ? (entry as Record<string, unknown>).url
             : null;
-        const duplicate = known.some(
-          (row) =>
-            row.url === url &&
-            (row.value === null || isDeepStrictEqual(row.value, entry)),
-        );
+        const duplicate = isDuplicate(entry);
         return typeof url === 'string' && !duplicate
           ? [item(String(index), 'add', '/', null, entry)]
           : [];

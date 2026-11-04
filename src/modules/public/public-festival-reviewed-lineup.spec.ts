@@ -13,6 +13,51 @@ const candidate = {
 const id = discoverySummaries([{ candidate }])[0].id;
 
 describe('reviewed NOL World lineup projection', () => {
+  it('re-enriches already published crawl entries without changing public detail preference', async () => {
+    const published = {
+      id,
+      name: candidate.name,
+      packVersion: 1,
+      days: [],
+      stages: [],
+      sets: [],
+    };
+    const query = jest.fn().mockImplementation((sql: string) => {
+      if (sql.includes('WITH candidates')) return [{ candidate }];
+      if (sql.includes('FROM admin_festivals'))
+        return [
+          {
+            name: candidate.name,
+            venue: candidate.venue,
+            firstDate: '2026-11-08',
+            lastDate: '2026-11-08',
+            sourceUrl: url,
+          },
+        ];
+      if (sql.includes('FROM crawl_lineup_revisions'))
+        return [{ artists: [{ name: 'New official artist' }] }];
+      return [];
+    });
+    const service = new PublicFestivalService(
+      {
+        findOne: jest
+          .fn()
+          .mockResolvedValue({ publishedVersion: 1, published }),
+      } as never,
+      {} as never,
+      publicFestivalTestDataSource(query) as never,
+      { packGeneration: jest.fn().mockResolvedValue(null) } as never,
+    );
+    expect(
+      (await service.crawlCandidates()).map((entry) => entry.id),
+    ).toContain(id);
+    expect(await service.discovered(id)).toBeNull();
+    expect((await service.crawlDetail(id)).artists).toEqual([
+      { name: 'New official artist', imageUrl: null },
+    ]);
+    expect((await service.detail(id)).artists).toEqual([]);
+  });
+
   it('keeps private OCR evidence out of public discovered detail and adds approved names only', async () => {
     const query = jest.fn().mockImplementation((sql: string) => {
       if (sql.includes('WITH candidates')) return [{ candidate }];

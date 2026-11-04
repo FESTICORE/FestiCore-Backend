@@ -165,6 +165,7 @@ function harness(bytes: Buffer) {
     audit as never,
     {} as never,
     publicFestivals as never,
+    { requestAfterCrawl: jest.fn() } as never,
   ) as unknown as ApprovedCrawl;
   const response = { status: 200, body: bytes, contentType: 'image/png' };
   jest.spyOn(service, 'checkRobots').mockResolvedValue(undefined);
