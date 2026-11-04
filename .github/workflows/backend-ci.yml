@@ -44,6 +44,7 @@ jobs:
       - run: npm test -- --runInBand
         env:
           LIVE_ACTIVITY_PG_URL: postgres://postgres:postgres@127.0.0.1:5432/festicore
+      - run: npm run packs:test
       - run: npm run test:e2e -- --runInBand
       - run: npm audit --omit=dev --audit-level=high
       - run: docker build -t festicore-ci .

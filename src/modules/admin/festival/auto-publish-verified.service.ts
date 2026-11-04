@@ -40,11 +40,13 @@ export class AutoPublishVerifiedService
   ) {}
 
   private enabled(): boolean {
+    if (this.stopped) return false;
+    const url = this.config.get<string>('PUBLIC_URL');
+    if (url === 'https://festicore-dev.up.railway.app')
+      return this.config.get<string>('AUTO_PUBLISH_VERIFIED_TIMETABLE') !== 'false';
     return (
-      !this.stopped &&
-      this.config.get<string>('PUBLIC_URL') ===
-        'https://festicore-dev.up.railway.app' &&
-      this.config.get<string>('AUTO_PUBLISH_VERIFIED_TIMETABLE') !== 'false'
+      url === 'https://festicore.up.railway.app' &&
+      this.config.get<string>('AUTO_PUBLISH_PACKS') === 'true'
     );
   }
 
@@ -98,13 +100,23 @@ export class AutoPublishVerifiedService
       let changed = 0;
       for (const festival of festivals) {
         if (!this.enabled()) break;
+        if (
+          this.config.get<string>('PUBLIC_URL') ===
+            'https://festicore.up.railway.app' &&
+          festival.packVersion > 0
+        )
+          continue;
         try {
           const detail = await this.publicFestivals.crawlDetail(festival.id);
           if (!detail) continue;
           const timetable = buildDraft(detail, false);
+          if (typeof timetable === 'string') {
+            this.logger.warn(`자동 발행 보류 ${festival.id}: ${timetable}`);
+            continue;
+          }
           const result = await this.adminFestivals.publishCrawled(
             detail,
-            typeof timetable === 'string' ? null : timetable,
+            timetable.days.length === 0 ? null : timetable,
           );
           if (result.changed) {
             changed += 1;

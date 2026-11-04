@@ -64,21 +64,20 @@ describe('AutoPublishVerifiedService', () => {
       }),
     );
   });
+  it('publishes date-only metadata when no approved timetable exists', async () => {
+    const value = { ...detail, timetable: [] };
+    const { service, adminFestivals } = fixture(value);
+    await service.tick();
+    expect(adminFestivals.publishCrawled).toHaveBeenCalledWith(value, null);
+  });
   it.each([
-    ['no timetable', { ...detail, timetable: [] }],
     ['incomplete days', { ...detail, lastDate: '2026-11-21' }],
-    [
-      'unknown end',
-      { ...detail, timetable: [{ ...detail.timetable[0], endsAt: null }] },
-    ],
-  ])(
-    'publishes metadata with %s without manufacturing performance times',
-    async (_label, value) => {
-      const { service, adminFestivals } = fixture(value);
-      await service.tick();
-      expect(adminFestivals.publishCrawled).toHaveBeenCalledWith(value, null);
-    },
-  );
+    ['unknown end', { ...detail, timetable: [{ ...detail.timetable[0], endsAt: null }] }],
+  ])('holds %s for correction instead of publishing date-only', async (_label, value) => {
+    const { service, adminFestivals } = fixture(value);
+    await service.tick();
+    expect(adminFestivals.publishCrawled).not.toHaveBeenCalled();
+  });
   it('does not reject every stable ID just because names match', async () => {
     const { service, publicFestivals, adminFestivals } = fixture();
     publicFestivals.crawlCandidates.mockResolvedValue([
@@ -133,6 +132,17 @@ describe('AutoPublishVerifiedService', () => {
     await service.tick();
     service.requestAfterCrawl();
     expect(publicFestivals.crawlCandidates).not.toHaveBeenCalled();
+  });
+  it('keeps production disabled until AUTO_PUBLISH_PACKS is true', async () => {
+    const { service, publicFestivals } = fixture(detail, 'https://festicore.up.railway.app');
+    await service.tick();
+    expect(publicFestivals.crawlCandidates).not.toHaveBeenCalled();
+  });
+  it('publishes only unpublished production candidates when enabled', async () => {
+    const { service, publicFestivals, adminFestivals } = fixture(detail, 'https://festicore.up.railway.app', 'true');
+    publicFestivals.crawlCandidates.mockResolvedValue([festival, { ...festival, id: 'fst_fedcba9876543210', packVersion: 2 }]);
+    await service.tick();
+    expect(adminFestivals.publishCrawled).toHaveBeenCalledTimes(1);
   });
   it('debounces sequential crawl successes and stops pending work on shutdown', async () => {
     jest.useFakeTimers();

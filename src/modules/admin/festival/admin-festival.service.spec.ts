@@ -306,7 +306,7 @@ describe('discovered festival import', () => {
 });
 
 describe('date-only draft publication', () => {
-  it('rejects publication before a verified timetable and leaves the pack untouched', async () => {
+  it('publishes a verified date range without inventing performance times', async () => {
     const row = {
       id: 'fst_0123456789abcdef',
       draft: {
@@ -331,35 +331,49 @@ describe('date-only draft publication', () => {
       published: null,
       publishedVersion: 0,
     };
-    const save = jest.fn();
+    const save = jest.fn().mockResolvedValue(undefined);
+    const saveVersion = jest.fn().mockResolvedValue(undefined);
     const enqueueFestival = jest.fn();
     const audit = jest.fn();
+    const invalidatePack = jest.fn();
     const service = new AdminFestivalService(
       {} as never,
       {} as never,
       {
         transaction: (callback: (manager: unknown) => Promise<unknown>) =>
           callback({
-            getRepository: () => ({
-              findOne: () => Promise.resolve(row),
-              save,
-            }),
+            getRepository: (entity: unknown) =>
+              entity === AdminFestival
+                ? { findOne: () => Promise.resolve(row), save }
+                : { save: saveVersion },
+            query: jest.fn().mockResolvedValue([]),
           }),
       } as never,
       { record: audit } as never,
-      {} as never,
+      { invalidatePack } as never,
       {} as never,
       { enqueueFestival } as never,
     );
     await expect(
       service.publish(row.id, '', '"d1"', 'adm_1'),
-    ).rejects.toMatchObject({
-      status: 400,
+    ).resolves.toMatchObject({ packVersion: 1 });
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(saveVersion).toHaveBeenCalledTimes(1);
+    const versionCalls = saveVersion.mock.calls as unknown[][];
+    const savedVersion = versionCalls[0]?.[0];
+    expect(savedVersion).toMatchObject({
+      festivalId: row.id,
+      packVersion: 1,
+      pack: {
+        eventPeriod: row.draft.eventPeriod,
+        days: [],
+        stages: [],
+        sets: [],
+      },
     });
-    expect(save).not.toHaveBeenCalled();
-    expect(enqueueFestival).not.toHaveBeenCalled();
-    expect(audit).not.toHaveBeenCalled();
-    expect(row.published).toBeNull();
+    expect(enqueueFestival).toHaveBeenCalledTimes(1);
+    expect(audit).toHaveBeenCalledTimes(1);
+    expect(invalidatePack).toHaveBeenCalledWith(row.id);
   });
 });
 

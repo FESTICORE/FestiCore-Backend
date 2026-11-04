@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * 승인된 공식 시간표가 공개 상세에 있는 발견 축제를 관리 초안으로 가져와 발행한다.
+ * 발견 축제를 관리 초안으로 가져와 발행한다. 시간표가 없으면 날짜 전용 팩으로 발행한다.
  *
- * 시간표는 공개 상세 API(GET /festivals/:id)의 timetable을 그대로 쓴다. 이 값은 서버가 대체 출처 URL과
- * 여러 날 검토본을 합쳐 승인본만 노출하므로, 스크립트가 검토본을 직접 고르지 않는다.
+ * 시간표는 공개 상세 API(GET /festivals/:id)의 승인된 timetable만 쓴다. 운영 환경에 시간표가 없으면
+ * 같은 ID·이름·장소·날짜가 일치하는 Stage 발행본을 확인한다. 일치하지 않으면 빈 시간표로 발행한다.
  *
  * 사용법:
  *   node scripts/publish-stage-festivals.cjs [옵션]                       미리보기(토큰 불필요)
@@ -18,11 +18,12 @@
  *   --fill-missing-ends   종료 시각이 없는 공연을 같은 날·같은 무대의 다음 공연 시작 시각으로 채운다.
  *                         다음 공연이 없으면 그 축제는 건너뛴다.
  *
- * 토큰은 출력하지 않는다. 승인된 시간표가 없거나 발행 검증을 통과하지 못하는 축제는 가짜 시간표를 만들지 않고
- * 사유와 함께 건너뛴다. 이미 가져온 초안이 있는 축제는 관리자가 편집 중일 수 있어 건드리지 않는다.
+ * 토큰은 출력하지 않는다. 시간표가 없을 때 공연 시각은 만들지 않는다.
+ * 이미 가져온 초안이 있는 축제는 관리자가 편집 중일 수 있어 건드리지 않는다.
  */
 const { createHash } = require('node:crypto');
 const { writeFileSync } = require('node:fs');
+const { canonicalFestivalId } = require('./festival-aliases.cjs');
 
 const STAGE_HOST = 'festicore-dev.up.railway.app';
 const PROD_HOST = 'festicore.up.railway.app';
@@ -59,7 +60,8 @@ function parseArgs(argv) {
       if (!options.auditFile || options.auditFile.startsWith('--')) throw new Error('--audit-file에는 파일 경로가 필요합니다.');
     }
     else if (arg === '--base') options.base = argv[(i += 1)];
-    else if (arg === '--only') options.only = new Set(argv[(i += 1)].split(',').map((id) => id.trim()));
+    else if (arg === '--only')
+      options.only = new Set(argv[(i += 1)].split(',').map((id) => id.trim()));
     else throw new Error(`알 수 없는 옵션: ${arg}`);
   }
   options.base = validatedBase(options.base, options.allowProd);
@@ -75,14 +77,24 @@ function validatedBase(value, allowProd) {
     throw new Error(`올바른 URL이 아닙니다: ${value}`);
   }
   const allowed = allowProd ? [STAGE_HOST, PROD_HOST] : [STAGE_HOST];
-  if (url.protocol !== 'https:' || !allowed.includes(url.host) || url.pathname.replace(/\/+$/, '') !== '') {
-    throw new Error(`허용하지 않는 호스트입니다: ${value} (허용: ${allowed.join(', ')})`);
+  if (
+    url.protocol !== 'https:' ||
+    !allowed.includes(url.host) ||
+    url.pathname.replace(/\/+$/, '') !== ''
+  ) {
+    throw new Error(
+      `허용하지 않는 호스트입니다: ${value} (허용: ${allowed.join(', ')})`,
+    );
   }
   return `https://${url.host}`;
 }
 
 function createClient(base, token) {
-  return async function request(method, path, { body, ifMatch, auth = false } = {}) {
+  return async function request(
+    method,
+    path,
+    { body, ifMatch, auth = false } = {},
+  ) {
     const headers = { Accept: 'application/json' };
     if (auth) {
       headers.Authorization = `Bearer ${token}`;
@@ -113,7 +125,8 @@ async function discoveredFestivals(request) {
   for (let page = 0; page < 100; page += 1) {
     const query = after ? `?after=${encodeURIComponent(after)}` : '';
     const { status, json } = await request('GET', `festivals${query}`);
-    if (status !== 200 || json?.code !== 'SUCCESS') throw new Error(`축제 목록 조회 실패 (HTTP ${status})`);
+    if (status !== 200 || json?.code !== 'SUCCESS')
+      throw new Error(`축제 목록 조회 실패 (HTTP ${status})`);
     festivals.push(...json.data.items);
     after = json.data.nextCursor;
     if (!after) return festivals;
@@ -124,18 +137,21 @@ async function discoveredFestivals(request) {
 /** --only로 받은 ID는 목록 대신 상세로 직접 찾는다. 목록은 종료 30일이 지난 축제를 빼기 때문이다. */
 async function festivalsByID(request, ids) {
   const festivals = [];
-  for (const id of ids) {
+  for (const id of new Set([...ids].map(canonicalFestivalId))) {
     const detail = await publicDetail(request, id).catch(() => null);
     if (!detail) throw new Error(`축제를 찾을 수 없습니다: ${id}`);
-    if (detail.status !== 'discovered') throw new Error(`발견 상태가 아닌 축제입니다: ${id} (${detail.status})`);
     festivals.push(detail);
   }
   return festivals;
 }
 
 async function publicDetail(request, id) {
-  const { status, json } = await request('GET', `festivals/${encodeURIComponent(id)}`);
-  if (status !== 200 || json?.code !== 'SUCCESS') throw new Error(`축제 상세 조회 실패 (HTTP ${status})`);
+  const { status, json } = await request(
+    'GET',
+    `festivals/${encodeURIComponent(id)}`,
+  );
+  if (status !== 200 || json?.code !== 'SUCCESS')
+    throw new Error(`축제 상세 조회 실패 (HTTP ${status})`);
   return json.data;
 }
 
@@ -151,7 +167,12 @@ function fillEnds(sets) {
       continue;
     }
     const next = sets
-      .filter((other) => other.date === set.date && other.stageName === set.stageName && other.startsAt > set.startsAt)
+      .filter(
+        (other) =>
+          other.date === set.date &&
+          other.stageName === set.stageName &&
+          other.startsAt > set.startsAt,
+      )
       .sort((a, b) => a.startsAt.localeCompare(b.startsAt))[0];
     if (!next) return null;
     filled.push({ ...set, endsAt: next.startsAt });
@@ -161,17 +182,30 @@ function fillEnds(sets) {
 
 /** 공연 목록이 서버 발행 검증(무대·이름·아티스트·일정 범위·겹침)을 통과할지 미리 확인한다. */
 function preflight(sets, festival) {
-  if (sets.length > MAX_SETS) return `공연이 ${sets.length}개로 최대 ${MAX_SETS}개를 넘음`;
+  if (sets.length > MAX_SETS)
+    return `공연이 ${sets.length}개로 최대 ${MAX_SETS}개를 넘음`;
   const stageNames = [...new Set(sets.map((set) => set.stageName))];
-  if (stageNames.length > MAX_STAGES) return `무대가 ${stageNames.length}개로 최대 ${MAX_STAGES}개를 넘음`;
-  const longStage = stageNames.find((name) => [...name].length < 1 || [...name].length > MAX_STAGE_NAME);
-  if (longStage !== undefined) return `무대 이름 길이가 1~${MAX_STAGE_NAME}자가 아님: ${longStage}`;
-  const longArtist = sets.find((set) => [...set.artist].length < 1 || [...set.artist].length > MAX_ARTIST);
-  if (longArtist) return `아티스트 이름 길이가 1~${MAX_ARTIST}자가 아님: ${longArtist.artist}`;
+  if (stageNames.length > MAX_STAGES)
+    return `무대가 ${stageNames.length}개로 최대 ${MAX_STAGES}개를 넘음`;
+  const longStage = stageNames.find(
+    (name) => [...name].length < 1 || [...name].length > MAX_STAGE_NAME,
+  );
+  if (longStage !== undefined)
+    return `무대 이름 길이가 1~${MAX_STAGE_NAME}자가 아님: ${longStage}`;
+  const longArtist = sets.find(
+    (set) => [...set.artist].length < 1 || [...set.artist].length > MAX_ARTIST,
+  );
+  if (longArtist)
+    return `아티스트 이름 길이가 1~${MAX_ARTIST}자가 아님: ${longArtist.artist}`;
   for (const set of sets) {
-    if (!ISO.test(set.startsAt) || !ISO.test(set.endsAt)) return `시각 형식이 초안 규칙과 다름: ${set.artist}`;
-    if (!(Date.parse(set.endsAt) > Date.parse(set.startsAt))) return `종료 시각이 시작보다 늦지 않음: ${set.artist}`;
-    if ((festival.firstDate && set.date < festival.firstDate) || (festival.lastDate && set.date > festival.lastDate)) {
+    if (!ISO.test(set.startsAt) || !ISO.test(set.endsAt))
+      return `시각 형식이 초안 규칙과 다름: ${set.artist}`;
+    if (!(Date.parse(set.endsAt) > Date.parse(set.startsAt)))
+      return `종료 시각이 시작보다 늦지 않음: ${set.artist}`;
+    if (
+      (festival.firstDate && set.date < festival.firstDate) ||
+      (festival.lastDate && set.date > festival.lastDate)
+    ) {
       return `공연 날짜 ${set.date}가 축제 기간(${festival.firstDate}~${festival.lastDate}) 밖임`;
     }
   }
@@ -187,7 +221,8 @@ function preflight(sets, festival) {
   }
   const covered = new Set(sets.map((set) => set.date));
   for (const date of festivalDates(festival)) {
-    if (!covered.has(date)) return `축제 기간 중 ${date}의 승인된 시간표가 없음`;
+    if (!covered.has(date))
+      return `축제 기간 중 ${date}의 승인된 시간표가 없음`;
   }
   return null;
 }
@@ -215,9 +250,10 @@ function buildDraft(detail, fillMissingEnds) {
     endsAt,
     imageUrl: STORED_IMAGE.test(imageUrl ?? '') ? imageUrl : undefined,
   }));
-  if (sets.length === 0) return '승인된 시간표 없음';
+  if (sets.length === 0) return dateOnlyDraft(detail);
   if (sets.some((set) => !set.endsAt)) {
-    if (!fillMissingEnds) return '종료 시각이 없는 공연이 있음 (--fill-missing-ends로 채울 수 있음)';
+    if (!fillMissingEnds)
+      return '종료 시각이 없는 공연이 있음 (--fill-missing-ends로 채울 수 있음)';
     sets = fillEnds(sets);
     if (!sets) return '종료 시각을 채울 다음 공연이 없음';
   }
@@ -225,17 +261,29 @@ function buildDraft(detail, fillMissingEnds) {
   if (invalid) return invalid;
 
   const stageNames = [...new Set(sets.map((set) => set.stageName))];
-  const stages = stageNames.map((name, index) => ({ id: stageID(name), name, order: index + 1 }));
+  const stages = stageNames.map((name, index) => ({
+    id: stageID(name),
+    name,
+    order: index + 1,
+  }));
   const stageByName = new Map(stages.map((stage) => [stage.name, stage.id]));
   const byDate = new Map();
   for (const set of sets) {
-    const day = byDate.get(set.date) ?? { date: set.date, startsAt: set.startsAt, endsAt: set.endsAt };
-    if (Date.parse(set.startsAt) < Date.parse(day.startsAt)) day.startsAt = set.startsAt;
-    if (Date.parse(set.endsAt) > Date.parse(day.endsAt)) day.endsAt = set.endsAt;
+    const day = byDate.get(set.date) ?? {
+      date: set.date,
+      startsAt: set.startsAt,
+      endsAt: set.endsAt,
+    };
+    if (Date.parse(set.startsAt) < Date.parse(day.startsAt))
+      day.startsAt = set.startsAt;
+    if (Date.parse(set.endsAt) > Date.parse(day.endsAt))
+      day.endsAt = set.endsAt;
     byDate.set(set.date, day);
   }
   const longDay = [...byDate.values()].find(
-    (day) => Date.parse(day.endsAt) - Date.parse(day.startsAt) > MAX_DAY_HOURS * 3_600_000,
+    (day) =>
+      Date.parse(day.endsAt) - Date.parse(day.startsAt) >
+      MAX_DAY_HOURS * 3_600_000,
   );
   if (longDay) return `${longDay.date} 일정이 ${MAX_DAY_HOURS}시간을 넘음`;
   return {
@@ -251,9 +299,41 @@ function buildDraft(detail, fillMissingEnds) {
   };
 }
 
+/** 시간표 미확인 축제는 출처가 제공한 날짜 범위만 기록한다. */
+function dateOnlyDraft(detail) {
+  const dates = festivalDates(detail);
+  if (!dates.length || dates[dates.length - 1] !== detail.lastDate)
+    return '검증된 축제 날짜 범위 없음';
+  return { days: [], stages: [], sets: [], timetableStatus: 'unpublished' };
+}
+
+/** 운영 발견 항목과 Stage 발행본의 식별 정보가 모두 같을 때만 시간표를 복사한다. */
+function matchingPublishedSource(destination, source) {
+  return (
+    source?.packVersion > 0 &&
+    source.id === destination.id &&
+    source.name === destination.name &&
+    source.venue === destination.venue &&
+    source.firstDate === destination.firstDate &&
+    source.lastDate === destination.lastDate
+  );
+}
+
+async function sourceTimetable(request, destination, stageSummaries) {
+  const source = stageSummaries.get(destination.id);
+  if (!matchingPublishedSource(destination, source)) return null;
+  const detail = await publicDetail(request, destination.id);
+  return Array.isArray(detail.timetable) && detail.timetable.length > 0
+    ? detail.timetable
+    : null;
+}
+
 async function adminDraft(request, id) {
-  const { status, json } = await request('GET', `admin/festivals/${id}/draft`, { auth: true });
-  if (status !== 200 || json?.code !== 'SUCCESS') throw new Error(`초안 조회 실패 (HTTP ${status})`);
+  const { status, json } = await request('GET', `admin/festivals/${id}/draft`, {
+    auth: true,
+  });
+  if (status !== 200 || json?.code !== 'SUCCESS')
+    throw new Error(`초안 조회 실패 (HTTP ${status})`);
   return json.data;
 }
 
@@ -262,44 +342,90 @@ async function draftVersion(request, id) {
 }
 
 function failureMessage(step, { status, json }) {
-  const errors = Array.isArray(json?.data?.errors) ? json.data.errors.join(', ') : '';
+  const errors = Array.isArray(json?.data?.errors)
+    ? json.data.errors.join(', ')
+    : '';
   return `${step} 실패 (HTTP ${status}${json?.code ? ` ${json.code}` : ''}) ${errors || json?.message || ''}`.trim();
 }
 
 class SkipError extends Error {}
 
-async function publish(request, festival, draft) {
-  const imported = await request('POST', `admin/festivals/discovered/${festival.id}/import`, { body: {}, auth: true });
+async function publish(request, festival, draft, note) {
+  const imported = await request(
+    'POST',
+    `admin/festivals/discovered/${festival.id}/import`,
+    { body: {}, auth: true },
+  );
   // 이미 가져온 초안은 관리자 편집인지 이전 실행이 남긴 것인지 구분할 수 없어 건드리지 않고 실패로 보고한다.
-  if (imported.status === 409) throw new Error('이미 가져온 초안이 있어 발행하지 않음 (관리자 화면에서 확인)');
-  if (![200, 201].includes(imported.status)) throw new Error(failureMessage('가져오기', imported));
+  if (imported.status === 409)
+    throw new SkipError(
+      '이미 가져온 초안이 있어 발행하지 않음 (관리자 화면에서 확인)',
+    );
+  if (![200, 201].includes(imported.status))
+    throw new Error(failureMessage('가져오기', imported));
 
-  const patched = await request('PATCH', `admin/festivals/${festival.id}/draft`, {
-    body: draft,
-    ifMatch: await draftVersion(request, festival.id),
-    auth: true,
-  });
-  if (patched.status !== 200) throw new Error(`${failureMessage('초안 수정', patched)} — 가져온 초안이 남아 있음`);
+  const patched = await request(
+    'PATCH',
+    `admin/festivals/${festival.id}/draft`,
+    {
+      body: draft,
+      ifMatch: await draftVersion(request, festival.id),
+      auth: true,
+    },
+  );
+  if (patched.status !== 200)
+    throw new Error(
+      `${failureMessage('초안 수정', patched)} — 가져온 초안이 남아 있음`,
+    );
 
-  const published = await request('POST', `admin/festivals/${festival.id}/publish`, {
-    body: { note: 'Stage 일괄 발행 스크립트 (공개 상세의 승인된 공식 시간표)' },
-    ifMatch: await draftVersion(request, festival.id),
-    auth: true,
-  });
-  if (published.status !== 200) throw new Error(`${failureMessage('발행', published)} — 가져온 초안이 남아 있음`);
+  const published = await request(
+    'POST',
+    `admin/festivals/${festival.id}/publish`,
+    {
+      body: { note },
+      ifMatch: await draftVersion(request, festival.id),
+      auth: true,
+    },
+  );
+  if (published.status !== 200)
+    throw new Error(
+      `${failureMessage('발행', published)} — 가져온 초안이 남아 있음`,
+    );
   return published.json?.data;
 }
 
-async function main() {
-  const options = parseArgs(process.argv.slice(2));
-  const token = process.env.FESTICORE_ADMIN_TOKEN;
-  if (options.apply && !token) throw new Error('--apply에는 FESTICORE_ADMIN_TOKEN 환경 변수가 필요합니다.');
+async function main(
+  argv = process.argv.slice(2),
+  token = process.env.FESTICORE_ADMIN_TOKEN,
+) {
+  const options = parseArgs(argv);
+  if (options.apply && !token)
+    throw new Error(
+      '--apply에는 FESTICORE_ADMIN_TOKEN 환경 변수가 필요합니다.',
+    );
   const request = createClient(options.base, token);
+  const production = new URL(options.base).host === PROD_HOST;
+  const stageRequest = production
+    ? createClient(`https://${STAGE_HOST}`)
+    : null;
+  const stageSummaries = stageRequest
+    ? new Map(
+        (await discoveredFestivals(stageRequest))
+          .filter((festival) => festival.packVersion > 0)
+          .map((festival) => [festival.id, festival]),
+      )
+    : new Map();
 
   const festivals = options.only
     ? await festivalsByID(request, options.only)
-    : (await discoveredFestivals(request)).filter((festival) => festival.status === 'discovered');
-  console.log(`${options.apply ? '실행' : '미리보기'}: ${options.base}, 발견 축제 ${festivals.length}개`);
+    : (await discoveredFestivals(request)).filter(
+        (festival) =>
+          festival.status === 'discovered' &&
+          canonicalFestivalId(festival.id) === festival.id,
+      );
+  console.log(
+    `${options.apply ? '실행' : '미리보기'}: ${options.base}, 발견 축제 ${festivals.length}개`,
+  );
   const summary = { published: 0, ready: 0, skipped: 0, failed: 0 };
   const audit = {
     checkedAt: new Date().toISOString(),
@@ -314,9 +440,29 @@ async function main() {
   for (const festival of festivals) {
     const label = `${festival.id} ${festival.name}`;
     const entry = { id: festival.id, name: festival.name, sourceUrl: festival.sourceUrl ?? null };
+    if (festival.packVersion > 0) {
+      console.log(
+        `- 건너뜀 ${label}: 이미 발행됨 (팩 버전 ${festival.packVersion})`,
+      );
+      summary.skipped += 1;
+      audit.skipped.push({ ...entry, reason: '이미 발행됨' });
+      continue;
+    }
     let draft;
     try {
-      draft = buildDraft(await publicDetail(request, festival.id), options.fillMissingEnds);
+      const detail = await publicDetail(request, festival.id);
+      if (
+        production &&
+        (!Array.isArray(detail.timetable) || detail.timetable.length === 0)
+      ) {
+        const approved = await sourceTimetable(
+          stageRequest,
+          detail,
+          stageSummaries,
+        );
+        if (approved) detail.timetable = approved;
+      }
+      draft = buildDraft(detail, options.fillMissingEnds);
     } catch (error) {
       console.log(`- 실패 ${label}: ${error.message}`);
       audit.failed.push({ ...entry, reason: error.message });
@@ -324,12 +470,15 @@ async function main() {
       continue;
     }
     if (typeof draft === 'string') {
-      console.log(`- 건너뜀 ${label}: ${draft}`);
-      (draft === '승인된 시간표 없음' ? audit.missingTimetable : audit.skipped).push({ ...entry, reason: draft });
+      console.log(`- 시간표 검증 보류 ${label}: ${draft}`);
+      audit.skipped.push({ ...entry, reason: draft });
       summary.skipped += 1;
       continue;
     }
-    const shape = `${draft.days.length}일, 무대 ${draft.stages.length}개, 공연 ${draft.sets.length}개`;
+    const shape =
+      draft.days.length > 0
+        ? `${draft.days.length}일, 무대 ${draft.stages.length}개, 공연 ${draft.sets.length}개`
+        : `${festival.firstDate}~${festival.lastDate}, 시간표 대기`;
     if (!options.apply) {
       console.log(`- 발행 가능 ${label}: ${shape}`);
       audit.ready.push({ ...entry, shape });
@@ -337,8 +486,14 @@ async function main() {
       continue;
     }
     try {
-      const result = await publish(request, festival, draft);
-      console.log(`- 발행 ${label}: ${shape}, 팩 버전 ${result?.packVersion ?? '?'}`);
+      const note =
+        draft.days.length > 0
+          ? '승인된 공개 시간표로 팩 발행'
+          : '공식 일정 미확인: 날짜 전용 팩 발행 (공연 시간표 대기)';
+      const result = await publish(request, festival, draft, note);
+      console.log(
+        `- 발행 ${label}: ${shape}, 팩 버전 ${result?.packVersion ?? '?'}`,
+      );
       audit.published.push({ ...entry, shape, packVersion: result?.packVersion ?? null });
       summary.published += 1;
     } catch (error) {
@@ -360,6 +515,7 @@ async function main() {
       : `미리보기 완료: 발행 가능 ${summary.ready}, 건너뜀 ${summary.skipped}, 실패 ${summary.failed}. 실제 발행은 --apply로 실행합니다.`,
   );
   if (summary.failed > 0) process.exitCode = 1;
+  return summary;
 }
 
 if (require.main === module) {
@@ -369,4 +525,14 @@ if (require.main === module) {
   });
 }
 
-module.exports = { buildDraft, festivalDates, fillEnds, preflight, stageID, validatedBase };
+module.exports = {
+  buildDraft,
+  dateOnlyDraft,
+  festivalDates,
+  fillEnds,
+  main,
+  matchingPublishedSource,
+  preflight,
+  stageID,
+  validatedBase,
+};
