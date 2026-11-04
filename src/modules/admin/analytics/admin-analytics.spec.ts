@@ -305,4 +305,52 @@ describe('admin analytics', () => {
     expect(JSON.stringify(first)).not.toContain('private@example.com');
     expect(global.fetch).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    [401, 'unauthorized'],
+    [403, 'forbidden'],
+  ])(
+    'distinguishes Mixpanel HTTP %i without exposing upstream data',
+    async (status, reason) => {
+      global.fetch = jest.fn(() =>
+        Promise.resolve(new Response('private upstream details', { status })),
+      ) as typeof fetch;
+      const service = new AdminAnalyticsService(
+        config({
+          MIXPANEL_SERVICE_ACCOUNT_USERNAME: 'reader',
+          MIXPANEL_SERVICE_ACCOUNT_SECRET: 'private-secret',
+        }),
+      );
+      const result = await service.mixpanel(range());
+      expect(result).toEqual({
+        status: 'error',
+        reason,
+        scope: 'shared',
+        totalEvents: null,
+        series: [],
+        topEvents: [],
+        truncated: false,
+      });
+      expect(JSON.stringify(result)).not.toContain('private');
+    },
+  );
+
+  it.each([429, 500])(
+    'does not misclassify Mixpanel HTTP %i as a credential failure',
+    async (status) => {
+      global.fetch = jest.fn(() =>
+        Promise.resolve(new Response('', { status })),
+      ) as typeof fetch;
+      const service = new AdminAnalyticsService(
+        config({
+          MIXPANEL_SERVICE_ACCOUNT_USERNAME: 'reader',
+          MIXPANEL_SERVICE_ACCOUNT_SECRET: 'secret',
+        }),
+      );
+      const result = await service.mixpanel(range());
+      expect(result.status).toBe(status === 429 ? 'rate_limited' : 'error');
+      expect(result).not.toHaveProperty('reason');
+      expect(result.totalEvents).toBeNull();
+    },
+  );
 });

@@ -12,6 +12,7 @@ import {
   WONDERLIVET_LINK_PAGE,
   wonderlivetMelonProduct,
 } from './wonderlivet-ticket-link';
+import { TOUR_API_SOURCE, tourApiCandidates } from './tour-api';
 
 const REGEX_TIMEOUT_MS = 1000;
 const MAX_REGEX_WORKERS = 10;
@@ -1697,6 +1698,7 @@ export async function parseCrawl(
     };
   }
   if (source.parser === 'ticket-list') {
+    if (source.url === TOUR_API_SOURCE) return tourApiCandidates(body);
     const links = ticketCandidates(body, source.url, config);
     if (!links.length) throw new Error('공개 예매 링크를 찾지 못했습니다.');
     return links;

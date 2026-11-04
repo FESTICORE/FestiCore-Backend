@@ -22,6 +22,7 @@ type SentryResult = {
 };
 type MixpanelResult = {
   status: Status;
+  reason?: 'unauthorized' | 'forbidden';
   scope: 'shared';
   totalEvents: number | null;
   series: Point[];
@@ -330,7 +331,14 @@ export class AdminAnalyticsService {
           truncated,
         };
       } catch (error) {
-        return empty(failure(error));
+        const result = empty(failure(error));
+        if (
+          error instanceof AnalyticsFetchError &&
+          (error.kind === 'unauthorized' || error.kind === 'forbidden')
+        ) {
+          result.reason = error.kind;
+        }
+        return result;
       }
     });
   }

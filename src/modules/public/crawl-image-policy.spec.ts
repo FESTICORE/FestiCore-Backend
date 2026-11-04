@@ -17,6 +17,7 @@ import { ADDITIONAL_FESTIVAL_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/add
 import { PRUGIO_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/prugio-profile';
 import { CDF_LOW_HIGH_LOW_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/cdf-low-high-low-profile';
 import { SOHYANG_COMMONS_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/sohyang-commons-profile';
+import { PRUGIO_PORTRAIT_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/prugio-portraits';
 
 describe('public crawl image policy', () => {
   it('hides the Commons photo after rights drift, stale validation, or a replaced file', () => {
@@ -57,6 +58,18 @@ describe('public crawl image policy', () => {
       "source.\"parserConfig\"->>'seed' = 'prugio-official-profile'",
     );
     expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(PRUGIO_PUBLIC_IMAGE_SQL);
+  });
+  it('serves cropped Prugio photos only through the active official gallery and exact poster origin', () => {
+    expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(
+      "source.\"parserConfig\"->>'seed' IS DISTINCT FROM 'prugio-official-portraits'",
+    );
+    expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(PRUGIO_PORTRAIT_PUBLIC_IMAGE_SQL);
+    expect(PRUGIO_PORTRAIT_PUBLIC_IMAGE_SQL).toContain(
+      'gallery.enabled = true',
+    );
+    expect(PRUGIO_PORTRAIT_PUBLIC_IMAGE_SQL).toContain(
+      'cdnticket[.]melon[.]co[.]kr',
+    );
   });
   it('publishes additional Seoul portraits only through the verified profile branch', () => {
     expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(
