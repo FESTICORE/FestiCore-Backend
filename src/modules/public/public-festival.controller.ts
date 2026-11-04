@@ -121,7 +121,7 @@ export class PublicFestivalController {
     name: 'after',
     required: false,
     description:
-      '조회 하한 날짜 YYYY-MM-DD 또는 이전 응답의 nextCursor(조회 하한 날짜~v2~정렬 기준일~순위~날짜~축제 ID, URL 인코딩 필요). 진행 중, 다가오는 일정, 종료된 일정 순으로 정렬하며 같은 날짜는 ID 순입니다. 이전 형식의 커서는 첫 페이지부터 다시 조회해야 합니다.',
+      '조회 하한 날짜 YYYY-MM-DD 또는 이전 응답의 nextCursor(조회 하한 날짜~v2~정렬 기준일~순위~날짜~축제 ID, URL 인코딩 필요). 진행 중, 다가오는 일정, 종료된 일정 순으로 정렬하며 같은 날짜는 ID 순입니다. 유효한 이전 형식 커서는 날짜 하한을 유지한 첫 페이지로 전환하고 새 커서를 반환합니다.',
     example: '2026-10-21',
   })
   @ApiQuery({

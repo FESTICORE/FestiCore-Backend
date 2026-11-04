@@ -147,7 +147,57 @@ describe('PublicFestivalService list order', () => {
     );
   });
 
-  it('rejects old cursor format with a first-page reset hint', async () => {
+  it('restarts a valid legacy cursor at its original floor and continues with v2', async () => {
+    const builder = {
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      getMany: jest
+        .fn()
+        .mockResolvedValueOnce([
+          published('fst_live', '2026-10-20', '2026-10-23'),
+          published('fst_future', '2026-11-01', '2026-11-02'),
+        ])
+        .mockResolvedValueOnce([
+          published('fst_future', '2026-11-01', '2026-11-02'),
+        ]),
+    };
+    const service = new PublicFestivalService(
+      { createQueryBuilder: () => builder } as never,
+      {} as never,
+      publicFestivalTestDataSource(jest.fn().mockResolvedValue([])) as never,
+      {} as never,
+    );
+    const internals = service as unknown as {
+      discoveryCatalog: () => Promise<object[]>;
+      attachStoredImages: () => Promise<unknown>;
+    };
+    jest.spyOn(internals, 'discoveryCatalog').mockResolvedValue([]);
+    jest.spyOn(internals, 'attachStoredImages').mockResolvedValue(new Map());
+
+    const first = await service.list(
+      '2026-10-01~2026-10-20T12:00:00+09:00~fst_older',
+      '1',
+      today,
+    );
+    expect(first.items.map((item) => item.id)).toEqual(['fst_live']);
+    expect(first.nextCursor).toBe(
+      '2026-10-01~v2~2026-10-22~0~2026-10-20~fst_live',
+    );
+    expect(builder.andWhere).toHaveBeenCalledWith(
+      expect.stringContaining('>= :floor'),
+      { floor: '2026-10-01' },
+    );
+    expect(builder.andWhere.mock.calls).toHaveLength(2);
+
+    const second = await service.list(first.nextCursor!, '1', today);
+    expect(second.items.map((item) => item.id)).toEqual(['fst_future']);
+    expect(second.nextCursor).toBeNull();
+  });
+
+  it('rejects malformed legacy cursors', async () => {
     const service = new PublicFestivalService(
       {} as never,
       {} as never,
@@ -155,7 +205,10 @@ describe('PublicFestivalService list order', () => {
       {} as never,
     );
     await expect(
-      service.list('2026-10-21~2026-11-20T12:00:00+09:00~fst_a', '1', today),
-    ).rejects.toThrow('첫 페이지');
+      service.list('2026-10-01~invalid~fst_a', '1', today),
+    ).rejects.toThrow('지원하지 않는 after 커서');
+    await expect(
+      service.list('2026-10-01~2026-10-20T12:00:00+99:00~fst_a', '1', today),
+    ).rejects.toThrow('지원하지 않는 after 커서');
   });
 });

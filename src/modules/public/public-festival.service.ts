@@ -1927,11 +1927,17 @@ export class PublicFestivalService {
     const cursor = after?.match(
       /^(\d{4}-\d{2}-\d{2})~v2~(\d{4}-\d{2}-\d{2})~([012])~(\d{4}-\d{2}-\d{2})~(fst_[0-9a-z]+)$/,
     );
-    if (after?.includes('~') && !cursor)
+    const legacyCursor = after?.match(
+      /^(\d{4}-\d{2}-\d{2})~(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2}))~(fst_[0-9a-z]+)$/,
+    );
+    if (
+      after?.includes('~') &&
+      !cursor &&
+      (!legacyCursor || Number.isNaN(Date.parse(legacyCursor[2])))
+    )
       throw new BadRequestException({
         code: 'VALIDATION',
-        message:
-          '지원하지 않는 after 커서입니다. 첫 페이지부터 다시 조회하세요.',
+        message: '지원하지 않는 after 커서입니다.',
       });
     if (
       cursor &&
@@ -1945,7 +1951,7 @@ export class PublicFestivalService {
         code: 'VALIDATION',
         message: 'after 커서의 날짜가 올바르지 않습니다.',
       });
-    const afterDate = cursor?.[1] ?? after;
+    const afterDate = cursor?.[1] ?? legacyCursor?.[1] ?? after;
     if (afterDate !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(afterDate))
       throw new BadRequestException({
         code: 'VALIDATION',
