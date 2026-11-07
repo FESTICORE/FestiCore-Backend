@@ -21,6 +21,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { AdminRoles } from '../../auth/admin-roles.decorator';
+import { Throttle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
 import {
   CreateCrawlSourceDto,
@@ -219,6 +220,7 @@ export class CrawlController {
   }
 
   @Get('images/:id')
+  @Throttle({ default: { ttl: 60_000, limit: 600 } })
   @AdminRoles('viewer')
   @ApiOperation({
     summary: '저장된 크롤 이미지',

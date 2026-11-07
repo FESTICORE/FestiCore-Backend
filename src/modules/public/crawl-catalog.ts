@@ -315,7 +315,10 @@ export function ticketDateRange(
 
 export function ticketDateSpanLimit(url: unknown): number {
   return typeof url === 'string' &&
-    /^https:\/\/world\.nol\.com\/en\/ticket\/products\/\d+$/.test(url)
+    (/^https:\/\/world\.nol\.com\/en\/ticket\/products\/\d+$/.test(url) ||
+      /^https:\/\/apis\.data\.go\.kr\/B551011\/KorService2\/detailCommon2\?contentId=\d+$/.test(
+        url,
+      ))
     ? 31
     : 6;
 }
@@ -428,13 +431,19 @@ export function discoverySummaries(
       url.protocol !== 'https:' ||
       url.username ||
       url.password ||
-      ![
-        'ticket.melon.com',
-        'ticket.yes24.com',
-        'nol.yanolja.com',
-        'world.nol.com',
-        'mintpaper.co.kr',
-      ].includes(url.hostname)
+      !(
+        [
+          'ticket.melon.com',
+          'ticket.yes24.com',
+          'nol.yanolja.com',
+          'world.nol.com',
+          'mintpaper.co.kr',
+        ].includes(url.hostname) ||
+        (url.hostname === 'apis.data.go.kr' &&
+          url.pathname === '/B551011/KorService2/detailCommon2' &&
+          url.searchParams.size === 1 &&
+          /^\d+$/.test(url.searchParams.get('contentId') ?? ''))
+      )
     )
       continue;
     const name = cleanName(value.name);

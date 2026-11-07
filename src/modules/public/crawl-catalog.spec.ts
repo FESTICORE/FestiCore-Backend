@@ -852,3 +852,24 @@ describe('ticket discovery catalog', () => {
     ).not.toHaveProperty('officialInstagramUrl');
   });
 });
+
+describe('TourAPI bounded catalog projection', () => {
+  it.each([
+    ['2026-11-01 ~ 2026-12-02', 1],
+    ['2026-11-01 ~ 2026-12-03', 0],
+    ['2026-01-01 ~ 2026-12-31', 0],
+  ])('supports at most 32 inclusive days: %s', (date, count) => {
+    expect(
+      discoverySummaries([
+        {
+          candidate: {
+            name: '지역 축제',
+            venue: '서울 광장',
+            date,
+            url: 'https://apis.data.go.kr/B551011/KorService2/detailCommon2?contentId=123',
+          },
+        },
+      ]),
+    ).toHaveLength(count);
+  });
+});
