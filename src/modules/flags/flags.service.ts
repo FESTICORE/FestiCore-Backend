@@ -299,11 +299,16 @@ export class FlagsService {
     const follow = userId
       ? await this.follows.exists({ where: { flagId: id, userId } })
       : null;
+    // 앱 상세의 "잠금화면에 표시" 토글이 현재 대표 깃발인지 읽는다.
+    const pinned = userId
+      ? await this.pins.exists({ where: { userId, flagId: id } })
+      : null;
     return {
       ...this.profile(flag),
       status: statusView(flag),
       isFollowing: follow,
       isBearer: userId ? bearer : null,
+      isPinned: pinned,
       hidden: flag.hidden,
     };
   }
