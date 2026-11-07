@@ -46,7 +46,10 @@ describe('FlagsService security boundaries', () => {
       .mockResolvedValue({ published: { zones: [], sets: [] } }),
     exists: jest.fn().mockResolvedValue(true),
   };
+  const follows = { exists: jest.fn().mockResolvedValue(false) };
+  const pins = { exists: jest.fn().mockResolvedValue(false) };
   const bearers = {
+    exists: jest.fn().mockResolvedValue(false),
     findOne: jest.fn().mockResolvedValue({ userId: 'owner' }),
     find: jest.fn(),
     count: jest.fn().mockResolvedValue(1),
@@ -108,8 +111,8 @@ describe('FlagsService security boundaries', () => {
     db as unknown as DataSource,
     { get: () => 'a-long-test-refresh-secret' } as unknown as ConfigService,
     flags as unknown as Repository<Flag>,
-    {} as Repository<FlagFollow>,
-    {} as Repository<FlagPin>,
+    follows as unknown as Repository<FlagFollow>,
+    pins as unknown as Repository<FlagPin>,
     bearers as unknown as Repository<FlagBearer>,
     codes as unknown as Repository<FlagBearerCode>,
     {} as Repository<FlagClaimAttempt>,
@@ -330,6 +333,30 @@ describe('FlagsService security boundaries', () => {
       { bio: '새 소개' },
     );
     expect(sync).toHaveBeenCalledWith('flg_1');
+  });
+
+  it('tells a signed-in follower whether the flag is their pinned flag', async () => {
+    flags.findOne.mockResolvedValueOnce({ ...flag, createdAt: new Date(0) });
+    follows.exists.mockResolvedValueOnce(true);
+    pins.exists.mockResolvedValueOnce(true);
+    await expect(service.detail('flg_1', 'user-1')).resolves.toMatchObject({
+      isFollowing: true,
+      isBearer: false,
+      isPinned: true,
+    });
+    expect(pins.exists).toHaveBeenCalledWith({
+      where: { userId: 'user-1', flagId: 'flg_1' },
+    });
+  });
+
+  it('leaves follow and pin state empty for anonymous detail', async () => {
+    flags.findOne.mockResolvedValueOnce({ ...flag, createdAt: new Date(0) });
+    await expect(service.detail('flg_1')).resolves.toMatchObject({
+      isFollowing: null,
+      isBearer: null,
+      isPinned: null,
+    });
+    expect(pins.exists).not.toHaveBeenCalled();
   });
 
   it('does not expose flags from an unpublished festival', async () => {

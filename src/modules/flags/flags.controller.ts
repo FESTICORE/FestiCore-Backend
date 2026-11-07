@@ -163,12 +163,12 @@ export class FlagsController {
   @ApiOperation({
     summary: '공개 깃발 상세',
     description:
-      '익명 조회가 가능합니다. 유효한 앱 access 토큰을 보내면 isFollowing, isBearer가 채워집니다. 유효하지 않은 토큰은 익명 조회로 처리합니다.',
+      '익명 조회가 가능합니다. 유효한 앱 access 토큰을 보내면 isFollowing, isBearer, isPinned가 채워집니다. 유효하지 않은 토큰은 익명 조회로 처리합니다.',
   })
   @ApiResponse({
     status: 200,
     description:
-      '깃발 프로필, 현장 상태, 팔로우/기수 여부. 익명 조회의 두 여부는 null입니다.',
+      '깃발 프로필, 현장 상태, 팔로우/기수/대표 깃발 여부. 익명 조회의 세 여부는 null입니다.',
     schema: {
       example: {
         id: 'flg_123',
@@ -188,6 +188,7 @@ export class FlagsController {
         },
         isFollowing: null,
         isBearer: null,
+        isPinned: null,
         hidden: false,
       },
     },
