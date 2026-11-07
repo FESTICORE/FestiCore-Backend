@@ -25,6 +25,16 @@ import { publicFestivalTestDataSource } from './public-festival-test-data-source
 import { PublicLiveService } from '../src/modules/public/public-live.service';
 import { CacheService } from '../src/modules/redis/service/cache.service';
 
+/** 목록 커서의 정렬 기준일. 서비스와 같이 서울 날짜로 오늘을 쓴다. */
+function seoulToday(): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+}
+
 function envelopeData<T>(body: unknown, code: string): T {
   expect(body).toBeInstanceOf(Object);
   expect(Object.keys(body as object).sort()).toEqual([
@@ -867,7 +877,7 @@ describe('Public festival API', () => {
     );
     expect(body.items[0].id).toBe('fst_12345678');
     expect(body.nextCursor).toBe(
-      '2026-10-21~v2~2026-11-04~1~2026-11-20~fst_12345678',
+      `2026-10-21~v2~${seoulToday()}~1~2026-11-20~fst_12345678`,
     );
     queryBuilder.getMany.mockResolvedValueOnce([
       {
@@ -936,7 +946,7 @@ describe('Public festival API', () => {
     });
     expect(firstPage.items[0]).not.toHaveProperty('startsAt');
     expect(firstPage.nextCursor).toBe(
-      '2026-10-21~v2~2026-11-04~1~2026-11-20~fst_000metadata1',
+      `2026-10-21~v2~${seoulToday()}~1~2026-11-20~fst_000metadata1`,
     );
 
     queryBuilder.andWhere.mockClear();
@@ -951,7 +961,7 @@ describe('Public festival API', () => {
       'fst_000metadata2',
     ]);
     expect(secondPage.nextCursor).toBe(
-      '2026-10-21~v2~2026-11-04~1~2026-11-20~fst_000metadata2',
+      `2026-10-21~v2~${seoulToday()}~1~2026-11-20~fst_000metadata2`,
     );
     expect(queryBuilder.andWhere).toHaveBeenCalledWith(
       expect.stringContaining('festival.id > :cursorId'),
@@ -1017,7 +1027,7 @@ describe('Public festival API', () => {
     );
     expect(body.items[0].id).toBe('fst_12345678');
     expect(body.nextCursor).toBe(
-      '2026-10-21~v2~2026-11-04~1~2026-11-20~fst_12345678',
+      `2026-10-21~v2~${seoulToday()}~1~2026-11-20~fst_12345678`,
     );
     queryBuilder.getMany.mockResolvedValueOnce([later]);
     await request(server)
