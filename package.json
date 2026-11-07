@@ -26,7 +26,8 @@
     "migration:run": "ts-node src/database/safe-migration-cli.ts run",
     "migration:revert": "ts-node src/database/safe-migration-cli.ts revert",
     "migration:show": "npm run typeorm -- migration:show",
-    "oauth-token:backfill": "ts-node src/database/backfill-oauth-tokens.ts"
+    "oauth-token:backfill": "ts-node src/database/backfill-oauth-tokens.ts",
+    "flags:seed-dev": "ts-node src/database/seed-dev-flags.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1153.0",

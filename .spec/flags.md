@@ -64,6 +64,14 @@
 | POST | `/api/v1/admin/flags/:flagId/hide` | editor | 공개 숨김, 변경 전후 감사 기록 |
 | POST | `/api/v1/admin/flags/:flagId/unhide` | editor | 숨김 해제, 변경 전후 감사 기록 |
 
+## 개발 DB 목 데이터
+
+- `src/database/seed-dev-flags.ts`가 Figma S05의 `호락호락`(슬램·떼창·초보 환영, 팔로워 1,284, 계획 4개, 활동 중·슬램)과
+  쉬는 중·예정·오늘 종료 깃발을 고정 ID(`flg_dev_*`)로 넣고 공개 깃발 팩과 팩 캐시를 갱신한다. 다시 실행하면 덮어쓴다.
+- `RAILWAY_ENVIRONMENT_NAME=develop`과 `--apply`가 모두 있어야 쓴다. 운영 환경에서는 어떤 옵션으로도 실행하지 않는다.
+- 대상은 `--festival <id>` 또는 깃발을 쓰고 존 2개·셋 4개 이상인 첫 발행 축제다.
+- 실행: `railway run -e develop -s <백엔드 서비스> -- sh -c 'DATABASE_URL="$DATABASE_PUBLIC_URL" npm run flags:seed-dev -- --apply'`
+
 ## 실패·보안·검증
 
 - 비공개 또는 숨김 깃발의 공개 조회와 사진은 404다. 기수 전용 쓰기는 소유권을 확인한다.
