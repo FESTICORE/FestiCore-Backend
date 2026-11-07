@@ -56,7 +56,10 @@
 | --- | --- | --- | --- |
 | POST | `/api/v1/admin/festivals/:festivalId/bearer-codes` | editor | 등록 코드 생성, 관리자 행위 감사 기록 |
 | GET | `/api/v1/admin/festivals/:festivalId/bearer-codes` | viewer | 코드 현황 |
-| GET | `/api/v1/admin/festivals/:festivalId/flags` | viewer | 깃발 현황 |
+| GET | `/api/v1/admin/festivals/:festivalId/flags` | viewer | 깃발 현황(프로필, 전체 계획과 계획 공개, 팔로워, 신고 수, 숨김, 현장 상태) |
+| POST | `/api/v1/admin/festivals/:festivalId/flags` | editor | 기수 없는 깃발 생성(이름·소개·태그·사진 URL·홈 존·계획·계획 공개), 예정 상태로 시작, 감사 기록 |
+| PATCH | `/api/v1/admin/flags/:flagId` | editor | 프로필·사진 URL·계획·계획 공개 편집, 바뀐 필드의 전후 감사 기록 |
+| POST | `/api/v1/admin/flags/:flagId/force-status` | editor | 현장 상태(존·활동·상태) 강제 변경, 전후 감사 기록 |
 | GET | `/api/v1/admin/flags/reported` | viewer | 신고된 깃발 |
 | POST | `/api/v1/admin/flags/:flagId/hide` | editor | 공개 숨김, 변경 전후 감사 기록 |
 | POST | `/api/v1/admin/flags/:flagId/unhide` | editor | 숨김 해제, 변경 전후 감사 기록 |
@@ -68,6 +71,9 @@
   서버의 refresh 비밀값에서 분리해 파생한 키를 사용한다. 코드 추측은 사용자·디바이스·IP별로 제한한다.
 - 등록 코드 원문을 반환하는 관리자 응답은 `Cache-Control: no-store`다. JWT refresh 비밀값을
   교체하면 이전 암호문을 복원할 수 없으므로, 기존 코드를 폐기하고 다시 발급해야 한다.
+- 관리자 깃발 생성·편집은 홈 존과 계획 셋을 축제 팩(발행본 우선, 없으면 초안)에서 확인하고, 감사 기록과
+  공개 깃발 팩 갱신을 같은 트랜잭션에서 처리한다. 사진 URL은 https만 받으며 썸네일도 같은 URL을 쓴다.
+  사진 URL을 바꾸면 업로드 사진 키 연결을 끊는다. 팔로워 수는 관리자 API로 바꿀 수 없다.
 - 코드 발급과 숨김 변경은 감사 기록을 같은 DB 트랜잭션에 저장한다. 감사 기록에는 코드 수,
   라벨, 만료 시각만 남기며 코드 원문·해시·암호문은 남기지 않는다. 숨김 변경과 공개 깃발 팩
   갱신도 같은 트랜잭션에서 처리한다. 코드 발급 응답은 `Cache-Control: no-store`다.

@@ -880,16 +880,195 @@ export class AdminFlagsController {
   @ApiOperation({
     summary: '축제 깃발 관리 목록',
     description:
-      'Bearer JWT와 viewer 이상 역할이 필요합니다. 해당 축제의 모든 깃발과 신고 수, 숨김 여부를 조회합니다.',
+      'Bearer JWT와 viewer 이상 역할이 필요합니다. 해당 축제의 모든 깃발과 팔로워 수, 신고 수, 숨김 여부를 조회합니다. 계획은 공개 여부와 관계없이 전체를 돌려줍니다.',
   })
   @ApiResponse({
     status: 200,
-    description: '깃발 프로필, 숨김 여부, 신고 수와 현장 상태 목록',
+    description:
+      '깃발 프로필, 전체 계획과 계획 공개 여부, 공개 범위, 숨김 여부, 신고 수와 현장 상태 목록',
   })
   @ApiResponse({ status: 401, description: '유효한 access JWT가 없습니다.' })
   @ApiResponse({ status: 403, description: 'viewer 이상 권한 없음' })
   flags(@Param('festivalId') id: string) {
     return this.service.adminFlags(id);
+  }
+  @Post('festivals/:festivalId/flags')
+  @AdminRoles('editor', 'owner')
+  @ApiParam({ name: 'festivalId', description: '축제 ID', example: 'fst_123' })
+  @ApiOperation({
+    summary: '관리자 깃발 생성',
+    description:
+      'Bearer JWT와 editor/owner 역할이 필요합니다. 기수 없는 공개 깃발을 예정 상태로 만들고, 감사 기록과 축제 팩 갱신을 같은 트랜잭션에서 처리합니다.',
+  })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['name', 'tags'],
+      additionalProperties: false,
+      properties: {
+        name: { type: 'string', minLength: 2, maxLength: 20 },
+        bio: { type: 'string', nullable: true, maxLength: 60 },
+        tags: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 3,
+          uniqueItems: true,
+          items: {
+            type: 'string',
+            enum: ['slam', 'sing', 'train', 'calm', 'newbie'],
+          },
+        },
+        photoUrl: {
+          type: 'string',
+          nullable: true,
+          maxLength: 500,
+          description: 'https 사진 URL. 썸네일도 같은 URL을 쓴다.',
+        },
+        homeZoneId: {
+          type: 'string',
+          nullable: true,
+          description: '축제 팩(발행본 우선)의 존 ID',
+        },
+        plan: {
+          type: 'array',
+          maxItems: 30,
+          uniqueItems: true,
+          items: { type: 'string' },
+          description: '축제 팩(발행본 우선)의 셋 ID',
+        },
+        planVisible: { type: 'boolean' },
+      },
+      example: {
+        name: '호락호락',
+        bio: '처음 와도 괜찮아요.',
+        tags: ['slam', 'sing', 'newbie'],
+        photoUrl: 'https://example.com/flag.jpg',
+        homeZoneId: 'zone_main',
+        plan: ['set_1', 'set_2'],
+        planVisible: true,
+      },
+    },
+  })
+  @ApiResponse({
+    status: 201,
+    description: '생성된 관리자용 깃발(전체 계획 포함)',
+    schema: {
+      example: {
+        id: 'flg_1234567890',
+        name: '호락호락',
+        thumbUrl: 'https://example.com/flag.jpg',
+        photoUrl: 'https://example.com/flag.jpg',
+        tags: ['slam', 'sing', 'newbie'],
+        bio: '처음 와도 괜찮아요.',
+        followerCount: 0,
+        planVisible: true,
+        plan: ['set_1', 'set_2'],
+        homeZoneId: 'zone_main',
+        visibility: 'public',
+        hidden: false,
+        reportCount: 0,
+        status: {
+          flagId: 'flg_1234567890',
+          status: 'scheduled',
+          zoneId: null,
+          activity: null,
+          updatedAt: '2026-11-08T00:00:00.000Z',
+        },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 400,
+    description: '필수 필드 누락, 형식 오류, 팩에 없는 셋',
+  })
+  @ApiResponse({ status: 401, description: '유효한 access JWT가 없습니다.' })
+  @ApiResponse({ status: 403, description: 'editor/owner 권한 없음' })
+  @ApiResponse({ status: 404, description: '축제 또는 존을 찾을 수 없음' })
+  @ApiResponse({
+    status: 409,
+    description: 'FLAG_NAME_TAKEN: 같은 축제에 같은 이름의 깃발이 있음',
+  })
+  createFlag(
+    @Param('festivalId') id: string,
+    @Body() body: unknown,
+    @Req() request: AdminRequest,
+  ) {
+    return this.service.adminCreate(id, body, request.admin!.id);
+  }
+  @Patch('flags/:flagId')
+  @AdminRoles('editor', 'owner')
+  @ApiParam({
+    name: 'flagId',
+    description: '수정할 깃발 ID',
+    example: 'flg_1234567890',
+  })
+  @ApiOperation({
+    summary: '관리자 깃발 편집',
+    description:
+      'Bearer JWT와 editor/owner 역할이 필요합니다. 보낸 필드만 바꾸며, 바뀐 필드의 이전·이후 값을 감사 기록에 남기고 축제 팩을 갱신합니다. 현장 상태는 force-status로 바꿉니다.',
+  })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      minProperties: 1,
+      additionalProperties: false,
+      properties: {
+        name: { type: 'string', minLength: 2, maxLength: 20 },
+        bio: { type: 'string', nullable: true, maxLength: 60 },
+        tags: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 3,
+          uniqueItems: true,
+          items: {
+            type: 'string',
+            enum: ['slam', 'sing', 'train', 'calm', 'newbie'],
+          },
+        },
+        photoUrl: {
+          type: 'string',
+          nullable: true,
+          maxLength: 500,
+          description: 'https 사진 URL. 썸네일도 같은 URL을 쓴다.',
+        },
+        homeZoneId: {
+          type: 'string',
+          nullable: true,
+          description: '축제 팩(발행본 우선)의 존 ID',
+        },
+        plan: {
+          type: 'array',
+          maxItems: 30,
+          uniqueItems: true,
+          items: { type: 'string' },
+          description: '축제 팩(발행본 우선)의 셋 ID',
+        },
+        planVisible: { type: 'boolean' },
+      },
+      example: { plan: ['set_1', 'set_2'], planVisible: false },
+    },
+  })
+  @ApiResponse({
+    status: 200,
+    description: '수정된 관리자용 깃발(전체 계획 포함)',
+  })
+  @ApiResponse({
+    status: 400,
+    description: '수정할 필드 없음, 형식 오류, 팩에 없는 셋',
+  })
+  @ApiResponse({ status: 401, description: '유효한 access JWT가 없습니다.' })
+  @ApiResponse({ status: 403, description: 'editor/owner 권한 없음' })
+  @ApiResponse({ status: 404, description: '깃발 또는 존을 찾을 수 없음' })
+  @ApiResponse({
+    status: 409,
+    description: 'FLAG_NAME_TAKEN: 같은 축제에 같은 이름의 깃발이 있음',
+  })
+  updateFlag(
+    @Param('flagId') id: string,
+    @Body() body: unknown,
+    @Req() request: AdminRequest,
+  ) {
+    return this.service.adminUpdate(id, body, request.admin!.id);
   }
   @Get('festivals/:festivalId/bearers')
   @AdminRoles('viewer', 'editor', 'owner')
