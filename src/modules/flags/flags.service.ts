@@ -53,6 +53,10 @@ import { SocialNotificationService } from '../notification/social-notification.s
 import { LiveActivityService } from '../notification/live-activity.service';
 
 const codeAlphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+/** 깃발 하나의 기수 한도: 원래 기수 1명 + 공동 기수 3명(Figma S10 "공동 기수 초대 0 / 3명"). */
+export const MAX_FLAG_BEARERS = 4;
+const coBearerFullMessage = '공동 기수는 원래 기수를 빼고 최대 3명입니다.';
 function newCode(): string {
   return Array.from(
     randomBytes(6),
@@ -672,10 +676,13 @@ export class FlagsService {
         });
         flag = await flags.save(flag);
         lockedCode.flagId = flag.id;
-      } else if ((await bearers.count({ where: { flagId: flag.id } })) >= 3)
+      } else if (
+        (await bearers.count({ where: { flagId: flag.id } })) >=
+        MAX_FLAG_BEARERS
+      )
         throw new ConflictException({
           code: 'CO_BEARER_FULL',
-          message: '공동 기수는 최대 3명입니다.',
+          message: coBearerFullMessage,
         });
       await bearers.save(
         bearers.create({
@@ -942,10 +949,12 @@ export class FlagsService {
         code: 'FLAG_NOT_OWNER',
         message: '원래 기수만 초대할 수 있습니다.',
       });
-    if ((await this.bearers.count({ where: { flagId: id } })) >= 3)
+    if (
+      (await this.bearers.count({ where: { flagId: id } })) >= MAX_FLAG_BEARERS
+    )
       throw new ConflictException({
         code: 'CO_BEARER_FULL',
-        message: '공동 기수는 최대 3명입니다.',
+        message: coBearerFullMessage,
       });
     const code = newCode();
     const expiresAt = new Date(Date.now() + 24 * 3600_000);
