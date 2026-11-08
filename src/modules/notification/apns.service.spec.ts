@@ -426,6 +426,56 @@ describe('ApnsService', () => {
     },
   );
 
+  it('sends a saved performance alert through the service extension with its deep link', async () => {
+    const now = jest
+      .spyOn(Date, 'now')
+      .mockReturnValue(Date.parse('2026-11-20T04:00:00Z'));
+    try {
+      const { session, stream } = mockResponse(200);
+      const service = new ApnsService(config(credentials));
+      const eventKey = 'set-reminder:fst_12345678:set_a1b2c3d4';
+      await service.sendSetReminderNotification(DEVICE_TOKEN, 'production', {
+        festivalId: 'fst_12345678',
+        setId: 'set_a1b2c3d4',
+        title: '공개 축제',
+        body: '밴드 공연이 2시간 후 메인 무대에서 시작돼요.',
+        eventKey,
+        deeplink: 'festicore://festival/fst_12345678/set/set_a1b2c3d4',
+        expiresAt: new Date('2026-11-20T06:00:00Z'),
+      });
+      const headers = (
+        session.request.mock.calls as unknown[][]
+      )[0][0] as Record<string, string>;
+      expect(headers['apns-push-type']).toBe('alert');
+      expect(headers['apns-priority']).toBe('10');
+      expect(headers['apns-collapse-id']).toMatch(/^[a-f0-9]{64}$/);
+      expect(headers['apns-expiration']).toBe(
+        String(Date.parse('2026-11-20T06:00:00Z') / 1000),
+      );
+      const payload = JSON.parse(
+        (stream.end.mock.calls as unknown[][])[0][0] as string,
+      ) as Record<string, unknown>;
+      expect(payload).toEqual({
+        aps: {
+          alert: {
+            title: '공개 축제',
+            body: '밴드 공연이 2시간 후 메인 무대에서 시작돼요.',
+          },
+          sound: 'default',
+          'thread-id': eventKey,
+          'mutable-content': 1,
+        },
+        type: 'festival.set_reminder',
+        festivalId: 'fst_12345678',
+        setId: 'set_a1b2c3d4',
+        deeplink: 'festicore://festival/fst_12345678/set/set_a1b2c3d4',
+        eventKey,
+      });
+    } finally {
+      now.mockRestore();
+    }
+  });
+
   it('does not contact APNs for malformed tokens or missing credentials', async () => {
     const service = new ApnsService(config(credentials));
     await expect(
