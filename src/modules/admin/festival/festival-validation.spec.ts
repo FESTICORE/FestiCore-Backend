@@ -80,6 +80,48 @@ describe('festival draft validation', () => {
       );
     });
 
+    it('accepts shuttle stop and station coordinates or null', () => {
+      const valid = withDirections({
+        shuttle: {
+          body: '정문 셔틀',
+          links: [],
+          stopName: '정문 셔틀 정류장',
+          location: { latitude: 37.6651, longitude: 126.7411 },
+        },
+        transit: {
+          body: null,
+          links: [],
+          stationName: '킨텍스역',
+          location: null,
+        },
+      });
+      expect(validateDraft(valid)).toEqual([]);
+    });
+
+    it('rejects shuttle stop and station coordinates out of range or not numbers', () => {
+      const errors = validateDraft(
+        withDirections({
+          shuttle: {
+            body: '셔틀',
+            links: [],
+            location: { latitude: 91, longitude: 126.7411 },
+          },
+          transit: {
+            body: null,
+            links: [],
+            stationName: '킨텍스역',
+            location: { latitude: '37.66', longitude: 126.74 },
+          },
+        }),
+      );
+      expect(errors).toEqual(
+        expect.arrayContaining([
+          'directions.shuttle.location: 위도 -90..90·경도 -180..180 숫자 또는 null 필요',
+          'directions.transit.location: 위도 -90..90·경도 -180..180 숫자 또는 null 필요',
+        ]),
+      );
+    });
+
     it('turns legacy free-text return times into null instead of blocking PATCH or publish', () => {
       const legacy = withDirections({
         lastShuttleAt: '23:40',
