@@ -24,6 +24,7 @@ import { PublicFestivalService } from '../src/modules/public/public-festival.ser
 import { publicFestivalTestDataSource } from './public-festival-test-data-source';
 import { PublicLiveService } from '../src/modules/public/public-live.service';
 import { CacheService } from '../src/modules/redis/service/cache.service';
+import { LIVE_POLLS_PER_MINUTE } from '../src/modules/public/public-live.service';
 
 /** 목록 커서의 정렬 기준일. 서비스와 같이 서울 날짜로 오늘을 쓴다. */
 function seoulToday(): string {
@@ -1298,7 +1299,7 @@ describe('Public festival API', () => {
       .set('Authorization', 'Bearer invalid')
       .expect(401);
     expect(errorData<null>(invalidToken.body, 'UNAUTHORIZED')).toBeNull();
-    rateLimitCount = 5;
+    rateLimitCount = LIVE_POLLS_PER_MINUTE + 1;
     const limited = await request(server)
       .get(url)
       .set('X-Device-Id', device)

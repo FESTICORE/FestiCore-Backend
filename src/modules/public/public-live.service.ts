@@ -15,6 +15,12 @@ import { Crew, CrewGather, CrewMember } from '../crews/crew.entity';
 import { Flag, FlagBearer, FlagFollow, FlagPin } from '../flags/flag.entity';
 import { PublicFestivalService } from './public-festival.service';
 
+/**
+ * 기기당 분당 라이브 조회 한도. 앱은 라이브 보드·존 지도 35초 갱신, 포그라운드 복귀, 축제 전환이 겹치므로
+ * 정상 사용에서 한도에 닿지 않도록 넉넉히 둔다(304 응답도 센다).
+ */
+export const LIVE_POLLS_PER_MINUTE = 30;
+
 type AccessPayload = { sub?: string; provider?: string; typ?: string };
 
 function iso(date: Date): string {
@@ -116,7 +122,7 @@ export class PublicLiveService {
        RETURNING count`,
       [deviceId, minute],
     );
-    if (Number(rows[0]?.count) > 4)
+    if (Number(rows[0]?.count) > LIVE_POLLS_PER_MINUTE)
       throw new HttpException(
         {
           code: 'RATE_LIMITED',
