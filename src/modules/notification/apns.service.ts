@@ -91,6 +91,49 @@ export class ApnsService {
     );
   }
 
+  /** 저장한 공연 알림. Notification Service Extension을 거치고 탭하면 `deeplink`를 연다. */
+  async sendSetReminderNotification(
+    token: string,
+    environment: 'sandbox' | 'production',
+    input: {
+      festivalId: string;
+      setId: string;
+      title: string;
+      body: string;
+      eventKey: string;
+      deeplink: string;
+      expiresAt: Date;
+    },
+  ): Promise<ApnsSendResult> {
+    return this.send(
+      token,
+      environment,
+      {
+        aps: {
+          alert: { title: input.title, body: input.body },
+          sound: 'default',
+          'thread-id': input.eventKey,
+          'mutable-content': 1,
+        },
+        type: 'festival.set_reminder',
+        festivalId: input.festivalId,
+        setId: input.setId,
+        deeplink: input.deeplink,
+        eventKey: input.eventKey,
+      },
+      {
+        pushType: 'alert',
+        priority: '10',
+        collapseKey: input.eventKey,
+        // 공연이 시작된 뒤 켜진 기기에는 '2시간 후' 알림을 늦게 보이지 않는다.
+        expirationSeconds: Math.max(
+          1,
+          Math.floor((input.expiresAt.getTime() - Date.now()) / 1000),
+        ),
+      },
+    );
+  }
+
   async sendPackUpdated(
     token: string,
     environment: 'sandbox' | 'production',
