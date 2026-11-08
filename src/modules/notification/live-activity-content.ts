@@ -11,6 +11,7 @@ export interface LiveActivitySet {
 export interface LiveActivityFlag {
   id: string;
   festivalId: string;
+  name: string;
   status: 'scheduled' | 'active' | 'resting' | 'ended';
   visibility: 'public' | 'private';
   hidden: boolean;
@@ -67,6 +68,8 @@ export type LiveActivityContentState = {
   } | null;
   pinnedFlag: {
     flagId: string;
+    /** 잠금화면에 그대로 보이는 깃발 이름. */
+    name: string;
     status: 'active' | 'resting';
     zoneId: string | null;
     activity: string | null;
@@ -184,6 +187,7 @@ export function buildLiveActivityContentState(
     pinnedFlag: pinned
       ? {
           flagId: pinned.id,
+          name: pinned.name,
           status: pinned.status as 'active' | 'resting',
           zoneId: pinned.zoneId,
           activity: pinned.activity,

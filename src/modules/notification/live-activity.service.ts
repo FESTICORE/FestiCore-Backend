@@ -499,7 +499,7 @@ export class LiveActivityService implements OnModuleInit, OnModuleDestroy {
         return;
       }
       const flags = await manager.query<LiveActivityFlag[]>(
-        `SELECT "id", "festivalId",
+        `SELECT "id", "festivalId", "name",
         "status", "visibility", "hidden", "zoneId", "activity" FROM "flags"
         WHERE "festivalId" = $1 AND "visibility" = 'public' AND "hidden" = false`,
         [festivalId],
