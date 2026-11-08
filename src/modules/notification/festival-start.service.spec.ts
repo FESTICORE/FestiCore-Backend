@@ -825,6 +825,33 @@ describe('FestivalStartService', () => {
     expect(query.mock.calls[1][0]).toContain("'OUTCOME_UNKNOWN'");
   });
 
+  it('starts a saved performance when the stored activity already ended', async () => {
+    const { service, query, sendLiveActivityStart } = setup();
+    // 서버 종료·토큰 거절·8시간 경과로 끝난 활동의 ID만 남은 기기다.
+    query.mockResolvedValueOnce([
+      {
+        ...performanceTarget,
+        liveActivityId: 'ended-yesterday',
+        hasCurrentActivity: false,
+      },
+    ]);
+    query.mockResolvedValueOnce([{ id: job.id }]);
+    query.mockResolvedValueOnce([]);
+    sendLiveActivityStart.mockResolvedValueOnce({
+      accepted: true,
+      permanent: false,
+    });
+
+    await service.deliver(performanceJob, performanceJob.scheduledAt);
+
+    expect(sendLiveActivityStart).toHaveBeenCalledTimes(1);
+    const targetSql = query.mock.calls[0][0] as string;
+    expect(targetSql).toContain('"liveActivityPushToken" IS NULL');
+    expect(targetSql).toContain(
+      `"liveActivityRegisteredAt" <= now() - interval '8 hours'`,
+    );
+  });
+
   it('cancels a removed performance or duplicate festival start before APNs', async () => {
     const { service, query, sendLiveActivityStart } = setup();
     query
@@ -944,6 +971,7 @@ describe('FestivalStartService', () => {
         {
           ...liveStartTarget,
           liveActivityId: 'already-running',
+          hasCurrentActivity: true,
         },
       ])
       .mockResolvedValueOnce([]);
