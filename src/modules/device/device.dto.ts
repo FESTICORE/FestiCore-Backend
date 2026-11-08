@@ -126,7 +126,7 @@ export class NotificationSettingsDto {
 
   @ApiPropertyOptional({
     example: true,
-    description: '공연 10분 전. 서버 발송 기능 전까지 값만 저장합니다.',
+    description: '저장한 공연 2시간 전 알림. 꺼지면 이 기기에 보내지 않습니다.',
   })
   @IsOptional()
   @IsBoolean()
