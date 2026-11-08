@@ -331,6 +331,7 @@ export class SocialNotificationService
       JOIN "devices" d ON d."userId" = r."userId"
         AND d."apnsToken" IS NOT NULL AND d."apnsEnvironment" IS NOT NULL
       WHERE ${recipientFilter}`;
+    // Postgres는 쓰지 않는 매개변수의 형식을 정하지 못해 42P18로 실패하므로 payload($4)를 빼고 보낸다.
     await manager.query(
       `WITH targets AS (${targetSql})
       UPDATE "social_notification_deliveries" n
@@ -338,8 +339,8 @@ export class SocialNotificationService
       FROM targets t
       WHERE n."deviceId" = t."deviceId" AND n."recipientUserId" = t."recipientUserId"
         AND n."type" = $3 AND n."subjectId" = $1 AND n."status" = 'pending'
-        AND n."createdAt" <= now() - ($5 * interval '1 minute')`,
-      params,
+        AND n."createdAt" <= now() - ($4 * interval '1 minute')`,
+      [subjectId, actorUserId, type, minutes],
     );
     await manager.query(
       `WITH targets AS (${targetSql})
