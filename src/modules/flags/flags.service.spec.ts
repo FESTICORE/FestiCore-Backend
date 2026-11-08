@@ -319,6 +319,17 @@ describe('FlagsService security boundaries', () => {
     expect(invalidatePacks).not.toHaveBeenCalled();
   });
 
+  it('lets the owner invite until three co-bearers join', async () => {
+    bearers.count.mockResolvedValueOnce(3);
+    const invite = await service.invite('flg_1', 'owner');
+    expect(invite.code).toHaveLength(6);
+    bearers.count.mockResolvedValueOnce(4);
+    await expect(service.invite('flg_1', 'owner')).rejects.toMatchObject({
+      status: 409,
+      response: { code: 'CO_BEARER_FULL' },
+    });
+  });
+
   it('rejects an invitation by a co-bearer', async () => {
     await expect(service.invite('flg_1', 'co-bearer')).rejects.toMatchObject({
       status: 403,

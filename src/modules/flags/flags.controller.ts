@@ -505,7 +505,7 @@ export class FlagsController {
   @ApiOperation({
     summary: '공동 기수 초대 코드 발급',
     description:
-      '원래 기수만 24시간 유효한 코드를 만들 수 있습니다. 공동 기수는 최대 3명입니다. 코드는 등록 API로 제출합니다.',
+      '원래 기수만 24시간 유효한 코드를 만들 수 있습니다. 공동 기수는 원래 기수를 빼고 최대 3명입니다(깃발당 기수 4명). 코드는 등록 API로 제출합니다.',
   })
   @ApiResponse({
     status: 200,
