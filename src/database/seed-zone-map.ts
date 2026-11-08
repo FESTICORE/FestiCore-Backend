@@ -86,10 +86,10 @@ const ZONES = [
   },
 ] as const;
 
-/** 무대 머리글 줄: [x, y, w] */
+/** 무대 머리글 줄: [x, y, w]. Figma S06 머리글 상자(높이 34)는 지도 위에서 2pt 아래에 있다. */
 const STAGE_HEADERS = [
-  [10, 12, 174],
-  [209, 12, 174],
+  [10, 2, 174],
+  [209, 2, 174],
 ] as const;
 
 type Activity = 'slam' | 'sing' | 'train' | 'calm';
