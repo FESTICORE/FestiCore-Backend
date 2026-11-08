@@ -94,6 +94,29 @@ describe('SocialNotificationService', () => {
     }
   });
 
+  it('types the status type parameter wherever the insert reuses it', async () => {
+    const query = jest
+      .fn<Promise<unknown>, [string, unknown[]?]>()
+      .mockResolvedValue([]);
+    const { service } = setup();
+    await service.enqueueFlagStatus(
+      { query } as never,
+      {
+        id: 'flag_123',
+        visibility: 'public',
+        hidden: false,
+        status: 'active',
+        zoneId: 'zone_123',
+        activity: 'sing',
+      } as never,
+      actorUserId,
+    );
+    const insert = query.mock.calls.find(([sql]) => sql.includes('INSERT'));
+    // 열 값과 문자열 연결에 같은 매개변수를 형식 없이 쓰면 Postgres가 42P08로 실패한다.
+    expect(insert?.[0]).toContain('$3::varchar ||');
+    expect(insert?.[0].match(/\$3(?!::varchar)/g)).toBeNull();
+  });
+
   it('excludes resting flags and cancels pending status jobs', async () => {
     const { service } = setup();
     const query = jest

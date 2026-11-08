@@ -352,18 +352,19 @@ export class SocialNotificationService
         AND n."createdAt" > now() - ($5 * interval '1 minute')`,
       params,
     );
+    // $3을 열 값과 문자열 연결에 함께 쓰면 Postgres가 형식을 하나로 정하지 못해 42P08로 실패하므로 형식을 밝힌다.
     await manager.query(
       `WITH targets AS (${targetSql})
       INSERT INTO "social_notification_deliveries"
         ("deviceId", "recipientUserId", "type", "subjectId", "actorUserId", "eventKey", "payload", "nextAttemptAt")
-      SELECT t."deviceId", t."recipientUserId", $3, $1, $2,
-        $3 || ':' || $1 || ':' || gen_random_uuid()::text, $4::jsonb,
+      SELECT t."deviceId", t."recipientUserId", $3::varchar, $1, $2,
+        $3::varchar || ':' || $1 || ':' || gen_random_uuid()::text, $4::jsonb,
         now() + ($5 * interval '1 minute')
       FROM targets t
       WHERE NOT EXISTS (
         SELECT 1 FROM "social_notification_deliveries" n
         WHERE n."deviceId" = t."deviceId" AND n."recipientUserId" = t."recipientUserId"
-          AND n."type" = $3 AND n."subjectId" = $1 AND n."status" = 'pending'
+          AND n."type" = $3::varchar AND n."subjectId" = $1 AND n."status" = 'pending'
           AND n."createdAt" > now() - ($5 * interval '1 minute')
       )`,
       params,
