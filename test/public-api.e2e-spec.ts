@@ -485,7 +485,7 @@ describe('Public festival API', () => {
       .expect(200);
     const packEtag = String(packVersion.headers.etag);
     expect(changed.headers.etag).toBe(
-      `"cdm6-chg6-${packEtag.replace(/"/g, '')}"`,
+      `"cdm7-chg6-${packEtag.replace(/"/g, '')}"`,
     );
     const unchanged = await request(server)
       .get(`/api/v1/festivals/${pack.id}/pack/changes?from=6`)
@@ -512,7 +512,7 @@ describe('Public festival API', () => {
       .expect(200);
     expect(overlaidPack.headers.etag).not.toBe(packEtag);
     expect(overlaid.headers.etag).toBe(
-      `"cdm6-chg6-${String(overlaidPack.headers.etag).replace(/"/g, '')}"`,
+      `"cdm7-chg6-${String(overlaidPack.headers.etag).replace(/"/g, '')}"`,
     );
 
     const latest = await request(server)
@@ -805,6 +805,117 @@ describe('Public festival API', () => {
     });
   });
 
+  it('projects the zone map and changes mapVersion only when the map changes', async () => {
+    const zoneMap = {
+      mapImageUrl: null,
+      mapAspect: 0.62,
+      stages: [{ id: 'stg_main', name: 'RIVET STAGE', order: 1 }],
+      mapStages: [
+        {
+          stageId: 'stg_main',
+          x: 0.03,
+          y: 0.02,
+          w: 0.44,
+          note: 'STAGE_POINT_SECRET',
+        },
+        { stageId: 'stg_main', x: 2, y: 0.1, w: 0.4 },
+      ],
+      zones: [
+        {
+          id: 'zon_front_left',
+          name: '리벳 스테이지 앞 왼쪽',
+          kind: '무대 앞',
+          x: 0.25,
+          y: 0.1,
+          order: 1,
+          area: { x: 0.02, y: 0.05, w: 0.44, h: 0.17, memo: 'AREA_SECRET' },
+          landmark: null,
+          staffNote: 'ZONE_SECRET',
+        },
+        {
+          id: 'zon_tent',
+          name: 'TENT 앞',
+          x: 0.75,
+          y: 0.5,
+          area: { x: 0.5, y: 'top', w: 0.4, h: 0.1 },
+          landmark: 'TENT 무대',
+        },
+      ],
+    };
+    repo.findOne.mockResolvedValueOnce({
+      ...published,
+      published: { ...pack, ...zoneMap },
+    });
+    const response = await request(server)
+      .get(`/api/v1/festivals/${pack.id}/pack`)
+      .expect(200);
+    const body = successData<{
+      zones: unknown[];
+      mapStages: unknown[];
+      mapVersion: string;
+      mapAspect: number;
+    }>(response.body);
+    expect(JSON.stringify(response.body)).not.toMatch(
+      /STAGE_POINT_SECRET|AREA_SECRET|ZONE_SECRET/,
+    );
+    expect(body.mapAspect).toBe(0.62);
+    expect(body.mapStages).toEqual([
+      { stageId: 'stg_main', x: 0.03, y: 0.02, w: 0.44 },
+    ]);
+    expect(body.zones).toEqual([
+      {
+        id: 'zon_front_left',
+        name: '리벳 스테이지 앞 왼쪽',
+        kind: '무대 앞',
+        x: 0.25,
+        y: 0.1,
+        order: 1,
+        area: { x: 0.02, y: 0.05, w: 0.44, h: 0.17 },
+        landmark: null,
+      },
+      {
+        id: 'zon_tent',
+        name: 'TENT 앞',
+        x: 0.75,
+        y: 0.5,
+        area: null,
+        landmark: 'TENT 무대',
+      },
+    ]);
+    expect(body.mapVersion).toMatch(/^zm-[0-9a-f]{12}$/);
+
+    // 지도와 관계없는 공연이 바뀌면 같은 버전, 존 영역이 바뀌면 다른 버전이다.
+    repo.findOne.mockResolvedValueOnce({
+      ...published,
+      published: { ...pack, ...zoneMap, sets: [], packVersion: 8 },
+    });
+    const sameMap = await request(server)
+      .get(`/api/v1/festivals/${pack.id}/pack/version`)
+      .expect(200);
+    expect(successData<{ mapVersion: string }>(sameMap.body).mapVersion).toBe(
+      body.mapVersion,
+    );
+    repo.findOne.mockResolvedValueOnce({
+      ...published,
+      published: {
+        ...pack,
+        ...zoneMap,
+        zones: [
+          {
+            ...zoneMap.zones[0],
+            area: { x: 0.02, y: 0.05, w: 0.44, h: 0.2 },
+          },
+        ],
+      },
+    });
+    const movedMap = await request(server)
+      .get(`/api/v1/festivals/${pack.id}/pack/version`)
+      .expect(200);
+    expect(
+      successData<{ mapVersion: string }>(movedMap.body).mapVersion,
+    ).not.toBe(body.mapVersion);
+  });
+
   it('returns version and filters flag tags with OR semantics', async () => {
     const version = await request(server)
       .get(`/api/v1/festivals/${pack.id}/pack/version`)
@@ -813,6 +924,7 @@ describe('Public festival API', () => {
       packVersion: 7,
       packUpdatedAt: pack.packUpdatedAt,
       etag: version.headers.etag,
+      mapVersion: null,
     });
     expect(version.headers.etag).toMatch(/^"[0-9a-f]{64}"$/);
     await request(server)

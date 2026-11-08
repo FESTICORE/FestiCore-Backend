@@ -17,12 +17,14 @@
 | GET    | `/:id/draft`             | ID                                                                      | 현재 초안·버전                                                    |
 | PATCH  | `/:id/draft`             | `If-Match: "d{draftVersion}"`, JSON 병합 패치                           | 검증된 새 초안·버전                                               |
 | PUT    | `/:id/draft/sets`        | 같은 `If-Match`, 배열                                                   | 공연 목록 전체 교체                                               |
-| PUT    | `/:id/draft/zones`       | 같은 `If-Match`, 배열                                                   | 존 목록 전체 교체                                                 |
+| PUT    | `/:id/draft/zones`       | 같은 `If-Match`, 배열                                                   | 존 목록 전체 교체. 선택 `kind`·`area {x,y,w,h}`·`landmark`(1~12자)                 |
 | GET    | `/:id/draft/diff`        | ID                                                                      | 발행본 대비 최상위 필드 차이                                      |
 | POST   | `/:id/publish`           | `If-Match: "d{draftVersion}"`, `{ note?: string }`                     | 검토한 초안 버전만 발행. 새 `packVersion`, ETag, `pushedDevices`(알림 대기열 등록 수) |
 | GET    | `/:id/versions`          | ID                                                                      | 발행 이력                                                         |
 | POST   | `/:id/rollback`          | `{ toVersion }`                                                         | 이전 팩을 새 버전으로 재발행                                      |
 | POST   | `/:id/pack/import-image` | multipart `image` (JPEG/PNG/WebP, 최대 10MB), `date` (등록된 축제 날짜) | HTTP 200 `{ draft: Set[], confidence: 0..1, unparsed: string[] }` |
+
+존 지도: 초안 `zones[].area`는 지도 왼쪽 위 기준 0~1 비율 사각형이며 지도 밖으로 나갈 수 없다(w·h > 0, x+w ≤ 1, y+h ≤ 1). 영역이 있는 존이 하나라도 있으면 `mapAspect`(지도 너비/높이)가 필요하다. 초안 PATCH의 `mapStages`는 최대 8개의 `{ stageId, x, y, w }`(0~1)로 존 지도의 무대 머리글 줄 위치를 정하며, `stageId`는 초안 `stages`에 있어야 한다. 발행하면 공개 팩 `mapVersion`이 바뀐다(공개 축제 명세의 존 지도 참고).
 
 공연 `Set`의 선택 필드 `imageUrl`에는 서버가 보관한 `/api/v1/festivals/images/{imageId}.webp` 경로만 넣는다. 외부 URL은 거부한다. 발행 후 공개 상세의 `sets`와 `timetable`에 이 경로가 전달되며, 사진이 없는 공연은 `imageUrl: null`이다. `timetable`의 각 항목에는 `date`와 `stageName`도 포함된다. 공연별 공식 시작·종료 시각이 없으면 공연을 임의 생성하지 않는다.
 

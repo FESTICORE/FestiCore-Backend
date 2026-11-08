@@ -125,6 +125,7 @@ function draftFor(
     rules: [],
     mapImageUrl: null,
     mapAspect: null,
+    mapStages: [],
     source,
   };
 }

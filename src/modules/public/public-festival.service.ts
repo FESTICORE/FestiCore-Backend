@@ -102,6 +102,56 @@ function projectedArray(value: unknown, names: readonly string[]): Document[] {
   return requiredArray(value).map((item) => fields(item, names));
 }
 
+function unitNumber(value: unknown): value is number {
+  return typeof value === 'number' && value >= 0 && value <= 1;
+}
+
+/** 존 지도 영역 `{x,y,w,h}`(0..1). 형식이 다르면 null로 보낸다. */
+function projectMapArea(value: unknown): Document | null {
+  if (!object(value)) return null;
+  const { x, y, w, h } = value;
+  if (!unitNumber(x) || !unitNumber(y) || !unitNumber(w) || !unitNumber(h))
+    return null;
+  return { x, y, w, h };
+}
+
+function projectZones(value: unknown): Document[] {
+  return requiredArray(value).map((zone) => ({
+    ...fields(zone, ['id', 'name', 'kind', 'x', 'y', 'order']),
+    area: projectMapArea(zone.area),
+    landmark: typeof zone.landmark === 'string' ? zone.landmark : null,
+  }));
+}
+
+function projectMapStages(value: unknown): Document[] {
+  return requiredArray(value)
+    .filter(
+      (item) =>
+        typeof item.stageId === 'string' &&
+        unitNumber(item.x) &&
+        unitNumber(item.y) &&
+        unitNumber(item.w),
+    )
+    .map((item) => fields(item, ['stageId', 'x', 'y', 'w']));
+}
+
+/**
+ * 존 지도 버전. 지도 이미지·종횡비·존(이름·영역·좌표)·무대 머리글 위치가 바뀔 때만 바뀐다.
+ * 앱은 받아 둔 팩의 값과 `GET :id/pack/version`의 값을 비교해 "지도 바뀜(팩 업데이트 필요)"을 띄운다.
+ * 존이 없으면 null이다.
+ */
+export function zoneMapVersion(pack: Document): string | null {
+  const zones = projectZones(pack.zones);
+  if (zones.length === 0) return null;
+  const canonical = JSON.stringify({
+    imageUrl: typeof pack.mapImageUrl === 'string' ? pack.mapImageUrl : null,
+    aspect: typeof pack.mapAspect === 'number' ? pack.mapAspect : null,
+    zones,
+    stages: projectMapStages(pack.mapStages),
+  });
+  return `zm-${createHash('sha256').update(canonical).digest('hex').slice(0, 12)}`;
+}
+
 function projectSource(value: unknown): Document {
   return fields(value, ['name', 'url', 'verifiedAt']);
 }
@@ -361,14 +411,9 @@ function projectPack(pack: Document): Document {
     }));
   result.timetableStatus =
     requiredArray(result.sets).length > 0 ? 'available' : 'pending';
-  result.zones = projectedArray(pack.zones, [
-    'id',
-    'name',
-    'kind',
-    'x',
-    'y',
-    'order',
-  ]);
+  result.zones = projectZones(pack.zones);
+  result.mapStages = projectMapStages(pack.mapStages);
+  result.mapVersion = zoneMapVersion(pack);
   result.flags = requiredArray(pack.flags)
     .filter(
       (flag) =>
@@ -2246,6 +2291,7 @@ export class PublicFestivalService {
       packVersion: pack.packVersion as number,
       packUpdatedAt: pack.packUpdatedAt as string,
       etag,
+      mapVersion: zoneMapVersion(pack),
     };
   }
 

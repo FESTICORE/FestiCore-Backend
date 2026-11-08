@@ -76,6 +76,7 @@ const draftExample = {
   },
   mapImageUrl: null,
   mapAspect: null,
+  mapStages: [],
   source: {
     name: '관리자 입력',
     url: null,
@@ -342,7 +343,7 @@ export class AdminFestivalController {
   @ApiHeader(draftHeader)
   @ApiBody({
     description:
-      '수정할 필드만 보냅니다. 허용 필드: name, venue, timezone, days, thumbUrl, ticketLinks, flagsEnabled, source, stages, sets, zones, flags, directions, checklist, rules, mapImageUrl, mapAspect. 날짜 전용 초안은 days=[]를 유지할 수 있고, 발행하려면 검증된 시각·무대·세트가 필요합니다. eventPeriod는 수정할 수 없습니다.',
+      '수정할 필드만 보냅니다. 허용 필드: name, venue, timezone, days, thumbUrl, ticketLinks, flagsEnabled, source, stages, sets, zones, flags, directions, checklist, rules, mapImageUrl, mapAspect, mapStages. 존에 지도 영역(`area`)이 있으면 `mapAspect`(지도 너비/높이)가 필요합니다. 날짜 전용 초안은 days=[]를 유지할 수 있고, 발행하려면 검증된 시각·무대·세트가 필요합니다. eventPeriod는 수정할 수 없습니다.',
     schema: {
       type: 'object',
       minProperties: 1,
@@ -417,6 +418,22 @@ export class AdminFestivalController {
         rules: { type: 'array', maxItems: 20, items: {} },
         mapImageUrl: { type: 'string', nullable: true, format: 'uri' },
         mapAspect: { type: 'number', nullable: true },
+        mapStages: {
+          type: 'array',
+          maxItems: 8,
+          description:
+            '존 지도의 무대 머리글(무대 이름·지금 공연) 줄. 무대 ID와 지도 왼쪽 위 기준 0~1 좌표·너비',
+          items: {
+            type: 'object',
+            required: ['stageId', 'x', 'y', 'w'],
+            properties: {
+              stageId: { type: 'string', example: 'stg_rivet' },
+              x: { type: 'number', minimum: 0, maximum: 1 },
+              y: { type: 'number', minimum: 0, maximum: 1 },
+              w: { type: 'number', minimum: 0, maximum: 1 },
+            },
+          },
+        },
       },
       example: {
         stages: [{ id: 'stg_main', name: '메인 스테이지', order: 1 }],
@@ -564,7 +581,7 @@ export class AdminFestivalController {
   @ApiOperation({
     summary: '존 목록 전체 교체',
     description:
-      'editor 이상이 지도 존 배열을 통째로 교체합니다. 존 ID는 `zon_`으로 시작하고 x·y 좌표는 0~1 범위입니다.',
+      'editor 이상이 지도 존 배열을 통째로 교체합니다. 존 ID는 `zon_`으로 시작하고 x·y 좌표는 0~1 범위입니다. 존 지도에 그릴 영역 `area`(x·y·w·h, 0~1, 지도 밖으로 나가지 않음)와 영역 오른쪽 위 표지 `landmark`(1~12자)는 선택입니다.',
   })
   @ApiParam(festivalId)
   @ApiHeader(draftHeader)
@@ -581,9 +598,52 @@ export class AdminFestivalController {
           name: { type: 'string', minLength: 1, maxLength: 20 },
           x: { type: 'number', minimum: 0, maximum: 1 },
           y: { type: 'number', minimum: 0, maximum: 1 },
+          kind: {
+            type: 'string',
+            nullable: true,
+            description: '존 카드 보조 문구(예: 무대 앞, 슬램, 출입구)',
+          },
+          area: {
+            type: 'object',
+            nullable: true,
+            required: ['x', 'y', 'w', 'h'],
+            properties: {
+              x: { type: 'number', minimum: 0, maximum: 1 },
+              y: { type: 'number', minimum: 0, maximum: 1 },
+              w: {
+                type: 'number',
+                minimum: 0,
+                maximum: 1,
+                description: '0보다 커야 함',
+              },
+              h: {
+                type: 'number',
+                minimum: 0,
+                maximum: 1,
+                description: '0보다 커야 함',
+              },
+            },
+          },
+          landmark: {
+            type: 'string',
+            nullable: true,
+            minLength: 1,
+            maxLength: 12,
+            example: 'TENT 무대',
+          },
         },
       },
-      example: [{ id: 'zon_food', name: '푸드존', x: 0.35, y: 0.68 }],
+      example: [
+        {
+          id: 'zon_food',
+          name: '푸드존',
+          x: 0.35,
+          y: 0.68,
+          kind: '휴식',
+          area: { x: 0.53, y: 0.5, w: 0.44, h: 0.27 },
+          landmark: null,
+        },
+      ],
     },
   })
   @ApiResponse({

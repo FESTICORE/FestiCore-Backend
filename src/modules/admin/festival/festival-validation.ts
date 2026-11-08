@@ -25,10 +25,41 @@ const keys = new Set([
   'rules',
   'mapImageUrl',
   'mapAspect',
+  'mapStages',
 ]);
 
 function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function unit(value: unknown): value is number {
+  return typeof value === 'number' && value >= 0 && value <= 1;
+}
+
+/** 존 지도 영역. 지도 왼쪽 위 기준 0..1 비율이며 지도 밖으로 나가지 않아야 한다. 없으면 null·생략. */
+function optionalMapArea(value: unknown): boolean {
+  if (value === undefined || value === null) return true;
+  if (!object(value)) return false;
+  const { x, y, w, h } = value;
+  return (
+    unit(x) &&
+    unit(y) &&
+    unit(w) &&
+    unit(h) &&
+    w > 0 &&
+    h > 0 &&
+    x + w <= 1 + 1e-9 &&
+    y + h <= 1 + 1e-9
+  );
+}
+
+function optionalLabel(value: unknown, max: number): boolean {
+  if (value === undefined || value === null) return true;
+  return (
+    typeof value === 'string' &&
+    [...value].length >= 1 &&
+    [...value].length <= max
+  );
 }
 
 function calendarDate(value: unknown): value is string {
@@ -388,7 +419,36 @@ export function validateDraft(
       zone.y > 1
     )
       errors.push(`zones[${i}]: 좌표는 0..1`);
+    else {
+      if (!optionalMapArea(zone.area))
+        errors.push(`zones[${i}]: area는 0..1 안의 {x,y,w,h}`);
+      if (!optionalLabel(zone.landmark, 12))
+        errors.push(`zones[${i}]: landmark는 1..12자`);
+    }
   }
+  const mapStages = draft.mapStages;
+  if (mapStages !== undefined) {
+    if (!Array.isArray(mapStages) || mapStages.length > 8)
+      errors.push('mapStages: 배열 크기 오류');
+    else
+      for (const [i, item] of mapStages.entries()) {
+        if (
+          !object(item) ||
+          !stageIds.has(item.stageId) ||
+          !unit(item.x) ||
+          !unit(item.y) ||
+          !unit(item.w) ||
+          item.w === 0 ||
+          item.x + item.w > 1 + 1e-9
+        )
+          errors.push(`mapStages[${i}]: 무대 ID와 0..1 좌표·너비 필요`);
+      }
+  }
+  if (
+    zones.some((zone) => object(zone) && object(zone.area)) &&
+    (typeof draft.mapAspect !== 'number' || draft.mapAspect <= 0)
+  )
+    errors.push('mapAspect: 존 영역이 있으면 지도 종횡비(너비/높이) 필요');
   if (
     draft.mapImageUrl !== null &&
     (typeof draft.mapImageUrl !== 'string' ||
