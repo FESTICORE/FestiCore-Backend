@@ -387,15 +387,22 @@ export class SocialNotificationService
     }
   }
 
+  /**
+   * TypeORM Postgres는 최상위 UPDATE에 [rows, rowCount]를 돌려주므로 SELECT로 감싸 행만 받는다.
+   * 리스 시각은 JS Date와 같은 밀리초로 잘라 `"leaseUntil" = $2` 비교가 맞게 한다.
+   */
   async claim(): Promise<Delivery | null> {
     const jobs = await this.db.query<Delivery[]>(`WITH due AS (
       SELECT "id" FROM "social_notification_deliveries"
       WHERE ("status" = 'pending' AND "nextAttemptAt" <= now())
          OR ("status" = 'leased' AND "leaseUntil" <= now())
       ORDER BY "nextAttemptAt", "id" LIMIT 1 FOR UPDATE SKIP LOCKED
-    ) UPDATE "social_notification_deliveries" n
-      SET "status" = 'leased', "leaseUntil" = now() + interval '2 minutes'
-      FROM due WHERE n."id" = due."id" RETURNING n.*`);
+    ), claimed AS (
+      UPDATE "social_notification_deliveries" n
+      SET "status" = 'leased',
+        "leaseUntil" = date_trunc('milliseconds', now() + interval '2 minutes')
+      FROM due WHERE n."id" = due."id" RETURNING n.*
+    ) SELECT * FROM claimed`);
     return jobs[0] ?? null;
   }
 
@@ -482,8 +489,8 @@ export class SocialNotificationService
   ): Promise<void> {
     await this.db.query(
       `UPDATE "social_notification_deliveries"
-      SET "status" = $3, "attempts" = "attempts" + 1,
-        "sentAt" = CASE WHEN $3 = 'sent' THEN now() ELSE NULL END,
+      SET "status" = $3::varchar, "attempts" = "attempts" + 1,
+        "sentAt" = CASE WHEN $3::varchar = 'sent' THEN now() ELSE NULL END,
         "leaseUntil" = NULL, "lastErrorCode" = $4
       WHERE "id" = $1 AND "status" = 'leased' AND "leaseUntil" = $2`,
       [job.id, job.leaseUntil, status, reason?.slice(0, 128) ?? null],
