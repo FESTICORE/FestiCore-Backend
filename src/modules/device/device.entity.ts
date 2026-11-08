@@ -47,6 +47,10 @@ export class Device {
   @Column({ type: 'varchar', length: 256, nullable: true, select: false })
   liveActivityPushToken!: string | null;
 
+  /** 현재 Live Activity ID를 처음 등록한 시각. 8시간이 지나면 iOS가 끝낸 활동으로 본다. */
+  @Column({ type: 'timestamptz', nullable: true })
+  liveActivityRegisteredAt!: Date | null;
+
   @Column({ type: 'boolean', default: true })
   notifyFlagStatus!: boolean;
 

@@ -364,6 +364,12 @@ export class DeviceService {
     await this.ownedDevice(id, principal);
     await this.publishedFestival(body.festivalId);
     await this.dataSource.transaction(async (manager) => {
+      const current = await manager.findOne(Device, {
+        where: this.ownerCondition(id, principal),
+        select: { id: true, liveActivityId: true },
+      });
+      // 같은 활동의 토큰 교체는 등록 시각을 유지해 iOS의 8시간 한도와 맞춘다.
+      const isNewActivity = current?.liveActivityId !== body.activityId;
       const result = await manager.update(
         Device,
         this.ownerCondition(id, principal),
@@ -371,6 +377,7 @@ export class DeviceService {
           liveActivityFestivalId: body.festivalId,
           liveActivityId: body.activityId,
           liveActivityPushToken: body.pushToken,
+          ...(isNewActivity ? { liveActivityRegisteredAt: new Date() } : {}),
         },
       );
       if (result.affected !== 1)

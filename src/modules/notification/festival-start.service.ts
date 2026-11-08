@@ -56,6 +56,7 @@ interface DeliveryTarget {
   apnsToken: string | null;
   liveActivityPushToStartToken: string | null;
   liveActivityId: string | null;
+  hasCurrentActivity: boolean;
   apnsEnvironment: 'sandbox' | 'production' | null;
   name: string | null;
   days: unknown;
@@ -71,6 +72,15 @@ const REMINDER_PREFIX = 'festival-reminder:';
 const LIVE_START_PREFIX = 'live-activity-start:';
 const PERFORMANCE_START_PREFIX = 'live-activity-performance:';
 const PERFORMANCE_LEAD_MS = 2 * 60 * 60_000;
+/**
+ * 기기에 지금 보이는 Live Activity가 없다고 볼 조건.
+ * 서버가 종료했거나 APNs가 토큰을 거절하면 토큰만 지워지고 ID가 남고,
+ * iOS는 활동을 최대 8시간만 유지하므로 그보다 오래된 등록도 끝난 활동으로 본다.
+ */
+const NO_CURRENT_ACTIVITY = `(d."liveActivityId" IS NULL
+  OR d."liveActivityPushToken" IS NULL
+  OR d."liveActivityRegisteredAt" IS NULL
+  OR d."liveActivityRegisteredAt" <= now() - interval '8 hours')`;
 
 function liveActivityStartAt(days: Day[]): Date | null {
   const first = [...days].sort((left, right) =>
@@ -255,7 +265,7 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
              AND s."festivalStarts" = true
              AND d."liveActivityPushToStartToken" IS NOT NULL
              AND d."apnsEnvironment" IS NOT NULL
-             AND d."liveActivityId" IS NULL
+             AND ${NO_CURRENT_ACTIVITY}
              AND NOT EXISTS (
                SELECT 1 FROM "user_schedules" us
                WHERE us."userId" = d."userId" AND us."festivalId" = $1
@@ -327,7 +337,7 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
        JOIN "user_schedules" us ON us."userId" = p."userId"
          AND us."festivalId" = p."festivalId" AND us."setIds" ? p."setId"
        WHERE d."liveActivityPushToStartToken" IS NOT NULL
-         AND d."apnsEnvironment" IS NOT NULL AND d."liveActivityId" IS NULL
+         AND d."apnsEnvironment" IS NOT NULL AND ${NO_CURRENT_ACTIVITY}
        ON CONFLICT ("deviceId", "eventKey") DO UPDATE
          SET "scheduledAt" = EXCLUDED."scheduledAt",
              "nextAttemptAt" = EXCLUDED."nextAttemptAt",
@@ -410,7 +420,7 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
        JOIN "user_schedules" us ON us."userId" = d."userId"
          AND us."festivalId" = $1
        WHERE d."liveActivityPushToStartToken" IS NOT NULL
-         AND d."apnsEnvironment" IS NOT NULL AND d."liveActivityId" IS NULL
+         AND d."apnsEnvironment" IS NOT NULL AND ${NO_CURRENT_ACTIVITY}
          AND us."setIds" ? $4::text
          AND ($5::uuid IS NULL OR d."userId" = $5::uuid)
        ON CONFLICT ("deviceId", "eventKey") DO UPDATE
@@ -468,6 +478,7 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
       `
       SELECT d."userId" AS "ownerUserId", d."apnsToken", d."liveActivityPushToStartToken",
         d."liveActivityId", d."apnsEnvironment",
+        NOT ${NO_CURRENT_ACTIVITY} AS "hasCurrentActivity",
         f."published"->>'name' AS "name", f."published"->'days' AS "days",
         f."published"->'checklist' AS "checklist", f."published",
         f."publishedVersion" AS "publishedVersion",
@@ -680,7 +691,7 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
       (!performanceStart &&
         Array.isArray(target.savedSetIds) &&
         target.savedSetIds.length > 0) ||
-      target.liveActivityId
+      target.hasCurrentActivity
     ) {
       await this.finish(job, 'cancelled', 'TARGET_UNAVAILABLE');
       return;
