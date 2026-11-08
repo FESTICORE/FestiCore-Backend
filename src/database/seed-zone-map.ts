@@ -468,11 +468,12 @@ async function main() {
         where: { email: memberEmail.toLowerCase() },
       });
       if (!member) throw new Error('--member-email 계정을 찾을 수 없습니다.');
+      // 축제마다 깃발 ID가 달라서 멱등 키에 축제 ID를 넣는다.
       for (const item of FLAGS.filter((flag) => flag.followed))
         await flagsService.follow(
           flagIds.get(item.key)!,
           member.id,
-          `seed-zone-map-follow-${item.key}`,
+          `seed-zone-map-follow-${festivalId}-${item.key}`,
         );
       const owned = (await crews
         .create(member.id, { festivalId, name: '존 지도 목 크루' })
