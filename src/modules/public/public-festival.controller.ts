@@ -363,7 +363,8 @@ export class PublicFestivalController {
         data: {
           packVersion: 1,
           packUpdatedAt: '2026-10-20T09:00:00Z',
-          etag: '"cdm6-v1"',
+          etag: '"cdm7-v1"',
+          mapVersion: 'zm-3f2a9c1d0b7e',
         },
         message: '성공적으로 처리되었습니다.',
       },

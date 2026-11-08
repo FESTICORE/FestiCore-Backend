@@ -10,7 +10,7 @@
 | ---------------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
 | `GET /api/v1/festivals`                  | `after=YYYY-MM-DD` 또는 이전 응답의 `nextCursor`, `limit=1..50`(기본 20), 선택 `If-None-Match` | `items`(ID, 이름, 장소, 날짜, 팩 버전, 상태, 썸네일, `artistNames`, 발견 항목의 `sourceUrl`), `nextCursor` |
 | `GET /api/v1/festivals/:id`              | 목록에서 받은 축제 ID, 본문 없음                                                               | 발행 축제는 공개 팩과 공연별 날짜·무대명·시간·보관 이미지가 포함된 `timetable` 및 공연별 출연진에서 중복을 제거한 `artists`, 발견 축제는 확인된 날짜·장소·출처·저장 포스터·출연진과 빈 `timetable`  |
-| `GET /api/v1/festivals/:id/pack/version` | 선택 `If-None-Match`                                                                           | `packVersion`, `packUpdatedAt`, `etag`                                                      |
+| `GET /api/v1/festivals/:id/pack/version` | 선택 `If-None-Match`                                                                           | `packVersion`, `packUpdatedAt`, `etag`, `mapVersion`                                        |
 | `GET /api/v1/festivals/:id/pack/changes` | 필수 `from`(앱에 저장된 팩 버전, 1 이상 정수), 선택 `If-None-Match` | `fromVersion`, `toVersion`, `sizeBytes`, `changedSets`, `lastShuttleAt`, `lastTrainAt`, `lastDepartures` |
 | `GET /api/v1/festivals/:id/pack`         | 선택 `If-None-Match`, `Accept-Encoding: br` 또는 `gzip`                                        | 발행된 팩 전체 JSON 및 공연별 출연진에서 중복을 제거한 `artists`                            |
 | `GET /api/v1/festivals/:id/flags`        | 선택 `tag=slam&tag=calm`처럼 반복, OR 필터                                                     | `items`(공개 깃발 프로필), `packVersion`                                                    |
@@ -28,7 +28,16 @@
 
 `/pack/changes`는 앱 팩 관리 화면의 업데이트 안내에 쓴다. `sizeBytes`는 현재 발행 팩 JSON 크기, `changedSets`는 `from` 버전 대비 추가·삭제되었거나 아티스트·무대·시작·종료 시각이 바뀐 공연 수다. `lastShuttleAt`·`lastTrainAt`은 공개 팩 투영 값(오프셋 포함 ISO8601 또는 null)이 바뀐 경우에만 `{ "before", "after" }`이고 아니면 `null`이다. `lastDepartures`는 날짜별 마지막 셔틀·막차가 추가·삭제·변경된 날짜만 `[{ "date", "before": { "shuttleAt", "trainAt" } | null, "after": … | null }]`로 날짜순으로 주고, 바뀐 날짜가 없으면 `null`이다. `from`이 현재 버전 이상이면 `changedSets`는 0, 버전 기록이 없으면 `null`이다. `from`이 정수가 아니면 400 `VALIDATION`, 발행 전 축제는 404 `FESTIVAL_NOT_FOUND`다. 응답은 `public, no-cache, must-revalidate`이고 ETag는 `"cdm{투영 버전}-chg{from}-{현재 /pack ETag의 따옴표 안 값}"`이다. 같은 packVersion이라도 이미지 승인 변경으로 `/pack` 본문·ETag·`sizeBytes`가 바뀌면 이 ETag도 바뀐다. `from`과 현재 공개 팩이 같으면 `If-None-Match`에 304를 반환한다.
 
-`/pack`의 ETag는 JSON 응답 형식 변경을 구분하는 `"cdm6-v{packVersion}"`이다. `/pack/version`의 응답 헤더와 본문 `etag`도 같은 값을 반환한다. 두 경로 모두 `If-None-Match`가 일치하면 본문 없이 304를 반환한다. 이전 형식의 ETag는 일치하지 않아 새 본문을 다시 받는다. 압축별 응답은 `Vary: Accept-Encoding`으로 구분한다. 목록과 라이브도 조건부 조회를 지원한다. 축제 목록은 `public, no-cache, must-revalidate`로 저장을 허용하되 매 요청 공유 캐시 재검증을 요구한다. 이전 `max-age=3600` 응답은 Railway CDN이 요청의 `Cache-Control: no-cache`를 무시하고 오래된 304를 반환했다. 앱은 이전 목록 ETag를 `If-None-Match`로 보내 변경이 없을 때 304를 받을 수 있다. `live`의 `X-Poll-After: 30`은 최소 권장 폴링 간격이며, 기기당 분당 4회 초과 시 429와 `Retry-After`를 보낸다. 지난 요청 제한 기록 정리가 실패하면 새 제한 기록을 만들지 않고 503을 반환하며, 5분 간격으로 정리를 재시도한다.
+## 존 지도
+
+발행 팩은 존 지도(S06)를 그리는 값을 함께 보낸다.
+
+- `zones[]`: `{ id, name, kind, x, y, order, area, landmark }`. `x`·`y`는 기존 0~1 기준점, `area`는 지도 왼쪽 위 기준 0~1 비율 사각형 `{ x, y, w, h }`(없거나 형식이 다르면 `null`), `kind`는 존 카드 보조 문구(예: 무대 앞), `landmark`는 영역 오른쪽 위 표지(예: TENT 무대, 없으면 `null`)다.
+- `mapStages[]`: 무대 머리글(무대 이름·지금 공연) 줄 `{ stageId, x, y, w }`(0~1). 형식이 다른 항목은 뺀다.
+- `mapImageUrl`·`mapAspect`: 선택 배경 이미지와 지도 너비/높이. 존 영역이 있으면 `mapAspect`가 반드시 있다.
+- `mapVersion`: 지도 이미지·종횡비·존(이름·종류·기준점·영역·표지·순서)·무대 머리글이 바뀔 때만 바뀌는 `"zm-<12자리 hex>"`. 존이 없으면 `null`. `/pack/version`도 같은 값을 보내므로 앱은 받아 둔 팩의 값과 비교해 "지도가 바뀌었어요 · 팩을 업데이트해 주세요"를 띄운다. 영역이 있는 존이 없으면 앱은 지도 대신 존 목록을 보여 준다.
+
+`/pack`의 ETag는 JSON 응답 형식 변경을 구분하는 `"cdm7-v{packVersion}"`이다. `/pack/version`의 응답 헤더와 본문 `etag`도 같은 값을 반환한다. 두 경로 모두 `If-None-Match`가 일치하면 본문 없이 304를 반환한다. 이전 형식의 ETag는 일치하지 않아 새 본문을 다시 받는다. 압축별 응답은 `Vary: Accept-Encoding`으로 구분한다. 목록과 라이브도 조건부 조회를 지원한다. 축제 목록은 `public, no-cache, must-revalidate`로 저장을 허용하되 매 요청 공유 캐시 재검증을 요구한다. 이전 `max-age=3600` 응답은 Railway CDN이 요청의 `Cache-Control: no-cache`를 무시하고 오래된 304를 반환했다. 앱은 이전 목록 ETag를 `If-None-Match`로 보내 변경이 없을 때 304를 받을 수 있다. `live`의 `X-Poll-After: 30`은 최소 권장 폴링 간격이며, 기기당 분당 4회 초과 시 429와 `Retry-After`를 보낸다. 지난 요청 제한 기록 정리가 실패하면 새 제한 기록을 만들지 않고 503을 반환하며, 5분 간격으로 정리를 재시도한다.
 
 ## 오류와 보안
 

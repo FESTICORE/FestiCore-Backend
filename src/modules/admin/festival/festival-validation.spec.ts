@@ -440,3 +440,67 @@ describe('metadata publication', () => {
     expect(validateDraft(draft, true)).toEqual([]);
   });
 });
+
+describe('zone map', () => {
+  const zone = (extra: Record<string, unknown> = {}) => ({
+    id: 'zon_front_left',
+    name: '리벳 스테이지 앞 왼쪽',
+    kind: '무대 앞',
+    x: 0.2,
+    y: 0.2,
+    ...extra,
+  });
+
+  it('accepts zone areas, landmarks and stage header points with an aspect', () => {
+    const valid = {
+      ...draft,
+      mapAspect: 0.62,
+      zones: [
+        zone({ area: { x: 0.02, y: 0.1, w: 0.44, h: 0.17 } }),
+        zone({
+          id: 'zon_tent',
+          area: { x: 0.53, y: 0.5, w: 0.47, h: 0.5 },
+          landmark: 'TENT 무대',
+        }),
+      ],
+      mapStages: [{ stageId: 'stg_12345678', x: 0.03, y: 0.02, w: 0.44 }],
+    };
+    expect(validateDraft(valid)).toEqual([]);
+    expect(validateDraft(valid, true)).toEqual([]);
+  });
+
+  it('keeps point-only zones and drafts without mapStages valid', () => {
+    expect(validateDraft({ ...draft, zones: [zone()] })).toEqual([]);
+  });
+
+  it('rejects areas outside the map, long landmarks, unknown stages and a missing aspect', () => {
+    const errors = validateDraft({
+      ...draft,
+      zones: [
+        zone({ area: { x: 0.8, y: 0.1, w: 0.3, h: 0.2 } }),
+        zone({ id: 'zon_b', area: { x: 0.1, y: 0.1, w: 0, h: 0.2 } }),
+        zone({ id: 'zon_c', area: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 } }),
+        zone({ id: 'zon_d', landmark: '열세 글자가 넘는 표지 이름입니다' }),
+      ],
+      mapStages: [{ stageId: 'stg_unknown', x: 0.1, y: 0.1, w: 0.4 }],
+    });
+    expect(errors).toEqual(
+      expect.arrayContaining([
+        'zones[0]: area는 0..1 안의 {x,y,w,h}',
+        'zones[1]: area는 0..1 안의 {x,y,w,h}',
+        'zones[3]: landmark는 1..12자',
+        'mapStages[0]: 무대 ID와 0..1 좌표·너비 필요',
+        'mapAspect: 존 영역이 있으면 지도 종횡비(너비/높이) 필요',
+      ]),
+    );
+  });
+
+  it('accepts mapStages as a draft patch field', () => {
+    const merged = mergeDraft(draft, {
+      mapStages: [{ stageId: 'stg_12345678', x: 0.5, y: 0, w: 0.5 }],
+    });
+    expect(merged.mapStages).toEqual([
+      { stageId: 'stg_12345678', x: 0.5, y: 0, w: 0.5 },
+    ]);
+  });
+});

@@ -205,6 +205,7 @@ function discoveryDraft(
     rules: [],
     mapImageUrl: null,
     mapAspect: null,
+    mapStages: [],
     source: provenance,
   };
   const errors = validateDraft(draft);
