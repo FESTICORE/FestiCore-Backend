@@ -66,6 +66,34 @@ describe('SocialNotificationService', () => {
     expect(query.mock.calls[4][1]?.[4]).toBe(5);
   });
 
+  it('sends exactly the parameters each status query references', async () => {
+    const query = jest
+      .fn<Promise<unknown>, [string, unknown[]?]>()
+      .mockResolvedValue([]);
+    const { service } = setup();
+    await service.enqueueFlagStatus(
+      { query } as never,
+      {
+        id: 'flag_123',
+        visibility: 'public',
+        hidden: false,
+        status: 'active',
+        zoneId: 'zone_123',
+        activity: 'sing',
+      } as never,
+      actorUserId,
+    );
+    // 쓰지 않는 매개변수가 있으면 Postgres가 형식을 정하지 못해 42P18로 실패한다.
+    for (const [sql, params = []] of query.mock.calls) {
+      const used = new Set(
+        [...sql.matchAll(/\$(\d+)/g)].map((match) => Number(match[1])),
+      );
+      expect(params.length).toBe(used.size === 0 ? 0 : Math.max(...used));
+      for (let index = 1; index <= params.length; index++)
+        expect(used.has(index)).toBe(true);
+    }
+  });
+
   it('excludes resting flags and cancels pending status jobs', async () => {
     const { service } = setup();
     const query = jest
