@@ -441,7 +441,11 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
-  /** One SQL statement claims a due job; SKIP LOCKED excludes concurrent workers. */
+  /**
+   * One SQL statement claims a due job; SKIP LOCKED excludes concurrent workers.
+   * TypeORM Postgres는 최상위 UPDATE에 [rows, rowCount]를 돌려주므로 SELECT로 감싸 행만 받는다.
+   * 리스 시각은 JS Date와 같은 밀리초로 잘라 `"leaseUntil" = $2` 비교가 맞게 한다.
+   */
   async claim(): Promise<Delivery | null> {
     const jobs = await this.db.query<Delivery[]>(`
       WITH due AS (
@@ -450,12 +454,14 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
             OR ("status" = 'leased' AND "leaseUntil" <= now()))
         ORDER BY "nextAttemptAt", "id"
         LIMIT 1 FOR UPDATE SKIP LOCKED
-      )
-      UPDATE "notification_deliveries" n
-      SET "status" = 'leased', "leaseUntil" = now() + interval '2 minutes'
-      FROM due WHERE n."id" = due."id"
-      RETURNING n."id", n."deviceId", n."festivalId", n."eventKey",
-        n."scheduledAt", n."leaseUntil", n."attempts"`);
+      ), claimed AS (
+        UPDATE "notification_deliveries" n
+        SET "status" = 'leased',
+          "leaseUntil" = date_trunc('milliseconds', now() + interval '2 minutes')
+        FROM due WHERE n."id" = due."id"
+        RETURNING n."id", n."deviceId", n."festivalId", n."eventKey",
+          n."scheduledAt", n."leaseUntil", n."attempts"
+      ) SELECT * FROM claimed`);
     return jobs[0] ?? null;
   }
 
@@ -755,11 +761,13 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
       );
       if (other.length) return 'conflict';
       const reserved = await manager.query<Array<{ id: string }>>(
-        `UPDATE "notification_deliveries" SET "status" = 'failed',
-           "attempts" = "attempts" + 1, "leaseUntil" = NULL,
-           "lastErrorCode" = 'OUTCOME_UNKNOWN'
-         WHERE "id" = $1 AND "status" = 'leased' AND "leaseUntil" = $2
-         RETURNING "id"`,
+        `WITH reserved AS (
+           UPDATE "notification_deliveries" SET "status" = 'failed',
+             "attempts" = "attempts" + 1, "leaseUntil" = NULL,
+             "lastErrorCode" = 'OUTCOME_UNKNOWN'
+           WHERE "id" = $1 AND "status" = 'leased' AND "leaseUntil" = $2
+           RETURNING "id"
+         ) SELECT "id" FROM reserved`,
         [job.id, job.leaseUntil],
       );
       return reserved.length ? 'reserved' : 'lost';
@@ -830,8 +838,8 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
     reason: string | null,
   ): Promise<void> {
     await this.db.query(
-      `UPDATE "notification_deliveries" SET "status" = $2,
-         "sentAt" = CASE WHEN $2 = 'sent' THEN now() ELSE NULL END,
+      `UPDATE "notification_deliveries" SET "status" = $2::varchar,
+         "sentAt" = CASE WHEN $2::varchar = 'sent' THEN now() ELSE NULL END,
          "lastErrorCode" = $3
        WHERE "id" = $1 AND "status" = 'failed'
          AND "lastErrorCode" = 'OUTCOME_UNKNOWN'`,
@@ -875,8 +883,8 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
   ): Promise<void> {
     await this.db.query(
       `UPDATE "notification_deliveries"
-       SET "status" = $3, "attempts" = "attempts" + 1,
-         "sentAt" = CASE WHEN $3 = 'sent' THEN now() ELSE NULL END,
+       SET "status" = $3::varchar, "attempts" = "attempts" + 1,
+         "sentAt" = CASE WHEN $3::varchar = 'sent' THEN now() ELSE NULL END,
          "leaseUntil" = NULL, "lastErrorCode" = $4
        WHERE "id" = $1 AND "status" = 'leased' AND "leaseUntil" = $2`,
       [job.id, job.leaseUntil, status, reason?.slice(0, 128) ?? null],
