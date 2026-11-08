@@ -13,6 +13,7 @@ export type UserNotificationType =
   | 'crew.member_joined'
   | 'flag.status'
   | 'festival.reminder'
+  | 'festival.set_reminder'
   | 'festival.start'
   | 'pack.updated';
 

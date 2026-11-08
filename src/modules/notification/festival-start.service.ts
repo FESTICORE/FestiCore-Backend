@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { DataSource, EntityManager } from 'typeorm';
 import { ApnsService } from './apns.service';
+import { buildDeeplink } from './deeplink';
 import { buildLiveActivityContentState } from './live-activity-content';
 import {
   recordUserNotifications,
@@ -68,10 +69,34 @@ interface DeliveryTarget {
   hasActiveSession: boolean;
 }
 
+interface SetReminderTarget {
+  ownerUserId: string | null;
+  apnsToken: string | null;
+  apnsEnvironment: 'sandbox' | 'production' | null;
+  notifySetReminders: boolean;
+  hasActiveSession: boolean;
+  name: string | null;
+  published: Record<string, unknown>;
+  savedSetIds: unknown;
+  liveActivityStatus: string | null;
+  liveActivityErrorCode: string | null;
+  liveActivityScheduledAt: Date | null;
+}
+
+interface SetReminderPlan {
+  festivalId: string;
+  setId: string;
+  scheduledAt: Date;
+}
+
 const REMINDER_PREFIX = 'festival-reminder:';
 const LIVE_START_PREFIX = 'live-activity-start:';
 const PERFORMANCE_START_PREFIX = 'live-activity-performance:';
+const SET_REMINDER_PREFIX = 'set-reminder:';
 const PERFORMANCE_LEAD_MS = 2 * 60 * 60_000;
+/** 같은 시각 공연 push-to-start의 결과를 기다리는 최대 시간. 지나면 알림 푸시를 보낸다. */
+const LIVE_ACTIVITY_WAIT_MS = 5 * 60_000;
+const EVENT_KEY_MAX_LENGTH = 96;
 /**
  * 기기에 지금 보이는 Live Activity가 없다고 볼 조건.
  * 서버가 종료했거나 APNs가 토큰을 거절하면 토큰만 지워지고 ID가 남고,
@@ -114,6 +139,21 @@ function checklistSummary(value: unknown): string {
     .filter(Boolean)
     .slice(0, 3);
   return labels.length ? ` ${labels.join(', ')} 챙기세요.` : '';
+}
+
+function stageName(
+  published: Record<string, unknown>,
+  stageId: string,
+): string | null {
+  const stage = records(published.stages).find((item) => item.id === stageId);
+  const name = typeof stage?.name === 'string' ? stage.name.trim() : '';
+  return name || null;
+}
+
+function setReminderBody(artist: string, stage: string | null): string {
+  if (!stage) return `${artist} 공연이 2시간 후 시작돼요.`;
+  const place = stage.endsWith('무대') ? stage : `${stage} 무대`;
+  return `${artist} 공연이 2시간 후 ${place}에서 시작돼요.`;
 }
 
 function validDays(value: unknown): Day[] {
@@ -326,27 +366,37 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
           scheduledAt,
         });
     }
-    if (!plans.size) return;
-    await this.db.query(
-      `INSERT INTO "notification_deliveries"
-         ("id", "deviceId", "festivalId", "eventKey", "scheduledAt", "nextAttemptAt")
-       SELECT gen_random_uuid(), d."id", p."festivalId",
-         'live-activity-performance:' || p."festivalId", p."scheduledAt", p."scheduledAt"
-       FROM jsonb_to_recordset($1::jsonb) AS p("userId" uuid, "festivalId" varchar, "setId" text, "scheduledAt" timestamptz)
-       JOIN "devices" d ON d."userId" = p."userId"
-       JOIN "user_schedules" us ON us."userId" = p."userId"
-         AND us."festivalId" = p."festivalId" AND us."setIds" ? p."setId"
-       WHERE d."liveActivityPushToStartToken" IS NOT NULL
-         AND d."apnsEnvironment" IS NOT NULL AND ${NO_CURRENT_ACTIVITY}
-       ON CONFLICT ("deviceId", "eventKey") DO UPDATE
-         SET "scheduledAt" = EXCLUDED."scheduledAt",
-             "nextAttemptAt" = EXCLUDED."nextAttemptAt",
-             "status" = 'pending', "leaseUntil" = NULL
-       WHERE "notification_deliveries"."status" = 'cancelled'
-          AND "notification_deliveries"."lastErrorCode" IS DISTINCT FROM 'ACTIVITY_ALREADY_STARTED'
-          OR ("notification_deliveries"."status" = 'pending'
-              AND "notification_deliveries"."scheduledAt" <> EXCLUDED."scheduledAt")`,
-      [JSON.stringify([...plans.values()])],
+    if (plans.size)
+      await this.db.query(
+        `INSERT INTO "notification_deliveries"
+           ("id", "deviceId", "festivalId", "eventKey", "scheduledAt", "nextAttemptAt")
+         SELECT gen_random_uuid(), d."id", p."festivalId",
+           'live-activity-performance:' || p."festivalId", p."scheduledAt", p."scheduledAt"
+         FROM jsonb_to_recordset($1::jsonb) AS p("userId" uuid, "festivalId" varchar, "setId" text, "scheduledAt" timestamptz)
+         JOIN "devices" d ON d."userId" = p."userId"
+         JOIN "user_schedules" us ON us."userId" = p."userId"
+           AND us."festivalId" = p."festivalId" AND us."setIds" ? p."setId"
+         WHERE d."liveActivityPushToStartToken" IS NOT NULL
+           AND d."apnsEnvironment" IS NOT NULL AND ${NO_CURRENT_ACTIVITY}
+         ON CONFLICT ("deviceId", "eventKey") DO UPDATE
+           SET "scheduledAt" = EXCLUDED."scheduledAt",
+               "nextAttemptAt" = EXCLUDED."nextAttemptAt",
+               "status" = 'pending', "leaseUntil" = NULL
+         WHERE "notification_deliveries"."status" = 'cancelled'
+            AND "notification_deliveries"."lastErrorCode" IS DISTINCT FROM 'ACTIVITY_ALREADY_STARTED'
+            OR ("notification_deliveries"."status" = 'pending'
+                AND "notification_deliveries"."scheduledAt" <> EXCLUDED."scheduledAt")`,
+        [JSON.stringify([...plans.values()])],
+      );
+    await this.scheduleSetReminders(
+      [...eligibleSets].flatMap(([festivalId, sets]) =>
+        [...sets].map(([setId, scheduledAt]) => ({
+          festivalId,
+          setId,
+          scheduledAt,
+        })),
+      ),
+      this.db,
     );
   }
 
@@ -402,6 +452,79 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
         );
       }
     }
+    await manager.query(
+      `UPDATE "notification_deliveries" n SET "status" = 'cancelled',
+         "leaseUntil" = NULL, "lastErrorCode" = 'SCHEDULE_CHANGED'
+       FROM "devices" d
+       WHERE n."deviceId" = d."id" AND d."userId" = $1
+         AND n."festivalId" = $2 AND starts_with(n."eventKey", $3)
+         AND NOT (n."eventKey" = ANY($4::varchar[]))
+         AND n."status" IN ('pending', 'leased')`,
+      [
+        userId,
+        festivalId,
+        `${SET_REMINDER_PREFIX}${festivalId}:`,
+        setIds.map((id) => `${SET_REMINDER_PREFIX}${festivalId}:${id}`),
+      ],
+    );
+    await this.scheduleSetReminders(
+      selected
+        .map((set) => ({
+          festivalId,
+          setId: set.id,
+          scheduledAt: new Date(Date.parse(set.startsAt) - PERFORMANCE_LEAD_MS),
+        }))
+        .filter(
+          (plan) => plan.scheduledAt.getTime() >= now.getTime() - LATE_GRACE_MS,
+        ),
+      manager,
+      userId,
+    );
+  }
+
+  /**
+   * 저장한 공연마다 알림을 켠 로그인 기기에 공연 2시간 전 작업을 1건씩 둔다.
+   * push-to-start 배너와 겹쳐 건너뛴 작업은 다시 살리지 않는다.
+   */
+  private async scheduleSetReminders(
+    plans: SetReminderPlan[],
+    executor: DataSource | EntityManager,
+    userId?: string,
+  ): Promise<void> {
+    const rows = plans.filter(
+      (plan) =>
+        `${SET_REMINDER_PREFIX}${plan.festivalId}:${plan.setId}`.length <=
+        EVENT_KEY_MAX_LENGTH,
+    );
+    if (!rows.length) return;
+    await executor.query(
+      `INSERT INTO "notification_deliveries"
+         ("id", "deviceId", "festivalId", "eventKey", "scheduledAt", "nextAttemptAt")
+       SELECT gen_random_uuid(), d."id", p."festivalId",
+         'set-reminder:' || p."festivalId" || ':' || p."setId",
+         p."scheduledAt", p."scheduledAt"
+       FROM jsonb_to_recordset($1::jsonb) AS p("festivalId" varchar, "setId" text, "scheduledAt" timestamptz)
+       JOIN "user_schedules" us ON us."festivalId" = p."festivalId"
+         AND us."setIds" ? p."setId"
+       JOIN "devices" d ON d."userId" = us."userId"
+       WHERE d."apnsToken" IS NOT NULL AND d."apnsEnvironment" IS NOT NULL
+         AND d."notifySetReminders" = true
+         AND ($2::uuid IS NULL OR us."userId" = $2::uuid)
+         AND EXISTS (
+           SELECT 1 FROM "refresh_tokens" rt
+           WHERE rt."userId" = d."userId" AND rt."revokedAt" IS NULL
+             AND rt."expiresAt" > now()
+         )
+       ON CONFLICT ("deviceId", "eventKey") DO UPDATE
+         SET "scheduledAt" = EXCLUDED."scheduledAt",
+             "nextAttemptAt" = EXCLUDED."nextAttemptAt",
+             "status" = 'pending', "leaseUntil" = NULL
+       WHERE "notification_deliveries"."status" = 'cancelled'
+          AND "notification_deliveries"."lastErrorCode" IS DISTINCT FROM 'LIVE_ACTIVITY_ALERTED'
+          OR ("notification_deliveries"."status" = 'pending'
+              AND "notification_deliveries"."scheduledAt" <> EXCLUDED."scheduledAt")`,
+      [JSON.stringify(rows), userId ?? null],
+    );
   }
 
   private async schedulePerformanceStart(
@@ -466,6 +589,10 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
   }
 
   async deliver(job: Delivery, now = new Date()): Promise<void> {
+    if (job.eventKey.startsWith(`${SET_REMINDER_PREFIX}${job.festivalId}:`)) {
+      await this.deliverSetReminder(job, now);
+      return;
+    }
     const performanceStart =
       job.eventKey === `${PERFORMANCE_START_PREFIX}${job.festivalId}`;
     const liveStart =
@@ -641,7 +768,7 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
   /** 알림함 기록 실패가 푸시 발송을 막지 않게 한다. 같은 eventKey는 계정당 한 번만 남는다. */
   private async recordInbox(
     job: Delivery,
-    target: DeliveryTarget,
+    target: Pick<DeliveryTarget, 'ownerUserId'>,
     entry: Omit<UserNotificationEntry, 'dedupeKey'>,
   ): Promise<void> {
     if (!target.ownerUserId) return;
@@ -653,6 +780,139 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
     } catch {
       this.logger.error('축제 알림의 알림함 기록에 실패했습니다.');
     }
+  }
+
+  /**
+   * 발송 직전에 저장·설정·세션과 공연 시각을 다시 확인한다.
+   * 같은 기기에서 같은 공연 push-to-start가 이미 배너를 띄웠으면 알림 푸시는 보내지 않는다.
+   */
+  private async deliverSetReminder(job: Delivery, now: Date): Promise<void> {
+    const setId = job.eventKey.slice(
+      `${SET_REMINDER_PREFIX}${job.festivalId}:`.length,
+    );
+    const rows = await this.db.query<SetReminderTarget[]>(
+      `SELECT d."userId" AS "ownerUserId", d."apnsToken", d."apnsEnvironment",
+         d."notifySetReminders", f."published"->>'name' AS "name", f."published",
+         us."setIds" AS "savedSetIds",
+         EXISTS (
+           SELECT 1 FROM "refresh_tokens" rt
+           WHERE rt."userId" = d."userId" AND rt."revokedAt" IS NULL
+             AND rt."expiresAt" > now()
+         ) AS "hasActiveSession",
+         la."status" AS "liveActivityStatus",
+         la."lastErrorCode" AS "liveActivityErrorCode",
+         la."scheduledAt" AS "liveActivityScheduledAt"
+       FROM "notification_deliveries" n
+       JOIN "devices" d ON d."id" = n."deviceId"
+       JOIN "admin_festivals" f ON f."id" = n."festivalId"
+         AND f."published" IS NOT NULL AND f."publishedVersion" > 0
+       LEFT JOIN "user_schedules" us ON us."userId" = d."userId"
+         AND us."festivalId" = n."festivalId"
+       LEFT JOIN "notification_deliveries" la ON la."deviceId" = n."deviceId"
+         AND la."eventKey" = $3
+       WHERE n."id" = $1 AND n."status" = 'leased' AND n."leaseUntil" = $2`,
+      [job.id, job.leaseUntil, `${PERFORMANCE_START_PREFIX}${job.festivalId}`],
+    );
+    const target = rows[0];
+    const saved = Array.isArray(target?.savedSetIds) ? target.savedSetIds : [];
+    const sets = publishedSets(target?.published ?? {}, job.festivalId);
+    const set = saved.includes(setId)
+      ? sets.find((item) => item.id === setId)
+      : undefined;
+    const startsAt = set ? Date.parse(set.startsAt) : NaN;
+    const scheduledAt = new Date(startsAt - PERFORMANCE_LEAD_MS);
+    if (
+      !target?.apnsToken ||
+      !target.apnsEnvironment ||
+      !target.notifySetReminders ||
+      !target.hasActiveSession ||
+      !target.name ||
+      !set ||
+      !Number.isFinite(startsAt) ||
+      startsAt <= now.getTime() ||
+      scheduledAt.getTime() < now.getTime() - LATE_GRACE_MS
+    ) {
+      await this.finish(job, 'cancelled', 'TARGET_UNAVAILABLE');
+      return;
+    }
+    if (scheduledAt.getTime() !== new Date(job.scheduledAt).getTime()) {
+      await this.db.query(
+        `UPDATE "notification_deliveries"
+         SET "status" = 'pending', "scheduledAt" = $3, "nextAttemptAt" = $3,
+           "leaseUntil" = NULL, "lastErrorCode" = NULL
+         WHERE "id" = $1 AND "status" = 'leased' AND "leaseUntil" = $2`,
+        [job.id, job.leaseUntil, scheduledAt],
+      );
+      return;
+    }
+    const title = target.name;
+    const body = setReminderBody(
+      set.artist,
+      stageName(target.published, set.stageId),
+    );
+    const inbox = {
+      type: 'festival.set_reminder' as const,
+      festivalId: job.festivalId,
+      title,
+      body,
+      route: `/festivals/${job.festivalId}/live`,
+      subject: { setId },
+    };
+    // push-to-start는 저장한 공연 중 가장 이른 하나를 골라 같은 시각에 배너를 띄운다.
+    const liveActivitySetId = sets.find(
+      (item) =>
+        saved.includes(item.id) && Date.parse(item.startsAt) === startsAt,
+    )?.id;
+    if (
+      liveActivitySetId === setId &&
+      target.liveActivityScheduledAt &&
+      new Date(target.liveActivityScheduledAt).getTime() ===
+        scheduledAt.getTime()
+    ) {
+      if (target.liveActivityStatus === 'sent') {
+        await this.recordInbox(job, target, inbox);
+        await this.finish(job, 'cancelled', 'LIVE_ACTIVITY_ALERTED');
+        return;
+      }
+      const unresolved =
+        target.liveActivityStatus === 'pending' ||
+        target.liveActivityStatus === 'leased' ||
+        (target.liveActivityStatus === 'failed' &&
+          target.liveActivityErrorCode === 'OUTCOME_UNKNOWN');
+      if (
+        unresolved &&
+        now.getTime() < scheduledAt.getTime() + LIVE_ACTIVITY_WAIT_MS
+      ) {
+        await this.db.query(
+          `UPDATE "notification_deliveries"
+           SET "status" = 'pending', "nextAttemptAt" = now() + interval '1 minute',
+             "leaseUntil" = NULL, "lastErrorCode" = 'WAITING_LIVE_ACTIVITY'
+           WHERE "id" = $1 AND "status" = 'leased' AND "leaseUntil" = $2`,
+          [job.id, job.leaseUntil],
+        );
+        return;
+      }
+    }
+    await this.recordInbox(job, target, inbox);
+    await this.sendDelivery(job, () =>
+      this.apns.sendSetReminderNotification(
+        target.apnsToken!,
+        target.apnsEnvironment!,
+        {
+          festivalId: job.festivalId,
+          setId,
+          title,
+          body,
+          eventKey: job.eventKey,
+          deeplink: buildDeeplink({
+            type: 'set',
+            festivalId: job.festivalId,
+            setId,
+          }),
+          expiresAt: new Date(startsAt),
+        },
+      ),
+    );
   }
 
   private async deliverLiveActivityStart(
