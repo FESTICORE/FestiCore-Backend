@@ -25,6 +25,7 @@ import { Flag } from '../flags/flag.entity';
 import { artistNameKeys, normalizeArtistName } from '../../common/artist-name';
 import { isIsoInstant } from '../../common/iso-instant';
 import {
+  mapPoint,
   venueLabelMatches,
   verifiedVenueLocation,
 } from '../../common/festival-location';
@@ -149,10 +150,14 @@ function projectDirections(value: unknown, venue: unknown): Document {
       const section = fields(direction[key], [
         'body',
         'links',
-        ...(key === 'transit' ? ['stationName', 'walkMinutes'] : []),
-        ...(key === 'shuttle' ? ['stopName'] : []),
+        ...(key === 'transit'
+          ? ['stationName', 'walkMinutes', 'location']
+          : []),
+        ...(key === 'shuttle' ? ['stopName', 'location'] : []),
       ]);
       section.links = projectedArray(section.links, ['label', 'url']);
+      // 역·정류장 좌표는 위도·경도만 보내고 형식이 다르면 null로 보낸다.
+      if ('location' in section) section.location = mapPoint(section.location);
       direction[key] = section;
     }
   }

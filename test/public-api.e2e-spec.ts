@@ -485,7 +485,7 @@ describe('Public festival API', () => {
       .expect(200);
     const packEtag = String(packVersion.headers.etag);
     expect(changed.headers.etag).toBe(
-      `"cdm5-chg6-${packEtag.replace(/"/g, '')}"`,
+      `"cdm6-chg6-${packEtag.replace(/"/g, '')}"`,
     );
     const unchanged = await request(server)
       .get(`/api/v1/festivals/${pack.id}/pack/changes?from=6`)
@@ -512,7 +512,7 @@ describe('Public festival API', () => {
       .expect(200);
     expect(overlaidPack.headers.etag).not.toBe(packEtag);
     expect(overlaid.headers.etag).toBe(
-      `"cdm5-chg6-${String(overlaidPack.headers.etag).replace(/"/g, '')}"`,
+      `"cdm6-chg6-${String(overlaidPack.headers.etag).replace(/"/g, '')}"`,
     );
 
     const latest = await request(server)
@@ -695,6 +695,18 @@ describe('Public festival API', () => {
             ],
             secret: 'SHUTTLE_SECRET',
             stopName: '정문 셔틀 정류장',
+            location: {
+              latitude: 37.6651,
+              longitude: 126.7411,
+              secret: 'STOP_LOCATION_SECRET',
+            },
+          },
+          transit: {
+            body: 'Train',
+            links: [],
+            stationName: '킨텍스역',
+            walkMinutes: 10,
+            location: { latitude: '37.66', longitude: 126.74 },
           },
           lastShuttleAt: '23:40',
           lastTrainAt: '2026-11-20T23:52:00+09:00',
@@ -734,6 +746,7 @@ describe('Public festival API', () => {
       'DIRECTION_SECRET',
       'LOCATION_SECRET',
       'LOCATION_SOURCE_SECRET',
+      'STOP_LOCATION_SECRET',
       'flags/private-key.webp',
     ])
       expect(serialized).not.toContain(secret);
@@ -746,12 +759,25 @@ describe('Public festival API', () => {
       1,
     );
     const directions = successData<{
-      directions: { shuttle: unknown; lastDepartures: unknown };
+      directions: {
+        shuttle: unknown;
+        transit: unknown;
+        lastDepartures: unknown;
+      };
     }>(response.body).directions;
     expect(directions.shuttle).toEqual({
       body: 'Shuttle',
       links: [{ label: 'Map', url: 'https://example.com' }],
       stopName: '정문 셔틀 정류장',
+      location: { latitude: 37.6651, longitude: 126.7411 },
+    });
+    // 형식이 다른 역 좌표는 null로 보내고 역 이름·도보 분은 그대로 둔다.
+    expect(directions.transit).toEqual({
+      body: 'Train',
+      links: [],
+      stationName: '킨텍스역',
+      walkMinutes: 10,
+      location: null,
     });
     expect(directions).toMatchObject({
       lastShuttleAt: null,

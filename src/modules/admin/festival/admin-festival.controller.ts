@@ -32,6 +32,17 @@ const festivalDay = {
   endsAt: '2026-10-24T23:00:00+09:00',
 };
 
+/** 셔틀 정류장·역 좌표. 앱이 현재 위치에서 걸어가는 시간을 계산한다. */
+const stationPointSchema = {
+  type: 'object',
+  nullable: true,
+  required: ['latitude', 'longitude'],
+  properties: {
+    latitude: { type: 'number', minimum: -90, maximum: 90 },
+    longitude: { type: 'number', minimum: -180, maximum: 180 },
+  },
+};
+
 const draftExample = {
   id: 'fst_01234567',
   name: '가을 음악 축제',
@@ -369,8 +380,18 @@ export class AdminFestivalController {
         directions: {
           type: 'object',
           description:
-            '가는 길 안내. location은 확인된 장소의 위도·경도와 HTTPS 출처를 함께 입력합니다.',
+            '가는 길 안내. location은 확인된 장소의 위도·경도와 HTTPS 출처를 함께 입력합니다. shuttle·transit의 location은 셔틀 정류장·역의 위도·경도입니다.',
           properties: {
+            shuttle: {
+              type: 'object',
+              nullable: true,
+              properties: { location: stationPointSchema },
+            },
+            transit: {
+              type: 'object',
+              nullable: true,
+              properties: { location: stationPointSchema },
+            },
             location: {
               type: 'object',
               nullable: true,

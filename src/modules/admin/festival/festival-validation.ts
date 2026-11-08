@@ -1,5 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import {
+  mapPoint,
   venueLabelMatches,
   verifiedVenueLocation,
 } from '../../../common/festival-location';
@@ -94,6 +95,19 @@ function validateReturnDirections(
       [...shuttle.stopName].length > 40)
   )
     errors.push('directions.shuttle.stopName: 1..40자 또는 null 필요');
+  // 앱이 현재 위치에서 걸어가는 시간을 계산하는 셔틀 정류장·역 좌표
+  for (const key of ['shuttle', 'transit'] as const) {
+    const section = directions[key];
+    if (
+      object(section) &&
+      section.location !== undefined &&
+      section.location !== null &&
+      !mapPoint(section.location)
+    )
+      errors.push(
+        `directions.${key}.location: 위도 -90..90·경도 -180..180 숫자 또는 null 필요`,
+      );
+  }
   const departures = directions.lastDepartures;
   if (departures === undefined) return errors;
   if (!Array.isArray(departures) || departures.length > MAX_LAST_DEPARTURES) {
