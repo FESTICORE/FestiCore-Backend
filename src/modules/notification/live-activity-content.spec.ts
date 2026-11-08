@@ -36,6 +36,7 @@ function input(): LiveActivityContentInput {
       {
         id: 'flg_one',
         festivalId,
+        name: '호락호락',
         status: 'active',
         visibility: 'public',
         hidden: false,
@@ -84,6 +85,7 @@ describe('buildLiveActivityContentState', () => {
     });
     expect(state.pinnedFlag).toEqual({
       flagId: 'flg_one',
+      name: '호락호락',
       status: 'active',
       zoneId: 'zone_a',
       activity: 'sing',

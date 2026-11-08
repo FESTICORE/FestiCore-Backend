@@ -852,7 +852,7 @@ describe('FestivalStartService', () => {
     await service.deliver(performanceJob, performanceJob.scheduledAt);
 
     expect(sendLiveActivityStart).toHaveBeenCalledTimes(1);
-    const targetSql = query.mock.calls[0][0] as string;
+    const targetSql = query.mock.calls[0][0];
     expect(targetSql).toContain('"liveActivityPushToken" IS NULL');
     expect(targetSql).toContain(
       `"liveActivityRegisteredAt" <= now() - interval '8 hours'`,
