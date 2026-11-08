@@ -105,6 +105,15 @@ describe('깃발 상태를 바꾼 기수', () => {
     });
   });
 
+  it('비공개 계획도 기수 본인 상세에는 그대로 보낸다', async () => {
+    const { service, flag } = setup();
+    flag.planVisible = false;
+    flag.plan = ['set_1', 'set_2'];
+    const view = await service.bearerView('flg_1', 'usr_co');
+    expect(view.flag.planVisible).toBe(false);
+    expect(view.flag.plan).toEqual(['set_1', 'set_2']);
+  });
+
   it('상태를 바꾸면 요청한 기수를 저장하고 응답에 담는다', async () => {
     const { service, saveFlag } = setup();
     const clientAt = new Date().toISOString();
