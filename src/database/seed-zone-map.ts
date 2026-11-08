@@ -5,10 +5,15 @@ import { DataSource } from 'typeorm';
 import { AppModule } from '../app.module';
 import { AdminAccount } from '../modules/admin/auth/admin.entity';
 import { AdminFestivalService } from '../modules/admin/festival/admin-festival.service';
+import { AdminFestival } from '../modules/admin/festival/festival.entity';
+import { festivalSetId } from '../modules/admin/festival/festival-set-id';
 import { User } from '../modules/auth/entity/user.entity';
+import type { CrewState } from '../modules/crews/crew.entity';
 import { CrewService } from '../modules/crews/crew.service';
 import { Flag } from '../modules/flags/flag.entity';
+import { FlagPackSyncService } from '../modules/flags/flag-pack-sync.service';
 import { FlagsService } from '../modules/flags/flags.service';
+import { ScheduleService } from '../modules/schedule/schedule.service';
 
 /**
  * 개발 환경의 S06 존 지도 목 데이터를 서비스 경로로 넣는다.
@@ -17,8 +22,13 @@ import { FlagsService } from '../modules/flags/flags.service';
  * - 목 기수 사용자 → 관리자 기수 코드 발급 → 코드 청구 → 깃발 프로필 수정 → 관리자 상태 강제 변경
  * - `--member-email`의 계정: 깃발 팔로우, 목 크루원과 같은 크루 → 크루원 위치 갱신
  *
+ * - `--live-today`: 오늘(KST) 진행 중인 개발 목 축제(`원더리벳 2026 (개발 목)`)를 만들거나 다시 쓰고,
+ *   무대마다 지금·다음 공연, 깃발 썸네일(보관된 출연진 이미지 재사용), 개발 계정의 내 일정을 넣어
+ *   S01 라이브 보드가 시안처럼 채워지게 한다.
+ *
  * 운영 환경에서는 실행하지 않는다. Railway develop 컨테이너에서 실행한다.
  *   node dist/database/seed-zone-map.js --festival fst_00e0f4f1d8065a93 --member-email me@example.com
+ *   node dist/database/seed-zone-map.js --live-today --member-email me@example.com
  * 같은 명령을 다시 실행하면 같은 목 사용자·깃발·크루를 다시 쓰고 존과 상태만 갱신한다.
  */
 
@@ -166,12 +176,78 @@ const FLAGS: {
   },
 ];
 
-const CREW_MEMBERS = [
-  { key: 'junho', nickname: '준호', zoneId: 'zon_wonder_back' },
-  { key: 'minji', nickname: '민지', zoneId: 'zon_fnb' },
-  { key: 'hansol', nickname: '한솔', zoneId: 'zon_gate' },
+const CREW_MEMBERS: {
+  key: string;
+  nickname: string;
+  zoneId: string;
+  state: CrewState;
+}[] = [
+  { key: 'junho', nickname: '준호', zoneId: 'zon_wonder_back', state: 'here' },
+  { key: 'minji', nickname: '민지', zoneId: 'zon_fnb', state: 'eating' },
+  { key: 'hansol', nickname: '한솔', zoneId: 'zon_gate', state: 'toilet' },
+];
+
+/** `--live-today` 개발 목 축제 */
+const MOCK_FESTIVAL_NAME = '원더리벳 2026 (개발 목)';
+/** 깃발 썸네일·출연진 사진으로 다시 쓸 보관 이미지가 있는 축제(WONDERLIVET 2026) */
+const IMAGE_SOURCE_FESTIVAL = 'fst_00e0f4f1d8065a93';
+const MOCK_STAGES = [
+  {
+    id: 'stg_rivet',
+    name: 'RIVET STAGE',
+    order: 1,
+    artists: ['잔나비', '새소년', '터치드', '실리카겔', '너드커넥션', '혁오'],
+  },
+  {
+    id: 'stg_wonder',
+    name: 'WONDER STAGE',
+    order: 2,
+    artists: ['데이브레이크', '소란', 'LUCY', '쏜애플', '글렌체크', '페퍼톤스'],
+  },
 ];
 const MEMBER_ZONE = 'zon_rivet_front_left';
+
+/**
+ * 오늘(KST) 진행 중인 일정. 무대마다 지금 공연(시작 25분 전후)과 앞뒤 공연을 1시간 간격(50분 공연)으로 둔다.
+ * 하루는 같은 날짜 안에서 18시간을 넘지 않으므로 KST 23시 15분 이후에는 지금 공연이 없다.
+ */
+export function liveTodayPlan(now: Date) {
+  const kst = new Date(now.getTime() + 9 * 3_600_000);
+  const date = kst.toISOString().slice(0, 10);
+  const iso = (minutes: number) => {
+    const hours = String(Math.floor(minutes / 60)).padStart(2, '0');
+    const mins = String(minutes % 60).padStart(2, '0');
+    return `${date}T${hours}:${mins}:00+09:00`;
+  };
+  const nowMinutes = kst.getUTCHours() * 60 + kst.getUTCMinutes();
+  const anchor = Math.max(0, Math.floor((nowMinutes - 25) / 5) * 5);
+  const dayEnd = Math.min(24 * 60 - 1, Math.max(23 * 60, anchor + 4 * 60));
+  const dayStart = Math.max(
+    dayEnd - 18 * 60,
+    Math.min(12 * 60, Math.max(0, anchor - 130)),
+  );
+  const sets = MOCK_STAGES.flatMap((stage) =>
+    [-2, -1, 0, 1, 2, 3].flatMap((offset, index) => {
+      const start = anchor + offset * 60;
+      const end = start + 50;
+      if (start < dayStart || end > dayEnd) return [];
+      return [
+        {
+          stageId: stage.id,
+          artist: stage.artists[index],
+          startsAt: iso(start),
+          endsAt: iso(end),
+          offset,
+        },
+      ];
+    }),
+  );
+  return {
+    day: { date, startsAt: iso(dayStart), endsAt: iso(dayEnd) },
+    stages: MOCK_STAGES.map(({ id, name, order }) => ({ id, name, order })),
+    sets,
+  };
+}
 
 function round(value: number): number {
   return Math.round(value * 10_000) / 10_000;
@@ -228,9 +304,10 @@ function argument(name: string): string | undefined {
 }
 
 async function main() {
-  const festivalId = argument('--festival');
+  const liveToday = process.argv.includes('--live-today');
   const memberEmail = argument('--member-email');
-  if (!festivalId) throw new Error('--festival <fst_...>이 필요합니다.');
+  if (!liveToday && !argument('--festival'))
+    throw new Error('--festival <fst_...> 또는 --live-today가 필요합니다.');
   if (process.env.RAILWAY_ENVIRONMENT_NAME !== 'develop')
     throw new Error('Railway develop 환경에서만 실행합니다.');
 
@@ -248,14 +325,63 @@ async function main() {
     });
     if (!admin) throw new Error('활성 owner 관리자 계정을 찾을 수 없습니다.');
 
-    // 1. 존 지도 초안 → 발행
+    const festivalRepo = db.getRepository(AdminFestival);
+    const source = await festivalRepo.findOne({
+      where: { id: IMAGE_SOURCE_FESTIVAL },
+    });
+    const images = [
+      ...new Set(
+        (Array.isArray(source?.published?.sets) ? source.published.sets : [])
+          .map((set: { imageUrl?: unknown }) => set.imageUrl)
+          .filter(
+            (url): url is string =>
+              typeof url === 'string' &&
+              /^\/api\/v1\/festivals\/images\/[0-9a-f-]{36}\.webp$/.test(url),
+          ),
+      ),
+    ];
+    const plan = liveTodayPlan(new Date());
+    let festivalId = argument('--festival') ?? '';
+    if (liveToday) {
+      const existing = await festivalRepo
+        .createQueryBuilder('festival')
+        .where(`festival.draft ->> 'name' = :name`, {
+          name: MOCK_FESTIVAL_NAME,
+        })
+        .getOne();
+      festivalId =
+        existing?.id ??
+        String(
+          (
+            (await festivals.create(
+              {
+                name: MOCK_FESTIVAL_NAME,
+                venue: 'KINTEX 제2전시장',
+                days: [plan.day],
+              },
+              admin.id,
+            )) as Record<string, unknown>
+          ).id,
+        );
+    }
+
+    // 1. 존 지도(·오늘 일정) 초안 → 발행
     const draft = (await festivals.getDraft(festivalId)) as Record<
       string,
       unknown
     >;
-    const stageIds = (Array.isArray(draft.stages) ? draft.stages : [])
-      .map((stage: { id?: unknown }) => stage.id)
-      .filter((id): id is string => typeof id === 'string');
+    const stageIds = liveToday
+      ? plan.stages.map((stage) => stage.id)
+      : (Array.isArray(draft.stages) ? draft.stages : [])
+          .map((stage: { id?: unknown }) => stage.id)
+          .filter((id): id is string => typeof id === 'string');
+    const sets = plan.sets.map((set, index) => ({
+      stageId: set.stageId,
+      artist: set.artist,
+      startsAt: set.startsAt,
+      endsAt: set.endsAt,
+      imageUrl: images.length > 0 ? images[index % images.length] : null,
+    }));
     const patched = (await festivals.patch(
       festivalId,
       {
@@ -263,6 +389,7 @@ async function main() {
         zones: seedZones(),
         mapAspect: round(MAP_WIDTH / MAP_HEIGHT),
         mapStages: seedMapStages(stageIds),
+        ...(liveToday ? { days: [plan.day], stages: plan.stages, sets } : {}),
       },
       `"d${String(draft.draftVersion)}"`,
       admin.id,
@@ -325,6 +452,12 @@ async function main() {
         zoneId: item.zoneId,
         activity: item.status === 'resting' ? 'resting' : item.activity,
       });
+      // 깃발 사진 업로드 대신 보관된 출연진 이미지를 썸네일로 다시 쓴다.
+      const image = images[flagIds.size % Math.max(images.length, 1)];
+      if (image) {
+        await flagRepo.update(flag.id, { thumbUrl: image, photoUrl: image });
+        await app.get(FlagPackSyncService).sync(flag.id);
+      }
       flagIds.set(item.key, flag.id);
     }
 
@@ -363,7 +496,7 @@ async function main() {
             });
         await crews.status(crewId, mate.id, {
           zoneId: item.zoneId,
-          state: 'here',
+          state: item.state,
           clientAt: new Date().toISOString(),
         });
       }
@@ -372,7 +505,34 @@ async function main() {
         state: 'here',
         clientAt: new Date().toISOString(),
       });
+      // 내 다음 일정 카드: 무대마다 다음 공연을 내 일정에 저장한다.
+      if (liveToday)
+        await app.get(ScheduleService).replace(member.id, festivalId, {
+          setIds: plan.sets
+            .filter((set) => set.offset === 1)
+            .map((set) =>
+              festivalSetId({
+                stageId: set.stageId,
+                artist: set.artist,
+                startsAt: set.startsAt,
+                endsAt: set.endsAt,
+              }),
+            ),
+          clientAt: new Date().toISOString(),
+        });
     }
+
+    // 4. 깃발 썸네일·상태까지 담아 팩 버전을 올린다.
+    const latest = (await festivals.getDraft(festivalId)) as Record<
+      string,
+      unknown
+    >;
+    await festivals.publish(
+      festivalId,
+      '개발 목 데이터 갱신',
+      `"d${String(latest.draftVersion)}"`,
+      admin.id,
+    );
     console.log(
       JSON.stringify({
         festivalId,
