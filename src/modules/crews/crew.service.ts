@@ -369,10 +369,14 @@ export class CrewService {
         error('NOT_FOUND', '초대를 찾을 수 없습니다.'),
       );
     const count = await this.members.count({ where: { crewId: crew.id } });
+    const owner = await this.members.findOne({
+      where: { crewId: crew.id, userId: crew.ownerId },
+    });
     return {
       crewName: crew.name,
       festivalId: crew.festivalId,
       festivalName: festival.published?.name,
+      ownerNickname: owner?.nickname ?? null,
       memberCount: count,
       expiresAt: crew.inviteExpiresAt,
     };

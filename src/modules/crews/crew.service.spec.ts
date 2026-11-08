@@ -170,6 +170,27 @@ describe('CrewService authorization and invitations', () => {
     );
   });
 
+  it('shows the owner nickname in the invitation preview', async () => {
+    const { service, crewRepository, memberRepository } = setup();
+    crewRepository.findOne.mockResolvedValueOnce({
+      ...crew,
+      archivedAt: null,
+      inviteExpiresAt: new Date(Date.now() + 3600_000),
+    });
+    memberRepository.count.mockResolvedValueOnce(4);
+    memberRepository.findOne.mockResolvedValueOnce({
+      crewId: crew.id,
+      userId: ownerId,
+      nickname: '민지',
+    });
+    const preview = await service.invite('K7P2QX');
+    expect(preview.ownerNickname).toBe('민지');
+    expect(preview.memberCount).toBe(4);
+    expect(memberRepository.findOne).toHaveBeenCalledWith({
+      where: { crewId: crew.id, userId: ownerId },
+    });
+  });
+
   it('returns the current member status for an identical clientAt retry', async () => {
     const { service, crewRepository, memberRepository, liveActivity } = setup();
     const clientAt = new Date();

@@ -93,7 +93,7 @@ export class CrewController {
   @ApiOperation({
     summary: '초대 코드 미리보기',
     description:
-      '로그인 없이 초대 코드의 크루명과 인원만 조회합니다. 없거나 만료된 코드는 같은 404로 응답합니다. IP당 분당 10회로 제한합니다.',
+      '로그인 없이 초대 코드의 크루명·크루장 닉네임과 인원만 조회합니다. 없거나 만료된 코드는 같은 404로 응답합니다. IP당 분당 10회로 제한합니다.',
   })
   @ApiParam({
     name: 'code',
@@ -107,6 +107,7 @@ export class CrewController {
         crewName: '함께 즐겨요',
         festivalId: 'fst_2026',
         festivalName: '테스트 축제',
+        ownerNickname: '로이',
         memberCount: 3,
         expiresAt: '2026-10-23T01:00:00.000Z',
       },
