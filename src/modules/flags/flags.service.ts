@@ -274,7 +274,8 @@ export class FlagsService {
     return flag;
   }
 
-  private profile(flag: Flag) {
+  /** 깃발 프로필. 비공개 계획은 공개 응답에서 가리고 기수 본인 응답에는 그대로 보낸다. */
+  private profile(flag: Flag, viewer: 'public' | 'bearer' = 'public') {
     return {
       id: flag.id,
       name: flag.name,
@@ -286,7 +287,7 @@ export class FlagsService {
       bio: flag.bio,
       followerCount: flag.followerCount,
       planVisible: flag.planVisible,
-      plan: flag.planVisible ? flag.plan : [],
+      plan: viewer === 'bearer' || flag.planVisible ? flag.plan : [],
       homeZoneId: flag.homeZoneId,
     };
   }
@@ -631,7 +632,7 @@ export class FlagsService {
       )
         return {
           flagId: flag.id,
-          flag: this.profile(flag),
+          flag: this.profile(flag, 'bearer'),
           isNew: false,
           coBearers: (await bearers.find({ where: { flagId: flag.id } })).map(
             (b) => b.userId,
@@ -698,7 +699,7 @@ export class FlagsService {
       await codes.save(lockedCode);
       return {
         flagId: flag.id,
-        flag: this.profile(flag),
+        flag: this.profile(flag, 'bearer'),
         isNew: flag.ownerId === userId,
         coBearers: (await bearers.find({ where: { flagId: flag.id } })).map(
           (b) => b.userId,
@@ -717,7 +718,7 @@ export class FlagsService {
     const users = await this.users.findByIds([...userIds]);
     const names = new Map(users.map((user) => [user.id, user.nickname]));
     return {
-      flag: this.profile(flag),
+      flag: this.profile(flag, 'bearer'),
       status: bearerStatusView(
         flag,
         flag.statusUpdatedBy ? names.get(flag.statusUpdatedBy) : undefined,
@@ -786,7 +787,7 @@ export class FlagsService {
     if (Object.keys(patch).length) await this.flags.update({ id }, patch);
     await this.packSync.sync(id);
     const current = await this.bearerFlag(id, userId);
-    return this.profile(current);
+    return this.profile(current, 'bearer');
   }
 
   async status(id: string, userId: string, key: string, input: unknown) {
