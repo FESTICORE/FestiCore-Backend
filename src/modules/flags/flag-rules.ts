@@ -88,6 +88,62 @@ export function validateProfilePatch(value: unknown): Record<string, unknown> {
   return value;
 }
 
+/**
+ * 관리자 깃발 생성·편집 입력. 기수 프로필 필드에 외부 사진 URL을 더한다.
+ * 생성은 name과 tags가 필요하고, 편집은 바꿀 필드가 하나 이상 필요하다.
+ */
+export function validateAdminFlagInput(
+  value: unknown,
+  mode: 'create' | 'update',
+): Record<string, unknown> {
+  if (!isRecord(value))
+    throw new BadRequestException({
+      code: 'VALIDATION',
+      message: '깃발 요청 형식이 올바르지 않습니다.',
+    });
+  const { photoUrl, ...profile } = value;
+  if (
+    photoUrl !== undefined &&
+    photoUrl !== null &&
+    (typeof photoUrl !== 'string' ||
+      photoUrl.length > 500 ||
+      !/^https:\/\/\S+$/.test(photoUrl))
+  )
+    throw new BadRequestException({
+      code: 'VALIDATION',
+      message: 'photoUrl은 500자 이하의 https URL이어야 합니다.',
+    });
+  if (
+    mode === 'create' &&
+    (profile.name === undefined || profile.tags === undefined)
+  )
+    throw new BadRequestException({
+      code: 'VALIDATION',
+      message: 'name과 tags가 필요합니다.',
+    });
+  if (
+    mode === 'update' &&
+    photoUrl === undefined &&
+    !Object.keys(profile).length
+  )
+    throw new BadRequestException({
+      code: 'VALIDATION',
+      message: '수정할 필드가 필요합니다.',
+    });
+  const patch = Object.keys(profile).length
+    ? validateProfilePatch(profile)
+    : {};
+  if (photoUrl === undefined) return patch;
+  // 업로드 사진 키가 남아 있으면 공개 URL이 업로드 사진을 가리키므로 함께 지운다.
+  return {
+    ...patch,
+    photoUrl,
+    thumbUrl: photoUrl,
+    photoKey: null,
+    thumbKey: null,
+  };
+}
+
 export function nextStatus(
   flag: Flag,
   input: unknown,

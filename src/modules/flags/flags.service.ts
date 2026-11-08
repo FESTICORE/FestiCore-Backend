@@ -42,6 +42,7 @@ import {
   nextStatus,
   repeatsAppliedStatus,
   statusView,
+  validateAdminFlagInput,
   validateProfilePatch,
 } from './flag-rules';
 import {
@@ -1133,13 +1134,160 @@ export class FlagsService {
       order: { name: 'ASC' },
     });
     return {
-      items: flags.map((flag) => ({
-        ...this.profile(flag),
-        hidden: flag.hidden,
-        reportCount: flag.reportCount,
-        status: statusView(flag),
-      })),
+      items: flags.map((flag) => this.adminFlagView(flag)),
     };
+  }
+
+  /** 관리자 화면용 깃발. 계획 비공개여도 전체 계획을 보여 준다. */
+  private adminFlagView(flag: Flag) {
+    return {
+      ...this.profile(flag),
+      plan: flag.plan,
+      visibility: flag.visibility,
+      hidden: flag.hidden,
+      reportCount: flag.reportCount,
+      status: statusView(flag),
+    };
+  }
+
+  /** 홈 존과 계획 셋이 축제 팩(발행본 우선, 없으면 초안)에 있는지 확인한다. */
+  private assertPackReferences(
+    festival: AdminFestival,
+    patch: Record<string, unknown>,
+  ) {
+    const pack = festival.published ?? festival.draft;
+    const zones = Array.isArray(pack?.zones) ? pack.zones : [];
+    const sets = Array.isArray(pack?.sets) ? pack.sets : [];
+    if (
+      typeof patch.homeZoneId === 'string' &&
+      !zones.some((zone) => isRecord(zone) && zone.id === patch.homeZoneId)
+    )
+      fail('ZONE_NOT_FOUND', 404, '존을 찾을 수 없습니다.');
+    if (
+      Array.isArray(patch.plan) &&
+      !patch.plan.every((id) =>
+        sets.some((set) => isRecord(set) && set.id === id),
+      )
+    )
+      throw new BadRequestException({
+        code: 'VALIDATION',
+        message: 'plan에 없는 셋이 포함되었습니다.',
+      });
+  }
+
+  /** 관리자가 축제에 기수 없는 깃발을 만든다. 현장 상태는 예정으로 시작한다. */
+  async adminCreate(festivalId: string, input: unknown, actor: string) {
+    const fields = validateAdminFlagInput(input, 'create');
+    const { flag, changed } = await this.db.transaction(async (manager) => {
+      const festival = await manager.getRepository(AdminFestival).findOne({
+        where: { id: festivalId },
+      });
+      if (!festival)
+        throw new NotFoundException({
+          code: 'NOT_FOUND',
+          message: '축제를 찾을 수 없습니다.',
+        });
+      this.assertPackReferences(festival, fields);
+      const flags = manager.getRepository(Flag);
+      if (
+        await flags.exists({
+          where: { festivalId, name: fields.name as string },
+        })
+      )
+        throw new ConflictException({
+          code: 'FLAG_NAME_TAKEN',
+          message: '이미 사용 중인 깃발 이름입니다.',
+        });
+      const created = await flags.save(
+        flags.create({
+          id: `flg_${randomBytes(5).toString('hex')}`,
+          festivalId,
+          visibility: 'public',
+          bio: null,
+          plan: [],
+          planVisible: true,
+          homeZoneId: null,
+          photoUrl: null,
+          thumbUrl: null,
+          ...fields,
+          followerCount: 0,
+          status: 'scheduled',
+          activity: null,
+          zoneId: null,
+          hidden: false,
+          reportCount: 0,
+          ownerId: null,
+          restartDate: null,
+          statusUpdatedAt: null,
+          statusUpdatedBy: null,
+          statusClientAt: null,
+        }),
+      );
+      await this.adminAudit.record(manager, {
+        actor,
+        action: 'flag.created',
+        target: `flag:${created.id}`,
+        before: null,
+        after: this.adminFlagView(created),
+      });
+      return {
+        flag: created,
+        changed: await this.packSync.sync(created.id, manager),
+      };
+    });
+    await this.packSync.invalidatePacks(changed);
+    return this.adminFlagView(flag);
+  }
+
+  /** 관리자가 깃발 프로필·사진 URL·계획·계획 공개를 고친다. 바뀐 필드만 감사 기록한다. */
+  async adminUpdate(id: string, input: unknown, actor: string) {
+    const patch = validateAdminFlagInput(input, 'update');
+    const { flag, changed } = await this.db.transaction(async (manager) => {
+      const flags = manager.getRepository(Flag);
+      const current = await flags.findOne({
+        where: { id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!current)
+        throw new NotFoundException({
+          code: 'NOT_FOUND',
+          message: '깃발을 찾을 수 없습니다.',
+        });
+      const festival = await manager.getRepository(AdminFestival).findOne({
+        where: { id: current.festivalId },
+      });
+      if (!festival)
+        throw new NotFoundException({
+          code: 'NOT_FOUND',
+          message: '축제를 찾을 수 없습니다.',
+        });
+      this.assertPackReferences(festival, patch);
+      if (
+        typeof patch.name === 'string' &&
+        patch.name !== current.name &&
+        (await flags.exists({
+          where: { festivalId: current.festivalId, name: patch.name },
+        }))
+      )
+        throw new ConflictException({
+          code: 'FLAG_NAME_TAKEN',
+          message: '이미 사용 중인 깃발 이름입니다.',
+        });
+      const keys = Object.keys(patch) as (keyof Flag)[];
+      const before = Object.fromEntries(keys.map((key) => [key, current[key]]));
+      Object.assign(current, patch);
+      const saved = await flags.save(current);
+      await this.adminAudit.record(manager, {
+        actor,
+        action: 'flag.updated',
+        target: `flag:${id}`,
+        before,
+        after: Object.fromEntries(keys.map((key) => [key, saved[key]])),
+      });
+      return { flag: saved, changed: await this.packSync.sync(id, manager) };
+    });
+    await this.packSync.invalidatePacks(changed);
+    return this.adminFlagView(flag);
   }
 
   async adminBearers(festivalId: string) {
