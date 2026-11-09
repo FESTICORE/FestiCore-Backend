@@ -1027,6 +1027,7 @@ export function melonArtistImageUrl(image: URL): URL {
       image.pathname,
     );
   if (image.hostname !== 'cdnimg.melon.co.kr' || !match) return image;
+  // Keep the extension's original casing: the CDN path is case-sensitive.
   return new URL(
     `https://cdnimg.melon.co.kr${match[1]}_org.${match[2]}${MELON_ARTIST_ORIGINAL_SUFFIX}`,
   );
