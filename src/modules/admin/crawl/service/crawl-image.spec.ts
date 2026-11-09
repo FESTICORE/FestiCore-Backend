@@ -315,6 +315,24 @@ describe('crawl image safety', () => {
     ]);
   });
 
+  it('downloads the high-resolution original of Melon artist crop thumbnails', () => {
+    const html = `<ul class="list_artist">
+        <li><img src="https://cdnimg.melon.co.kr/cm2/artistcrop/images/007/39/740/739740_20260529133007.jpg/melon/thumbnail/320x300"></li>
+        <li><img src="https://cdnimg.melon.co.kr/cm2/artistcrop/images/001/00/168/100168_20260807121205_org.jpg"></li>
+        <li><img src="https://cdnimg.melon.co.kr/melon/thumbnail/320x300"></li>
+      </ul>`;
+    expect(
+      discoverImageUrls(
+        html,
+        'https://ticket.melon.com/performance/index.htm?prodId=213665',
+      ).map(String),
+    ).toEqual([
+      'https://cdnimg.melon.co.kr/cm2/artistcrop/images/007/39/740/739740_20260529133007_org.jpg/melon/resize/1000/quality/90/optimize',
+      'https://cdnimg.melon.co.kr/cm2/artistcrop/images/001/00/168/100168_20260807121205_org.jpg/melon/resize/1000/quality/90/optimize',
+      'https://cdnimg.melon.co.kr/melon/thumbnail/320x300',
+    ]);
+  });
+
   it('ignores an image URL written inside the artist alt text', () => {
     const html = `<ul class="list_artist"><li><img alt="x data-src='https://cdnimg.melon.co.kr/artist/false.jpg'" src="https://cdnimg.melon.co.kr/artist/real.jpg"></li></ul>`;
     expect(

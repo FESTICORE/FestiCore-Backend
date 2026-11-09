@@ -4,6 +4,7 @@ import { checkedUrl } from './crawl-fetch';
 import { imageTagAttributes } from './image-tag-attributes';
 import {
   eventPerformers,
+  melonArtistImageUrl,
   melonSearchCandidates,
   nolPosterUrl,
   ticketCandidates,
@@ -65,7 +66,9 @@ function melonDetailImages(html: string, pageUrl: string): URL[] | null {
   const urls: URL[] = [];
   const add = (raw: string, hostname: string): boolean => {
     try {
-      const url = checkedUrl(new URL(raw, page).toString());
+      const url = melonArtistImageUrl(
+        checkedUrl(new URL(raw, page).toString()),
+      );
       if (url.hostname !== hostname) return false;
       if (!urls.some((item) => item.toString() === url.toString()))
         urls.push(url);
@@ -421,7 +424,7 @@ export async function prepareCrawlImage(
         fit: 'inside',
         withoutEnlargement: true,
       })
-      .webp({ quality: 82 })
+      .webp({ quality: 88 })
       .toBuffer();
     if (body.length > MAX_OUTPUT_BYTES)
       throw new Error('변환 이미지 크기 제한을 초과했습니다.');

@@ -589,6 +589,26 @@ describe('crawl parsers', () => {
     ]);
   });
 
+  it('links the high-resolution original of a Melon artist crop thumbnail', async () => {
+    const melon = source('ticket-list', 'discovery');
+    melon.url = 'https://ticket.melon.com/performance/index.htm?prodId=213665';
+    const html = `<strong class="tit">2026 대구힙합페스티벌</strong>
+      <span class="txt_info">2026.11.28 - 2026.11.29</span>
+      <span class="place">EXCO</span>
+      <ul class="list_artist"><li><img src="https://cdnimg.melon.co.kr/cm2/artistcrop/images/007/39/740/739740_20260529133007.jpg/melon/thumbnail/320x300"><span class="singer">빈첸</span></li></ul>`;
+    expect(await parseCrawl(melon, html)).toEqual([
+      expect.objectContaining({
+        artists: [
+          {
+            name: '빈첸',
+            sourceUrl:
+              'https://cdnimg.melon.co.kr/cm2/artistcrop/images/007/39/740/739740_20260529133007_org.jpg/melon/resize/1000/quality/90/optimize',
+          },
+        ],
+      }),
+    ]);
+  });
+
   it('accepts Melon venue coordinates only when the hidden inputs and quick route link agree', async () => {
     const melon = source('ticket-list', 'discovery');
     melon.url = 'https://ticket.melon.com/performance/index.htm?prodId=213793';

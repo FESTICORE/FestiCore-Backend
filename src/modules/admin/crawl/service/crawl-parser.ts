@@ -1001,7 +1001,7 @@ function melonDetailCandidates(
             !image.username &&
             !image.password
           ) {
-            artist.sourceUrl = image.toString();
+            artist.sourceUrl = melonArtistImageUrl(image).toString();
             break;
           }
         } catch {
@@ -1014,6 +1014,19 @@ function melonDetailCandidates(
     if (artists.size) candidate.artists = [...artists.values()];
   }
   return [candidate];
+}
+
+// Melon lineup cards link a 300px crop thumbnail. The same crop is published
+// as a 2000px `_org` original, so request a 1000px rendition of it instead.
+export function melonArtistImageUrl(image: URL): URL {
+  const match =
+    /^(\/cm2\/artistcrop\/images\/[\d/]+\/\d+_\d+)(?:_org)?\.(jpe?g|png)(?:\/melon\/.*)?$/i.exec(
+      image.pathname,
+    );
+  if (image.hostname !== 'cdnimg.melon.co.kr' || !match) return image;
+  return new URL(
+    `https://cdnimg.melon.co.kr${match[1]}_org.${match[2]}/melon/resize/1000/quality/90/optimize`,
+  );
 }
 
 export function yes24EventJson(body: string): Record<string, unknown> | null {
