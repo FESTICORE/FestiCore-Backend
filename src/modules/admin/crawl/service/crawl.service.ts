@@ -46,6 +46,7 @@ import {
 } from './crawl-fetch';
 import {
   artistProfileImageUrl,
+  crawlImageQuality,
   discoverImageUrls,
   prepareCrawlImage,
   selectRunImages,
@@ -1520,6 +1521,10 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
                       ? 'ticket-list:v4'
                       : source.url.startsWith(
                             'https://ticket.melon.com/search/index.htm?',
+                          ) ||
+                          // v4: artist photos use the high-resolution Melon original.
+                          /^https:\/\/ticket\.melon\.com\/performance\/index\.htm\?prodId=\d+$/.test(
+                            source.url,
                           )
                         ? 'ticket-list:v4'
                         : source.url.startsWith(
@@ -3751,6 +3756,8 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         const prepared = await prepareCrawlImage(
           response.body,
           response.contentType,
+          undefined,
+          crawlImageQuality(url),
         );
         if (source.kind === 'artist-image')
           run.contentHash = createHash('sha256')

@@ -3969,7 +3969,7 @@ describe('CrawlService manual runs and snapshots', () => {
       getOne: jest.fn().mockResolvedValue({
         contentHash: createHash('sha256')
           .update(body)
-          .update('ticket-list:v3')
+          .update('ticket-list:v4')
           .digest('hex'),
       }),
     }));
@@ -4017,7 +4017,7 @@ describe('CrawlService manual runs and snapshots', () => {
       .mockResolvedValue([]);
     const oldHash = createHash('sha256')
       .update(body)
-      .update('ticket-list:v3')
+      .update('ticket-list:v4')
       .digest('hex');
     runsRepo.createQueryBuilder = jest.fn(() => ({
       where: jest.fn().mockReturnThis(),
@@ -4052,6 +4052,59 @@ describe('CrawlService manual runs and snapshots', () => {
     await service.execute(nextRun, source);
     expect(nextRun.result).toBe('unchanged');
     expect(proposalItems).toHaveBeenCalledTimes(1);
+  });
+
+  it('reparses an unchanged Melon detail parsed by v3 to link high-resolution artist photos', async () => {
+    const { service, source, run, runsRepo, execute } = harness();
+    execute.mockRestore();
+    source.url = 'https://ticket.melon.com/performance/index.htm?prodId=213665';
+    source.parserConfig = { seed: 'ticket-detail', locationParserVersion: '1' };
+    const body = `<strong class="tit">2026 대구힙합페스티벌</strong>
+      <span class="txt_info">2026.11.28 - 2026.11.29</span>
+      <span class="place">EXCO</span>
+      <ul class="list_artist"><li><img src="https://cdnimg.melon.co.kr/cm2/artistcrop/images/007/39/740/739740_20260529133007.jpg/melon/thumbnail/320x300"><span class="singer">빈첸</span></li></ul>`;
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({ status: 200, body });
+    const captureImages = jest
+      .spyOn(
+        service as unknown as {
+          captureImages(
+            source: CrawlSource,
+            run: CrawlRun,
+            urls: URL[],
+          ): Promise<string[]>;
+        },
+        'captureImages',
+      )
+      .mockResolvedValue([]);
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue({
+        contentHash: createHash('sha256')
+          .update(body)
+          .update('ticket-list:v3')
+          .digest('hex'),
+      }),
+    }));
+    const proposalItems = jest
+      .spyOn(service, 'proposalItems')
+      .mockResolvedValue({ kind: 'festival.new', items: [] });
+
+    await service.execute(run, source);
+
+    const highResolution =
+      'https://cdnimg.melon.co.kr/cm2/artistcrop/images/007/39/740/739740_20260529133007_org.jpg/melon/resize/1000/quality/90/optimize';
+    expect(run.result).not.toBe('unchanged');
+    expect(proposalItems).toHaveBeenCalledTimes(1);
+    expect(proposalItems.mock.calls[0]?.[1]).toEqual([
+      expect.objectContaining({
+        artists: [{ name: '빈첸', sourceUrl: highResolution }],
+      }),
+    ]);
+    expect(captureImages.mock.calls[0]?.[2].map(String)).toContain(
+      highResolution,
+    );
   });
 
   it('registers a dynamic official WONDERLIVET Melon product on the daily crawl', async () => {
