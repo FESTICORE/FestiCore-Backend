@@ -1,5 +1,10 @@
 import { CrawlSource } from '../entity/crawl-source.entity';
-import { parseCrawl, xmfNoticeArtistAliases } from './crawl-parser';
+import {
+  isMelonArtistOriginalUrl,
+  melonArtistImageUrl,
+  parseCrawl,
+  xmfNoticeArtistAliases,
+} from './crawl-parser';
 
 function source(
   parser: CrawlSource['parser'],
@@ -18,6 +23,78 @@ const CDF_OFFICIAL_HTML =
   '<h1 class="NormalView_title__3ywx_">𝗖𝗢𝗨𝗡𝗧𝗗𝗢𝗪𝗡 𝗙𝗔𝗡𝗧𝗔𝗦𝗬 𝟮𝟬𝟮𝟲-𝟮𝟬𝟮𝟳 1차 라인업 공개</h1><div class="mb-20 PostContent_content__1w8Py"><figure class="image"><img src="https://mintpaper.s3.ap-northeast-2.amazonaws.com/CDF_2627_1_927427bb10.jpg"></figure><p>&nbsp;</p><p><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">𝗖𝗢𝗨𝗡𝗧𝗗𝗢𝗪𝗡&nbsp;𝗙𝗔𝗡𝗧𝗔𝗦𝗬&nbsp;𝟮𝟬𝟮𝟲-𝟮𝟬𝟮𝟳</span><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">1차&nbsp;라인업을&nbsp;공개합니다.</span><br><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">✦°｡⋆⸜&nbsp;🪩&nbsp;⸝⋆｡°✦</span><br><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">⊹&nbsp;𝟭𝟮.𝟯𝟭&nbsp;𝙏𝙃𝙐</span><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">극동아시아타이거즈&nbsp;</span><a href="https://www.instagram.com/far_east_asian_tigers/">@far_east_asian_tigers</a><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">LOW&nbsp;HIGH&nbsp;LOW&nbsp;</span><a href="https://www.instagram.com/band_lowhighlow/">@band_lowhighlow</a><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">THE&nbsp;SOLUTIONS&nbsp;</span><a href="https://www.instagram.com/the_solutions/">@the_solutions</a><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">실리카겔&nbsp;</span><a href="https://www.instagram.com/silicagel.official/">@silicagel.official</a><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">AxMxP&nbsp;</span><a href="https://www.instagram.com/axmxp_official/">@axmxp_official</a><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">FTISLAND&nbsp;</span><a href="https://www.instagram.com/ftisland/">@ftisland</a><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">OYSTERS&nbsp;</span><a href="https://www.instagram.com/oysters.999/">@oysters.999</a><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">ONEWE(원위)&nbsp;</span><a href="https://www.instagram.com/official_onewe/">@official_onewe</a><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">IDIOTAPE&nbsp;</span><a href="https://www.instagram.com/idiotapeofficial/">@idiotapeofficial</a><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">KARDI&nbsp;</span><a href="https://www.instagram.com/bandkardi_/">@bandkardi_</a><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">포져군단&nbsp;</span><a href="https://www.instagram.com/poseridiott/">@poseridiott</a><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">혁오&nbsp;</span><a href="https://www.instagram.com/hyukohofficial/">@hyukohofficial</a><br><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">𝚊𝚗𝚍&nbsp;𝚖𝚊𝚗𝚢&nbsp;𝚖𝚘𝚛𝚎..</span><br><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">⌁&nbsp;─────&nbsp;⚠️&nbsp;─────&nbsp;⌁</span><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">⊹&nbsp;주요&nbsp;일정</span><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">10월&nbsp;13일(화)&nbsp;티켓&nbsp;오픈</span><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">11월&nbsp;3일(화)&nbsp;2차&nbsp;라인업&nbsp;발표</span><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">12월&nbsp;31일(목)&nbsp;CDF2026-2027</span><br><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">𝗖𝗢𝗨𝗡𝗧𝗗𝗢𝗪𝗡&nbsp;𝗙𝗔𝗡𝗧𝗔𝗦𝗬&nbsp;𝟮𝟬𝟮𝟲-𝟮𝟬𝟮𝟳</span><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">𝟭𝟮.𝟯𝟭(𝗧𝗛𝗨)&nbsp;𝗮𝘁&nbsp;𝗞𝗜𝗡𝗧𝗘𝗫&nbsp;𝗛𝗔𝗟𝗟&nbsp;𝟳-𝟴</span><br><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">🎫┃𝙉𝙊𝙇&nbsp;·&nbsp;𝙔𝙀𝙎𝟮𝟰&nbsp;·&nbsp;𝙉𝘼𝙑𝙀𝙍&nbsp;·&nbsp;𝟮𝙏𝙈</span><br><br><a href="https://www.instagram.com/explore/tags/countdownfantasy/">#COUNTDOWNFANTASY</a><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">&nbsp;</span><a href="https://www.instagram.com/explore/tags/%EC%B9%B4%EC%9A%B4%ED%8A%B8%EB%8B%A4%EC%9A%B4%ED%8C%90%ED%83%80%EC%A7%8020262027/">#카운트다운판타지20262027</a><span style="background-color:rgb(255,255,255);color:rgb(12,16,20);">&nbsp;</span><a href="https://www.instagram.com/explore/tags/cdf20262027/">#CDF20262027</a></p><p>&nbsp;</p><hr><p style="margin-left:0px;">&nbsp;</p><p style="margin-left:0px;">&nbsp;</p><p style="margin-left:0px;"><a href="https://www.mintpaper.co.kr/"><span class="text-small" style="background-color:transparent!important;color:rgb(153,153,153);"><u>www.mintpaper.com</u></span></a><br><span class="text-small" style="background-color:rgb(244,244,244);color:rgb(153,153,153);">facebook </span><a href="https://www.facebook.com/GrandMintFest/" target="_blank" rel="noopener noreferrer"><span class="text-small" style="background-color:transparent!important;color:rgb(153,153,153);"><u>@grandmintfestival</u></span></a><br><span class="text-small" style="background-color:rgb(244,244,244);color:rgb(153,153,153);">instagram </span><a href="https://www.instagram.com/grandmintfestival/" target="_blank" rel="noopener noreferrer"><span class="text-small" style="background-color:transparent!important;color:rgb(153,153,153);"><u>@grandmintfestival</u></span></a></p></div>';
 const ONEWAY_OFFICIAL_HTML =
   '<div class="data_txt">\n                                \t<p class="" style="font: 13px " helvetica="" neue";="" margin:="" 0px;"=""><span style="font-size: 11pt;">원웨이 페스티벌 2026 - 슈퍼얼리버드</span></p><p class="" style="font: 13px " helvetica="" neue";="" min-height:="" 15px;="" margin:="" 0px;"=""><br></p><p class="" style="font: 13px " helvetica="" neue";="" min-height:="" 15px;="" margin:="" 0px;"=""><br></p><p class="" style="text-align: justify; font: 13px " helvetica="" neue";="" margin:="" 0px;"=""><span style="font-size: 11pt;">- 공 연 명 : 원웨이 페스티벌 2026</span></p><p class="" style="text-align: justify; font: 13px " helvetica="" neue";="" margin:="" 0px;"=""><span style="font-size: 11pt;">- 공연일시 : 2026. 12. 26- 12. 27</span></p><p class="" style="text-align: justify; font: 13px " helvetica="" neue";="" margin:="" 0px;"=""><span style="font-size: 11pt;">- 공연장소 : 킨텍스 제2전시장 10홀</span></p><p class="" style="text-align: justify; font: 13px " helvetica="" neue";="" margin:="" 0px;"=""><span style="font-size: 11pt;">&nbsp;</span></p><p class="" style="text-align: justify; font: 13px " helvetica="" neue";="" margin:="" 0px;"=""><span style="font-size: 11pt;">*슈퍼 얼리버드 티켓은 양일권(2일권)입니다.</span></p><p class="" style="font: 13px " helvetica="" neue";="" margin:="" 0px;"=""><span style="font-size: 11pt;">*한 ID당 8매까지 예매 가능합니다.</span></p><p class="" style="font: 13px " apple="" sd="" gothic="" neo";="" margin:="" 0px;"=""><span class="" style="font-size: 11pt;" helvetica="" neue";"="">*</span><span style="font-size: 11pt;">한정</span><span class="" style="font-size: 11pt;" helvetica="" neue";"=""> </span><span style="font-size: 11pt;">수량으로</span><span class="" style="font-size: 11pt;" helvetica="" neue";"=""> </span><span style="font-size: 11pt;">조기</span><span class="" style="font-size: 11pt;" helvetica="" neue";"=""> </span><span style="font-size: 11pt;">매진될</span><span class="" style="font-size: 11pt;" helvetica="" neue";"=""> </span><span style="font-size: 11pt;">수</span><span class="" style="font-size: 11pt;" helvetica="" neue";"=""> </span><span style="font-size: 11pt;">있습니다</span><span class="" style="font-size: 11pt;" helvetica="" neue";"="">.</span></p></div><div class="concert_info_txt">\n                                \t<p class="" style="text-align: justify; font: 13px " helvetica="" neue";="" margin:="" 0px;"=""><span style="font-size: 11pt;">2026년의 마지막 주말과 주일</span></p><p class="" style="text-align: justify; font: 13px " helvetica="" neue";="" margin:="" 0px;"=""><span style="font-size: 11pt;">수많은 워십 아티스트와 그리스도인들이 한자리에 모여</span></p><p class="" style="text-align: justify; font: 13px " helvetica="" neue";="" margin:="" 0px;"=""><span style="font-size: 11pt;">함께 하나님을 예배하고, 교제하고, 문화를 나누는</span></p><p class="" style="text-align: justify; font: 13px " helvetica="" neue";="" margin:="" 0px;"=""><span style="font-size: 11pt;">그리스도인들의 워십 페스티벌</span></p><p class="" style="text-align: justify; font: 13px " helvetica="" neue";="" margin:="" 0px;"=""><span style="font-size: 11pt;">&nbsp;</span></p><p class="" style="text-align: justify; font: 13px " helvetica="" neue";="" margin:="" 0px;"=""><span style="font-size: 11pt;">ONE WAY FESTIVAL 2026은</span><br><span style="font-size: 11pt;">찬양과 예배만을 위한 집회도,</span><br><span style="font-size: 11pt;">공연만을 위한 페스티벌도 아닙니다.</span></p><p class="" style="text-align: justify; font: 13px " helvetica="" neue";="" margin:="" 0px;"=""><span style="font-size: 11pt;">그리스도인들이 함께 머물고 즐기고 나누는</span><br><span style="font-size: 11pt;">새로운 축제의 문화입니다.</span></p><p class="" style="text-align: justify; font: 13px " helvetica="" neue";="" margin:="" 0px;"=""><span style="font-size: 11pt;">&nbsp;</span></p><p class="" style="text-align: justify; font: 13px " helvetica="" neue";="" margin:="" 0px;"=""><span style="font-size: 11pt;">[1차 라인업]</span></p><p class="" style="text-align: justify; font: 13px " helvetica="" neue";="" margin:="" 0px;"=""><span style="font-size: 11pt;">마커스워십, 기프티드, 커피소년X제이레빗 혜선, 레비스탕스, 위클레시아, 달빛마을, 홀라이프 워십, 브리지임팩트, 히스플랜, 시온의대로 and 소향 그리고 이게 끝이 아닙니다. 더 많은 팀들이 출연할 예정입니다.</span></p><p class="" style="text-align: justify; font: 13px " helvetica="" neue";="" margin:="" 0px;"=""><span style="font-size: 11pt;">&nbsp;</span></p><p class="" style="font: 13px " helvetica="" neue";="" margin:="" 0px;"=""><span class="" style="font-size: 11pt;" apple="" sd="" gothic="" neo";"="">인스타그램</span><span style="font-size: 11pt;">: instagram.com/oneway_festival</span></p></div>';
+
+describe('melonArtistImageUrl', () => {
+  const crop = 'https://cdnimg.melon.co.kr/cm2/artistcrop/images/007/39/740';
+  const resized = '/melon/resize/1000/quality/90/optimize';
+  it.each([
+    [
+      'a 320x300 thumbnail',
+      `${crop}/739740_20260529133007.jpg/melon/thumbnail/320x300`,
+      `${crop}/739740_20260529133007_org.jpg${resized}`,
+    ],
+    [
+      'a thumbnail with a query',
+      `${crop}/739740_20260529133007.jpg/melon/thumbnail/320x300?type=1`,
+      `${crop}/739740_20260529133007_org.jpg${resized}`,
+    ],
+    [
+      'an upper-case extension',
+      `${crop}/739740_20260529133007.JPG/melon/thumbnail/320x300`,
+      `${crop}/739740_20260529133007_org.JPG${resized}`,
+    ],
+    [
+      'a PNG crop',
+      `${crop}/739740_20260529133007.png`,
+      `${crop}/739740_20260529133007_org.png${resized}`,
+    ],
+    [
+      'an existing resize suffix',
+      `${crop}/739740_20260529133007_org.jpg/melon/resize/416`,
+      `${crop}/739740_20260529133007_org.jpg${resized}`,
+    ],
+    [
+      'an already converted original',
+      `${crop}/739740_20260529133007_org.jpg${resized}`,
+      `${crop}/739740_20260529133007_org.jpg${resized}`,
+    ],
+    [
+      'a path outside cm2/artistcrop',
+      'https://cdnimg.melon.co.kr/cm/artistcrop/images/007/39/740/739740_20260529133007.jpg/melon/thumbnail/320x300',
+      'https://cdnimg.melon.co.kr/cm/artistcrop/images/007/39/740/739740_20260529133007.jpg/melon/thumbnail/320x300',
+    ],
+    [
+      'the no-image placeholder',
+      'https://cdnimg.melon.co.kr/melon/thumbnail/320x300',
+      'https://cdnimg.melon.co.kr/melon/thumbnail/320x300',
+    ],
+    [
+      'another host',
+      'https://evil.example/cm2/artistcrop/images/007/39/740/739740_20260529133007.jpg',
+      'https://evil.example/cm2/artistcrop/images/007/39/740/739740_20260529133007.jpg',
+    ],
+  ])('maps %s', (_, input, expected) => {
+    expect(melonArtistImageUrl(new URL(input)).toString()).toBe(expected);
+  });
+
+  it('recognizes only converted Melon artist originals', () => {
+    expect(
+      isMelonArtistOriginalUrl(
+        new URL(`${crop}/739740_20260529133007_org.jpg${resized}`),
+      ),
+    ).toBe(true);
+    expect(
+      isMelonArtistOriginalUrl(
+        new URL(`${crop}/739740_20260529133007.jpg/melon/thumbnail/320x300`),
+      ),
+    ).toBe(false);
+    expect(
+      isMelonArtistOriginalUrl(
+        new URL('https://cdnticket.melon.co.kr/resource/image/poster.jpg'),
+      ),
+    ).toBe(false);
+  });
+});
 
 describe('crawl parsers', () => {
   it('reads a configured timetable table into stable set candidates', async () => {
@@ -583,6 +660,26 @@ describe('crawl parsers', () => {
           {
             name: 'THE ORAL CIGARETTES',
             sourceUrl: 'https://cdnimg.melon.co.kr/artist/1.jpg',
+          },
+        ],
+      }),
+    ]);
+  });
+
+  it('links the high-resolution original of a Melon artist crop thumbnail', async () => {
+    const melon = source('ticket-list', 'discovery');
+    melon.url = 'https://ticket.melon.com/performance/index.htm?prodId=213665';
+    const html = `<strong class="tit">2026 대구힙합페스티벌</strong>
+      <span class="txt_info">2026.11.28 - 2026.11.29</span>
+      <span class="place">EXCO</span>
+      <ul class="list_artist"><li><img src="https://cdnimg.melon.co.kr/cm2/artistcrop/images/007/39/740/739740_20260529133007.jpg/melon/thumbnail/320x300"><span class="singer">빈첸</span></li></ul>`;
+    expect(await parseCrawl(melon, html)).toEqual([
+      expect.objectContaining({
+        artists: [
+          {
+            name: '빈첸',
+            sourceUrl:
+              'https://cdnimg.melon.co.kr/cm2/artistcrop/images/007/39/740/739740_20260529133007_org.jpg/melon/resize/1000/quality/90/optimize',
           },
         ],
       }),

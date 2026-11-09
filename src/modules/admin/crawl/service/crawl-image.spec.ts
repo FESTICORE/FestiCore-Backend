@@ -1,10 +1,13 @@
 import sharp from 'sharp';
+import { CrawlSource } from '../entity/crawl-source.entity';
 import {
   artistProfileImageUrl,
+  crawlImageQuality,
   discoverImageUrls,
   prepareCrawlImage,
   selectRunImages,
 } from './crawl-image';
+import { parseCrawl } from './crawl-parser';
 
 describe('crawl image safety', () => {
   it('converts a bounded GIF poster to stored WebP', async () => {
@@ -313,6 +316,73 @@ describe('crawl image safety', () => {
       'https://cdnimg.melon.co.kr/artist/second.jpg',
       'https://cdnimg.melon.co.kr/artist/fallback.jpg',
     ]);
+  });
+
+  it('downloads the high-resolution original of Melon artist crop thumbnails', () => {
+    const html = `<ul class="list_artist">
+        <li><img src="https://cdnimg.melon.co.kr/cm2/artistcrop/images/007/39/740/739740_20260529133007.jpg/melon/thumbnail/320x300"></li>
+        <li><img src="https://cdnimg.melon.co.kr/cm2/artistcrop/images/001/00/168/100168_20260807121205_org.jpg"></li>
+        <li><img src="https://cdnimg.melon.co.kr/melon/thumbnail/320x300"></li>
+      </ul>`;
+    expect(
+      discoverImageUrls(
+        html,
+        'https://ticket.melon.com/performance/index.htm?prodId=213665',
+      ).map(String),
+    ).toEqual([
+      'https://cdnimg.melon.co.kr/cm2/artistcrop/images/007/39/740/739740_20260529133007_org.jpg/melon/resize/1000/quality/90/optimize',
+      'https://cdnimg.melon.co.kr/cm2/artistcrop/images/001/00/168/100168_20260807121205_org.jpg/melon/resize/1000/quality/90/optimize',
+      'https://cdnimg.melon.co.kr/melon/thumbnail/320x300',
+    ]);
+  });
+
+  it('collects the same Melon artist image URL that the parser links', async () => {
+    const pageUrl =
+      'https://ticket.melon.com/performance/index.htm?prodId=213665';
+    const html = `<strong class="tit">2026 대구힙합페스티벌</strong>
+      <span class="txt_info">2026.11.28 - 2026.11.29</span>
+      <span class="place">EXCO</span>
+      <ul class="list_artist">
+        <li><img src="https://cdnimg.melon.co.kr/cm2/artistcrop/images/007/39/740/739740_20260529133007.jpg/melon/thumbnail/320x300"><span class="singer">빈첸</span></li>
+        <li><img src="https://cdnimg.melon.co.kr/cm2/artistcrop/images/001/00/168/100168_20260807121205.jpg/melon/thumbnail/320x300"><span class="singer">Colde</span></li>
+      </ul>`;
+    const parsed = await parseCrawl(
+      {
+        parser: 'ticket-list',
+        kind: 'discovery',
+        parserConfig: {},
+        url: pageUrl,
+      } as CrawlSource,
+      html,
+    );
+    const linked = (Array.isArray(parsed) ? parsed : []).flatMap(
+      (candidate: { artists?: { sourceUrl?: string }[] }) =>
+        candidate.artists?.flatMap((artist) =>
+          artist.sourceUrl ? [artist.sourceUrl] : [],
+        ) ?? [],
+    );
+    expect(linked).toHaveLength(2);
+    expect(discoverImageUrls(html, pageUrl).map(String)).toEqual(linked);
+  });
+
+  it('raises WebP quality only for converted Melon artist originals', () => {
+    expect(
+      crawlImageQuality(
+        new URL(
+          'https://cdnimg.melon.co.kr/cm2/artistcrop/images/007/39/740/739740_20260529133007_org.jpg/melon/resize/1000/quality/90/optimize',
+        ),
+      ),
+    ).toBe(88);
+    expect(
+      crawlImageQuality(
+        new URL(
+          'https://cdnticket.melon.co.kr/resource/image/upload/product/poster.jpg',
+        ),
+      ),
+    ).toBe(82);
+    expect(
+      crawlImageQuality(new URL('https://tkfile.yes24.com/artists/a.jpg')),
+    ).toBe(82);
   });
 
   it('ignores an image URL written inside the artist alt text', () => {
