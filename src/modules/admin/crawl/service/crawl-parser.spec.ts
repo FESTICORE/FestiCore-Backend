@@ -59,9 +59,24 @@ describe('melonArtistImageUrl', () => {
       `${crop}/739740_20260529133007_org.jpg${resized}`,
     ],
     [
-      'a path outside cm2/artistcrop',
-      'https://cdnimg.melon.co.kr/cm/artistcrop/images/007/39/740/739740_20260529133007.jpg/melon/thumbnail/320x300',
-      'https://cdnimg.melon.co.kr/cm/artistcrop/images/007/39/740/739740_20260529133007.jpg/melon/thumbnail/320x300',
+      'a legacy cm/artistcrop thumbnail',
+      'https://cdnimg.melon.co.kr/cm/artistcrop/images/008/69/696/869696.jpg/melon/thumbnail/320x300',
+      'https://cdnimg.melon.co.kr/cm/artistcrop/images/008/69/696/869696_org.jpg',
+    ],
+    [
+      'a legacy crop with a numbered suffix',
+      'https://cdnimg.melon.co.kr/cm/artistcrop/images/026/31/074/2631074_2.jpg/melon/thumbnail/320x300',
+      'https://cdnimg.melon.co.kr/cm/artistcrop/images/026/31/074/2631074_2_org.jpg',
+    ],
+    [
+      'an already converted legacy original',
+      'https://cdnimg.melon.co.kr/cm/artistcrop/images/008/69/696/869696_org.jpg',
+      'https://cdnimg.melon.co.kr/cm/artistcrop/images/008/69/696/869696_org.jpg',
+    ],
+    [
+      'a path outside artistcrop',
+      'https://cdnimg.melon.co.kr/cm/album/images/007/39/740/739740.jpg/melon/thumbnail/320x300',
+      'https://cdnimg.melon.co.kr/cm/album/images/007/39/740/739740.jpg/melon/thumbnail/320x300',
     ],
     [
       'the no-image placeholder',
