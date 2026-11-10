@@ -834,7 +834,12 @@ export class PublicFestivalService {
   private storedImageIds(pack: Document): string[] {
     return [
       ...new Set(
-        [pack.thumbUrl, ...requiredArray(pack.sets).map((set) => set.imageUrl)]
+        [
+          pack.thumbUrl,
+          ...requiredArray(pack.sets).map((set) => set.imageUrl),
+          // 공연 없이 출연진만 있는 팩도 저장된 출연진 사진을 공개한다.
+          ...requiredArray(pack.artists).map((artist) => artist.imageUrl),
+        ]
           .map(storedImageId)
           .filter((imageId): imageId is string => imageId !== null),
       ),

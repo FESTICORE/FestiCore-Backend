@@ -264,6 +264,38 @@ describe('private missing artist image discovery input', () => {
     expect(await service.missingArtistImages()).toEqual([]);
   });
 
+  it('keeps a stored artist image visible when the pack has no sets', async () => {
+    const { service, query } = publishedOnlyService(
+      [
+        {
+          id: 'fst_lineup',
+          published: {
+            id: 'fst_lineup',
+            packVersion: 1,
+            source: { url: sourceUrl },
+            sets: [],
+            artists: [{ name: '가수 A', imageUrl: imageUrl(imageId) }],
+          },
+        } as unknown as ReturnType<typeof publishedFestival>,
+      ],
+      [
+        {
+          ...reviewedImage('fst_lineup'),
+          seed: null,
+          artistName: null,
+          reviewFestivalId: null,
+          festivalSourceUrl: null,
+        },
+      ],
+    );
+
+    expect(await service.missingArtistImages()).toEqual([]);
+    const imageQueries = (query.mock.calls as [string, unknown[]][]).filter(
+      ([sql]) => sql.includes('FROM crawl_images image'),
+    );
+    expect(imageQueries[0][1]).toEqual([['fst_lineup'], [imageId]]);
+  });
+
   it('separates same-name reviews by festival and checks all published packs in one image query', async () => {
     const first = publishedFestival('fst_first', '가수 A');
     const second = publishedFestival('fst_second', '가수 A', imageUrl(imageId));
