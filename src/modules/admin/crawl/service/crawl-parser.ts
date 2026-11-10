@@ -1020,8 +1020,16 @@ const MELON_ARTIST_ORIGINAL_SUFFIX = '/melon/resize/1000/quality/90/optimize';
 
 // Melon lineup cards link a `/melon/thumbnail/320x300` crop rendition (a 300px
 // image). The same crop is published as a 2000px `_org` original, so request a
-// 1000px rendition of it instead.
+// 1000px rendition of it instead. Legacy `/cm/` crops use their `_org` as is.
 export function melonArtistImageUrl(image: URL): URL {
+  // 예전 `/cm/` 경로의 `_org` 원본은 300~2000px로 제각각이다. 1000px로 늘리지 않고
+  // 원본 크기 그대로 받는다(저장할 때 2000px 안으로 줄인다).
+  const legacy =
+    /^(\/cm\/artistcrop\/images\/[\d/]+\/\d+(?:_\d+)?)(?:_org)?\.(jpe?g|png)(?:\/melon\/.*)?$/i.exec(
+      image.pathname,
+    );
+  if (image.hostname === 'cdnimg.melon.co.kr' && legacy)
+    return new URL(`https://cdnimg.melon.co.kr${legacy[1]}_org.${legacy[2]}`);
   const match =
     /^(\/cm2\/artistcrop\/images\/[\d/]+\/\d+_\d+)(?:_org)?\.(jpe?g|png)(?:\/melon\/.*)?$/i.exec(
       image.pathname,
