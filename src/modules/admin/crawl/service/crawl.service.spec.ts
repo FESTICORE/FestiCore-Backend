@@ -1263,6 +1263,8 @@ describe('DRDR official profile sources', () => {
 describe('CDF LOW HIGH LOW official Melon Ticket profile source', () => {
   const photo =
     'https://cdnimg.melon.co.kr/cm2/artistcrop/images/027/54/370/2754370_20250307154851.jpg';
+  const original =
+    'https://cdnimg.melon.co.kr/cm2/artistcrop/images/027/54/370/2754370_20250307154851_org.jpg/melon/resize/1000/quality/90/optimize';
   const config = {
     seed: CDF_LOW_HIGH_LOW_PROFILE_SEED,
     festivalSourceUrl: CDF_FESTIVAL_URL,
@@ -1314,11 +1316,11 @@ describe('CDF LOW HIGH LOW official Melon Ticket profile source', () => {
     ).testSource(source.id);
     expect(test.parsed).toEqual({
       artistName: '로우하이로우',
-      imageUrl: photo,
+      imageUrl: original,
     });
     expect(robots.mock.calls.map(([url]) => url)).toEqual([
       CDF_LOW_HIGH_LOW_PROFILE_URL,
-      photo,
+      original,
     ]);
 
     const capture = jest
@@ -1335,7 +1337,7 @@ describe('CDF LOW HIGH LOW official Melon Ticket profile source', () => {
       getOne: jest.fn().mockResolvedValue(null),
     }));
     await service.execute(run, source);
-    expect(capture.mock.calls[0][2]).toEqual([new URL(photo)]);
+    expect(capture.mock.calls[0][2]).toEqual([new URL(original)]);
     expect(run.result).toBe('nochange-parsed');
   });
 });
