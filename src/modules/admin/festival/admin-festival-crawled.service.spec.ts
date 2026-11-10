@@ -33,12 +33,24 @@ const timetable = {
     },
   ],
 };
-function fixture() {
+// 저장 사진 ID별 수집 소스. reviewed는 사진 검토를 거친 사진이다.
+type CrawlImageRow = { sourceId: string; reviewed?: boolean };
+function fixture(crawlImages: Record<string, CrawlImageRow> = {}) {
   let stored: AdminFestival | null = null;
   let versions: unknown[] = [];
-  const query = jest.fn((sql: string, parameters: string[]) => {
+  const query = jest.fn((sql: string, parameters: unknown[]) => {
     const source = (stored?.published?.source ?? stored?.draft.source) as
       { url?: string } | undefined;
+    if (sql.includes('FROM crawl_images image'))
+      return Promise.resolve(
+        (parameters[0] as string[])
+          .filter((id) => crawlImages[id])
+          .map((id) => ({
+            id,
+            sourceId: crawlImages[id].sourceId,
+            reviewed: crawlImages[id].reviewed ?? false,
+          })),
+      );
     return Promise.resolve(
       sql.includes('SELECT "id" FROM "admin_festivals"') &&
         source?.url === parameters[0]
@@ -553,5 +565,106 @@ describe('recrawled artist images', () => {
     expect(f.row().draft.artists).toEqual([
       { name: 'Artist', imageUrl: image(3) },
     ]);
+  });
+
+  describe('sets published before the recrawled lineup', () => {
+    const id = (n: number) => `00000000-0000-4000-8000-00000000000${n}`;
+    // 예전 수집본: 공연에만 남은 사진 image(1), 출연진에는 이미 새 사진 image(2).
+    async function retained(crawlImages: Record<string, CrawlImageRow>) {
+      const f = fixture(crawlImages);
+      await f.service.publishCrawled(
+        { ...detail, artists: [{ name: 'Artist', imageUrl: image(2) }] },
+        withImages([{ ...timetable.sets[0], imageUrl: image(1) }]),
+      );
+      return f;
+    }
+
+    it('replaces an older photo the same crawl source stored', async () => {
+      const f = await retained({
+        [id(1)]: { sourceId: 'melon' },
+        [id(3)]: { sourceId: 'melon' },
+      });
+      f.row().draftUpdatedBy = 'admin_1';
+
+      await expect(
+        f.service.publishCrawled(
+          { ...detail, artists: [{ name: 'Artist', imageUrl: image(3) }] },
+          null,
+        ),
+      ).resolves.toEqual({ packVersion: 2, changed: true });
+
+      expect(f.row().published!.sets).toEqual([
+        { ...timetable.sets[0], imageUrl: image(3) },
+      ]);
+      expect(f.row().draft.sets).toEqual([
+        { ...timetable.sets[0], imageUrl: image(3) },
+      ]);
+      expect(f.row().draftUpdatedBy).toBe('admin_1');
+    });
+
+    it('keeps photos from another source, reviewed photos and unknown photos', async () => {
+      for (const [current, crawlImages] of [
+        [
+          image(1),
+          { [id(1)]: { sourceId: 'commons' }, [id(3)]: { sourceId: 'melon' } },
+        ],
+        [
+          image(1),
+          {
+            [id(1)]: { sourceId: 'melon', reviewed: true },
+            [id(3)]: { sourceId: 'melon' },
+          },
+        ],
+        // 수집 기록이 없는 사진도 관리자가 고른 사진으로 본다.
+        [image(1), { [id(3)]: { sourceId: 'melon' } }],
+      ] as [string, Record<string, CrawlImageRow>][]) {
+        const f = fixture(crawlImages);
+        await f.service.publishCrawled(
+          { ...detail, artists: [{ name: 'Artist', imageUrl: image(2) }] },
+          withImages([{ ...timetable.sets[0], imageUrl: current }]),
+        );
+        const chosen = {
+          name: 'Artist',
+          imageUrl: current,
+          imageCredit: { author: 'Admin' },
+        };
+        f.row().draft = { ...f.row().draft, artists: [chosen] };
+        const draftVersion = f.row().draftVersion;
+
+        await f.service.publishCrawled(
+          { ...detail, artists: [{ name: 'Artist', imageUrl: image(3) }] },
+          null,
+        );
+
+        expect(f.row().published!.sets).toEqual([
+          { ...timetable.sets[0], imageUrl: current },
+        ]);
+        expect(f.row().draft.sets).toEqual([
+          { ...timetable.sets[0], imageUrl: current },
+        ]);
+        expect(f.row().draft.artists).toEqual([chosen]);
+        expect(f.row().draftVersion).toBe(draftVersion);
+      }
+    });
+
+    it('keeps a same-source photo when the name is ambiguous', async () => {
+      const f = await retained({
+        [id(1)]: { sourceId: 'melon' },
+        [id(3)]: { sourceId: 'melon' },
+      });
+      await f.service.publishCrawled(
+        {
+          ...detail,
+          artists: [
+            { name: 'Artist (아티스트)', imageUrl: image(3) },
+            { name: 'Artist' },
+          ],
+        },
+        null,
+      );
+      expect(f.row().published!.sets).toEqual([
+        { ...timetable.sets[0], imageUrl: image(1) },
+      ]);
+    });
   });
 });

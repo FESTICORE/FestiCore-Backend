@@ -135,6 +135,66 @@ function collectedImageUrls(artists: unknown): (name: unknown) => Set<string> {
       : new Set<string>();
 }
 
+/** 지금 사진이 수집기가 넣은 사진인지 판단한다. (이름, 지금 사진, 새 수집 사진) */
+type CollectedImage = (
+  name: unknown,
+  current: string,
+  latest: string,
+) => boolean;
+
+function storedImageId(url: unknown): string | null {
+  return typeof url === 'string' && STORED_ARTIST_IMAGE.test(url)
+    ? url.slice('/api/v1/festivals/images/'.length, -'.webp'.length)
+    : null;
+}
+
+function imageUrlsIn(items: unknown): unknown[] {
+  return Array.isArray(items)
+    ? (items as unknown[]).map((value) => item(value)?.imageUrl)
+    : [];
+}
+
+/**
+ * 직전 발행본 출연진에 있던 사진과, 새 사진과 같은 수집 소스가 저장한 사진을 수집 사진으로 본다.
+ * 사진 검토(crawl_artist_image_reviews)를 거친 사진, 다른 소스 사진, 외부 주소는 관리자가
+ * 고른 사진으로 보고 바꾸지 않는다. 출연진 발행이 소스 재수집보다 늦게 반영된 경우를 위한 보완이다.
+ */
+async function collectedImages(
+  manager: EntityManager,
+  previousArtists: unknown,
+  urls: unknown[],
+): Promise<CollectedImage> {
+  const previouslyCollected = collectedImageUrls(previousArtists);
+  const ids = [...new Set(urls.map(storedImageId).filter((id) => id !== null))];
+  const rows = ids.length
+    ? await manager.query<
+        { id: string; sourceId: string; reviewed: boolean }[]
+      >(
+        `SELECT image.id, image."sourceId",
+           EXISTS (
+             SELECT 1 FROM crawl_artist_image_reviews review
+             WHERE review."imageId" = image.id
+           ) AS reviewed
+         FROM crawl_images image
+         WHERE image.id = ANY($1::uuid[])`,
+        [ids],
+      )
+    : [];
+  const sourceOf = new Map(
+    rows
+      .filter((row) => !row.reviewed)
+      .map((row) => [row.id, row.sourceId] as const),
+  );
+  return (name, current, latest) => {
+    if (previouslyCollected(name).has(current)) return true;
+    const currentSource = sourceOf.get(storedImageId(current) ?? '');
+    return (
+      currentSource !== undefined &&
+      currentSource === sourceOf.get(storedImageId(latest) ?? '')
+    );
+  };
+}
+
 /**
  * 이름이 맞는 항목의 사진을 최신 수집 사진으로 바꾼다. 사진이 비어 있거나 직전에 수집한
  * 사진 그대로일 때만 바꾸고, 관리자가 다른 사진을 골랐으면 그대로 둔다.
@@ -143,7 +203,7 @@ function withLatestImages(
   items: unknown,
   nameField: 'artist' | 'name',
   imageFor: (name: unknown) => ArtistImage | null,
-  previouslyCollected: (name: unknown) => Set<string>,
+  collected: CollectedImage,
 ): unknown {
   if (!Array.isArray(items)) return items;
   return (items as unknown[]).map((value) => {
@@ -154,7 +214,7 @@ function withLatestImages(
     if (
       typeof current === 'string' &&
       current &&
-      !previouslyCollected(entry[nameField]).has(current)
+      !collected(entry[nameField], current, image.imageUrl)
     )
       return value;
     // 공연에는 사진 출처를 두지 않는다. 공개 응답이 저장된 권리 정보로 다시 붙인다.
@@ -598,7 +658,12 @@ export class AdminFestivalService {
       }
       if (detail.artists !== undefined) document.artists = detail.artists;
       const imageFor = crawledArtistImages(detail.artists);
-      const previouslyCollected = collectedImageUrls(previous?.artists);
+      const collected = await collectedImages(manager, previous?.artists, [
+        ...imageUrlsIn(detail.artists),
+        ...imageUrlsIn(previous?.sets),
+        ...imageUrlsIn(row?.draft.sets),
+        ...imageUrlsIn(row?.draft.artists),
+      ]);
       if (detail.officialInstagramUrl !== undefined)
         document.officialInstagramUrl = detail.officialInstagramUrl;
       if (detail.location !== undefined) {
@@ -646,7 +711,7 @@ export class AdminFestivalService {
         document.sets,
         'artist',
         imageFor,
-        previouslyCollected,
+        collected,
       );
       const errors = validateDraft(document, true);
       if (errors.length)
@@ -661,7 +726,7 @@ export class AdminFestivalService {
           row,
           detail,
           imageFor,
-          previouslyCollected,
+          collected,
         );
       if (previous && contentKey(previous) === contentKey(document))
         return { id, packVersion: row!.publishedVersion, changed: false };
@@ -706,17 +771,12 @@ export class AdminFestivalService {
     row: AdminFestival,
     detail: CrawledFestivalDetail,
     imageFor: (name: unknown) => ArtistImage | null,
-    previouslyCollected: (name: unknown) => Set<string>,
+    collected: CollectedImage,
   ) {
     const draft = row.draft;
     const next: FestivalDocument = {
       ...draft,
-      sets: withLatestImages(
-        draft.sets,
-        'artist',
-        imageFor,
-        previouslyCollected,
-      ),
+      sets: withLatestImages(draft.sets, 'artist', imageFor, collected),
     };
     if (draft.sets === undefined) delete next.sets;
     const filled = (artists: unknown) =>
@@ -726,7 +786,7 @@ export class AdminFestivalService {
         draft.artists,
         'name',
         imageFor,
-        previouslyCollected,
+        collected,
       );
     // 관리자가 비운 출연진은 다시 채우지 않는다.
     else if (!filled(row.published?.artists) && detail.artists?.length)
