@@ -1,5 +1,6 @@
 import { checkedUrl } from './crawl-fetch';
 import { CDF_FESTIVAL_URL } from './cdf-profile';
+import { melonArtistImageUrl } from './crawl-parser';
 
 export const CDF_LOW_HIGH_LOW_PROFILE_SEED = 'cdf-low-high-low-profile';
 export const CDF_LOW_HIGH_LOW_PROFILE_URL =
@@ -15,7 +16,7 @@ export const CDF_LOW_HIGH_LOW_PUBLIC_IMAGE_SQL = `(
   AND source."parserConfig"->>'festivalSourceUrl' = '${CDF_FESTIVAL_URL}'
   AND source."parserConfig"->>'artistName' = '${ARTIST_NAME}'
   AND source."parserConfig"->>'artistAlias' = '${FESTIVAL_NAME}'
-  AND image."originUrl" ~* '^https://cdnimg[.]melon[.]co[.]kr/cm2/artistcrop/images/027/54/370/2754370_[0-9]{14}[.]jpe?g$'
+  AND image."originUrl" ~* '^https://cdnimg[.]melon[.]co[.]kr/cm2/artistcrop/images/027/54/370/2754370_[0-9]{14}([.]jpe?g|_org[.]jpe?g/melon/resize/1000/quality/90/optimize)$'
 )`;
 
 export function cdfLowHighLowProfileFor(
@@ -82,7 +83,8 @@ export function cdfLowHighLowProfileImageUrl(
       IMAGE_PATH.test(image.pathname) &&
       !image.search &&
       !image.hash
-      ? image
+      ? // 프로필에 걸린 200px 사진 대신 같은 사진의 1000px 원본을 받는다.
+        melonArtistImageUrl(image)
       : null;
   } catch {
     return null;
