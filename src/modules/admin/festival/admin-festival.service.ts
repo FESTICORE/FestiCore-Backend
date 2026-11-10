@@ -78,54 +78,87 @@ function item(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-/** 수집 출연진의 저장 사진을 이름으로 찾는다. 이름 하나에 사진이 둘 이상 맞으면 고르지 않는다. */
+function artistName(value: unknown): string | null {
+  if (typeof value === 'string') return value;
+  const name = item(value)?.name;
+  return typeof name === 'string' ? name : null;
+}
+
+/**
+ * 수집 출연진의 저장 사진을 이름으로 찾는다. 사진이 없는 출연진도 이름을 등록해,
+ * 이름 하나가 출연진 둘 이상과 맞으면 모호한 것으로 보고 고르지 않는다.
+ */
 function crawledArtistImages(
   artists: unknown[] | undefined,
 ): (name: unknown) => ArtistImage | null {
-  const images = new Map<string, Map<string, ArtistImage>>();
-  for (const value of artists ?? []) {
+  const people = new Map<string, Set<number>>();
+  const images: (ArtistImage | null)[] = [];
+  (artists ?? []).forEach((value, index) => {
+    const name = artistName(value);
     const artist = item(value);
-    if (
-      typeof artist?.name !== 'string' ||
-      typeof artist.imageUrl !== 'string' ||
-      !STORED_ARTIST_IMAGE.test(artist.imageUrl)
-    )
-      continue;
-    const image: ArtistImage = {
-      imageUrl: artist.imageUrl,
-      ...(artist.imageCredit ? { imageCredit: artist.imageCredit } : {}),
-    };
-    for (const key of artistNameKeys(artist.name)) {
-      const byUrl = images.get(key) ?? new Map<string, ArtistImage>();
-      byUrl.set(image.imageUrl, image);
-      images.set(key, byUrl);
-    }
-  }
+    images[index] =
+      typeof artist?.imageUrl === 'string' &&
+      STORED_ARTIST_IMAGE.test(artist.imageUrl)
+        ? {
+            imageUrl: artist.imageUrl,
+            ...(artist.imageCredit ? { imageCredit: artist.imageCredit } : {}),
+          }
+        : null;
+    if (name === null) return;
+    for (const key of artistNameKeys(name))
+      people.set(key, (people.get(key) ?? new Set<number>()).add(index));
+  });
   return (name) => {
     if (typeof name !== 'string') return null;
-    const found = new Map(
-      artistNameKeys(name).flatMap((key) => [...(images.get(key) ?? [])]),
+    const found = new Set(
+      artistNameKeys(name).flatMap((key) => [...(people.get(key) ?? [])]),
     );
-    return found.size === 1 ? [...found.values()][0] : null;
+    return found.size === 1 ? (images[[...found][0]] ?? null) : null;
   };
 }
 
-/** 이름이 맞는 항목의 사진만 최신 수집 사진으로 바꾼다. 맞는 사진이 없으면 그대로 둔다. */
+/** 직전 발행본의 수집 출연진에서 이름이 맞는 사진 주소를 모두 찾는다. */
+function collectedImageUrls(artists: unknown): (name: unknown) => Set<string> {
+  const urls = new Map<string, Set<string>>();
+  for (const value of Array.isArray(artists) ? (artists as unknown[]) : []) {
+    const name = artistName(value);
+    const imageUrl = item(value)?.imageUrl;
+    if (name === null || typeof imageUrl !== 'string' || !imageUrl) continue;
+    for (const key of artistNameKeys(name))
+      urls.set(key, (urls.get(key) ?? new Set<string>()).add(imageUrl));
+  }
+  return (name) =>
+    typeof name === 'string'
+      ? new Set(
+          artistNameKeys(name).flatMap((key) => [...(urls.get(key) ?? [])]),
+        )
+      : new Set<string>();
+}
+
+/**
+ * 이름이 맞는 항목의 사진을 최신 수집 사진으로 바꾼다. 사진이 비어 있거나 직전에 수집한
+ * 사진 그대로일 때만 바꾸고, 관리자가 다른 사진을 골랐으면 그대로 둔다.
+ */
 function withLatestImages(
   items: unknown,
   nameField: 'artist' | 'name',
   imageFor: (name: unknown) => ArtistImage | null,
+  previouslyCollected: (name: unknown) => Set<string>,
 ): unknown {
   if (!Array.isArray(items)) return items;
   return (items as unknown[]).map((value) => {
     const entry = item(value);
     const image = entry ? imageFor(entry[nameField]) : null;
-    if (!entry || !image) return value;
+    if (!entry || !image || entry.imageUrl === image.imageUrl) return value;
+    const current = entry.imageUrl;
+    if (
+      typeof current === 'string' &&
+      current &&
+      !previouslyCollected(entry[nameField]).has(current)
+    )
+      return value;
     // 공연에는 사진 출처를 두지 않는다. 공개 응답이 저장된 권리 정보로 다시 붙인다.
-    if (nameField === 'artist')
-      return entry.imageUrl === image.imageUrl
-        ? value
-        : { ...entry, imageUrl: image.imageUrl };
+    if (nameField === 'artist') return { ...entry, imageUrl: image.imageUrl };
     const next: Record<string, unknown> = {
       ...entry,
       imageUrl: image.imageUrl,
@@ -565,6 +598,7 @@ export class AdminFestivalService {
       }
       if (detail.artists !== undefined) document.artists = detail.artists;
       const imageFor = crawledArtistImages(detail.artists);
+      const previouslyCollected = collectedImageUrls(previous?.artists);
       if (detail.officialInstagramUrl !== undefined)
         document.officialInstagramUrl = detail.officialInstagramUrl;
       if (detail.location !== undefined) {
@@ -608,7 +642,12 @@ export class AdminFestivalService {
         });
       }
       // 남겨 둔 공연도 다시 수집한 출연진 사진을 쓴다.
-      document.sets = withLatestImages(document.sets, 'artist', imageFor);
+      document.sets = withLatestImages(
+        document.sets,
+        'artist',
+        imageFor,
+        previouslyCollected,
+      );
       const errors = validateDraft(document, true);
       if (errors.length)
         throw new BadRequestException({
@@ -616,7 +655,14 @@ export class AdminFestivalService {
           message: errors.join('; '),
           errors,
         });
-      if (row) await this.refreshDraftImages(manager, row, detail, imageFor);
+      if (row)
+        await this.refreshDraftImages(
+          manager,
+          row,
+          detail,
+          imageFor,
+          previouslyCollected,
+        );
       if (previous && contentKey(previous) === contentKey(document))
         return { id, packVersion: row!.publishedVersion, changed: false };
       if (!row) {
@@ -653,28 +699,42 @@ export class AdminFestivalService {
 
   /**
    * 관리 초안에 다시 수집한 출연진 사진을 넣는다. 초안의 다른 편집 내용은 건드리지 않고,
-   * 출연진 목록이 비어 있을 때만 수집 목록을 채운다.
+   * 초안과 직전 발행본 모두 출연진을 채운 적이 없을 때만 수집 목록을 채운다.
    */
   private async refreshDraftImages(
     manager: EntityManager,
     row: AdminFestival,
     detail: CrawledFestivalDetail,
     imageFor: (name: unknown) => ArtistImage | null,
+    previouslyCollected: (name: unknown) => Set<string>,
   ) {
     const draft = row.draft;
     const next: FestivalDocument = {
       ...draft,
-      sets: withLatestImages(draft.sets, 'artist', imageFor),
+      sets: withLatestImages(
+        draft.sets,
+        'artist',
+        imageFor,
+        previouslyCollected,
+      ),
     };
     if (draft.sets === undefined) delete next.sets;
-    if (Array.isArray(draft.artists) && draft.artists.length)
-      next.artists = withLatestImages(draft.artists, 'name', imageFor);
-    else if (detail.artists?.length) next.artists = detail.artists;
+    const filled = (artists: unknown) =>
+      Array.isArray(artists) && artists.length > 0;
+    if (filled(draft.artists))
+      next.artists = withLatestImages(
+        draft.artists,
+        'name',
+        imageFor,
+        previouslyCollected,
+      );
+    // 관리자가 비운 출연진은 다시 채우지 않는다.
+    else if (!filled(row.published?.artists) && detail.artists?.length)
+      next.artists = detail.artists;
     if (contentKey(next) === contentKey(draft)) return;
     const before = { draftVersion: row.draftVersion, draft };
     row.draft = next;
     row.draftVersion++;
-    row.draftUpdatedBy = null;
     await manager.getRepository(AdminFestival).save(row);
     await this.audit.record(manager, {
       actor: null,

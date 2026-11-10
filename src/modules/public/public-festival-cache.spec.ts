@@ -322,6 +322,37 @@ describe('PublicFestivalService published cache', () => {
     expect(version.etag).toMatch(/^"[0-9a-f]{64}"$/);
   });
 
+  it('keeps stored lineup photos in publishedPack when the pack has no sets', async () => {
+    const { service, findOne, visibleRows } = setup();
+    const imageUrl =
+      '/api/v1/festivals/images/00000000-0000-4000-8000-000000000001.webp';
+    findOne.mockResolvedValue({
+      publishedVersion: 1,
+      published: {
+        id,
+        packVersion: 1,
+        sets: [],
+        artists: [{ name: '가수 A', imageUrl }],
+      },
+    });
+    visibleRows.push({
+      id: imageUrl.match(/[0-9a-f-]{36}/)![0],
+      seed: null,
+      artistName: null,
+      reviewFestivalId: null,
+      festivalSourceUrl: null,
+      author: null,
+      license: null,
+      licenseUrl: null,
+      sourceUrl: null,
+      rightsRunId: null,
+    });
+
+    const { document } = await service.publishedPack(id);
+
+    expect(document.artists).toEqual([{ name: '가수 A', imageUrl }]);
+  });
+
   it('an older reader cannot revive a pack after invalidation', async () => {
     const { service, cache, findOne } = setup();
     let finishRead!: (value: object) => void;
