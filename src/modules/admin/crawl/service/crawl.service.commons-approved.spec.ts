@@ -513,6 +513,10 @@ describe('승인된 Commons 사진 수집', () => {
 
     await service.execute(run, source);
 
+    expect(linkedOfficialSource.andWhere).toHaveBeenCalledWith(
+      `source."parserConfig"->>'festivalSourceUrl' = :festivalSourceUrl`,
+      { festivalSourceUrl: review.festivalSourceUrl },
+    );
     expect(run.error).toBe('COMMONS_OFFICIAL_SOURCE_UNLINKED');
     expect(transaction).toHaveBeenCalledTimes(1);
     expect(review.status).toBe('revoked');

@@ -2362,7 +2362,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         })
         .andWhere('source.url = :url', { url: review.officialEvidenceUrl })
         .andWhere(
-          "source.parserConfig->>'festivalSourceUrl' = :festivalSourceUrl",
+          'source."parserConfig"->>\'festivalSourceUrl\' = :festivalSourceUrl',
           { festivalSourceUrl: review.festivalSourceUrl },
         )
         .getOne();
