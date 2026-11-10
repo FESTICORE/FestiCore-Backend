@@ -348,3 +348,210 @@ describe('atomic crawled publication', () => {
     expect(f.versions()).toHaveLength(1);
   });
 });
+
+describe('recrawled artist images', () => {
+  const image = (n: number) =>
+    `/api/v1/festivals/images/00000000-0000-4000-8000-00000000000${n}.webp`;
+  const withImages = (sets: unknown[]) => ({ ...timetable, sets });
+
+  it('moves retained sets and the admin draft to the newest crawled artist image', async () => {
+    const f = fixture();
+    await f.service.publishCrawled(
+      {
+        ...detail,
+        artists: [{ name: 'Artist (아티스트)', imageUrl: image(1) }],
+      },
+      withImages([{ ...timetable.sets[0], imageUrl: image(1) }]),
+    );
+    f.row().draft = { ...f.row().draft, rules: ['Private rule'] };
+    f.row().draftVersion = 4;
+
+    await expect(
+      f.service.publishCrawled(
+        {
+          ...detail,
+          artists: [{ name: 'Artist (아티스트)', imageUrl: image(2) }],
+        },
+        null,
+      ),
+    ).resolves.toEqual({ packVersion: 2, changed: true });
+
+    const published = f.row().published!;
+    expect(published.sets).toEqual([
+      { ...timetable.sets[0], imageUrl: image(2) },
+    ]);
+    expect(published.artists).toEqual([
+      { name: 'Artist (아티스트)', imageUrl: image(2) },
+    ]);
+    expect(f.row().draft).toMatchObject({
+      rules: ['Private rule'],
+      sets: [{ artist: 'Artist', imageUrl: image(2) }],
+      artists: [{ name: 'Artist (아티스트)', imageUrl: image(2) }],
+    });
+    expect(f.row().draftVersion).toBe(5);
+    expect(f.record).toHaveBeenCalledWith(
+      f.manager,
+      expect.objectContaining({
+        actor: null,
+        action: 'festival.draft.updated',
+        before: expect.objectContaining({ draftVersion: 4 }) as unknown,
+      }),
+    );
+
+    // 같은 사진으로 다시 돌면 팩과 초안 모두 그대로다.
+    await expect(
+      f.service.publishCrawled(
+        {
+          ...detail,
+          artists: [{ name: 'Artist (아티스트)', imageUrl: image(2) }],
+        },
+        null,
+      ),
+    ).resolves.toEqual({ packVersion: 2, changed: false });
+    expect(f.row().draftVersion).toBe(5);
+  });
+
+  it('keeps the stored image when the name matches no photo or more than one', async () => {
+    for (const artists of [
+      [{ name: 'Artist' }],
+      [{ name: 'Other', imageUrl: image(3) }],
+      [
+        { name: 'Artist', imageUrl: image(2) },
+        { name: 'artist', imageUrl: image(3) },
+      ],
+      // 사진 없는 같은 이름도 사람으로 세어 별칭 충돌을 모호하게 본다.
+      [{ name: 'Artist (아티스트)', imageUrl: image(2) }, { name: 'Artist' }],
+      [{ name: 'Artist (아티스트)', imageUrl: image(2) }, 'Artist'],
+      [{ name: 'Artist', imageUrl: 'https://cdnimg.melon.co.kr/a.jpg' }],
+    ]) {
+      const f = fixture();
+      await f.service.publishCrawled(
+        { ...detail, artists: [{ name: 'Artist', imageUrl: image(1) }] },
+        withImages([{ ...timetable.sets[0], imageUrl: image(1) }]),
+      );
+      const draftVersion = f.row().draftVersion;
+      await f.service.publishCrawled({ ...detail, artists }, null);
+      expect(f.row().published!.sets).toEqual([
+        { ...timetable.sets[0], imageUrl: image(1) },
+      ]);
+      expect((f.row().draft.sets as { imageUrl?: string }[])[0].imageUrl).toBe(
+        image(1),
+      );
+      expect(f.row().draftVersion).toBe(draftVersion);
+    }
+  });
+
+  it('keeps a photo the admin chose when the artist is crawled again', async () => {
+    const f = fixture();
+    await f.service.publishCrawled(
+      { ...detail, artists: [{ name: 'Artist', imageUrl: image(1) }] },
+      withImages([{ ...timetable.sets[0], imageUrl: image(1) }]),
+    );
+    const chosen = {
+      name: 'Artist',
+      imageUrl: image(4),
+      imageCredit: { author: 'Admin pick' },
+    };
+    f.row().draft = {
+      ...f.row().draft,
+      sets: [{ ...timetable.sets[0], imageUrl: image(4) }],
+      artists: [chosen],
+    };
+    const draftVersion = f.row().draftVersion;
+
+    await f.service.publishCrawled(
+      { ...detail, artists: [{ name: 'Artist', imageUrl: image(2) }] },
+      null,
+    );
+
+    // 발행본은 직전 수집 사진이었으므로 새 사진으로 바뀐다.
+    expect(f.row().published!.sets).toEqual([
+      { ...timetable.sets[0], imageUrl: image(2) },
+    ]);
+    expect(f.row().draft.sets).toEqual([
+      { ...timetable.sets[0], imageUrl: image(4) },
+    ]);
+    expect(f.row().draft.artists).toEqual([chosen]);
+    expect(f.row().draftVersion).toBe(draftVersion);
+  });
+
+  it('fills an empty published set photo and keeps the draft editor when only photos change', async () => {
+    const f = fixture();
+    await f.service.publishCrawled(
+      { ...detail, artists: [{ name: 'Artist' }] },
+      withImages([timetable.sets[0]]),
+    );
+    f.row().draftUpdatedBy = 'admin_1';
+
+    await f.service.publishCrawled(
+      { ...detail, artists: [{ name: 'Artist', imageUrl: image(2) }] },
+      null,
+    );
+
+    expect(f.row().published!.sets).toEqual([
+      { ...timetable.sets[0], imageUrl: image(2) },
+    ]);
+    expect(f.row().draft.sets).toEqual([
+      { ...timetable.sets[0], imageUrl: image(2) },
+    ]);
+    expect(f.row().draftUpdatedBy).toBe('admin_1');
+  });
+
+  it('does not refill a draft lineup the admin cleared', async () => {
+    const f = fixture();
+    await f.service.publishCrawled(
+      { ...detail, artists: [{ name: 'Artist', imageUrl: image(1) }] },
+      null,
+    );
+    f.row().draft = { ...f.row().draft, artists: [] };
+    const draftVersion = f.row().draftVersion;
+
+    await f.service.publishCrawled(
+      { ...detail, artists: [{ name: 'Artist', imageUrl: image(2) }] },
+      null,
+    );
+
+    expect(f.row().draft.artists).toEqual([]);
+    expect(f.row().draftVersion).toBe(draftVersion);
+  });
+
+  it('keeps the admin photo credit when the crawled photo URL is unchanged', async () => {
+    const f = fixture();
+    await f.service.publishCrawled(
+      { ...detail, artists: [{ name: 'Artist', imageUrl: image(1) }] },
+      null,
+    );
+    const credited = {
+      name: 'Artist',
+      imageUrl: image(1),
+      imageCredit: { author: 'Admin', license: 'CC BY 4.0' },
+    };
+    f.row().draft = { ...f.row().draft, artists: [credited] };
+
+    await f.service.publishCrawled(
+      { ...detail, artists: [{ name: 'Artist', imageUrl: image(1) }] },
+      null,
+    );
+
+    expect(f.row().draft.artists).toEqual([credited]);
+  });
+
+  it('fills an empty draft lineup and replaces a stale draft photo credit', async () => {
+    const f = fixture();
+    await f.service.publishCrawled({ ...detail, artists: [] }, null);
+    const credited = {
+      name: 'Artist',
+      imageUrl: image(2),
+      imageCredit: { author: 'A', license: 'CC BY 4.0' },
+    };
+    await f.service.publishCrawled({ ...detail, artists: [credited] }, null);
+    expect(f.row().draft.artists).toEqual([credited]);
+    await f.service.publishCrawled(
+      { ...detail, artists: [{ name: 'Artist', imageUrl: image(3) }] },
+      null,
+    );
+    expect(f.row().draft.artists).toEqual([
+      { name: 'Artist', imageUrl: image(3) },
+    ]);
+  });
+});
