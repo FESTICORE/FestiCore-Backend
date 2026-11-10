@@ -9,6 +9,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { randomBytes } from 'crypto';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 import { brotliCompressSync } from 'zlib';
+import { artistNameKeys } from '../../../common/artist-name';
 import { verifiedVenueLocation } from '../../../common/festival-location';
 import {
   AdminFestival,
@@ -65,6 +66,74 @@ function publicationContent(document: FestivalDocument): FestivalDocument {
   delete content.packVersion;
   delete content.packUpdatedAt;
   return content;
+}
+
+type ArtistImage = { imageUrl: string; imageCredit?: unknown };
+const STORED_ARTIST_IMAGE =
+  /^\/api\/v1\/festivals\/images\/[0-9a-f-]{36}\.webp$/;
+
+function item(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+/** 수집 출연진의 저장 사진을 이름으로 찾는다. 이름 하나에 사진이 둘 이상 맞으면 고르지 않는다. */
+function crawledArtistImages(
+  artists: unknown[] | undefined,
+): (name: unknown) => ArtistImage | null {
+  const images = new Map<string, Map<string, ArtistImage>>();
+  for (const value of artists ?? []) {
+    const artist = item(value);
+    if (
+      typeof artist?.name !== 'string' ||
+      typeof artist.imageUrl !== 'string' ||
+      !STORED_ARTIST_IMAGE.test(artist.imageUrl)
+    )
+      continue;
+    const image: ArtistImage = {
+      imageUrl: artist.imageUrl,
+      ...(artist.imageCredit ? { imageCredit: artist.imageCredit } : {}),
+    };
+    for (const key of artistNameKeys(artist.name)) {
+      const byUrl = images.get(key) ?? new Map<string, ArtistImage>();
+      byUrl.set(image.imageUrl, image);
+      images.set(key, byUrl);
+    }
+  }
+  return (name) => {
+    if (typeof name !== 'string') return null;
+    const found = new Map(
+      artistNameKeys(name).flatMap((key) => [...(images.get(key) ?? [])]),
+    );
+    return found.size === 1 ? [...found.values()][0] : null;
+  };
+}
+
+/** 이름이 맞는 항목의 사진만 최신 수집 사진으로 바꾼다. 맞는 사진이 없으면 그대로 둔다. */
+function withLatestImages(
+  items: unknown,
+  nameField: 'artist' | 'name',
+  imageFor: (name: unknown) => ArtistImage | null,
+): unknown {
+  if (!Array.isArray(items)) return items;
+  return (items as unknown[]).map((value) => {
+    const entry = item(value);
+    const image = entry ? imageFor(entry[nameField]) : null;
+    if (!entry || !image) return value;
+    // 공연에는 사진 출처를 두지 않는다. 공개 응답이 저장된 권리 정보로 다시 붙인다.
+    if (nameField === 'artist')
+      return entry.imageUrl === image.imageUrl
+        ? value
+        : { ...entry, imageUrl: image.imageUrl };
+    const next: Record<string, unknown> = {
+      ...entry,
+      imageUrl: image.imageUrl,
+    };
+    delete next.imageCredit;
+    if (image.imageCredit) next.imageCredit = image.imageCredit;
+    return next;
+  });
 }
 
 const alphabet = '0123456789abcdefghjkmnpqrstvwxyz';
@@ -495,6 +564,7 @@ export class AdminFestivalService {
         else document.eventPeriod = previous.eventPeriod;
       }
       if (detail.artists !== undefined) document.artists = detail.artists;
+      const imageFor = crawledArtistImages(detail.artists);
       if (detail.officialInstagramUrl !== undefined)
         document.officialInstagramUrl = detail.officialInstagramUrl;
       if (detail.location !== undefined) {
@@ -537,6 +607,8 @@ export class AdminFestivalService {
           timetableStatus: 'unpublished',
         });
       }
+      // 남겨 둔 공연도 다시 수집한 출연진 사진을 쓴다.
+      document.sets = withLatestImages(document.sets, 'artist', imageFor);
       const errors = validateDraft(document, true);
       if (errors.length)
         throw new BadRequestException({
@@ -544,6 +616,7 @@ export class AdminFestivalService {
           message: errors.join('; '),
           errors,
         });
+      if (row) await this.refreshDraftImages(manager, row, detail, imageFor);
       if (previous && contentKey(previous) === contentKey(document))
         return { id, packVersion: row!.publishedVersion, changed: false };
       if (!row) {
@@ -576,6 +649,40 @@ export class AdminFestivalService {
     });
     if (result.changed) await this.cache.invalidatePack(result.id);
     return { packVersion: result.packVersion, changed: result.changed };
+  }
+
+  /**
+   * 관리 초안에 다시 수집한 출연진 사진을 넣는다. 초안의 다른 편집 내용은 건드리지 않고,
+   * 출연진 목록이 비어 있을 때만 수집 목록을 채운다.
+   */
+  private async refreshDraftImages(
+    manager: EntityManager,
+    row: AdminFestival,
+    detail: CrawledFestivalDetail,
+    imageFor: (name: unknown) => ArtistImage | null,
+  ) {
+    const draft = row.draft;
+    const next: FestivalDocument = {
+      ...draft,
+      sets: withLatestImages(draft.sets, 'artist', imageFor),
+    };
+    if (draft.sets === undefined) delete next.sets;
+    if (Array.isArray(draft.artists) && draft.artists.length)
+      next.artists = withLatestImages(draft.artists, 'name', imageFor);
+    else if (detail.artists?.length) next.artists = detail.artists;
+    if (contentKey(next) === contentKey(draft)) return;
+    const before = { draftVersion: row.draftVersion, draft };
+    row.draft = next;
+    row.draftVersion++;
+    row.draftUpdatedBy = null;
+    await manager.getRepository(AdminFestival).save(row);
+    await this.audit.record(manager, {
+      actor: null,
+      action: 'festival.draft.updated',
+      target: `festival:${row.id}`,
+      before,
+      after: { draftVersion: row.draftVersion, draft: row.draft },
+    });
   }
 
   private async writePublication(
