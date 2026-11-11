@@ -1,7 +1,7 @@
 import { CrawlService } from './crawl.service';
 import { CrawlSource } from '../entity/crawl-source.entity';
 import { CrawlRun } from '../entity/crawl-run.entity';
-import { Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Logger, NotFoundException } from '@nestjs/common';
 import { In } from 'typeorm';
 import { createHash } from 'crypto';
 import sharp from 'sharp';
@@ -60,6 +60,13 @@ type PrivateCrawl = {
   gmfQueuedSources: Set<string>;
   reconcileRecentXmf403(): Promise<void>;
   runNow(id: string): Promise<{ runId: string }>;
+  runPinnedCommonsDiscovery(
+    id: string,
+    input: unknown,
+    actor?: string | null,
+  ): Promise<{ runId: string; targets: number }>;
+  executeCommonsDiscovery(run: CrawlRun, source: CrawlSource): Promise<void>;
+  pinnedCommonsTargets: Map<string, unknown>;
   createSource(
     dto: CreateCrawlSourceDto,
     actor: string | null,
@@ -270,6 +277,147 @@ describe('Commons 사진 후보 일일 수집', () => {
         expect.objectContaining({ artistName: '둘째', status: 'no-results' }),
       ]),
     );
+  });
+});
+
+describe('Commons 지정 출연진 탐색', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  const pinned = {
+    festivalId: 'fst_pin',
+    festivalSourceUrl: 'https://festival.example.com/pin',
+    artistName: 'CNBLUE',
+  };
+
+  function commonsHarness() {
+    const fixture = harness();
+    fixture.source.kind = 'artist-image-discovery';
+    fixture.source.parser = 'commons-search';
+    fixture.source.url = COMMONS_DISCOVERY_URL;
+    fixture.source.parserConfig = { seed: COMMONS_DISCOVERY_SEED };
+    const hasCurrentArtist = jest.fn().mockResolvedValue(true);
+    Object.assign(fixture.publicFestivals, { hasCurrentArtist });
+    return { ...fixture, hasCurrentArtist };
+  }
+
+  it('지정한 현재 출연진만 기존 탐색 실행으로 검색해 후보로 기록한다', async () => {
+    const { service, source, run, execute, insertQb, publicFestivals, audit } =
+      commonsHarness();
+    publicFestivals.missingArtistImages.mockResolvedValue([
+      {
+        festivalId: 'fst_other',
+        festivalSourceUrl: 'https://festival.example.com/other',
+        artistName: '다른 출연진',
+      },
+    ]);
+    const searched: string[] = [];
+    jest.spyOn(service, 'limitedGetCommonsJson').mockImplementation((url) => {
+      searched.push(url.searchParams.get('q') ?? '');
+      return Promise.resolve({ status: 200, body: '{"pages":[]}' });
+    });
+    const done = new Promise<void>((resolve) =>
+      execute.mockImplementation(async (r: CrawlRun, s: CrawlSource) => {
+        await service.executeCommonsDiscovery(r, s);
+        resolve();
+      }),
+    );
+
+    await expect(
+      service.runPinnedCommonsDiscovery(
+        source.id,
+        { targets: [pinned, pinned] },
+        'admin-1',
+      ),
+    ).resolves.toEqual({ runId: run.id, targets: 1 });
+    await done;
+
+    expect(insertQb.values).toHaveBeenCalledWith({ sourceId: source.id });
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        actor: 'admin-1',
+        action: 'crawl.run.requested',
+        after: { sourceId: source.id, pinnedTargets: [pinned] },
+      }),
+    );
+    expect(searched).toHaveLength(1);
+    expect(searched[0]).toContain('CNBLUE');
+    expect(run.artistImageEvidence).toMatchObject({
+      totalMissing: 1,
+      deferredCount: 0,
+      targets: [{ ...pinned, status: 'no-results' }],
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(service.pinnedCommonsTargets.size).toBe(0);
+  });
+
+  it('지정하지 않은 실행은 하루 회전 대상을 그대로 쓴다', async () => {
+    const { service, source, run, publicFestivals } = commonsHarness();
+    run.scheduledDate = '2026-10-21';
+    publicFestivals.missingArtistImages.mockResolvedValue([
+      {
+        festivalId: 'fst_daily',
+        festivalSourceUrl: 'https://festival.example.com/daily',
+        artistName: '매일 대상',
+      },
+    ]);
+    jest
+      .spyOn(service, 'limitedGetCommonsJson')
+      .mockResolvedValue({ status: 200, body: '{"pages":[]}' });
+
+    await service.executeCommonsDiscovery(run, source);
+
+    expect(run.artistImageEvidence?.targets).toEqual([
+      expect.objectContaining({ artistName: '매일 대상' }),
+    ]);
+  });
+
+  it('현재 출연진이 아닌 이름은 실행을 만들지 않고 거절한다', async () => {
+    const { service, source, execute, insertQb, hasCurrentArtist } =
+      commonsHarness();
+    hasCurrentArtist.mockResolvedValue(false);
+
+    await expect(
+      service.runPinnedCommonsDiscovery(source.id, { targets: [pinned] }),
+    ).rejects.toThrow('현재 출연진이 아닌 탐색 대상입니다');
+    expect(hasCurrentArtist).toHaveBeenCalledWith(
+      pinned.festivalId,
+      pinned.festivalSourceUrl,
+      pinned.artistName,
+    );
+    expect(insertQb.values).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('Commons 탐색 소스가 아니거나 꺼져 있으면 거절한다', async () => {
+    for (const change of [
+      { kind: 'discovery' },
+      { enabled: false },
+      { parserConfig: { seed: COMMONS_DISCOVERY_SEED, extra: 1 } },
+    ]) {
+      const { service, source, execute } = commonsHarness();
+      Object.assign(source, change);
+      await expect(
+        service.runPinnedCommonsDiscovery(source.id, { targets: [pinned] }),
+      ).rejects.toThrow('활성 Commons 탐색 소스가 아닙니다.');
+      expect(execute).not.toHaveBeenCalled();
+    }
+  });
+
+  it('대상 개수와 형식이 맞지 않으면 거절한다', async () => {
+    const { service, source, execute } = commonsHarness();
+    for (const input of [
+      null,
+      { targets: [] },
+      { targets: Array.from({ length: 41 }, () => pinned) },
+      { targets: [{ ...pinned, festivalId: 'bad' }] },
+      { targets: [{ ...pinned, festivalSourceUrl: 'http://x.example' }] },
+      { targets: [{ ...pinned, artistName: ' ' }] },
+    ])
+      await expect(
+        service.runPinnedCommonsDiscovery(source.id, input),
+      ).rejects.toThrow(BadRequestException);
+    expect(execute).not.toHaveBeenCalled();
   });
 });
 
