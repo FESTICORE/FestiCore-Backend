@@ -538,6 +538,70 @@ describe('소향 Commons 사진 수집', () => {
   });
 });
 
+describe('승인 Commons 사진 실패 로그', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  function approvedHarness(error: Error) {
+    const fixture = harness();
+    fixture.execute.mockRestore();
+    Object.assign(fixture.source, {
+      kind: 'artist-image',
+      url: 'https://commons.wikimedia.org/wiki/File:Example.jpg',
+      parser: 'html-text',
+      parserConfig: {
+        seed: 'commons-approved-profile',
+        reviewId: '00000000-0000-4000-8000-000000000001',
+        festivalSourceUrl: 'https://festival.example.com',
+        artistName: 'CNBLUE',
+      },
+    });
+    jest
+      .spyOn(
+        fixture.service as unknown as {
+          executeApprovedCommonsImage: () => Promise<void>;
+        },
+        'executeApprovedCommonsImage',
+      )
+      .mockRejectedValue(error);
+    const warn = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+    return { ...fixture, warn };
+  }
+
+  it('단계 코드와 함께 세부 실패 코드를 남긴다', async () => {
+    for (const [message, detail] of [
+      [
+        'COMMONS_OFFICIAL_EVIDENCE_MISMATCH',
+        'COMMONS_OFFICIAL_EVIDENCE_MISMATCH',
+      ],
+      ['COMMONS_LINEUP_MISMATCH', 'COMMONS_LINEUP_MISMATCH'],
+      ['COMMONS_IMAGE_UNVERIFIED', 'COMMONS_IMAGE_UNVERIFIED'],
+    ]) {
+      const { service, source, run, warn } = approvedHarness(
+        new Error(message),
+      );
+      await service.execute(run, source);
+      expect(run.result).toBe('failed');
+      expect(run.error).toBe('COMMONS_RIGHTS');
+      expect(warn).toHaveBeenCalledWith(
+        `크롤 처리 실패: source=${source.id}, run=${run.id}, code=COMMONS_RIGHTS, detail=${detail}`,
+      );
+      jest.restoreAllMocks();
+    }
+  });
+
+  it('세부 코드가 아닌 오류 문구는 로그에 넣지 않는다', async () => {
+    const { service, source, run, warn } = approvedHarness(
+      new Error('https://secret.example.com/token 실패'),
+    );
+    await service.execute(run, source);
+    expect(warn).toHaveBeenCalledWith(
+      `크롤 처리 실패: source=${source.id}, run=${run.id}, code=COMMONS_RIGHTS`,
+    );
+  });
+});
+
 function wonderlivetBundle(artists: unknown[]) {
   const json = JSON.stringify({
     dataState: 'ready',

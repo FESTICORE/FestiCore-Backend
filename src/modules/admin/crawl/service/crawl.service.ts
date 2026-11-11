@@ -2325,8 +2325,19 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
               error.message === '요청 시간이 초과되었습니다.'
             ? 'TIMEOUT'
             : phase;
+      // 승인 Commons 사진은 단계 코드만으로 원인을 알 수 없어 세부 코드를 함께 남긴다.
+      const detail =
+        source.parserConfig.seed === 'commons-approved-profile' &&
+        error instanceof Error &&
+        /^(?:COMMONS_[A-Z_]+|APPROVED_ORIGINAL_CHANGED|HTTP \d{3})$/.test(
+          error.message,
+        )
+          ? error.message.replace(' ', '_')
+          : null;
       this.logger.warn(
-        `크롤 처리 실패: source=${source.id}, run=${run.id}, code=${run.error}`,
+        `크롤 처리 실패: source=${source.id}, run=${run.id}, code=${run.error}${
+          detail && detail !== run.error ? `, detail=${detail}` : ''
+        }`,
       );
       if (run.error === 'HTTP_403') {
         try {
