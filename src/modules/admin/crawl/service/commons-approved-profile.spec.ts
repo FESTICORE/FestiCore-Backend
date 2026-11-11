@@ -30,6 +30,30 @@ describe('Commons 승인 사진 파일 페이지 검증', () => {
     });
   });
 
+  it('작성자 칸의 Creator 템플릿 CSS와 스크립트를 빼고 보이는 글자만 비교한다', () => {
+    const css = `.mw-parser-output .commons-creator-table{background-color:#f0f0ff}${'.x{color:inherit}'.repeat(40)}`;
+    const body = html.replace(
+      '<td><a href="/wiki/User:Jane">Jane Photographer</a></td>',
+      `<td>
+<div style="clear:both;"></div>
+<div class="commons-creator vcard">
+<style data-mw-deduplicate="TemplateStyles:r966088355">${css}</style>
+<script>window.creator = "Other";</script>
+<table class="commons-creator-table"><tbody><tr><th><span class="fn">Jane Photographer</span>&#160;&#160; &#160;</td>`,
+    );
+    expect(css.length).toBeGreaterThan(500);
+
+    expect(parseApprovedCommonsProfile(body, pageUrl, expected)).toMatchObject({
+      credit: { author: 'Jane Photographer' },
+    });
+    expect(
+      parseApprovedCommonsProfile(body, pageUrl, {
+        ...expected,
+        author: 'Other Photographer',
+      }),
+    ).toBeNull();
+  });
+
   it('관리자 입력의 끝 슬래시 유무와 Commons 표기를 같은 CC BY 주소로 검증한다', () => {
     expect(
       parseApprovedCommonsProfile(html, pageUrl, {
