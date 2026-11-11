@@ -11,6 +11,7 @@ import { isDeepStrictEqual } from 'node:util';
 import {
   BadRequestException,
   ConflictException,
+  HttpException,
   Injectable,
   Logger,
   NotFoundException,
@@ -829,34 +830,46 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     const run = await this.runsRepo.findOneByOrFail({
       id: inserted.identifiers[0].id as string,
     });
-    await this.execute(run, source);
-    const finished = await this.runsRepo
-      .createQueryBuilder('run')
-      .addSelect('run.artistImageRightsEvidence')
-      .where('run.id = :id', { id: run.id })
-      .getOneOrFail();
-    const evidence = finished.artistImageRightsEvidence;
-    if (
-      !['unchanged', 'nochange-parsed'].includes(finished.result) ||
-      evidence?.status !== 'ok'
-    )
-      throw new UnprocessableEntityException(
-        'Commons 사진의 인물·권리·원본을 검증하지 못했습니다.',
+    try {
+      await this.execute(run, source);
+      const finished = await this.runsRepo
+        .createQueryBuilder('run')
+        .addSelect('run.artistImageRightsEvidence')
+        .where('run.id = :id', { id: run.id })
+        .getOneOrFail();
+      const evidence = finished.artistImageRightsEvidence;
+      if (
+        !['unchanged', 'nochange-parsed'].includes(finished.result) ||
+        evidence?.status !== 'ok'
+      )
+        throw new UnprocessableEntityException(
+          'Commons 사진의 인물·권리·원본을 검증하지 못했습니다.',
+        );
+      const review = await this.dataSource.query<
+        { author: string; license: string; licenseUrl: string }[]
+      >(
+        `SELECT author, license, "licenseUrl" FROM crawl_artist_image_reviews WHERE id = $1::uuid`,
+        [reviewId],
       );
-    const review = await this.dataSource.query<
-      { author: string; license: string; licenseUrl: string }[]
-    >(
-      `SELECT author, license, "licenseUrl" FROM crawl_artist_image_reviews WHERE id = $1::uuid`,
-      [reviewId],
-    );
-    return {
-      runId: run.id,
-      imageId: evidence.imageId,
-      originalSha256: evidence.originalSha256,
-      author: review[0].author,
-      license: review[0].license,
-      licenseUrl: review[0].licenseUrl,
-    };
+      return {
+        runId: run.id,
+        imageId: evidence.imageId,
+        originalSha256: evidence.originalSha256,
+        author: review[0].author,
+        license: review[0].license,
+        licenseUrl: review[0].licenseUrl,
+      };
+    } catch (error) {
+      // 의도된 검증 실패(404/409/422)는 그대로 전달한다. 그 밖의 예외는
+      // 500으로 번지므로 원인 추적을 위해 전체 스택과 맥락을 남기고 다시 던진다.
+      if (!(error instanceof HttpException)) {
+        this.logger.error(
+          `Commons 승인 사진 검증 중 예기치 않은 오류: review=${reviewId}, run=${run.id}, source=${source.id}, seed=${String(source.parserConfig?.seed)}, result=${run.result}`,
+          error instanceof Error ? error.stack : String(error),
+        );
+      }
+      throw error;
+    }
   }
 
   private sourceAuditSnapshot(source: CrawlSource) {
