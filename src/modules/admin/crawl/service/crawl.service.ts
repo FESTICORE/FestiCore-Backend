@@ -310,6 +310,7 @@ function artistImageConfig(url: string, config: Record<string, string>) {
         'ticket.melon.com',
         'ticket.yes24.com',
         'nol.yanolja.com',
+        'world.nol.com',
         'mintpaper.co.kr',
       ].includes(festival.hostname)) ||
     !artistName?.trim() ||
