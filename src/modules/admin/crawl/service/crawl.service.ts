@@ -133,6 +133,7 @@ import {
 import {
   COMMONS_DISCOVERY_SEED,
   COMMONS_DISCOVERY_URL,
+  COMMONS_PINNED_DISCOVERY_SEED,
   MAX_COMMONS_TARGETS,
   commonsFileUrl,
   commonsSearchUrl,
@@ -368,12 +369,15 @@ function artistGalleryConfig(url: string, config: Record<string, string>) {
   return { ...config, festivalSourceUrl: festival.toString() };
 }
 
-function validCommonsDiscoverySource(source: CrawlSource): boolean {
+function validCommonsDiscoverySource(
+  source: CrawlSource,
+  seed: string = COMMONS_DISCOVERY_SEED,
+): boolean {
   return (
     source.kind === 'artist-image-discovery' &&
     source.url === COMMONS_DISCOVERY_URL &&
     source.parser === 'commons-search' &&
-    source.parserConfig.seed === COMMONS_DISCOVERY_SEED &&
+    source.parserConfig.seed === seed &&
     Object.keys(source.parserConfig).length === 1 &&
     source.festivalId === null
   );
@@ -639,6 +643,10 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
 
   async runNow(id: string, actor: string | null = null) {
     const source = await this.getSource(id);
+    if (source.parserConfig.seed === COMMONS_PINNED_DISCOVERY_SEED)
+      throw new UnprocessableEntityException(
+        '지정 Commons 탐색 소스는 지정 탐색으로만 실행합니다.',
+      );
     await this.dataSource.transaction((manager) =>
       this.audit.record(manager, {
         actor,
@@ -677,16 +685,19 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
    * 지정한 출연진만 Commons 탐색에 넣어 바로 실행한다. 후보만 기록하며
    * 공개는 기존 검토 준비→승인 흐름의 권리·출연 근거 검사를 그대로 거친다.
    */
-  async runPinnedCommonsDiscovery(
-    id: string,
-    input: unknown,
-    actor: string | null = null,
-  ) {
-    const source = await this.getSource(id);
-    if (!validCommonsDiscoverySource(source) || !source.enabled)
+  async runPinnedCommonsDiscovery(input: unknown, actor: string | null = null) {
+    const source = (
+      await this.sourcesRepo.findBy({ kind: 'artist-image-discovery' })
+    ).find((item) => item.parserConfig.seed === COMMONS_PINNED_DISCOVERY_SEED);
+    if (
+      !source ||
+      !validCommonsDiscoverySource(source, COMMONS_PINNED_DISCOVERY_SEED) ||
+      !source.enabled
+    )
       throw new UnprocessableEntityException(
-        '활성 Commons 탐색 소스가 아닙니다.',
+        '활성 지정 Commons 탐색 소스가 없습니다.',
       );
+    const id = source.id;
     const body = input as Record<string, unknown> | null;
     if (
       !body ||
@@ -1249,6 +1260,8 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
           : listedSource;
       if (!source?.enabled || !['ok', 'broken'].includes(source.status))
         continue;
+      // 지정 탐색 소스는 관리자 요청으로만 실행한다.
+      if (source.parserConfig.seed === COMMONS_PINNED_DISCOVERY_SEED) continue;
       const gmfImage =
         source.kind === 'artist-image' &&
         source.url === GMF_LINEUP_URL &&
@@ -2376,10 +2389,15 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async executeCommonsDiscovery(run: CrawlRun, source: CrawlSource) {
-    if (!validCommonsDiscoverySource(source))
+    const pinned = this.pinnedCommonsTargets.get(run.id);
+    // 정기 소스는 하루 회전만, 지정 소스는 지정 대상만 검색한다.
+    if (
+      pinned
+        ? !validCommonsDiscoverySource(source, COMMONS_PINNED_DISCOVERY_SEED)
+        : !validCommonsDiscoverySource(source)
+    )
       throw new Error('INVALID_COMMONS_SOURCE');
     const missing = await this.publicFestivals.missingArtistImages();
-    const pinned = this.pinnedCommonsTargets.get(run.id);
     const { selected, deferredCount: deferredByCount } = pinned
       ? { selected: pinned, deferredCount: 0 }
       : dailyCommonsTargets(missing, run.scheduledDate ?? kstDay());

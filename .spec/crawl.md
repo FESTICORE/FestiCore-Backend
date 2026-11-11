@@ -37,22 +37,22 @@ NOL의 공개 상품·공연정보 상세 HTML이 입력되면 공연명과 명�
 
 ## 크롤 소스와 실행 API
 
-| 메서드 | 경로                                        | 역할   | 본문·쿼리                                                         | 결과                                      |
-| ------ | ------------------------------------------- | ------ | ----------------------------------------------------------------- | ----------------------------------------- |
-| GET    | `/admin/crawl/sources`                      | viewer | `festivalId?`, `status?`                                          | `{items: CrawlSource[]}`                  |
-| POST   | `/admin/crawl/sources`                      | owner  | `{festivalId?, kind, url, parser, parserConfig}`                  | 생성된 소스                               |
-| PATCH  | `/admin/crawl/sources/:id`                  | owner  | `{enabled?, parserConfig?, intervalMinutes?: 1440, url?}`         | 변경된 소스                               |
-| POST   | `/admin/crawl/sources/:id/run`              | editor | 없음                                                              | 202 `{runId}`                             |
-| POST   | `/admin/crawl/sources/:id/test`             | editor | 없음                                                              | `{parsed, excerpt}`                       |
-| POST   | `/admin/crawl/sources/:id/pinned-discovery` | editor | `{targets: [{festivalId, festivalSourceUrl, artistName}]}` 1~40개 | 202 `{runId, targets}`                    |
-| GET    | `/admin/crawl/runs`                         | viewer | `sourceId?`, `result?`, `limit?`                                  | `{items: CrawlRun[]}`; 기본 50, 최대 100  |
-| GET    | `/admin/crawl/snapshots/:id`                | viewer | 없음                                                              | `{id, runId, body, createdAt}`; 30일 보관 |
-| GET    | `/admin/crawl/images`                       | viewer | `runId?`, `sourceId?`                                             | `{items: CrawlImage[]}`; 최근 100개       |
-| GET    | `/admin/crawl/images/:id`                   | viewer | 없음                                                              | `image/webp` 바이너리                     |
-| GET    | `/admin/crawl/alerts`                       | viewer | `status?`, `limit?`                                               | `{items: CrawlAlert[]}`                   |
-| PATCH  | `/admin/crawl/alerts/:id/acknowledge`       | editor | 없음                                                              | 확인된 알림                               |
+| 메서드 | 경로                                  | 역할   | 본문·쿼리                                                         | 결과                                      |
+| ------ | ------------------------------------- | ------ | ----------------------------------------------------------------- | ----------------------------------------- |
+| GET    | `/admin/crawl/sources`                | viewer | `festivalId?`, `status?`                                          | `{items: CrawlSource[]}`                  |
+| POST   | `/admin/crawl/sources`                | owner  | `{festivalId?, kind, url, parser, parserConfig}`                  | 생성된 소스                               |
+| PATCH  | `/admin/crawl/sources/:id`            | owner  | `{enabled?, parserConfig?, intervalMinutes?: 1440, url?}`         | 변경된 소스                               |
+| POST   | `/admin/crawl/sources/:id/run`        | editor | 없음                                                              | 202 `{runId}`                             |
+| POST   | `/admin/crawl/sources/:id/test`       | editor | 없음                                                              | `{parsed, excerpt}`                       |
+| POST   | `/admin/crawl/pinned-discovery`       | editor | `{targets: [{festivalId, festivalSourceUrl, artistName}]}` 1~40개 | 202 `{runId, targets}`                    |
+| GET    | `/admin/crawl/runs`                   | viewer | `sourceId?`, `result?`, `limit?`                                  | `{items: CrawlRun[]}`; 기본 50, 최대 100  |
+| GET    | `/admin/crawl/snapshots/:id`          | viewer | 없음                                                              | `{id, runId, body, createdAt}`; 30일 보관 |
+| GET    | `/admin/crawl/images`                 | viewer | `runId?`, `sourceId?`                                             | `{items: CrawlImage[]}`; 최근 100개       |
+| GET    | `/admin/crawl/images/:id`             | viewer | 없음                                                              | `image/webp` 바이너리                     |
+| GET    | `/admin/crawl/alerts`                 | viewer | `status?`, `limit?`                                               | `{items: CrawlAlert[]}`                   |
+| PATCH  | `/admin/crawl/alerts/:id/acknowledge` | editor | 없음                                                              | 확인된 알림                               |
 
-`pinned-discovery`는 활성 Commons 탐색 소스에만 쓴다. 대상마다 승인 단계와 같은 현재 출연진 검사(`hasCurrentArtist`)를 통과해야 하며, 하나라도 실패하면 실행을 만들지 않고 422를 반환한다. 통과하면 하루 회전 대상 대신 지정한 대상만 기존 탐색 실행으로 검색해 후보만 기록한다. 공개는 기존 검토 준비·승인 흐름에서 라이선스·공식 출연 근거·원본 해시 검사를 거친다. 지정 실행도 최신 탐색 실행이 되므로 검토 준비는 다음 탐색 실행 전에 한다.
+`pinned-discovery`는 지정 탐색 전용 소스(`parserConfig.seed = commons-pinned-discovery-v1`)에서 실행한다. 이 소스는 예약 실행과 `run`에서 제외되고, 정기 탐색 소스와 실행 기록이 분리되어 검토 준비의 최신 실행 판정이 서로 섞이지 않는다. 대상마다 승인 단계와 같은 현재 출연진 검사(`hasCurrentArtist`)를 통과해야 하며, 하나라도 실패하면 실행을 만들지 않고 422를 반환한다. 이미 사진이 있는 출연진도 지정할 수 있다. 통과하면 지정한 대상만 검색해 후보만 기록한다. 공개는 기존 검토 준비·승인 흐름에서 라이선스·공식 출연 근거·원본 해시 검사를 거친다. 지정 실행 후보의 검토 준비는 다음 지정 실행 전에 한다. 공개 출연진 사진은 그 축제에 승인된 Commons 사진이 하나로 정해지면 기존 사진보다 우선한다.
 
 소스 등록 예시:
 

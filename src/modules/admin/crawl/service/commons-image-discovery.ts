@@ -3,6 +3,8 @@ import { checkedUrl } from './crawl-fetch';
 export const COMMONS_DISCOVERY_URL =
   'https://api.wikimedia.org/core/v1/commons/search/page';
 export const COMMONS_DISCOVERY_SEED = 'commons-image-discovery-v1';
+// 관리자 지정 탐색 전용 소스. 정기 탐색의 최신 실행 판정과 섞이지 않게 나눈다.
+export const COMMONS_PINNED_DISCOVERY_SEED = 'commons-pinned-discovery-v1';
 export const MAX_COMMONS_TARGETS = 40;
 export const MAX_COMMONS_CANDIDATES = 2;
 export const MAX_COMMONS_SEARCH_RESULTS = 20;

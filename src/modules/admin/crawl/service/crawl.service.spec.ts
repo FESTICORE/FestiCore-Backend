@@ -49,6 +49,7 @@ import {
 import {
   COMMONS_DISCOVERY_SEED,
   COMMONS_DISCOVERY_URL,
+  COMMONS_PINNED_DISCOVERY_SEED,
 } from './commons-image-discovery';
 import { TOUR_API_SOURCE } from './tour-api';
 
@@ -61,7 +62,6 @@ type PrivateCrawl = {
   reconcileRecentXmf403(): Promise<void>;
   runNow(id: string): Promise<{ runId: string }>;
   runPinnedCommonsDiscovery(
-    id: string,
     input: unknown,
     actor?: string | null,
   ): Promise<{ runId: string; targets: number }>;
@@ -294,7 +294,7 @@ describe('Commons 지정 출연진 탐색', () => {
     fixture.source.kind = 'artist-image-discovery';
     fixture.source.parser = 'commons-search';
     fixture.source.url = COMMONS_DISCOVERY_URL;
-    fixture.source.parserConfig = { seed: COMMONS_DISCOVERY_SEED };
+    fixture.source.parserConfig = { seed: COMMONS_PINNED_DISCOVERY_SEED };
     const hasCurrentArtist = jest.fn().mockResolvedValue(true);
     Object.assign(fixture.publicFestivals, { hasCurrentArtist });
     return { ...fixture, hasCurrentArtist };
@@ -324,7 +324,6 @@ describe('Commons 지정 출연진 탐색', () => {
 
     await expect(
       service.runPinnedCommonsDiscovery(
-        source.id,
         { targets: [pinned, pinned] },
         'admin-1',
       ),
@@ -353,6 +352,7 @@ describe('Commons 지정 출연진 탐색', () => {
 
   it('지정하지 않은 실행은 하루 회전 대상을 그대로 쓴다', async () => {
     const { service, source, run, publicFestivals } = commonsHarness();
+    source.parserConfig = { seed: COMMONS_DISCOVERY_SEED };
     run.scheduledDate = '2026-10-21';
     publicFestivals.missingArtistImages.mockResolvedValue([
       {
@@ -373,12 +373,11 @@ describe('Commons 지정 출연진 탐색', () => {
   });
 
   it('현재 출연진이 아닌 이름은 실행을 만들지 않고 거절한다', async () => {
-    const { service, source, execute, insertQb, hasCurrentArtist } =
-      commonsHarness();
+    const { service, execute, insertQb, hasCurrentArtist } = commonsHarness();
     hasCurrentArtist.mockResolvedValue(false);
 
     await expect(
-      service.runPinnedCommonsDiscovery(source.id, { targets: [pinned] }),
+      service.runPinnedCommonsDiscovery({ targets: [pinned] }),
     ).rejects.toThrow('현재 출연진이 아닌 탐색 대상입니다');
     expect(hasCurrentArtist).toHaveBeenCalledWith(
       pinned.festivalId,
@@ -389,23 +388,40 @@ describe('Commons 지정 출연진 탐색', () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
-  it('Commons 탐색 소스가 아니거나 꺼져 있으면 거절한다', async () => {
+  it('지정 탐색 전용 소스가 없거나 꺼져 있으면 거절한다', async () => {
     for (const change of [
       { kind: 'discovery' },
       { enabled: false },
-      { parserConfig: { seed: COMMONS_DISCOVERY_SEED, extra: 1 } },
+      { parserConfig: { seed: COMMONS_DISCOVERY_SEED } },
+      { parserConfig: { seed: COMMONS_PINNED_DISCOVERY_SEED, extra: 1 } },
     ]) {
       const { service, source, execute } = commonsHarness();
       Object.assign(source, change);
       await expect(
-        service.runPinnedCommonsDiscovery(source.id, { targets: [pinned] }),
-      ).rejects.toThrow('활성 Commons 탐색 소스가 아닙니다.');
+        service.runPinnedCommonsDiscovery({ targets: [pinned] }),
+      ).rejects.toThrow('활성 지정 Commons 탐색 소스가 없습니다.');
       expect(execute).not.toHaveBeenCalled();
     }
   });
 
+  it('지정 탐색 소스는 예약·수동 실행이나 지정 대상 없는 실행을 하지 않는다', async () => {
+    const { service, source, run, insertQb, execute } = commonsHarness();
+
+    await service.scheduleDue();
+    expect(insertQb.values).not.toHaveBeenCalled();
+
+    await expect(service.runNow(source.id)).rejects.toThrow(
+      '지정 Commons 탐색 소스는 지정 탐색으로만 실행합니다.',
+    );
+    expect(execute).not.toHaveBeenCalled();
+
+    await expect(service.executeCommonsDiscovery(run, source)).rejects.toThrow(
+      'INVALID_COMMONS_SOURCE',
+    );
+  });
+
   it('대상 개수와 형식이 맞지 않으면 거절한다', async () => {
-    const { service, source, execute } = commonsHarness();
+    const { service, execute } = commonsHarness();
     for (const input of [
       null,
       { targets: [] },
@@ -418,9 +434,9 @@ describe('Commons 지정 출연진 탐색', () => {
       { targets: [{ ...pinned, extra: 1 }] },
       { targets: [pinned], extra: 1 },
     ])
-      await expect(
-        service.runPinnedCommonsDiscovery(source.id, input),
-      ).rejects.toThrow(BadRequestException);
+      await expect(service.runPinnedCommonsDiscovery(input)).rejects.toThrow(
+        BadRequestException,
+      );
     expect(execute).not.toHaveBeenCalled();
   });
 });
