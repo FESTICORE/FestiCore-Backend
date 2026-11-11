@@ -335,6 +335,28 @@ describe('admin analytics', () => {
     },
   );
 
+  it('does not request a Mixpanel to_date later than today (UTC)', async () => {
+    jest.useFakeTimers({ now: Date.parse('2026-10-21T05:00:00Z') });
+    const fetchMock = jest.fn<Promise<globalThis.Response>, [URL]>(() =>
+      Promise.resolve(new Response('', { status: 200 })),
+    );
+    global.fetch = fetchMock;
+    try {
+      const service = new AdminAnalyticsService(
+        config({
+          MIXPANEL_SERVICE_ACCOUNT_USERNAME: 'reader',
+          MIXPANEL_SERVICE_ACCOUNT_SECRET: 'secret',
+        }),
+      );
+      await service.mixpanel(range());
+      const requested = fetchMock.mock.calls[0][0];
+      expect(requested.searchParams.get('to_date')).toBe('2026-10-21');
+      expect(requested.searchParams.get('from_date')).toBe('2026-10-19');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it.each([
     'terminated early\n',
     `${JSON.stringify({ event: 'app_open', properties: { time: Date.parse('2026-10-20T00:00:00Z') / 1000 } })}\nterminated early\n`,

@@ -278,12 +278,12 @@ export class AdminAnalyticsService {
           .toISOString()
           .slice(0, 10),
       );
-      url.searchParams.set(
-        'to_date',
-        new Date(Date.parse(`${range.to}T00:00:00Z`) + 86_400_000)
-          .toISOString()
-          .slice(0, 10),
-      );
+      // Mixpanel은 오늘(UTC) 이후의 to_date를 400으로 거절하므로 다음 날 보정은 오늘까지만 한다.
+      const todayUtc = new Date().toISOString().slice(0, 10);
+      const nextDay = new Date(Date.parse(`${range.to}T00:00:00Z`) + 86_400_000)
+        .toISOString()
+        .slice(0, 10);
+      url.searchParams.set('to_date', nextDay > todayUtc ? todayUtc : nextDay);
       url.searchParams.set('limit', '10000');
       try {
         const raw = (await fetchAnalytics(
