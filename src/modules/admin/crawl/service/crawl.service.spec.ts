@@ -413,6 +413,10 @@ describe('Commons 지정 출연진 탐색', () => {
       { targets: [{ ...pinned, festivalId: 'bad' }] },
       { targets: [{ ...pinned, festivalSourceUrl: 'http://x.example' }] },
       { targets: [{ ...pinned, artistName: ' ' }] },
+      { targets: [{ ...pinned, artistName: ' CNBLUE ' }] },
+      { targets: [{ ...pinned, artistName: 'CN\u0007BLUE' }] },
+      { targets: [{ ...pinned, extra: 1 }] },
+      { targets: [pinned], extra: 1 },
     ])
       await expect(
         service.runPinnedCommonsDiscovery(source.id, input),

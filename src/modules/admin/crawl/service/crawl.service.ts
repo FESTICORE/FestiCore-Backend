@@ -687,7 +687,14 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       throw new UnprocessableEntityException(
         '활성 Commons 탐색 소스가 아닙니다.',
       );
-    const raw = (input as { targets?: unknown } | null)?.targets;
+    const body = input as Record<string, unknown> | null;
+    if (
+      !body ||
+      typeof body !== 'object' ||
+      Object.keys(body).some((key) => key !== 'targets')
+    )
+      throw new BadRequestException('탐색 요청 형식이 잘못되었습니다.');
+    const raw = body.targets;
     if (
       !Array.isArray(raw) ||
       raw.length < 1 ||
@@ -707,6 +714,12 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       const festivalSourceUrl = item?.festivalSourceUrl;
       const artistName = item?.artistName;
       if (
+        !item ||
+        typeof item !== 'object' ||
+        Object.keys(item).some(
+          (key) =>
+            !['festivalId', 'festivalSourceUrl', 'artistName'].includes(key),
+        ) ||
         typeof festivalId !== 'string' ||
         !/^fst_[0-9a-z]+$/.test(festivalId) ||
         typeof festivalSourceUrl !== 'string' ||
@@ -714,7 +727,9 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         festivalSourceUrl.length > 2048 ||
         typeof artistName !== 'string' ||
         !artistName.trim() ||
-        artistName.length > 160
+        artistName !== artistName.trim() ||
+        artistName.length > 160 ||
+        /\p{Cc}/u.test(artistName)
       )
         throw new BadRequestException('탐색 대상 형식이 잘못되었습니다.');
       const key = [festivalId, festivalSourceUrl, artistName].join('\u0000');
