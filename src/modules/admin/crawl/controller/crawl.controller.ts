@@ -121,6 +121,29 @@ export class CrawlController {
     return this.crawl.runNow(id, req.admin?.id ?? null);
   }
 
+  @Post('pinned-discovery')
+  @AdminRoles('editor')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({
+    summary: 'Commons 지정 출연진 탐색 실행',
+    description:
+      'editor 이상. 지정한 현재 출연진만 Commons 탐색 대상으로 넣어 바로 실행합니다. 후보만 기록하며 공개는 기존 검토 준비·승인 흐름을 거칩니다.',
+  })
+  @ApiResponse({
+    status: 202,
+    description: '실행 요청 접수',
+    schema: {
+      example: { runId: '931aaccc-4a2a-4d20-8c97-a7741d1fe818', targets: 1 },
+    },
+  })
+  @ApiResponse({
+    status: 422,
+    description: '활성 지정 Commons 탐색 소스가 없거나 현재 출연진이 아닙니다.',
+  })
+  pinnedDiscovery(@Body() raw: unknown, @Req() req: AdminRequest) {
+    return this.crawl.runPinnedCommonsDiscovery(raw, req.admin?.id ?? null);
+  }
+
   @Post('sources/:id/test')
   @AdminRoles('editor')
   @ApiOperation({

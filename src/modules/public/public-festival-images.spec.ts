@@ -72,6 +72,52 @@ describe('discovered festival artist profile images', () => {
     ]);
   });
 
+  it('prefers an approved Commons photo over an existing profile photo', async () => {
+    const candidate = {
+      name: '사진 교체 페스티벌',
+      venue: '공연장',
+      date: '2026.12.26',
+      url: 'https://ticket.melon.com/performance/index.htm?prodId=213769',
+      artists: [{ name: '가수 A' }],
+    };
+    const festivalId = discoverySummaries([{ candidate }])[0].id;
+    const commons = '00000000-0000-4000-8000-000000000021';
+    const query = jest.fn().mockImplementation((sql: string) => {
+      if (sql.includes('WITH candidates AS')) return [{ candidate }];
+      if (sql.includes('SELECT DISTINCT ON (source."parserConfig"'))
+        return [
+          {
+            festivalSourceUrl: candidate.url,
+            artistName: '가수 A',
+            reviewFestivalId: null,
+            seed: 'official-gmf-lineup',
+            id: '00000000-0000-4000-8000-000000000020',
+          },
+          {
+            festivalSourceUrl: candidate.url,
+            artistName: '가수 A',
+            reviewFestivalId: festivalId,
+            seed: 'commons-approved-profile',
+            id: commons,
+          },
+        ];
+      return [];
+    });
+    const service = new PublicFestivalService(
+      { findOne: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+      publicFestivalTestDataSource(query) as never,
+      {} as never,
+    );
+    const detail = await service.detail(festivalId);
+    expect(detail.artists).toEqual([
+      expect.objectContaining({
+        name: '가수 A',
+        imageUrl: `/api/v1/festivals/images/${commons}.webp`,
+      }),
+    ]);
+  });
+
   it('does not attach an approval for an older festival ID at the same source URL', async () => {
     const candidate = {
       name: '새로운 회차',
