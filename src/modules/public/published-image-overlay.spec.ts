@@ -126,4 +126,51 @@ describe('published image rights overlay', () => {
       ]),
     );
   });
+
+  it('prefers the approved Commons photo over an existing stored photo', () => {
+    const old = '00000000-0000-4000-8000-000000000003';
+    const stored: PublicImageRow = {
+      ...row(old, '가수 A', 'run-0'),
+      seed: 'official-gmf-lineup',
+      reviewFestivalId: null,
+      author: null,
+      license: null,
+      licenseUrl: null,
+      sourceUrl: null,
+      rightsRunId: null,
+    };
+    const result = overlayPublishedImages(
+      {
+        ...pack,
+        artists: [{ name: '가수 A', imageUrl: image(old) }],
+        sets: [{ artist: '가수 A', imageUrl: image(old) }],
+      },
+      festivalId,
+      [stored, row(a, '가수 A', 'run-1')],
+    );
+    expect(result.document.artists).toEqual([
+      expect.objectContaining({ name: '가수 A', imageUrl: image(a) }),
+    ]);
+    expect(result.document.sets).toEqual([
+      expect.objectContaining({ artist: '가수 A', imageUrl: image(a) }),
+    ]);
+  });
+
+  it('keeps the existing stored photo when no Commons photo is approved', () => {
+    const old = '00000000-0000-4000-8000-000000000003';
+    const result = overlayPublishedImages(
+      { ...pack, artists: [{ name: '가수 A', imageUrl: image(old) }] },
+      festivalId,
+      [
+        {
+          ...row(old, '가수 A', 'run-0'),
+          seed: 'official-gmf-lineup',
+          reviewFestivalId: null,
+        },
+      ],
+    );
+    expect(result.document.artists).toEqual([
+      expect.objectContaining({ name: '가수 A', imageUrl: image(old) }),
+    ]);
+  });
 });

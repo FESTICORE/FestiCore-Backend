@@ -1683,7 +1683,16 @@ export class PublicFestivalService {
             ),
           ),
         );
+        // 이 축제에 승인된 Commons 사진이 하나로 정해지면 기존 사진보다 우선한다.
+        const reviewedProfileIds = new Set(
+          artistNameKeys(artist.name).flatMap((nameKey) => [
+            ...(profileImageByName.get(
+              `${entry.id}\u0000${entry.sourceUrl}\u0000${nameKey}`,
+            ) ?? []),
+          ]),
+        );
         const imageId =
+          (reviewedProfileIds.size === 1 ? [...reviewedProfileIds][0] : null) ??
           (primaryProfileIds.size === 1 ? [...primaryProfileIds][0] : null) ??
           (artist.sourceUrl && imageByUrl.get(artist.sourceUrl)) ??
           (primaryProfileIds.size === 0 && matchingProfileIds.size === 1
@@ -1847,6 +1856,7 @@ export class PublicFestivalService {
     );
     const artistImages = new Map<string, Set<string>>();
     const primaryArtistImages = new Map<string, Set<string>>();
+    const reviewedArtistImages = new Map<string, Set<string>>();
     const addArtistImage = (
       imagesByName: Map<string, Set<string>>,
       name: string,
@@ -1873,8 +1883,12 @@ export class PublicFestivalService {
       addArtistImage(artistImages, artistName, imageUrl);
       if (festivalSourceUrl === entry.sourceUrl)
         addArtistImage(primaryArtistImages, artistName, imageUrl);
+      if (festivalSourceUrl === entry.sourceUrl && scope === entry.id)
+        addArtistImage(reviewedArtistImages, artistName, imageUrl);
     }
+    // 이 축제에 승인된 Commons 사진이 하나로 정해지면 기존 사진보다 우선한다.
     const artistImage = (name: string) =>
+      artistImageForName(name, reviewedArtistImages) ??
       artistImageForName(name, primaryArtistImages) ??
       artistImageForName(name, artistImages);
     const timetable = (revisions ?? []).flatMap((revision) =>
