@@ -38,7 +38,7 @@ export const PUBLIC_CRAWL_IMAGE_SQL = `(
     AND source."parserConfig"->>'seed' IS DISTINCT FROM 'sohyang-commons-profile'
     AND source."parserConfig"->>'seed' IS DISTINCT FROM 'commons-approved-profile'
     AND source."parserConfig"->>'seed' IS DISTINCT FROM 'prugio-official-portraits'
-    AND source."parserConfig"->>'festivalSourceUrl' ~ '^https://(ticket[.]melon[.]com|ticket[.]yes24[.]com|nol[.]yanolja[.]com|mintpaper[.]co[.]kr)/'
+    AND source."parserConfig"->>'festivalSourceUrl' ~ '^https://(ticket[.]melon[.]com|ticket[.]yes24[.]com|nol[.]yanolja[.]com|world[.]nol[.]com|mintpaper[.]co[.]kr)/'
     AND (source."parserConfig"->>'seed' IS DISTINCT FROM 'official-artist-gallery'
       OR (split_part(image."originUrl", '?', 1) =
             'https://cdn.imweb.me/thumbnail/' || (source."parserConfig"->>'imageHint')

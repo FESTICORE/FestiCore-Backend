@@ -1941,6 +1941,57 @@ describe('CrawlService source audit', () => {
     expect(dataSource.transaction).not.toHaveBeenCalled();
   });
 
+  it('NOL World 예매 상세를 축제 원본으로 둔 출연진 프로필 소스를 등록한다', async () => {
+    const { service, dataSource } = harness();
+    jest.spyOn(service, 'checkRobots').mockResolvedValue(undefined);
+    const repo = {
+      create: jest.fn((value: CrawlSource) => value),
+      save: jest.fn((value: CrawlSource) =>
+        Promise.resolve({ ...value, id: 'source-nol-world' }),
+      ),
+    };
+    const manager = { getRepository: jest.fn(() => repo) };
+    dataSource.transaction.mockImplementation(
+      (callback: (transactionManager: typeof manager) => Promise<unknown>) =>
+        callback(manager),
+    );
+    const dto = {
+      kind: 'artist-image',
+      url: 'https://artist.example.com/profile',
+      parser: 'html-text',
+      parserConfig: {
+        artistName: 'Artist',
+        festivalSourceUrl: 'https://world.nol.com/en/ticket/products/26015253',
+        imageHint: 'profile-photo',
+      },
+    } as CreateCrawlSourceDto;
+
+    await expect(service.createSource(dto, 'admin-1')).resolves.toMatchObject({
+      id: 'source-nol-world',
+      parserConfig: {
+        festivalSourceUrl: 'https://world.nol.com/en/ticket/products/26015253',
+      },
+    });
+  });
+
+  it('허용 목록 밖 예매 호스트를 축제 원본으로 둔 출연진 프로필 소스는 거절한다', async () => {
+    const { service, dataSource } = harness();
+    const dto = {
+      kind: 'artist-image',
+      url: 'https://artist.example.com/profile',
+      parser: 'html-text',
+      parserConfig: {
+        artistName: 'Artist',
+        festivalSourceUrl: 'https://nol.com/en/ticket/products/26015253',
+        imageHint: 'profile-photo',
+      },
+    } as CreateCrawlSourceDto;
+    await expect(service.createSource(dto, 'admin-1')).rejects.toThrow(
+      'festivalSourceUrl',
+    );
+    expect(dataSource.transaction).not.toHaveBeenCalled();
+  });
+
   it('requires a distinctive image hint for an artist profile', async () => {
     const { service, dataSource } = harness();
     const dto = {
