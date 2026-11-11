@@ -4,6 +4,7 @@ import { UnprocessableEntityException } from '@nestjs/common';
 import { CrawlService } from './crawl.service';
 import { CrawlRun } from '../entity/crawl-run.entity';
 import { CrawlSource } from '../entity/crawl-source.entity';
+import { NOL_LINEUP_PARSER_VERSION } from './nol-world-lineup-evidence';
 
 const reviewId = '11111111-1111-4111-8111-111111111111';
 const sourceId = '22222222-2222-4222-8222-222222222222';
@@ -90,6 +91,7 @@ function harness(bytes: Buffer) {
       sql.includes('FROM crawl_artist_image_reviews') ? [review] : [],
     ),
   );
+  const lineupEvidenceRun: { value: CrawlRun | null } = { value: null };
   const runsRepo = {
     create: jest.fn((value: object) => ({ id: runId, ...value })),
     save: jest.fn((value: CrawlRun) => Promise.resolve(value)),
@@ -104,8 +106,12 @@ function harness(bytes: Buffer) {
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
       addSelect: jest.fn().mockReturnThis(),
+      innerJoin: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
       execute: jest.fn().mockResolvedValue({ identifiers: [{ id: runId }] }),
       getOneOrFail: jest.fn(() => Promise.resolve(run)),
+      getOne: jest.fn(() => Promise.resolve(lineupEvidenceRun.value)),
     })),
   };
   const publicFestivals = {
@@ -196,6 +202,7 @@ function harness(bytes: Buffer) {
     transaction,
     audit,
     linkedOfficialSource,
+    lineupEvidenceRun,
   };
 }
 
@@ -533,5 +540,135 @@ describe('승인된 Commons 사진 수집', () => {
     expect(transaction).toHaveBeenCalledTimes(1);
     expect(review.status).toBe('revoked');
     expect(source.enabled).toBe(false);
+  });
+
+  describe('이미지 전용 공식 페이지의 OCR 근거 (NOL World 한정)', () => {
+    const nolPage = 'https://world.nol.com/en/ticket/products/26013822';
+    const lineupImage =
+      'https://ticketimage.interpark.com/Play/image/etc/25/26013822.jpg';
+    const ocrBytes = Buffer.from('nol-lineup-ocr-image-bytes');
+    const ocrHash = createHash('sha256').update(ocrBytes).digest('hex');
+
+    function nolHarness(bytes: Buffer) {
+      const context = harness(bytes);
+      const { service, review, source } = context;
+      review.officialEvidenceUrl = nolPage;
+      review.festivalSourceUrl = nolPage;
+      (source.parserConfig as { festivalSourceUrl: string }).festivalSourceUrl =
+        nolPage;
+      // Official page carries the lineup inside the image and no artist text.
+      jest
+        .spyOn(service, 'limitedGet')
+        .mockResolvedValue({ status: 200, body: `<img src="${lineupImage}">` });
+      jest
+        .spyOn(service, 'limitedGetImage')
+        .mockImplementation((url: URL) =>
+          Promise.resolve(
+            url.hostname === 'ticketimage.interpark.com'
+              ? { status: 200, body: ocrBytes, contentType: 'image/jpeg' }
+              : context.response,
+          ),
+        );
+      return context;
+    }
+
+    function evidence(overrides: Record<string, unknown> = {}) {
+      return {
+        sourceUrl: nolPage,
+        imageUrl: lineupImage,
+        imageHash: ocrHash,
+        parserVersion: NOL_LINEUP_PARSER_VERSION,
+        status: 'ok',
+        failureReason: null,
+        rawLines: ['19:00 Artist'],
+        ...overrides,
+      };
+    }
+
+    it('공식 이미지 OCR에 출연진 이름이 있고 재fetch 해시가 일치하면 수집을 허용한다', async () => {
+      const { service, run, capture, lineupEvidenceRun } = nolHarness(bytes);
+      lineupEvidenceRun.value = {
+        result: 'nochange-parsed',
+        lineupEvidence: [evidence()],
+      } as unknown as CrawlRun;
+
+      await expect(
+        service.prepareApprovedCommonsImage(reviewId),
+      ).resolves.toMatchObject({ imageId });
+
+      expect(run.result).toBe('nochange-parsed');
+      expect(capture).toHaveBeenCalled();
+    });
+
+    it('재fetch한 이미지 SHA-256이 저장 해시와 다르면 거부한다', async () => {
+      const { service, run, capture, lineupEvidenceRun } = nolHarness(bytes);
+      lineupEvidenceRun.value = {
+        result: 'nochange-parsed',
+        lineupEvidence: [evidence({ imageHash: 'b'.repeat(64) })],
+      } as unknown as CrawlRun;
+
+      await expect(
+        service.prepareApprovedCommonsImage(reviewId),
+      ).rejects.toBeInstanceOf(UnprocessableEntityException);
+
+      expect(run.result).toBe('failed');
+      expect(capture).not.toHaveBeenCalled();
+    });
+
+    it('OCR 이미지가 현재 공식 페이지의 유효 이미지 집합에 없으면 거부한다', async () => {
+      const { service, run, capture, lineupEvidenceRun } = nolHarness(bytes);
+      lineupEvidenceRun.value = {
+        result: 'nochange-parsed',
+        lineupEvidence: [
+          evidence({
+            imageUrl:
+              'https://ticketimage.interpark.com/Play/image/etc/25/26013822-missing.jpg',
+          }),
+        ],
+      } as unknown as CrawlRun;
+
+      await expect(
+        service.prepareApprovedCommonsImage(reviewId),
+      ).rejects.toBeInstanceOf(UnprocessableEntityException);
+
+      expect(run.result).toBe('failed');
+      expect(capture).not.toHaveBeenCalled();
+    });
+
+    it('OCR 텍스트에 출연진 이름이 없으면 거부한다', async () => {
+      const { service, run, capture, lineupEvidenceRun } = nolHarness(bytes);
+      lineupEvidenceRun.value = {
+        result: 'nochange-parsed',
+        lineupEvidence: [evidence({ rawLines: ['19:00 Someone Else'] })],
+      } as unknown as CrawlRun;
+
+      await expect(
+        service.prepareApprovedCommonsImage(reviewId),
+      ).rejects.toBeInstanceOf(UnprocessableEntityException);
+
+      expect(run.result).toBe('failed');
+      expect(capture).not.toHaveBeenCalled();
+    });
+
+    it('저장된 OCR 증거가 없거나 status가 ok가 아니면 거부한다', async () => {
+      const noEvidence = nolHarness(bytes);
+      noEvidence.lineupEvidenceRun.value = null;
+      await expect(
+        noEvidence.service.prepareApprovedCommonsImage(reviewId),
+      ).rejects.toBeInstanceOf(UnprocessableEntityException);
+      expect(noEvidence.run.result).toBe('failed');
+      expect(noEvidence.capture).not.toHaveBeenCalled();
+
+      const emptyEvidence = nolHarness(bytes);
+      emptyEvidence.lineupEvidenceRun.value = {
+        result: 'nochange-parsed',
+        lineupEvidence: [evidence({ status: 'empty', rawLines: [] })],
+      } as unknown as CrawlRun;
+      await expect(
+        emptyEvidence.service.prepareApprovedCommonsImage(reviewId),
+      ).rejects.toBeInstanceOf(UnprocessableEntityException);
+      expect(emptyEvidence.run.result).toBe('failed');
+      expect(emptyEvidence.capture).not.toHaveBeenCalled();
+    });
   });
 });

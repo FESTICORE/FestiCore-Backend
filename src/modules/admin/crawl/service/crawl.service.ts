@@ -59,6 +59,7 @@ import { crawlArtistGallery } from './artist-gallery';
 import { timetableSourceConfig } from './timetable-source-config';
 import {
   collectNolWorldLineupEvidence,
+  officialOcrLineupImageCandidates,
   MAX_NOL_LINEUP_IMAGE_BYTES,
 } from './nol-world-lineup-evidence';
 import { normalizeArtistName } from '../../../../common/artist-name';
@@ -151,14 +152,18 @@ const kstDay = (date = new Date()) =>
     day: '2-digit',
   }).format(date);
 
-function officialPageMentionsArtist(html: string, artistName: string): boolean {
+function textMentionsArtist(text: string, artistName: string): boolean {
   const name = normalizeArtistName(artistName);
   if (!name) return false;
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return new RegExp(
     `(?<![\\p{L}\\p{N}_])${escaped}(?![\\p{L}\\p{N}_])`,
     'u',
-  ).test(normalizeArtistName(plainText(html)));
+  ).test(normalizeArtistName(text));
+}
+
+function officialPageMentionsArtist(html: string, artistName: string): boolean {
+  return textMentionsArtist(plainText(html), artistName);
 }
 
 const YES24_PAGE_LIMIT = 4;
@@ -2300,6 +2305,43 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * Additional, image-only evidence path for official pages whose lineup lives
+   * inside an image (e.g. NOL World). Accepts the stored OCR text only when the
+   * image is still referenced by the official page, the re-fetched bytes match
+   * the stored SHA-256, and the OCR text mentions the artist. This never
+   * weakens or replaces the HTML {@link officialPageMentionsArtist} check.
+   */
+  private async officialImageOcrMentionsArtist(
+    officialHtml: string,
+    officialPageUrl: string,
+    artistName: string,
+  ): Promise<boolean> {
+    const evidenceRun = await this.runsRepo
+      .createQueryBuilder('run')
+      .innerJoin(CrawlSource, 'source', 'source.id = run.sourceId')
+      .where('source.url = :url', { url: officialPageUrl })
+      .andWhere('run.lineupEvidence IS NOT NULL')
+      .andWhere("run.result != 'failed'")
+      .orderBy('run.startedAt', 'DESC')
+      .addOrderBy('run.id', 'DESC')
+      .getOne();
+    const candidates = officialOcrLineupImageCandidates(
+      officialHtml,
+      officialPageUrl,
+      evidenceRun?.lineupEvidence ?? null,
+      (rawLines) => textMentionsArtist(rawLines.join('\n'), artistName),
+    );
+    for (const candidate of candidates) {
+      await this.checkRobots(candidate.imageUrl.href);
+      const image = await this.limitedGetImage(candidate.imageUrl);
+      if (image.status !== 200) continue;
+      const hash = createHash('sha256').update(image.body).digest('hex');
+      if (hash === candidate.imageHash) return true;
+    }
+    return false;
+  }
+
   private async executeApprovedCommonsImage(
     run: CrawlRun,
     source: CrawlSource,
@@ -2372,9 +2414,15 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     const official = await this.limitedGet(
       checkedUrl(review.officialEvidenceUrl),
     );
+    if (official.status !== 200)
+      throw new Error('COMMONS_OFFICIAL_EVIDENCE_MISMATCH');
     if (
-      official.status !== 200 ||
-      !officialPageMentionsArtist(official.body, review.artistName)
+      !officialPageMentionsArtist(official.body, review.artistName) &&
+      !(await this.officialImageOcrMentionsArtist(
+        official.body,
+        review.officialEvidenceUrl,
+        review.artistName,
+      ))
     )
       throw new Error('COMMONS_OFFICIAL_EVIDENCE_MISMATCH');
     await this.checkRobots(source.url);
