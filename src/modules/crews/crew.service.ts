@@ -9,7 +9,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash, randomBytes, randomUUID } from 'crypto';
-import { EntityManager, IsNull, Repository } from 'typeorm';
+import { EntityManager, In, IsNull, Repository } from 'typeorm';
 import { AdminFestival } from '../admin/festival/festival.entity';
 import { User } from '../auth/entity/user.entity';
 import { SocialNotificationService } from '../notification/social-notification.service';
@@ -17,6 +17,8 @@ import { LiveActivityService } from '../notification/live-activity.service';
 import {
   Crew,
   CrewGather,
+  CrewGatherReply,
+  CrewGatherResponse,
   CrewMember,
   CrewState,
   CrewStatusIdempotency,
@@ -25,6 +27,9 @@ import {
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const INVITE_MS = 48 * 60 * 60_000;
 const GATHER_MS = 10 * 60_000;
+const CREW_NAME_MAX = 12;
+const INVITE_PREVIEW_MEMBERS = 3;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function error(code: string, message: string) {
   return { code, message };
@@ -77,6 +82,8 @@ export class CrewService {
     @InjectRepository(User) private readonly users: Repository<User>,
     private readonly socialNotifications: SocialNotificationService,
     private readonly liveActivity: LiveActivityService,
+    @InjectRepository(CrewGatherResponse)
+    private readonly gatherResponses: Repository<CrewGatherResponse>,
   ) {}
 
   private async festival(id: string): Promise<AdminFestival> {
@@ -205,6 +212,29 @@ export class CrewService {
           order: { createdAt: 'DESC' },
         })
       : null;
+    const activeGather =
+      latestGather && latestGather.createdAt.getTime() + GATHER_MS > Date.now()
+        ? latestGather
+        : null;
+    const nicknames = new Map(
+      members.map((member) => [member.userId, member.nickname]),
+    );
+    const responses = activeGather
+      ? (
+          await this.gatherResponses.find({
+            where: { gatherId: activeGather.id },
+            order: { respondedAt: 'ASC' },
+          })
+        )
+          // 응답 뒤 크루를 떠난 사람은 목록에서 뺀다.
+          .filter((row) => nicknames.has(row.userId))
+          .map((row) => ({
+            userId: row.userId,
+            nickname: nicknames.get(row.userId) as string,
+            response: row.response,
+            respondedAt: row.respondedAt,
+          }))
+      : [];
     const nextGather = crew.lastGatherAt
       ? new Date(crew.lastGatherAt.getTime() + GATHER_MS)
       : null;
@@ -237,15 +267,24 @@ export class CrewService {
                   updatedAt: statusUpdatedAt,
                 }),
               ),
-              gatherRequest:
-                latestGather &&
-                latestGather.createdAt.getTime() + GATHER_MS > Date.now()
-                  ? {
-                      zoneId: latestGather.zoneId,
-                      byUserId: latestGather.byUserId,
-                      at: latestGather.createdAt,
-                    }
-                  : null,
+              gatherRequest: activeGather
+                ? {
+                    id: activeGather.id,
+                    zoneId: activeGather.zoneId,
+                    byUserId: activeGather.byUserId,
+                    at: activeGather.createdAt,
+                    expiresAt: new Date(
+                      activeGather.createdAt.getTime() + GATHER_MS,
+                    ),
+                    responses,
+                    responseSummary: {
+                      going: responses.filter((row) => row.response === 'going')
+                        .length,
+                      ack: responses.filter((row) => row.response === 'ack')
+                        .length,
+                    },
+                  }
+                : null,
               gatherAvailableAt:
                 nextGather && nextGather.getTime() > Date.now()
                   ? nextGather
@@ -269,7 +308,7 @@ export class CrewService {
       throw new GoneException(
         error('FESTIVAL_ENDED', '종료된 페스티벌입니다.'),
       );
-    const crewName = name(body.name, 20);
+    const crewName = name(body.name, CREW_NAME_MAX);
     const user = await this.users.findOne({ where: { id: userId } });
     if (!user)
       throw new NotFoundException(
@@ -372,12 +411,32 @@ export class CrewService {
     const owner = await this.members.findOne({
       where: { crewId: crew.id, userId: crew.ownerId },
     });
+    const preview = await this.members.find({
+      where: { crewId: crew.id },
+      order: { joinedAt: 'ASC' },
+      take: INVITE_PREVIEW_MEMBERS,
+    });
+    const avatars = new Map(
+      preview.length
+        ? (
+            await this.users.find({
+              where: { id: In(preview.map((member) => member.userId)) },
+              select: { id: true, profileImageUrl: true },
+            })
+          ).map((user) => [user.id, user.profileImageUrl])
+        : [],
+    );
     return {
       crewName: crew.name,
       festivalId: crew.festivalId,
       festivalName: festival.published?.name,
       ownerNickname: owner?.nickname ?? null,
       memberCount: count,
+      // 공개 미리보기라 userId 등 식별 정보는 넣지 않는다.
+      memberPreview: preview.map((member) => ({
+        nickname: member.nickname,
+        avatarUrl: avatars.get(member.userId) ?? null,
+      })),
       expiresAt: crew.inviteExpiresAt,
     };
   }
@@ -667,6 +726,7 @@ export class CrewService {
       );
       await this.liveActivity.enqueueCrewMembers(id, crew.festivalId, manager);
       return {
+        id: saved.id,
         zoneId: saved.zoneId,
         byUserId: saved.byUserId,
         at: saved.createdAt,
@@ -674,11 +734,52 @@ export class CrewService {
     });
   }
 
+  async respondGather(
+    id: string,
+    gatherId: string,
+    userId: string,
+    response: CrewGatherReply,
+  ) {
+    const { crew, member } = await this.member(id, userId);
+    if (response !== 'going' && response !== 'ack')
+      throw new BadRequestException(
+        error('VALIDATION', 'response는 going 또는 ack여야 합니다.'),
+      );
+    const gather = UUID.test(gatherId)
+      ? await this.gathers.findOne({ where: { id: gatherId, crewId: id } })
+      : null;
+    if (!gather)
+      throw new NotFoundException(
+        error('NOT_FOUND', '모여 요청을 찾을 수 없습니다.'),
+      );
+    if (gather.byUserId === userId)
+      throw new ForbiddenException(
+        error('GATHER_SENDER', '모여를 보낸 사람은 응답할 수 없습니다.'),
+      );
+    await this.active(crew);
+    if (gather.createdAt.getTime() + GATHER_MS <= Date.now())
+      throw new ConflictException(
+        error('GATHER_EXPIRED', '만료된 모여 요청입니다.'),
+      );
+    const respondedAt = new Date();
+    await this.gatherResponses.upsert(
+      { gatherId, userId, response, respondedAt },
+      ['gatherId', 'userId'],
+    );
+    return {
+      gatherId,
+      userId,
+      nickname: member.nickname,
+      response,
+      respondedAt,
+    };
+  }
+
   async rename(id: string, userId: string, value: unknown) {
     const { crew } = await this.member(id, userId);
     this.owner(crew, userId);
     await this.active(crew);
-    const nextName = name(value, 20);
+    const nextName = name(value, CREW_NAME_MAX);
     const updated = await this.crews.manager.transaction(async (manager) => {
       const locked = await this.lockedCrew(manager, id, userId);
       this.owner(locked, userId);

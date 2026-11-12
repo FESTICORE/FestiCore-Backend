@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   GoneException,
@@ -10,6 +11,7 @@ import { User } from '../auth/entity/user.entity';
 import {
   Crew,
   CrewGather,
+  CrewGatherResponse,
   CrewMember,
   CrewStatusIdempotency,
 } from './crew.entity';
@@ -53,6 +55,11 @@ function setup() {
     }),
   };
   const gatherRepository = { findOne: jest.fn().mockResolvedValue(null) };
+  const gatherResponseRepository = {
+    find: jest.fn().mockResolvedValue([]),
+    upsert: jest.fn().mockResolvedValue(undefined),
+  };
+  const userRepository = { find: jest.fn().mockResolvedValue([]) };
   const socialNotifications = {
     enqueueCrewStatus: jest.fn().mockResolvedValue(undefined),
     enqueueCrewGather: jest.fn().mockResolvedValue(undefined),
@@ -69,14 +76,18 @@ function setup() {
     memberRepository as unknown as Repository<CrewMember>,
     gatherRepository as unknown as Repository<CrewGather>,
     festivalRepository as unknown as Repository<AdminFestival>,
-    {} as Repository<User>,
+    userRepository as unknown as Repository<User>,
     socialNotifications as unknown as SocialNotificationService,
     liveActivity as unknown as LiveActivityService,
+    gatherResponseRepository as unknown as Repository<CrewGatherResponse>,
   );
   return {
     service,
     crewRepository,
     memberRepository,
+    gatherRepository,
+    gatherResponseRepository,
+    userRepository,
     socialNotifications,
     liveActivity,
   };
@@ -632,5 +643,195 @@ describe('CrewService authorization and invitations', () => {
       lock: { mode: 'pessimistic_write' },
     });
     expect(gatherRepository.save).not.toHaveBeenCalled();
+  });
+});
+
+describe('CrewService gather responses, invite preview and name limit', () => {
+  const gatherId = '00000000-0000-4000-8000-0000000000aa';
+  const thirdId = '00000000-0000-4000-8000-000000000003';
+  const member = (userId: string, nickname: string) => ({
+    crewId: crew.id,
+    userId,
+    nickname,
+  });
+  const gather = (createdAt = new Date(Date.now() - 60_000)) => ({
+    id: gatherId,
+    crewId: crew.id,
+    byUserId: ownerId,
+    zoneId: 'zon_test',
+    createdAt,
+  });
+
+  it('saves a going response and overwrites it with a later ack', async () => {
+    const {
+      service,
+      memberRepository,
+      gatherRepository,
+      gatherResponseRepository,
+    } = setup();
+    memberRepository.findOne.mockResolvedValue(member(otherId, '하나'));
+    gatherRepository.findOne.mockResolvedValue(gather());
+    const first = await service.respondGather(
+      crew.id,
+      gatherId,
+      otherId,
+      'going',
+    );
+    const second = await service.respondGather(
+      crew.id,
+      gatherId,
+      otherId,
+      'ack',
+    );
+    expect(first).toMatchObject({
+      gatherId,
+      userId: otherId,
+      nickname: '하나',
+      response: 'going',
+    });
+    expect(second.response).toBe('ack');
+    expect(gatherRepository.findOne).toHaveBeenCalledWith({
+      where: { id: gatherId, crewId: crew.id },
+    });
+    expect(gatherResponseRepository.upsert).toHaveBeenCalledTimes(2);
+    expect(gatherResponseRepository.upsert).toHaveBeenLastCalledWith(
+      expect.objectContaining({ gatherId, userId: otherId, response: 'ack' }),
+      ['gatherId', 'userId'],
+    );
+  });
+
+  it('does not let the sender respond to their own gather', async () => {
+    const {
+      service,
+      memberRepository,
+      gatherRepository,
+      gatherResponseRepository,
+    } = setup();
+    memberRepository.findOne.mockResolvedValue(member(ownerId, '로이'));
+    gatherRepository.findOne.mockResolvedValue(gather());
+    await expect(
+      service.respondGather(crew.id, gatherId, ownerId, 'going'),
+    ).rejects.toMatchObject({
+      status: 403,
+      response: { code: 'GATHER_SENDER' },
+    });
+    expect(gatherResponseRepository.upsert).not.toHaveBeenCalled();
+  });
+
+  it('returns 409 for an expired gather', async () => {
+    const {
+      service,
+      memberRepository,
+      gatherRepository,
+      gatherResponseRepository,
+    } = setup();
+    memberRepository.findOne.mockResolvedValue(member(otherId, '하나'));
+    gatherRepository.findOne.mockResolvedValue(
+      gather(new Date(Date.now() - 11 * 60_000)),
+    );
+    await expect(
+      service.respondGather(crew.id, gatherId, otherId, 'ack'),
+    ).rejects.toMatchObject({
+      status: 409,
+      response: { code: 'GATHER_EXPIRED' },
+    });
+    expect(gatherResponseRepository.upsert).not.toHaveBeenCalled();
+  });
+
+  it('rejects non-members, unknown gathers and invalid responses', async () => {
+    const { service, memberRepository, gatherRepository } = setup();
+    await expect(
+      service.respondGather(crew.id, gatherId, otherId, 'going'),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    memberRepository.findOne.mockResolvedValue(member(otherId, '하나'));
+    await expect(
+      service.respondGather(crew.id, 'not-a-uuid', otherId, 'going'),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(gatherRepository.findOne).not.toHaveBeenCalled();
+    await expect(
+      service.respondGather(crew.id, gatherId, otherId, 'going'),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    await expect(
+      service.respondGather(
+        crew.id,
+        gatherId,
+        otherId,
+        'late' as unknown as 'going',
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('lists current gather responses with counts in the crew detail', async () => {
+    const {
+      service,
+      memberRepository,
+      gatherRepository,
+      gatherResponseRepository,
+    } = setup();
+    memberRepository.findOne.mockResolvedValue(member(otherId, '하나'));
+    memberRepository.find.mockResolvedValue([
+      { ...member(ownerId, '로이'), joinedAt: new Date() },
+      { ...member(otherId, '하나'), joinedAt: new Date() },
+      { ...member(thirdId, '두리'), joinedAt: new Date() },
+    ]);
+    gatherRepository.findOne.mockResolvedValue(gather());
+    const at = new Date();
+    gatherResponseRepository.find.mockResolvedValue([
+      { gatherId, userId: otherId, response: 'going', respondedAt: at },
+      { gatherId, userId: thirdId, response: 'ack', respondedAt: at },
+      // 응답 뒤 떠난 사람
+      {
+        gatherId,
+        userId: '00000000-0000-4000-8000-000000000009',
+        response: 'going',
+        respondedAt: at,
+      },
+    ]);
+    const detail = await service.detail(crew.id, otherId);
+    expect(detail.live?.gatherRequest).toMatchObject({
+      id: gatherId,
+      byUserId: ownerId,
+      responses: [
+        { userId: otherId, nickname: '하나', response: 'going' },
+        { userId: thirdId, nickname: '두리', response: 'ack' },
+      ],
+      responseSummary: { going: 1, ack: 1 },
+    });
+  });
+
+  it('previews at most three members without private identifiers', async () => {
+    const { service, crewRepository, memberRepository, userRepository } =
+      setup();
+    crewRepository.findOne.mockResolvedValueOnce({ ...crew });
+    memberRepository.count.mockResolvedValueOnce(5);
+    memberRepository.findOne.mockResolvedValueOnce(member(ownerId, '로이'));
+    memberRepository.find.mockResolvedValueOnce([
+      member(ownerId, '로이'),
+      member(otherId, '하나'),
+      member(thirdId, '두리'),
+    ]);
+    userRepository.find.mockResolvedValueOnce([
+      { id: ownerId, profileImageUrl: 'https://example.com/roy.png' },
+    ]);
+    const preview = await service.invite('K7P2QX');
+    expect(memberRepository.find).toHaveBeenCalledWith(
+      expect.objectContaining({ take: 3, where: { crewId: crew.id } }),
+    );
+    expect(preview.memberCount).toBe(5);
+    expect(preview.memberPreview).toEqual([
+      { nickname: '로이', avatarUrl: 'https://example.com/roy.png' },
+      { nickname: '하나', avatarUrl: null },
+      { nickname: '두리', avatarUrl: null },
+    ]);
+    expect(JSON.stringify(preview)).not.toContain(otherId);
+    expect(JSON.stringify(preview)).not.toContain(ownerId);
+  });
+
+  it('limits crew names to 12 characters on rename', async () => {
+    const { service, memberRepository } = setup();
+    memberRepository.findOne.mockResolvedValue(member(ownerId, '로이'));
+    await expect(
+      service.rename(crew.id, ownerId, '열세글자크루이름입니다요!'),
+    ).rejects.toBeInstanceOf(BadRequestException);
   });
 });
