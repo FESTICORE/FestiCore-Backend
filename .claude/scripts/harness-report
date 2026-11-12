@@ -1,0 +1,56 @@
+#!/usr/bin/env python3
+"""하네스 문서 · 규칙 · 에이전트 · 스킬 사용 리포트. (docs/agent/harness.md 관측 · 정리)
+
+사용: .claude/scripts/harness-report [--days 30]
+- 문서 · 규칙 · 에이전트 · 스킬별 읽은 횟수와 마지막 사용일
+- 기간 안에 한 번도 읽히지 않은 문서 · 규칙 · 에이전트 → 지우거나 합칠 후보
+"""
+import argparse
+import datetime
+import glob
+import json
+import os
+import subprocess
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--days", type=int, default=30)
+    args = parser.parse_args()
+
+    root = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True,
+                          stdin=subprocess.DEVNULL).stdout.strip() or "."
+    os.chdir(root)
+    since = datetime.datetime.now() - datetime.timedelta(days=args.days)
+
+    counts, last = {}, {}
+    try:
+        with open(".claude/state/usage.jsonl", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    row = json.loads(line)
+                    at = datetime.datetime.fromisoformat(row["at"])
+                except (ValueError, KeyError):
+                    continue
+                if at < since:
+                    continue
+                target = row["target"]
+                counts[target] = counts.get(target, 0) + 1
+                last[target] = max(last.get(target, at), at)
+    except OSError:
+        print("기록이 없습니다 (.claude/state/usage.jsonl). Claude 세션에서 문서를 읽으면 쌓입니다.")
+        return
+
+    print(f"최근 {args.days}일 사용 (많은 순)")
+    for target, count in sorted(counts.items(), key=lambda kv: -kv[1]):
+        print(f"  {count:4d}  {last[target]:%Y-%m-%d}  {target}")
+
+    known = sorted(glob.glob("docs/agent/*.md") + glob.glob("docs/architecture/*.md") + glob.glob(".claude/rules/*.md") + glob.glob(".claude/agents/*.md"))
+    unused = [k for k in known if k not in counts]
+    print(f"\n최근 {args.days}일 한 번도 쓰이지 않음 (정리 후보 {len(unused)}개)")
+    for target in unused:
+        print(f"  {target}")
+
+
+if __name__ == "__main__":
+    main()
