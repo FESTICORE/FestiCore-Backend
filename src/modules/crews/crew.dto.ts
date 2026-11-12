@@ -7,7 +7,7 @@ import {
   Length,
   Matches,
 } from 'class-validator';
-import type { CrewState } from './crew.entity';
+import type { CrewGatherReply, CrewState } from './crew.entity';
 
 export class CreateCrewDto {
   @ApiProperty({ example: 'fst_2026', description: '발행된 축제 ID' })
@@ -15,9 +15,9 @@ export class CreateCrewDto {
   @Length(1, 32)
   festivalId!: string;
 
-  @ApiProperty({ example: '함께 즐겨요', minLength: 1, maxLength: 20 })
+  @ApiProperty({ example: '함께 즐겨요', minLength: 1, maxLength: 12 })
   @IsString()
-  @Length(1, 20)
+  @Length(1, 12)
   name!: string;
 
   @ApiPropertyOptional({
@@ -81,10 +81,20 @@ export class CrewGatherDto {
   zoneId!: string;
 }
 
+export class CrewGatherResponseDto {
+  @ApiProperty({
+    enum: ['going', 'ack'],
+    example: 'going',
+    description: 'going: 가는 중, ack: 확인',
+  })
+  @IsIn(['going', 'ack'])
+  response!: CrewGatherReply;
+}
+
 export class RenameCrewDto {
-  @ApiProperty({ example: '우리 크루', minLength: 1, maxLength: 20 })
+  @ApiProperty({ example: '우리 크루', minLength: 1, maxLength: 12 })
   @IsString()
-  @Length(1, 20)
+  @Length(1, 12)
   name!: string;
 }
 

@@ -28,7 +28,8 @@
     "migration:show": "npm run typeorm -- migration:show",
     "oauth-token:backfill": "ts-node src/database/backfill-oauth-tokens.ts",
     "flags:seed-dev": "ts-node src/database/seed-dev-flags.ts",
-    "pack-details:seed-dev": "ts-node src/database/seed-dev-pack-details.ts"
+    "pack-details:seed-dev": "ts-node src/database/seed-dev-pack-details.ts",
+    "crews:seed-dev": "ts-node src/database/seed-dev-crews.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1153.0",

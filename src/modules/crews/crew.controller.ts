@@ -28,6 +28,7 @@ import type { AuthUser } from '../auth/types/social-profile';
 import {
   CreateCrewDto,
   CrewGatherDto,
+  CrewGatherResponseDto,
   CrewStatusDto,
   JoinCrewDto,
   RenameCrewDto,
@@ -93,7 +94,7 @@ export class CrewController {
   @ApiOperation({
     summary: '초대 코드 미리보기',
     description:
-      '로그인 없이 초대 코드의 크루명·크루장 닉네임과 인원만 조회합니다. 없거나 만료된 코드는 같은 404로 응답합니다. IP당 분당 10회로 제한합니다.',
+      '로그인 없이 초대 코드의 크루명·크루장 닉네임·인원과 먼저 들어온 크루원 최대 3명의 닉네임·프로필 이미지를 조회합니다. 없거나 만료된 코드는 같은 404로 응답합니다. IP당 분당 10회로 제한합니다.',
   })
   @ApiParam({
     name: 'code',
@@ -109,6 +110,11 @@ export class CrewController {
         festivalName: '테스트 축제',
         ownerNickname: '로이',
         memberCount: 3,
+        memberPreview: [
+          { nickname: '로이', avatarUrl: 'https://example.com/a.png' },
+          { nickname: '하나', avatarUrl: null },
+          { nickname: '두리', avatarUrl: null },
+        ],
         expiresAt: '2026-10-23T01:00:00.000Z',
       },
     },
@@ -187,7 +193,22 @@ export class CrewController {
           name: '함께 즐겨요',
           ownerId: '00000000-0000-4000-8000-000000000001',
           members: [],
-          gatherRequest: null,
+          gatherRequest: {
+            id: '00000000-0000-4000-8000-0000000000aa',
+            zoneId: 'zon_main',
+            byUserId: '00000000-0000-4000-8000-000000000001',
+            at: '2026-10-21T01:00:00.000Z',
+            expiresAt: '2026-10-21T01:10:00.000Z',
+            responses: [
+              {
+                userId: '00000000-0000-4000-8000-000000000002',
+                nickname: '하나',
+                response: 'going',
+                respondedAt: '2026-10-21T01:01:00.000Z',
+              },
+            ],
+            responseSummary: { going: 1, ack: 0 },
+          },
           gatherAvailableAt: null,
         },
       },
@@ -288,6 +309,7 @@ export class CrewController {
     status: 200,
     schema: {
       example: {
+        id: '00000000-0000-4000-8000-0000000000aa',
         zoneId: 'zon_main',
         byUserId: '00000000-0000-4000-8000-000000000001',
         at: '2026-10-21T01:00:00.000Z',
@@ -307,11 +329,51 @@ export class CrewController {
   }
 
   @RequireCurrentTerms()
+  @Post(':crewId/gather/:gatherId/response')
+  @ApiBearerAuth()
+  @HttpCode(200)
+  @ApiOperation({
+    summary: '모여! 응답',
+    description:
+      '모여를 받은 크루원이 going(가는 중) 또는 ack(확인)으로 응답합니다. 다시 응답하면 덮어씁니다. 모여를 보낸 사람은 응답할 수 없고, 10분 유효 시간이 지난 모여는 409입니다.',
+  })
+  @ApiParam({ name: 'crewId', example: 'flg_1234567890abcdef' })
+  @ApiParam({
+    name: 'gatherId',
+    example: '00000000-0000-4000-8000-0000000000aa',
+    description: '크루 상세 live.gatherRequest.id',
+  })
+  @ApiResponse({
+    status: 200,
+    schema: {
+      example: {
+        gatherId: '00000000-0000-4000-8000-0000000000aa',
+        userId: '00000000-0000-4000-8000-000000000002',
+        nickname: '하나',
+        response: 'going',
+        respondedAt: '2026-10-21T01:01:00.000Z',
+      },
+    },
+  })
+  @ApiResponse({ status: 403, description: 'CREW_NOT_MEMBER · GATHER_SENDER' })
+  @ApiResponse({ status: 404, description: '없는 모여 요청' })
+  @ApiResponse({ status: 409, description: 'GATHER_EXPIRED' })
+  @ApiResponse({ status: 410, description: 'CREW_ARCHIVED' })
+  respondGather(
+    @Param('crewId') id: string,
+    @Param('gatherId') gatherId: string,
+    @CurrentUser() user: AuthUser,
+    @Body() body: CrewGatherResponseDto,
+  ) {
+    return this.service.respondGather(id, gatherId, user.userId, body.response);
+  }
+
+  @RequireCurrentTerms()
   @Patch(':crewId')
   @ApiBearerAuth()
   @ApiOperation({
     summary: '크루 이름 변경',
-    description: '크루장만 변경할 수 있습니다. 1~20자입니다.',
+    description: '크루장만 변경할 수 있습니다. 1~12자입니다.',
   })
   @ApiResponse({ status: 200, description: '변경된 크루' })
   rename(
