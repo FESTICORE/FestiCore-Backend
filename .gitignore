@@ -45,3 +45,9 @@ yarn-error.log*
 PLAN.md
 PLAN-REVIEW-LOG.md
 .omc/
+
+# Claude Code 로컬 상태
+.claude/state/
+.claude/settings.local.json
+.claude/worktrees/
+__pycache__/
