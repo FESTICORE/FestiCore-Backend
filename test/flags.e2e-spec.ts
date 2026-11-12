@@ -36,6 +36,9 @@ describe('Flags HTTP authorization (e2e)', () => {
     claim: jest.fn().mockResolvedValue({ flagId: 'flag-1', isNew: true }),
     createCodes: jest.fn().mockResolvedValue({ codes: [] }),
     listCodes: jest.fn().mockResolvedValue({ items: [] }),
+    pinnedFlag: jest.fn().mockResolvedValue({ pinnedFlagId: null, flag: null }),
+    myBearerFlags: jest.fn().mockResolvedValue({ items: [] }),
+    register: jest.fn().mockResolvedValue({ flagId: 'flag-2', isNew: true }),
   };
   const adminAuth = {
     findActiveByUserId: jest
@@ -265,5 +268,73 @@ describe('Flags HTTP authorization (e2e)', () => {
       { count: 1 },
       'admin-1',
     );
+  });
+
+  it('내 대표 깃발·기수 깃발 조회와 코드 없는 기수 등록은 익명 요청을 거부한다', async () => {
+    await request(server).get('/api/v1/me/pinned-flag').expect(401);
+    await request(server).get('/api/v1/me/bearer-flags').expect(401);
+    await request(server)
+      .post('/api/v1/bearer/register')
+      .set('Idempotency-Key', 'register-1')
+      .send({ festivalId: 'fst-1', name: '새 깃발' })
+      .expect(401);
+    expect(service.pinnedFlag).not.toHaveBeenCalled();
+    expect(service.myBearerFlags).not.toHaveBeenCalled();
+    expect(service.register).not.toHaveBeenCalled();
+  });
+
+  it('대표 깃발이 없으면 200과 null 값을 저장 없이 돌려준다', async () => {
+    const response = await request(server)
+      .get('/api/v1/me/pinned-flag')
+      .set('Authorization', `Bearer ${await accessToken()}`)
+      .expect(200);
+    expect((response.body as { data: unknown }).data).toEqual({
+      pinnedFlagId: null,
+      flag: null,
+    });
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(service.pinnedFlag).toHaveBeenCalledWith('user-1');
+  });
+
+  it('기수 깃발 목록은 토큰 사용자와 선택 축제로 조회하고 약관 미동의여도 읽을 수 있다', async () => {
+    acceptedTerms = false;
+    const response = await request(server)
+      .get('/api/v1/me/bearer-flags?festivalId=fst-1')
+      .set('Authorization', `Bearer ${await accessToken()}`)
+      .expect(200);
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(service.myBearerFlags).toHaveBeenCalledWith('user-1', 'fst-1');
+  });
+
+  it('코드 없는 기수 등록은 약관 동의와 멱등키가 필요하고 201로 응답한다', async () => {
+    const token = await accessToken();
+    const body = { festivalId: 'fst-1', name: '새 깃발' };
+    acceptedTerms = false;
+    const denied = await request(server)
+      .post('/api/v1/bearer/register')
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', 'register-1')
+      .send(body)
+      .expect(403);
+    expect((denied.body as { code: string }).code).toBe('TERMS_REQUIRED');
+    acceptedTerms = true;
+    const missingKey = await request(server)
+      .post('/api/v1/bearer/register')
+      .set('Authorization', `Bearer ${token}`)
+      .send(body)
+      .expect(400);
+    expect((missingKey.body as { code: string }).code).toBe('VALIDATION');
+    expect(service.register).not.toHaveBeenCalled();
+    const response = await request(server)
+      .post('/api/v1/bearer/register')
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', 'register-1')
+      .send(body)
+      .expect(201);
+    expect((response.body as { data: unknown }).data).toEqual({
+      flagId: 'flag-2',
+      isNew: true,
+    });
+    expect(service.register).toHaveBeenCalledWith('user-1', 'register-1', body);
   });
 });

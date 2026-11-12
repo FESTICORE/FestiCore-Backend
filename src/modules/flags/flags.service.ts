@@ -458,6 +458,75 @@ export class FlagsService {
     });
   }
 
+  /** 내 대표 깃발과 상세. 대표가 없거나 공개 조회할 수 없으면 pinnedFlagId·flag 모두 null이다. */
+  async pinnedFlag(userId: string) {
+    const none = { pinnedFlagId: null, flag: null };
+    const pin = await this.pins.findOne({ where: { userId } });
+    if (!pin?.flagId) return none;
+    // 라이브 보드처럼 팔로우가 끊긴 대표는 없는 것으로 본다.
+    if (!(await this.follows.exists({ where: { userId, flagId: pin.flagId } })))
+      return none;
+    const flag = await this.flags.findOne({
+      where: { id: pin.flagId, visibility: 'public' },
+    });
+    const festival = flag
+      ? await this.festivals.findOne({ where: { id: flag.festivalId } })
+      : null;
+    if (!flag || !festival?.published) return none;
+    const bearer = await this.bearers.exists({
+      where: { flagId: flag.id, userId },
+    });
+    if (flag.hidden && !bearer) return none;
+    return {
+      pinnedFlagId: flag.id,
+      flag: {
+        ...this.profile(flag),
+        festivalId: flag.festivalId,
+        status: statusView(flag),
+        isFollowing: true,
+        isBearer: bearer,
+        isPinned: true,
+        hidden: flag.hidden,
+      },
+    };
+  }
+
+  /** 내가 기수인 깃발 목록. 발행된 축제의 깃발만 최근 등록순으로 돌려준다. */
+  async myBearerFlags(userId: string, festivalId?: string) {
+    const rows = await this.bearers.find({
+      where: festivalId ? { userId, festivalId } : { userId },
+      order: { createdAt: 'DESC' },
+    });
+    if (!rows.length) return { items: [] };
+    const flags = await this.flags.find({
+      where: { id: In(rows.map((row) => row.flagId)) },
+    });
+    const festivals = await this.festivals.find({
+      where: { id: In([...new Set(flags.map((flag) => flag.festivalId))]) },
+    });
+    const published = new Set(
+      festivals.filter((row) => row.published).map((row) => row.id),
+    );
+    const flagsById = new Map(flags.map((flag) => [flag.id, flag]));
+    return {
+      items: rows.flatMap((row) => {
+        const flag = flagsById.get(row.flagId);
+        if (!flag || !published.has(flag.festivalId)) return [];
+        return [
+          {
+            flagId: flag.id,
+            festivalId: flag.festivalId,
+            isOwner: row.isOwner,
+            joinedAt: row.createdAt.toISOString(),
+            flag: this.profile(flag, 'bearer'),
+            status: statusView(flag),
+            hidden: flag.hidden,
+          },
+        ];
+      }),
+    };
+  }
+
   async report(id: string, userId: string, input: unknown) {
     const flag = await this.publicFlag(id);
     if (flag.hidden) throw new NotFoundException({ code: 'NOT_FOUND' });
@@ -708,6 +777,131 @@ export class FlagsService {
     });
     await this.packSync.sync(claimed.flagId);
     return claimed;
+  }
+
+  /**
+   * 코드 없이 깃발 프로필을 만들고 요청자를 원래 기수로 등록한다(11/10 회의).
+   * 코드 레코드는 만들지 않으므로 관리자 코드 목록에는 나오지 않는다.
+   */
+  async register(userId: string, key: string, input: unknown) {
+    if (!isRecord(input) || typeof input.festivalId !== 'string')
+      throw new BadRequestException({
+        code: 'VALIDATION',
+        message: 'festivalId가 필요합니다.',
+      });
+    const { festivalId, ...profile } = input;
+    if (profile.name === undefined)
+      throw new BadRequestException({
+        code: 'VALIDATION',
+        message: 'name이 필요합니다.',
+      });
+    const fields = validateProfilePatch(profile);
+    const operation = `bearer-register:${festivalId}`;
+    try {
+      const { response, changed } = await this.db.transaction(
+        async (manager) => {
+          await this.lockActiveUser(manager, userId);
+          const prior = await this.replay(
+            manager,
+            userId,
+            key,
+            operation,
+            input,
+          );
+          if (prior) return { response: prior, changed: [] as string[] };
+          const festival = await manager
+            .getRepository(AdminFestival)
+            .findOne({ where: { id: festivalId } });
+          if (!festival?.published)
+            throw new NotFoundException({
+              code: 'NOT_FOUND',
+              message: '공개된 페스티벌이 없습니다.',
+            });
+          this.assertPackReferences(festival, fields);
+          const flags = manager.getRepository(Flag);
+          const bearers = manager.getRepository(FlagBearer);
+          if (await bearers.exists({ where: { userId, festivalId } }))
+            throw new ConflictException({
+              code: 'BEARER_LIMIT',
+              message: '페스티벌당 한 깃발만 맡을 수 있습니다.',
+            });
+          if (
+            await flags.exists({
+              where: { festivalId, name: fields.name as string },
+            })
+          )
+            throw new ConflictException({
+              code: 'FLAG_NAME_TAKEN',
+              message: '이미 사용 중인 깃발 이름입니다.',
+            });
+          const flag = await flags.save(
+            flags.create({
+              id: `flg_${randomBytes(5).toString('hex')}`,
+              festivalId,
+              visibility: 'public',
+              tags: ['newbie'],
+              bio: null,
+              plan: [],
+              planVisible: true,
+              homeZoneId: null,
+              photoUrl: null,
+              thumbUrl: null,
+              ...fields,
+              followerCount: 0,
+              status: 'scheduled',
+              activity: null,
+              zoneId: null,
+              hidden: false,
+              reportCount: 0,
+              ownerId: userId,
+              restartDate: null,
+              statusUpdatedAt: null,
+              statusUpdatedBy: null,
+              statusClientAt: null,
+            }),
+          );
+          await bearers.save(
+            bearers.create({
+              flagId: flag.id,
+              festivalId,
+              userId,
+              isOwner: true,
+            }),
+          );
+          const created = {
+            flagId: flag.id,
+            flag: this.profile(flag, 'bearer'),
+            isNew: true,
+            coBearers: [userId],
+          };
+          await this.remember(manager, userId, key, operation, input, created);
+          return {
+            response: created,
+            changed: await this.packSync.sync(flag.id, manager),
+          };
+        },
+      );
+      if (changed.length) await this.packSync.invalidatePacks(changed);
+      return response;
+    } catch (cause) {
+      // 동시 요청이 사전 확인을 함께 통과하면 고유 인덱스가 막는다.
+      if (cause instanceof HttpException) throw cause;
+      const constraint =
+        (cause as { code?: string; constraint?: string }).code === '23505'
+          ? (cause as { constraint?: string }).constraint
+          : undefined;
+      if (constraint === 'IDX_flags_festival_name')
+        throw new ConflictException({
+          code: 'FLAG_NAME_TAKEN',
+          message: '이미 사용 중인 깃발 이름입니다.',
+        });
+      if (constraint === 'IDX_flag_bearers_user_festival')
+        throw new ConflictException({
+          code: 'BEARER_LIMIT',
+          message: '페스티벌당 한 깃발만 맡을 수 있습니다.',
+        });
+      throw cause;
+    }
   }
 
   async bearerView(id: string, userId: string) {

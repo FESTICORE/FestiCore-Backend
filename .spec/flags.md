@@ -23,8 +23,38 @@
 | POST | `/api/v1/flags/:flagId/co-bearers/invite` | 소유 기수 | 공동 기수 초대 |
 | DELETE | `/api/v1/flags/:flagId/co-bearers/:userId` | 소유 기수 | 공동 기수 해제, 204 |
 | POST | `/api/v1/bearer/claim` | 앱 JWT | 등록 코드·`X-Device-Id`로 기수 권한 신청 |
+| POST | `/api/v1/bearer/register` | 앱 JWT·약관 | `Idempotency-Key` 필수, 코드 없이 깃발 프로필 생성·원래 기수 등록, 201 |
 | GET | `/api/v1/me/follows` | 앱 JWT | 내 팔로우 목록, 선택 `festivalId` |
+| GET | `/api/v1/me/pinned-flag` | 앱 JWT | 내 대표 깃발 ID와 상세, 없으면 200 `null`, `no-store` |
 | PUT | `/api/v1/me/pinned-flag` | 앱 JWT | 내 대표 깃발 지정 |
+| GET | `/api/v1/me/bearer-flags` | 앱 JWT | 내가 기수인 깃발 목록, 선택 `festivalId`, `no-store` |
+
+### 내 대표 깃발 조회
+
+- 대표 깃발은 `flag_pins`에 계정당 하나이고 축제별로 나뉘지 않으므로 `festivalId` 쿼리를 받지 않는다.
+- 응답은 `{ pinnedFlagId, flag }`다. `flag`는 공개 상세(`GET /flags/:flagId`)와 같은 필드에 `festivalId`를 더하고
+  `isFollowing`·`isPinned`는 항상 `true`다.
+- 대표가 없으면 404가 아니라 200으로 둘 다 `null`이다(`PUT`의 해제 응답 `pinnedFlagId: null`, 라이브 보드와 같은 관례).
+  팔로우가 끊긴 대표, 비공개·미발행 축제 깃발, 내가 기수가 아닌 숨김 깃발도 `null`로 본다.
+
+### 내 기수 깃발 목록
+
+- `items[]`는 `flagId`, `festivalId`, `isOwner`, `joinedAt`, `flag`(기수 시점 프로필, 비공개 계획 포함), `status`, `hidden`이다.
+- 발행된 축제의 깃발만 최근 기수 등록순으로 준다. 숨김 깃발은 `hidden: true`로 포함한다.
+
+### 코드 없는 기수 등록
+
+- 11/10 회의 결정. 요청 본문은 `festivalId`(필수)와 `PATCH /flags/:flagId`의 프로필 필드(`name` 필수, `bio`, `tags`,
+  `plan`, `planVisible`, `homeZoneId`)다. 같은 길이·값 규칙을 쓰고 다른 필드는 400이다. `tags`를 생략하면 `['newbie']`다.
+  사진은 생성 뒤 `POST /flags/:flagId/photo`로 올린다.
+- 홈 존·계획 셋은 발행 팩에 있어야 한다(없는 존 404 `ZONE_NOT_FOUND`, 없는 셋 400).
+- 발행되지 않은 축제 404 `NOT_FOUND`, 이 축제에서 이미 기수 409 `BEARER_LIMIT`, 같은 이름 409 `FLAG_NAME_TAKEN`,
+  같은 멱등키의 다른 요청 409 `IDEMPOTENCY_CONFLICT`다. 동시 요청은 고유 인덱스 위반을 같은 코드로 바꾼다.
+- 결과 데이터는 코드 등록으로 새 깃발을 만들 때와 같다. 공개 예정 상태 깃발(`ownerId`=요청자)과 `isOwner: true` 기수
+  관계를 만들고 공개 깃발 팩을 같은 트랜잭션에서 갱신한다. 응답 형식도 `claim`과 같다.
+- 등록 코드 레코드를 만들지 않으므로 관리자 코드 목록에는 나오지 않는다. 코드 없이 만든 깃발은 `ownerId`가 있으면서
+  `flag_bearer_codes`에 그 깃발·원래 기수(`flagId`, `usedBy`=`ownerId`)의 코드가 없는 깃발로 구분할 수 있어 새 컬럼과
+  마이그레이션은 두지 않았다. 공동 기수 초대 코드는 원래 기수가 쓰지 않으므로 구분에 영향을 주지 않는다.
 
 ### 상태 변경의 오래됨 판단
 
