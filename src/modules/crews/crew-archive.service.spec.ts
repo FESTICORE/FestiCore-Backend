@@ -10,7 +10,7 @@ import { CrewArchiveService } from './crew-archive.service';
 import { LiveActivityService } from '../notification/live-activity.service';
 
 describe('CrewArchiveService', () => {
-  it('archives after the festival day ends plus 24 hours and removes live location after 30 days', async () => {
+  it('마지막 공연일 자정(KST)에 보관하고 30일 뒤 실시간 위치를 지운다', async () => {
     const end = new Date('2026-10-01T12:00:00.000Z');
     const crew = {
       id: 'flg_crew',
@@ -55,7 +55,10 @@ describe('CrewArchiveService', () => {
       idempotency as unknown as Repository<CrewStatusIdempotency>,
       liveActivity as unknown as LiveActivityService,
     );
-    const archiveAt = new Date(end.getTime() + 24 * 60 * 60_000);
+    // 종료 2026-10-01 21:00 KST → 보관 2026-10-02 00:00 KST
+    const archiveAt = new Date('2026-10-01T15:00:00.000Z');
+    await service.run(new Date(archiveAt.getTime() - 1));
+    expect(crews.update).not.toHaveBeenCalled();
     await service.run(archiveAt);
     expect(crews.update).toHaveBeenCalledWith(
       expect.objectContaining({ id: crew.id }),
@@ -74,6 +77,6 @@ describe('CrewArchiveService', () => {
       { zoneId: null, state: null, statusUpdatedAt: null },
     );
     expect(gathers.delete).toHaveBeenCalledWith({ crewId: crew.id });
-    expect(idempotency.delete).toHaveBeenCalledTimes(2);
+    expect(idempotency.delete).toHaveBeenCalledTimes(3);
   });
 });

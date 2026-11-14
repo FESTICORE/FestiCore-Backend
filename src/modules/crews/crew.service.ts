@@ -23,6 +23,7 @@ import {
   CrewState,
   CrewStatusIdempotency,
 } from './crew.entity';
+import { crewArchiveTime } from './crew-archive-time';
 
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const INVITE_MS = 48 * 60 * 60_000;
@@ -96,13 +97,7 @@ export class CrewService {
   }
 
   private archiveTime(festival: AdminFestival): number {
-    const days = list(festival.published?.days);
-    const ends = days
-      .map((day) =>
-        Date.parse(typeof day.endsAt === 'string' ? day.endsAt : ''),
-      )
-      .filter(Number.isFinite);
-    return ends.length ? Math.max(...ends) + 24 * 60 * 60_000 : Infinity;
+    return crewArchiveTime(festival.published?.days);
   }
 
   private async active(crew: Crew): Promise<void> {

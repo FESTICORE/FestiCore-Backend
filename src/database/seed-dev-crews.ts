@@ -2,6 +2,7 @@ import type { DataSource, EntityManager } from 'typeorm';
 import { In } from 'typeorm';
 import { AppDataSource } from './data-source';
 import { AdminFestival } from '../modules/admin/festival/festival.entity';
+import { crewArchiveTime } from '../modules/crews/crew-archive-time';
 import { User } from '../modules/auth/entity/user.entity';
 import {
   Crew,
@@ -86,19 +87,9 @@ function zoneIds(value: unknown): string[] {
     : [];
 }
 
-/** 마지막 공연일 다음 날까지인 축제만 크루를 쓸 수 있다(CrewService.archiveTime과 같은 기준). */
+/** 크루 보관 시각(마지막 공연일 자정, CrewService.archiveTime과 같은 기준) 전인 축제만 크루를 쓸 수 있다. */
 function isOpen(festival: AdminFestival, now: Date): boolean {
-  const days: unknown = festival.published?.days;
-  const ends = (Array.isArray(days) ? days : [])
-    .map((day: unknown) =>
-      Date.parse(
-        typeof (day as { endsAt?: unknown })?.endsAt === 'string'
-          ? (day as { endsAt: string }).endsAt
-          : '',
-      ),
-    )
-    .filter(Number.isFinite);
-  return !ends.length || now.getTime() < Math.max(...ends) + 24 * 60 * 60_000;
+  return now.getTime() < crewArchiveTime(festival.published?.days);
 }
 
 async function targetFestival(
