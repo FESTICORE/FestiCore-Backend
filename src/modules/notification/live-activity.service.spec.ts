@@ -363,8 +363,9 @@ describe('LiveActivityService durable queue', () => {
       expect(secondState[2]).toMatchObject({
         phase: 'ongoing',
       });
+      // 다음 행사일 자정(KST)에 다시 그린다.
       expect(query.mock.calls.at(-1)?.[1]?.[5]).toEqual(
-        new Date('2026-11-21T15:00:00Z'),
+        new Date('2026-11-20T15:00:00Z'),
       );
     } finally {
       jest.useRealTimers();
@@ -565,6 +566,56 @@ describe('LiveActivityService durable queue', () => {
         new Date('2026-11-20T01:30:00Z'),
       );
       expect(apns.sendLiveActivityUpdate).toHaveBeenCalledTimes(2);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('refreshes at the published opening and the next festival midnight', async () => {
+    const days = [
+      {
+        date: '2026-11-20',
+        startsAt: '2026-11-20T15:00:00+09:00',
+        endsAt: '2026-11-20T23:00:00+09:00',
+      },
+      {
+        date: '2026-11-21',
+        startsAt: '2026-11-21T15:00:00+09:00',
+        endsAt: '2026-11-21T23:00:00+09:00',
+      },
+    ];
+    const boundaryAt = async (now: string) => {
+      jest.setSystemTime(new Date(now));
+      query.mockReset();
+      query
+        .mockResolvedValueOnce([
+          {
+            userId: null,
+            liveActivityFestivalId: 'fst_one',
+            liveActivityId: 'activity-one',
+            liveActivityPushToken: 'a'.repeat(64),
+            apnsEnvironment: 'sandbox',
+          },
+        ])
+        .mockResolvedValueOnce([{ revision: job.revision }])
+        .mockResolvedValueOnce([
+          { published: { flagsEnabled: false, days, sets: [] } },
+        ])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ canSend: true }]);
+      await service.deliver(job);
+      return query.mock.calls.at(-1)?.[1]?.[5] as Date;
+    };
+    jest.useFakeTimers();
+    try {
+      // 개장 전 정오(KST)에는 개장 시각에 다시 그린다.
+      expect(await boundaryAt('2026-11-20T03:00:00Z')).toEqual(
+        new Date('2026-11-20T06:00:00Z'),
+      );
+      // 그날 공연이 끝난 23:30(KST)에는 다음 행사일 자정에 다시 그린다.
+      expect(await boundaryAt('2026-11-20T14:30:00Z')).toEqual(
+        new Date('2026-11-20T15:00:00Z'),
+      );
     } finally {
       jest.useRealTimers();
     }

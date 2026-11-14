@@ -123,6 +123,13 @@ function nextBoundary(
       .map((value) => Date.parse(value)),
   ];
   for (const day of days) {
+    // 앱이 행사일이 바뀔 때와 개장·종료 시각에 '개장 전'·'오늘 끝' 상태를 다시 그린다.
+    if (typeof day.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(day.date)) {
+      future.push(Date.parse(`${day.date}T00:00:00+09:00`));
+    }
+    for (const value of [day.startsAt, day.endsAt]) {
+      if (typeof value === 'string') future.push(Date.parse(value));
+    }
     if (typeof day.startsAt !== 'string' || typeof day.endsAt !== 'string')
       continue;
     const start = Date.parse(day.startsAt);
