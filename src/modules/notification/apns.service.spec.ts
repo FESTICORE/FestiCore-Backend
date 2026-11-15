@@ -174,7 +174,7 @@ describe('ApnsService', () => {
       unknown
     >;
     expect(payload).toMatchObject({
-      aps: { sound: 'default' },
+      aps: { sound: 'default', 'mutable-content': 1 },
       type: 'crew.gather',
       route: '/crews/crew_123',
       crewId: 'crew_123',
@@ -197,7 +197,10 @@ describe('ApnsService', () => {
       unknown
     >;
     expect(payload).toMatchObject({
-      aps: { alert: { title: '크루 해산', body: '크루가 해산됐어요' } },
+      aps: {
+        alert: { title: '크루 해산', body: '크루가 해산됐어요' },
+        'mutable-content': 1,
+      },
       type: 'crew.status',
       route: '/crews',
       crewId: 'crew_123',
@@ -598,6 +601,8 @@ describe('ApnsService', () => {
       };
       expect(payload).toMatchObject({ type, route: '/' });
       expect(payload.aps['content-available'] === 1).toBe(background);
+      // 보이는 테스트 알림만 Notification Service Extension을 거친다.
+      expect(payload.aps['mutable-content'] === 1).toBe(!background);
       if (background) expect(payload.aps.alert).toBeUndefined();
     },
   );
