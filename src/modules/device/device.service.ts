@@ -551,7 +551,10 @@ export class DeviceService {
     throw new ForbiddenException('기기 인증이 필요합니다.');
   }
 
-  async ownedDevice(id: string, principal: DevicePrincipal): Promise<Device> {
+  private async ownedDevice(
+    id: string,
+    principal: DevicePrincipal,
+  ): Promise<Device> {
     this.requireId(id);
     const device = await this.devices.findOne({ where: { id } });
     if (!device) throw new NotFoundException('등록되지 않은 기기입니다.');
@@ -567,7 +570,7 @@ export class DeviceService {
     return device;
   }
 
-  async publishedFestival(id: string) {
+  private async publishedFestival(id: string) {
     if (!/^fst_[0-9a-z]+$/.test(id))
       throw new BadRequestException('festivalId 형식이 올바르지 않습니다.');
     const festival = await this.festivals.findOne({ where: { id } });

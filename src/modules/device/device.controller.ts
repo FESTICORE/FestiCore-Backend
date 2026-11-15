@@ -4,7 +4,6 @@ import {
   Delete,
   Get,
   HttpCode,
-  Post,
   Put,
   Req,
   SetMetadata,
@@ -27,13 +26,11 @@ import {
   type DeviceRequest,
 } from './device-auth.guard';
 import {
-  DeviceTestPushDto,
   LiveActivityDto,
   NotificationSettingsDto,
   RegisterDeviceDto,
 } from './device.dto';
 import { DeviceService } from './device.service';
-import { DeviceTestPushService } from './device-test-push.service';
 
 const notificationSettingsSchema = {
   type: 'object',
@@ -65,10 +62,7 @@ const notificationSettingsSchema = {
   description: 'Keychain에 보관한 UUID v4 기기 ID. 기기 API에서만 사용합니다.',
 })
 export class DeviceController {
-  constructor(
-    private readonly service: DeviceService,
-    private readonly testPush: DeviceTestPushService,
-  ) {}
+  constructor(private readonly service: DeviceService) {}
 
   @Put()
   @SetMetadata(ALLOW_ANONYMOUS_DEVICE_REGISTRATION, true)
@@ -278,51 +272,6 @@ export class DeviceController {
     await this.service.stopLiveActivity(
       this.deviceId(request),
       (request as DeviceRequest).devicePrincipal,
-    );
-  }
-
-  @Post('test-push')
-  @HttpCode(202)
-  @ApiOperation({
-    summary: '개발 전용 테스트 푸시 예약',
-    description:
-      'DEVICE_TEST_PUSH_ENABLED=true인 개발 서버에서만 열립니다. 꺼져 있으면 404입니다. delaySeconds 뒤 이 기기에 공연 알림 형태의 테스트 알림과 Live Activity 원격 시작을 보냅니다. 토큰이 없는 쪽은 보내지 않으며 기기별 1분에 한 번만 요청할 수 있습니다.',
-  })
-  @ApiBody({ type: DeviceTestPushDto })
-  @ApiResponse({
-    status: 202,
-    description: '예약됨. 토큰 값은 포함하지 않습니다.',
-    schema: {
-      type: 'object',
-      properties: {
-        code: { type: 'string', example: 'SUCCESS' },
-        data: {
-          type: 'object',
-          properties: {
-            deviceId: { type: 'string', format: 'uuid' },
-            festivalId: { type: 'string', example: 'fst_example' },
-            scheduledAt: { type: 'string', format: 'date-time' },
-            alert: { type: 'boolean', description: 'APNs 기기 토큰 등록 여부' },
-            liveActivity: {
-              type: 'boolean',
-              description: 'Live Activity 원격 시작 토큰 등록 여부',
-            },
-          },
-        },
-        message: { type: 'string', example: '성공적으로 처리되었습니다.' },
-      },
-    },
-  })
-  @ApiResponse({ status: 404, description: '개발 전용 기능이 꺼져 있음' })
-  @ApiResponse({ status: 429, description: 'RATE_LIMITED' })
-  async scheduleTestPush(
-    @Body() body: DeviceTestPushDto,
-    @Req() request: DeviceRequest,
-  ) {
-    return this.testPush.schedule(
-      this.deviceId(request),
-      body,
-      request.devicePrincipal,
     );
   }
 
