@@ -61,6 +61,26 @@ export function nolWorldDetailImageUrls(html: string, pageUrl: string): URL[] {
       // Ignore malformed image references from untrusted HTML.
     }
   }
+  // 출연진이 메인 포스터에만 있는 상품이 있어 같은 상품의 포스터 한 장을 더 읽는다.
+  for (const match of normalized.matchAll(
+    /https?:\/\/ticketimage\.interpark\.com\/Play\/image\/large\/[\w./-]+\.(?:gif|jpe?g|png)/gi,
+  )) {
+    try {
+      const poster = checkedUrl(match[0].replace(/^http:/i, 'https:'));
+      if (
+        poster.hostname !== 'ticketimage.interpark.com' ||
+        !new RegExp(
+          `^/Play/image/large/\\d{2}/${productId}_p\\.(?:gif|jpe?g|png)$`,
+          'i',
+        ).test(poster.pathname)
+      )
+        continue;
+      urls.set(poster.toString(), poster);
+      break;
+    } catch {
+      // Ignore malformed image references from untrusted HTML.
+    }
+  }
   return [...urls.values()];
 }
 
@@ -175,7 +195,7 @@ export async function collectNolWorldLineupEvidence(
     }
   }
   const seen = new Set(images.map(String));
-  for (const old of previous?.slice(0, MAX_IMAGES) ?? []) {
+  for (const old of previous?.slice(0, MAX_IMAGES + 1) ?? []) {
     if (
       old.sourceUrl !== pageUrl ||
       seen.has(old.imageUrl) ||
