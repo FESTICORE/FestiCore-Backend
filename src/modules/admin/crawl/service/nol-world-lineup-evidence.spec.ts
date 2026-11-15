@@ -50,6 +50,27 @@ describe('NOL World private lineup evidence', () => {
     expect(nolWorldDetailImageUrls(html, page).map(String)).toEqual([image]);
   });
 
+  it('adds one main poster of the same product after the detail images', () => {
+    const poster =
+      'https://ticketimage.interpark.com/Play/image/large/26/26013510_p.gif';
+    const html = `<meta property="og:image" content="${poster}"/>
+      <meta property="twitter:image" content="${poster}"/>
+      <img src="https://ticketimage.interpark.com/Play/image/large/26/26013511_p.gif">
+      <img src="https://ticketimage.interpark.com/Play/image/large/26/26013510_s.gif">
+      <img src="https://evil.example/Play/image/large/26/26013510_p.gif">
+      <img src="${image}">`;
+    expect(nolWorldDetailImageUrls(html, page).map(String)).toEqual([
+      image,
+      poster,
+    ]);
+    expect(
+      nolWorldDetailImageUrls(
+        `<img src="https://ticketimage.interpark.com/Play/image/large/26/26013511_p.gif">`,
+        page,
+      ),
+    ).toEqual([]);
+  });
+
   it('keeps raw OCR lines in run evidence, reuses only matching bytes and version', async () => {
     const firstBytes = await sharp({
       create: { width: 2, height: 2, channels: 3, background: '#fff' },
