@@ -5,6 +5,7 @@ import {
   verifiedVenueLocation,
 } from '../../../common/festival-location';
 import { isIsoInstant as iso } from '../../../common/iso-instant';
+import { SET_NOTE_MAX_LENGTH, setNote } from '../../../common/set-note';
 import type { FestivalDocument } from './festival.entity';
 
 const keys = new Set([
@@ -380,6 +381,14 @@ export function validateDraft(
         ))
     )
       errors.push(`sets[${i}]: 보관된 출연진 이미지 경로만 허용`);
+    if (
+      set.note !== undefined &&
+      set.note !== null &&
+      setNote(set.note) === null
+    )
+      errors.push(
+        `sets[${i}]: 한 줄 메모는 줄바꿈 없는 1~${SET_NOTE_MAX_LENGTH}자`,
+      );
     if (
       Array.isArray(days) &&
       !days.some(

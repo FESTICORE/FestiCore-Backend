@@ -237,6 +237,24 @@ describe('festival draft validation', () => {
     ).toContain('sets[0]: 보관된 출연진 이미지 경로만 허용');
   });
 
+  it('accepts a one-line set note and rejects multi-line or long notes', () => {
+    const set = {
+      stageId: 'stg_12345678',
+      artist: 'A',
+      startsAt: '2026-11-20T13:00:00+09:00',
+      endsAt: '2026-11-20T14:00:00+09:00',
+    };
+    const withNote = (note: unknown) =>
+      validateDraft({ ...draft, sets: [{ ...set, note }] });
+    expect(withNote('앵콜 없이 정시에 끝나요.')).toEqual([]);
+    expect(withNote(null)).toEqual([]);
+    const error = 'sets[0]: 한 줄 메모는 줄바꿈 없는 1~80자';
+    expect(withNote('   ')).toContain(error);
+    expect(withNote('두 줄\n메모')).toContain(error);
+    expect(withNote('가'.repeat(81))).toContain(error);
+    expect(withNote(3)).toContain(error);
+  });
+
   it('rejects overlapping sets on the same stage', () => {
     const errors = validateDraft(
       {

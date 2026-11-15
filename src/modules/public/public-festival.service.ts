@@ -12,6 +12,7 @@ import {
 import { DataSource, Repository } from 'typeorm';
 import { AdminFestival } from '../admin/festival/festival.entity';
 import { festivalSetId } from '../admin/festival/festival-set-id';
+import { setNote } from '../../common/set-note';
 import { CrawlTimetableSet } from '../admin/crawl/entity/crawl-timetable-revision.entity';
 import { PUBLIC_CRAWL_IMAGE_SQL } from './crawl-image-policy';
 import { projectSearchArtists } from './public-artist-search';
@@ -369,6 +370,7 @@ function projectPack(pack: Document): Document {
   ]).map((set) => ({
     ...set,
     id: festivalSetId(set),
+    note: setNote(set.note),
     imageUrl: storedArtistImageUrl(set.imageUrl),
   }));
   const artists = new Map<string, { name: string; imageUrl: string | null }>();
