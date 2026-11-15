@@ -8,6 +8,7 @@ import { createHash } from 'crypto';
 import {
   canonicalFestivalId,
   FESTIVAL_ALIASES,
+  isHiddenFestival,
 } from '../../../scripts/festival-aliases.cjs';
 import { DataSource, Repository } from 'typeorm';
 import { AdminFestival } from '../admin/festival/festival.entity';
@@ -1383,7 +1384,7 @@ export class PublicFestivalService {
   }
 
   async discovered(id: string): Promise<DiscoverySummary | null> {
-    if (canonicalFestivalId(id) !== id) return null;
+    if (canonicalFestivalId(id) !== id || isHiddenFestival(id)) return null;
     const entry = (await this.discoveryCatalog()).find(
       (item) => item.id === id,
     );
@@ -1763,7 +1764,7 @@ export class PublicFestivalService {
 
   async detail(id: string): Promise<Document> {
     id = canonicalFestivalId(id);
-    if (!/^fst_[0-9a-z]+$/.test(id))
+    if (!/^fst_[0-9a-z]+$/.test(id) || isHiddenFestival(id))
       throw new NotFoundException({
         code: 'FESTIVAL_NOT_FOUND',
         message: '축제를 찾을 수 없습니다.',
@@ -2196,6 +2197,7 @@ export class PublicFestivalService {
     }
     const discovered = (await this.discoveryCatalog()).filter((entry) => {
       if (canonicalFestivalId(entry.id) !== entry.id) return false;
+      if (isHiddenFestival(entry.id)) return false;
       if (entry.lastDate < floor) return false;
       if (!cursor) return true;
       return (
@@ -2208,7 +2210,10 @@ export class PublicFestivalService {
     });
     await this.attachStoredImages(discovered);
     const ordered = [
-      ...summaries.filter((summary) => !(summary.id in FESTIVAL_ALIASES)),
+      ...summaries.filter(
+        (summary) =>
+          !(summary.id in FESTIVAL_ALIASES) && !isHiddenFestival(summary.id),
+      ),
       ...discovered,
     ].sort((a, b) =>
       compareListSortKeys(listSortKey(a, sortToday), listSortKey(b, sortToday)),
