@@ -294,6 +294,15 @@ describe('FestivalStartService', () => {
         scheduledAt: '2026-11-20T04:00:00.000Z',
       },
     ]);
+    // 같은 공연의 알림 푸시는 Live Activity와 따로 10분 전에 예약한다.
+    expect(query.mock.calls[3][0]).toContain("'set-reminder:'");
+    expect(JSON.parse(query.mock.calls[3][1]?.[0] as string)).toEqual([
+      {
+        festivalId,
+        setId: 'set_a1b2c3d4',
+        scheduledAt: '2026-11-20T05:50:00.000Z',
+      },
+    ]);
   });
 
   it('uses one device-and-festival job for multiple saved performances, ending at the earliest start', async () => {
@@ -1062,13 +1071,13 @@ describe('FestivalStartService', () => {
     ]);
   });
 
-  describe('저장한 공연 2시간 전 알림', () => {
+  describe('저장한 공연 10분 전 알림', () => {
     const userId = '55555555-5555-4555-8555-555555555555';
     const setId = 'set_a1b2c3d4';
     const reminderJob = {
       ...job,
       eventKey: `set-reminder:${festivalId}:${setId}`,
-      scheduledAt: new Date('2026-11-20T04:00:00Z'),
+      scheduledAt: new Date('2026-11-20T05:50:00Z'),
     };
     const reminderTarget = {
       ownerUserId: userId,
@@ -1078,9 +1087,6 @@ describe('FestivalStartService', () => {
       hasActiveSession: true,
       name: '공개 축제',
       savedSetIds: [setId],
-      liveActivityStatus: null,
-      liveActivityErrorCode: null,
-      liveActivityScheduledAt: null,
       published: {
         stages: [{ id: 'main', name: '메인 스테이지', order: 1 }],
         sets: [
@@ -1093,7 +1099,7 @@ describe('FestivalStartService', () => {
         ],
       },
     };
-    const sendAt = new Date('2026-11-20T04:00:30Z');
+    const sendAt = new Date('2026-11-20T05:50:30Z');
     const futurePublished = {
       sets: [
         {
@@ -1105,7 +1111,7 @@ describe('FestivalStartService', () => {
       ],
     };
 
-    it('저장한 미래 공연마다 알림을 켠 로그인 기기에 2시간 전 작업을 예약한다', async () => {
+    it('저장한 미래 공연마다 알림을 켠 로그인 기기에 10분 전 작업을 예약한다', async () => {
       const { service, query } = setup();
       query.mockResolvedValueOnce([
         {
@@ -1147,16 +1153,15 @@ describe('FestivalStartService', () => {
       expect(sql).toContain('us."setIds" ? p."setId"');
       expect(sql).toContain('FROM "refresh_tokens" rt');
       expect(sql).toContain('ON CONFLICT ("deviceId", "eventKey")');
-      expect(sql).toContain(
-        `"lastErrorCode" IS DISTINCT FROM 'LIVE_ACTIVITY_ALERTED'`,
-      );
+      // 예전에 push-to-start와 합쳐져 취소된 작업도 10분 전 알림으로 다시 살린다.
+      expect(sql).not.toContain('LIVE_ACTIVITY_ALERTED');
       expect(sql).not.toContain('liveActivityPushToStartToken');
       expect(JSON.parse(params[0] as string)).toEqual([
-        { festivalId, setId, scheduledAt: '2026-11-20T04:00:00.000Z' },
+        { festivalId, setId, scheduledAt: '2026-11-20T05:50:00.000Z' },
         {
           festivalId,
           setId: 'set_b1b2c3d4',
-          scheduledAt: '2026-11-20T07:00:00.000Z',
+          scheduledAt: '2026-11-20T08:50:00.000Z',
         },
       ]);
       expect(params[1]).toBeNull();
@@ -1187,7 +1192,7 @@ describe('FestivalStartService', () => {
       const schedule = query.mock.calls[3];
       expect(schedule[0]).toContain("'set-reminder:'");
       expect(JSON.parse(schedule[1]?.[0] as string)).toEqual([
-        { festivalId, setId, scheduledAt: '2099-11-20T04:00:00.000Z' },
+        { festivalId, setId, scheduledAt: '2099-11-20T05:50:00.000Z' },
       ]);
       expect(schedule[1]?.[1]).toBe(userId);
     });
@@ -1216,12 +1221,10 @@ describe('FestivalStartService', () => {
 
       await service.deliver(reminderJob, sendAt);
 
-      expect(query.mock.calls[0][1]).toEqual([
-        reminderJob.id,
-        leaseUntil,
-        `live-activity-performance:${festivalId}`,
-      ]);
+      expect(query.mock.calls[0][1]).toEqual([reminderJob.id, leaseUntil]);
       expect(query.mock.calls[0][0]).not.toContain('device_subscriptions');
+      // Live Activity 시작 작업의 상태와 관계없이 보낸다.
+      expect(query.mock.calls[0][0]).not.toContain('live-activity-performance');
       expect(sendSetReminderNotification).toHaveBeenCalledWith(
         'token',
         'production',
@@ -1229,7 +1232,7 @@ describe('FestivalStartService', () => {
           festivalId,
           setId,
           title: '공개 축제',
-          body: '밴드 공연이 2시간 후 메인 스테이지 무대에서 시작돼요.',
+          body: '밴드 공연이 10분 후 메인 스테이지 무대에서 시작돼요.',
           eventKey: reminderJob.eventKey,
           deeplink: `festicore://festival/${festivalId}/set/${setId}`,
           expiresAt: new Date('2026-11-20T06:00:00Z'),
@@ -1243,7 +1246,7 @@ describe('FestivalStartService', () => {
         'festival.set_reminder',
         festivalId,
         '공개 축제',
-        '밴드 공연이 2시간 후 메인 스테이지 무대에서 시작돼요.',
+        '밴드 공연이 10분 후 메인 스테이지 무대에서 시작돼요.',
         `/festivals/${festivalId}/live`,
         JSON.stringify({ setId }),
         reminderJob.eventKey,
@@ -1257,8 +1260,8 @@ describe('FestivalStartService', () => {
     });
 
     it.each([
-      ['메인 무대', '밴드 공연이 2시간 후 메인 무대에서 시작돼요.'],
-      [undefined, '밴드 공연이 2시간 후 시작돼요.'],
+      ['메인 무대', '밴드 공연이 10분 후 메인 무대에서 시작돼요.'],
+      [undefined, '밴드 공연이 10분 후 시작돼요.'],
     ])('무대 이름 %s를 자연스럽게 붙인다', async (name, body) => {
       const { service, query, sendSetReminderNotification } = setup();
       query
@@ -1310,7 +1313,7 @@ describe('FestivalStartService', () => {
       expect(query.mock.calls[1][1]?.[3]).toBe('TARGET_UNAVAILABLE');
     });
 
-    it('공연 시각이 바뀌었으면 보내지 않고 새 2시간 전으로 다시 예약한다', async () => {
+    it('공연 시각이 바뀌었으면 보내지 않고 새 10분 전으로 다시 예약한다', async () => {
       const { service, query, sendSetReminderNotification } = setup();
       query
         .mockResolvedValueOnce([
@@ -1334,128 +1337,23 @@ describe('FestivalStartService', () => {
       expect(query.mock.calls[1][1]).toEqual([
         reminderJob.id,
         leaseUntil,
-        new Date('2026-11-20T05:00:00Z'),
+        new Date('2026-11-20T06:50:00Z'),
       ]);
     });
 
-    it('같은 공연 push-to-start가 이미 배너를 띄웠으면 알림 푸시를 건너뛰고 알림함에만 남긴다', async () => {
+    it('2시간 전 기준으로 남은 예전 작업은 보내지 않고 10분 전으로 다시 예약한다', async () => {
       const { service, query, sendSetReminderNotification } = setup();
-      query
-        .mockResolvedValueOnce([
-          {
-            ...reminderTarget,
-            liveActivityStatus: 'sent',
-            liveActivityScheduledAt: reminderJob.scheduledAt,
-          },
-        ])
-        .mockResolvedValue([]);
-      await service.deliver(reminderJob, sendAt);
-      expect(sendSetReminderNotification).not.toHaveBeenCalled();
-      expect(query.mock.calls[1][0]).toContain(
-        'INSERT INTO "user_notifications"',
+      query.mockResolvedValueOnce([reminderTarget]).mockResolvedValue([]);
+      await service.deliver(
+        { ...reminderJob, scheduledAt: new Date('2026-11-20T04:00:00Z') },
+        new Date('2026-11-20T04:00:30Z'),
       );
-      expect(query.mock.calls[2][1]).toEqual([
+      expect(sendSetReminderNotification).not.toHaveBeenCalled();
+      expect(query.mock.calls[1][1]).toEqual([
         reminderJob.id,
         leaseUntil,
-        'cancelled',
-        'LIVE_ACTIVITY_ALERTED',
+        new Date('2026-11-20T05:50:00Z'),
       ]);
-    });
-
-    it('같은 시각 push-to-start 결과가 나기 전이면 1분 뒤 다시 확인한다', async () => {
-      const { service, query, sendSetReminderNotification } = setup();
-      query
-        .mockResolvedValueOnce([
-          {
-            ...reminderTarget,
-            liveActivityStatus: 'failed',
-            liveActivityErrorCode: 'OUTCOME_UNKNOWN',
-            liveActivityScheduledAt: reminderJob.scheduledAt,
-          },
-        ])
-        .mockResolvedValue([]);
-      await service.deliver(reminderJob, sendAt);
-      expect(sendSetReminderNotification).not.toHaveBeenCalled();
-      expect(query).toHaveBeenCalledTimes(2);
-      expect(query.mock.calls[1][0]).toContain("interval '1 minute'");
-      expect(query.mock.calls[1][0]).toContain("'WAITING_LIVE_ACTIVITY'");
-      expect(query.mock.calls[1][0]).not.toContain('"attempts"');
-      expect(query.mock.calls[1][1]).toEqual([reminderJob.id, leaseUntil]);
-    });
-
-    it.each([
-      [
-        '5분을 넘겨도 결과가 없는 push-to-start',
-        {
-          liveActivityStatus: 'pending',
-          liveActivityScheduledAt: new Date('2026-11-20T04:00:00Z'),
-        },
-        new Date('2026-11-20T04:05:00Z'),
-      ],
-      [
-        '앞선 공연에 이미 쓴 push-to-start',
-        {
-          liveActivityStatus: 'sent',
-          liveActivityScheduledAt: new Date('2026-11-20T01:00:00Z'),
-        },
-        sendAt,
-      ],
-      [
-        '취소된 push-to-start',
-        {
-          liveActivityStatus: 'cancelled',
-          liveActivityScheduledAt: new Date('2026-11-20T04:00:00Z'),
-        },
-        sendAt,
-      ],
-    ])('%s는 알림 푸시를 막지 않는다', async (_, change, now) => {
-      const { service, query, sendSetReminderNotification } = setup();
-      query
-        .mockResolvedValueOnce([{ ...reminderTarget, ...change }])
-        .mockResolvedValue([]);
-      sendSetReminderNotification.mockResolvedValueOnce({ accepted: true });
-      await service.deliver(reminderJob, now);
-      expect(sendSetReminderNotification).toHaveBeenCalledTimes(1);
-    });
-
-    it('같은 시각에 저장한 다른 공연은 push-to-start 배너와 별개로 알림을 보낸다', async () => {
-      const { service, query, sendSetReminderNotification } = setup();
-      const otherSetId = 'set_b1b2c3d4';
-      query
-        .mockResolvedValueOnce([
-          {
-            ...reminderTarget,
-            savedSetIds: [setId, otherSetId],
-            liveActivityStatus: 'sent',
-            liveActivityScheduledAt: reminderJob.scheduledAt,
-            published: {
-              ...reminderTarget.published,
-              sets: [
-                ...reminderTarget.published.sets,
-                {
-                  id: otherSetId,
-                  stageId: 'main',
-                  artist: '다른 밴드',
-                  startsAt: '2026-11-20T15:00:00+09:00',
-                },
-              ],
-            },
-          },
-        ])
-        .mockResolvedValue([]);
-      sendSetReminderNotification.mockResolvedValueOnce({ accepted: true });
-      await service.deliver(
-        {
-          ...reminderJob,
-          eventKey: `set-reminder:${festivalId}:${otherSetId}`,
-        },
-        sendAt,
-      );
-      expect(sendSetReminderNotification).toHaveBeenCalledWith(
-        'token',
-        'production',
-        expect.objectContaining({ setId: otherSetId }),
-      );
     });
   });
 });

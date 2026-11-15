@@ -78,9 +78,6 @@ interface SetReminderTarget {
   name: string | null;
   published: Record<string, unknown>;
   savedSetIds: unknown;
-  liveActivityStatus: string | null;
-  liveActivityErrorCode: string | null;
-  liveActivityScheduledAt: Date | null;
 }
 
 interface SetReminderPlan {
@@ -93,9 +90,10 @@ const REMINDER_PREFIX = 'festival-reminder:';
 const LIVE_START_PREFIX = 'live-activity-start:';
 const PERFORMANCE_START_PREFIX = 'live-activity-performance:';
 const SET_REMINDER_PREFIX = 'set-reminder:';
+/** 저장한 공연의 Live Activity 원격 시작은 공연 2시간 전에 보낸다. */
 const PERFORMANCE_LEAD_MS = 2 * 60 * 60_000;
-/** 같은 시각 공연 push-to-start의 결과를 기다리는 최대 시간. 지나면 알림 푸시를 보낸다. */
-const LIVE_ACTIVITY_WAIT_MS = 5 * 60_000;
+/** 저장한 공연 알림 푸시는 명세(`setReminders`)대로 공연 10분 전에 보낸다. */
+const SET_REMINDER_LEAD_MS = 10 * 60_000;
 const EVENT_KEY_MAX_LENGTH = 96;
 /**
  * 기기에 지금 보이는 Live Activity가 없다고 볼 조건.
@@ -151,9 +149,9 @@ function stageName(
 }
 
 function setReminderBody(artist: string, stage: string | null): string {
-  if (!stage) return `${artist} 공연이 2시간 후 시작돼요.`;
+  if (!stage) return `${artist} 공연이 10분 후 시작돼요.`;
   const place = stage.endsWith('무대') ? stage : `${stage} 무대`;
-  return `${artist} 공연이 2시간 후 ${place}에서 시작돼요.`;
+  return `${artist} 공연이 10분 후 ${place}에서 시작돼요.`;
 }
 
 function validDays(value: unknown): Day[] {
@@ -244,6 +242,7 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
       FROM "admin_festivals"
       WHERE "published" IS NOT NULL AND "publishedVersion" > 0`);
     const eligibleSets = new Map<string, Map<string, Date>>();
+    const setReminderPlans: SetReminderPlan[] = [];
     for (const row of rows) {
       const days = validDays(row.days);
       const reminder = reminderAt(days);
@@ -327,77 +326,78 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
         const start = Date.parse(set.startsAt);
         if (!Number.isFinite(start) || start <= now.getTime()) continue;
         const scheduledAt = new Date(start - PERFORMANCE_LEAD_MS);
-        if (scheduledAt.getTime() < now.getTime() - LATE_GRACE_MS) continue;
-        sets.set(set.id, scheduledAt);
+        if (scheduledAt.getTime() >= now.getTime() - LATE_GRACE_MS)
+          sets.set(set.id, scheduledAt);
+        const remindAt = new Date(start - SET_REMINDER_LEAD_MS);
+        if (remindAt.getTime() >= now.getTime() - LATE_GRACE_MS)
+          setReminderPlans.push({
+            festivalId: row.id,
+            setId: set.id,
+            scheduledAt: remindAt,
+          });
       }
       if (sets.size) eligibleSets.set(row.id, sets);
     }
-    if (!eligibleSets.size) return;
-    const schedules = await this.db.query<SavedScheduleRow[]>(
-      `SELECT "userId", "festivalId", "setIds" FROM "user_schedules"
-       WHERE "festivalId" = ANY($1::varchar[])
-         AND jsonb_array_length("setIds") > 0`,
-      [[...eligibleSets.keys()]],
-    );
-    const plans = new Map<
-      string,
-      { userId: string; festivalId: string; setId: string; scheduledAt: Date }
-    >();
-    for (const schedule of schedules) {
-      const festivalSets = eligibleSets.get(schedule.festivalId);
-      if (!festivalSets || !Array.isArray(schedule.setIds)) continue;
-      const starts = schedule.setIds
-        .filter((id): id is string => typeof id === 'string')
-        .map((id) => ({ id, date: festivalSets.get(id) }))
-        .filter(
-          (item): item is { id: string; date: Date } => item.date !== undefined,
-        )
-        .sort((left, right) => left.date.getTime() - right.date.getTime());
-      if (!starts.length) continue;
-      const scheduledAt = starts[0].date;
-      const setId = starts[0].id;
-      const key = `${schedule.userId}:${schedule.festivalId}`;
-      const previous = plans.get(key);
-      if (!previous || scheduledAt < previous.scheduledAt)
-        plans.set(key, {
-          userId: schedule.userId,
-          festivalId: schedule.festivalId,
-          setId,
-          scheduledAt,
-        });
-    }
-    if (plans.size)
-      await this.db.query(
-        `INSERT INTO "notification_deliveries"
-           ("id", "deviceId", "festivalId", "eventKey", "scheduledAt", "nextAttemptAt")
-         SELECT gen_random_uuid(), d."id", p."festivalId",
-           'live-activity-performance:' || p."festivalId", p."scheduledAt", p."scheduledAt"
-         FROM jsonb_to_recordset($1::jsonb) AS p("userId" uuid, "festivalId" varchar, "setId" text, "scheduledAt" timestamptz)
-         JOIN "devices" d ON d."userId" = p."userId"
-         JOIN "user_schedules" us ON us."userId" = p."userId"
-           AND us."festivalId" = p."festivalId" AND us."setIds" ? p."setId"
-         WHERE d."liveActivityPushToStartToken" IS NOT NULL
-           AND d."apnsEnvironment" IS NOT NULL AND ${NO_CURRENT_ACTIVITY}
-         ON CONFLICT ("deviceId", "eventKey") DO UPDATE
-           SET "scheduledAt" = EXCLUDED."scheduledAt",
-               "nextAttemptAt" = EXCLUDED."nextAttemptAt",
-               "status" = 'pending', "leaseUntil" = NULL
-         WHERE "notification_deliveries"."status" = 'cancelled'
-            AND "notification_deliveries"."lastErrorCode" IS DISTINCT FROM 'ACTIVITY_ALREADY_STARTED'
-            OR ("notification_deliveries"."status" = 'pending'
-                AND "notification_deliveries"."scheduledAt" <> EXCLUDED."scheduledAt")`,
-        [JSON.stringify([...plans.values()])],
+    // Live Activity 대상이 없어도 공연 10분 전 알림 예약은 이어서 한다.
+    if (eligibleSets.size) {
+      const schedules = await this.db.query<SavedScheduleRow[]>(
+        `SELECT "userId", "festivalId", "setIds" FROM "user_schedules"
+         WHERE "festivalId" = ANY($1::varchar[])
+           AND jsonb_array_length("setIds") > 0`,
+        [[...eligibleSets.keys()]],
       );
-    await this.scheduleSetReminders(
-      [...eligibleSets].flatMap(([festivalId, sets]) =>
-        [...sets].map(([setId, scheduledAt]) => ({
-          festivalId,
-          setId,
-          scheduledAt,
-        })),
-      ),
-      this.db,
-    );
+      const plans = new Map<
+        string,
+        { userId: string; festivalId: string; setId: string; scheduledAt: Date }
+      >();
+      for (const schedule of schedules) {
+        const festivalSets = eligibleSets.get(schedule.festivalId);
+        if (!festivalSets || !Array.isArray(schedule.setIds)) continue;
+        const starts = schedule.setIds
+          .filter((id): id is string => typeof id === 'string')
+          .map((id) => ({ id, date: festivalSets.get(id) }))
+          .filter(
+            (item): item is { id: string; date: Date } =>
+              item.date !== undefined,
+          )
+          .sort((left, right) => left.date.getTime() - right.date.getTime());
+        if (!starts.length) continue;
+        const scheduledAt = starts[0].date;
+        const setId = starts[0].id;
+        const key = `${schedule.userId}:${schedule.festivalId}`;
+        const previous = plans.get(key);
+        if (!previous || scheduledAt < previous.scheduledAt)
+          plans.set(key, {
+            userId: schedule.userId,
+            festivalId: schedule.festivalId,
+            setId,
+            scheduledAt,
+          });
+      }
+      if (plans.size)
+        await this.db.query(
+          `INSERT INTO "notification_deliveries"
+             ("id", "deviceId", "festivalId", "eventKey", "scheduledAt", "nextAttemptAt")
+           SELECT gen_random_uuid(), d."id", p."festivalId",
+             'live-activity-performance:' || p."festivalId", p."scheduledAt", p."scheduledAt"
+           FROM jsonb_to_recordset($1::jsonb) AS p("userId" uuid, "festivalId" varchar, "setId" text, "scheduledAt" timestamptz)
+           JOIN "devices" d ON d."userId" = p."userId"
+           JOIN "user_schedules" us ON us."userId" = p."userId"
+             AND us."festivalId" = p."festivalId" AND us."setIds" ? p."setId"
+           WHERE d."liveActivityPushToStartToken" IS NOT NULL
+             AND d."apnsEnvironment" IS NOT NULL AND ${NO_CURRENT_ACTIVITY}
+           ON CONFLICT ("deviceId", "eventKey") DO UPDATE
+             SET "scheduledAt" = EXCLUDED."scheduledAt",
+                 "nextAttemptAt" = EXCLUDED."nextAttemptAt",
+                 "status" = 'pending', "leaseUntil" = NULL
+           WHERE "notification_deliveries"."status" = 'cancelled'
+              AND "notification_deliveries"."lastErrorCode" IS DISTINCT FROM 'ACTIVITY_ALREADY_STARTED'
+              OR ("notification_deliveries"."status" = 'pending'
+                  AND "notification_deliveries"."scheduledAt" <> EXCLUDED."scheduledAt")`,
+          [JSON.stringify([...plans.values()])],
+        );
+    }
+    await this.scheduleSetReminders(setReminderPlans, this.db);
   }
 
   async syncUserSchedule(
@@ -472,7 +472,9 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
         .map((set) => ({
           festivalId,
           setId: set.id,
-          scheduledAt: new Date(Date.parse(set.startsAt) - PERFORMANCE_LEAD_MS),
+          scheduledAt: new Date(
+            Date.parse(set.startsAt) - SET_REMINDER_LEAD_MS,
+          ),
         }))
         .filter(
           (plan) => plan.scheduledAt.getTime() >= now.getTime() - LATE_GRACE_MS,
@@ -483,8 +485,7 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * 저장한 공연마다 알림을 켠 로그인 기기에 공연 2시간 전 작업을 1건씩 둔다.
-   * push-to-start 배너와 겹쳐 건너뛴 작업은 다시 살리지 않는다.
+   * 저장한 공연마다 알림을 켠 로그인 기기에 공연 10분 전 작업을 1건씩 둔다.
    */
   private async scheduleSetReminders(
     plans: SetReminderPlan[],
@@ -520,7 +521,6 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
              "nextAttemptAt" = EXCLUDED."nextAttemptAt",
              "status" = 'pending', "leaseUntil" = NULL
        WHERE "notification_deliveries"."status" = 'cancelled'
-          AND "notification_deliveries"."lastErrorCode" IS DISTINCT FROM 'LIVE_ACTIVITY_ALERTED'
           OR ("notification_deliveries"."status" = 'pending'
               AND "notification_deliveries"."scheduledAt" <> EXCLUDED."scheduledAt")`,
       [JSON.stringify(rows), userId ?? null],
@@ -784,7 +784,6 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * 발송 직전에 저장·설정·세션과 공연 시각을 다시 확인한다.
-   * 같은 기기에서 같은 공연 push-to-start가 이미 배너를 띄웠으면 알림 푸시는 보내지 않는다.
    */
   private async deliverSetReminder(job: Delivery, now: Date): Promise<void> {
     const setId = job.eventKey.slice(
@@ -798,20 +797,15 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
            SELECT 1 FROM "refresh_tokens" rt
            WHERE rt."userId" = d."userId" AND rt."revokedAt" IS NULL
              AND rt."expiresAt" > now()
-         ) AS "hasActiveSession",
-         la."status" AS "liveActivityStatus",
-         la."lastErrorCode" AS "liveActivityErrorCode",
-         la."scheduledAt" AS "liveActivityScheduledAt"
+         ) AS "hasActiveSession"
        FROM "notification_deliveries" n
        JOIN "devices" d ON d."id" = n."deviceId"
        JOIN "admin_festivals" f ON f."id" = n."festivalId"
          AND f."published" IS NOT NULL AND f."publishedVersion" > 0
        LEFT JOIN "user_schedules" us ON us."userId" = d."userId"
          AND us."festivalId" = n."festivalId"
-       LEFT JOIN "notification_deliveries" la ON la."deviceId" = n."deviceId"
-         AND la."eventKey" = $3
        WHERE n."id" = $1 AND n."status" = 'leased' AND n."leaseUntil" = $2`,
-      [job.id, job.leaseUntil, `${PERFORMANCE_START_PREFIX}${job.festivalId}`],
+      [job.id, job.leaseUntil],
     );
     const target = rows[0];
     const saved = Array.isArray(target?.savedSetIds) ? target.savedSetIds : [];
@@ -820,7 +814,7 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
       ? sets.find((item) => item.id === setId)
       : undefined;
     const startsAt = set ? Date.parse(set.startsAt) : NaN;
-    const scheduledAt = new Date(startsAt - PERFORMANCE_LEAD_MS);
+    const scheduledAt = new Date(startsAt - SET_REMINDER_LEAD_MS);
     if (
       !target?.apnsToken ||
       !target.apnsEnvironment ||
@@ -858,41 +852,6 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
       route: `/festivals/${job.festivalId}/live`,
       subject: { setId },
     };
-    // push-to-start는 저장한 공연 중 가장 이른 하나를 골라 같은 시각에 배너를 띄운다.
-    const liveActivitySetId = sets.find(
-      (item) =>
-        saved.includes(item.id) && Date.parse(item.startsAt) === startsAt,
-    )?.id;
-    if (
-      liveActivitySetId === setId &&
-      target.liveActivityScheduledAt &&
-      new Date(target.liveActivityScheduledAt).getTime() ===
-        scheduledAt.getTime()
-    ) {
-      if (target.liveActivityStatus === 'sent') {
-        await this.recordInbox(job, target, inbox);
-        await this.finish(job, 'cancelled', 'LIVE_ACTIVITY_ALERTED');
-        return;
-      }
-      const unresolved =
-        target.liveActivityStatus === 'pending' ||
-        target.liveActivityStatus === 'leased' ||
-        (target.liveActivityStatus === 'failed' &&
-          target.liveActivityErrorCode === 'OUTCOME_UNKNOWN');
-      if (
-        unresolved &&
-        now.getTime() < scheduledAt.getTime() + LIVE_ACTIVITY_WAIT_MS
-      ) {
-        await this.db.query(
-          `UPDATE "notification_deliveries"
-           SET "status" = 'pending', "nextAttemptAt" = now() + interval '1 minute',
-             "leaseUntil" = NULL, "lastErrorCode" = 'WAITING_LIVE_ACTIVITY'
-           WHERE "id" = $1 AND "status" = 'leased' AND "leaseUntil" = $2`,
-          [job.id, job.leaseUntil],
-        );
-        return;
-      }
-    }
     await this.recordInbox(job, target, inbox);
     await this.sendDelivery(job, () =>
       this.apns.sendSetReminderNotification(

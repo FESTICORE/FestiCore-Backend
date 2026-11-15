@@ -10,7 +10,7 @@ jest.mock('./apns.service', () => ({ ApnsService: class {} }));
 const url = process.env.LIVE_ACTIVITY_PG_URL;
 const describePostgres = url ? describe : describe.skip;
 
-describePostgres('저장한 공연 2시간 전 알림 (PostgreSQL)', () => {
+describePostgres('저장한 공연 10분 전 알림 (PostgreSQL)', () => {
   const schema = `set_reminder_test_${randomUUID().replaceAll('-', '_')}`;
   const festivalId = 'fst_0123456789abcdef';
   const setId = 'set_a1b2c3d4';
@@ -166,7 +166,7 @@ describePostgres('저장한 공연 2시간 전 알림 (PostgreSQL)', () => {
     }
   });
 
-  it('알림을 켠 로그인 기기에만 저장한 공연 2시간 전 작업을 둔다', async () => {
+  it('알림을 켠 로그인 기기에만 저장한 공연 10분 전 작업을 둔다', async () => {
     await service.schedulePublished();
 
     expect(await jobs()).toEqual([
@@ -174,26 +174,38 @@ describePostgres('저장한 공연 2시간 전 알림 (PostgreSQL)', () => {
         deviceId: device,
         eventKey: `set-reminder:${festivalId}:${setId}`,
         status: 'pending',
-        scheduledAt: new Date(startsAt.getTime() - 2 * 60 * 60_000),
+        scheduledAt: new Date(startsAt.getTime() - 10 * 60_000),
         lastErrorCode: null,
       },
     ]);
   });
 
-  it('배너가 겹쳐 건너뛴 작업은 다시 살리지 않고 다른 이유로 취소된 작업은 다시 예약한다', async () => {
+  it('예전에 push-to-start 배너와 합쳐져 취소된 미래 공연 작업도 10분 전으로 다시 예약한다', async () => {
     await service.schedulePublished();
     await db.query(
       `UPDATE "notification_deliveries" SET "status" = 'cancelled',
+         "scheduledAt" = $1, "nextAttemptAt" = $1,
          "lastErrorCode" = 'LIVE_ACTIVITY_ALERTED'`,
+      [new Date(startsAt.getTime() - 2 * 60 * 60_000)],
     );
     await service.schedulePublished();
-    expect((await jobs())[0].status).toBe('cancelled');
+    expect((await jobs())[0]).toMatchObject({
+      status: 'pending',
+      scheduledAt: new Date(startsAt.getTime() - 10 * 60_000),
+    });
+  });
 
+  it('2시간 전으로 남은 미발송 작업은 다음 주기에 10분 전으로 옮긴다', async () => {
+    await service.schedulePublished();
     await db.query(
-      `UPDATE "notification_deliveries" SET "lastErrorCode" = 'TARGET_UNAVAILABLE'`,
+      `UPDATE "notification_deliveries" SET "scheduledAt" = $1, "nextAttemptAt" = $1`,
+      [new Date(startsAt.getTime() - 2 * 60 * 60_000)],
     );
     await service.schedulePublished();
-    expect((await jobs())[0].status).toBe('pending');
+    expect((await jobs())[0]).toMatchObject({
+      status: 'pending',
+      scheduledAt: new Date(startsAt.getTime() - 10 * 60_000),
+    });
   });
 
   it('일정 저장 때 빠진 공연 작업은 취소하고 새 공연 작업을 그 회원 기기에 둔다', async () => {
@@ -239,8 +251,8 @@ describePostgres('저장한 공연 2시간 전 알림 (PostgreSQL)', () => {
   });
 
   it('선점한 작업을 발송하고 알림함에 한 번 기록한다', async () => {
-    // 이미 2시간 안쪽에 들어온 공연이라 작업이 바로 선점된다.
-    startsAt = new Date(Date.now() + 60 * 60_000);
+    // 이미 10분 안쪽에 들어온 공연이라 작업이 바로 선점된다.
+    startsAt = new Date(Date.now() + 5 * 60_000);
     await publish([{ id: setId, startsAt }]);
     await service.schedulePublished();
     sendSetReminderNotification.mockResolvedValueOnce({
@@ -256,7 +268,7 @@ describePostgres('저장한 공연 2시간 전 알림 (PostgreSQL)', () => {
       'aa',
       'production',
       expect.objectContaining({
-        body: '밴드 공연이 2시간 후 메인 무대에서 시작돼요.',
+        body: '밴드 공연이 10분 후 메인 무대에서 시작돼요.',
         deeplink: `festicore://festival/${festivalId}/set/${setId}`,
       }),
     );
@@ -272,8 +284,8 @@ describePostgres('저장한 공연 2시간 전 알림 (PostgreSQL)', () => {
     ]);
   });
 
-  it('같은 기기 같은 공연 push-to-start가 발송됐으면 알림 푸시를 건너뛴다', async () => {
-    startsAt = new Date(Date.now() + 60 * 60_000);
+  it('같은 기기 같은 공연 push-to-start가 2시간 전에 발송됐어도 10분 전 알림 푸시를 보낸다', async () => {
+    startsAt = new Date(Date.now() + 5 * 60_000);
     await publish([{ id: setId, startsAt }]);
     await service.schedulePublished();
     await db.query(
@@ -288,18 +300,23 @@ describePostgres('저장한 공연 2시간 전 알림 (PostgreSQL)', () => {
       ],
     );
 
+    sendSetReminderNotification.mockResolvedValueOnce({
+      accepted: true,
+      permanent: false,
+    });
+
     const job = await service.claim();
     await service.deliver(job!, new Date());
 
-    expect(sendSetReminderNotification).not.toHaveBeenCalled();
+    expect(sendSetReminderNotification).toHaveBeenCalledTimes(1);
     expect((await jobs())[0]).toMatchObject({
-      status: 'cancelled',
-      lastErrorCode: 'LIVE_ACTIVITY_ALERTED',
+      status: 'sent',
+      lastErrorCode: null,
     });
   });
 
   it('발송 직전에 알림 설정이 꺼졌으면 취소한다', async () => {
-    startsAt = new Date(Date.now() + 60 * 60_000);
+    startsAt = new Date(Date.now() + 5 * 60_000);
     await publish([{ id: setId, startsAt }]);
     await service.schedulePublished();
     await db.query(

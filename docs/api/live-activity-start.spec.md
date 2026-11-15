@@ -4,7 +4,7 @@
 
 공개 버전이 있는 축제의 첫 행사일 `startsAt`에는 축제를 핀하고 `festivalStarts`를 켠 기기별로 한 건을 예약합니다. 이벤트 키는 `live-activity-start:<festivalId>`입니다. 개인 일정에 공연을 저장한 사용자의 기기는 첫 행사일 시작 예약에서 제외합니다.
 
-로그인한 사용자의 기기에 `liveActivityPushToStartToken`과 APNs 환경이 등록되어 있으면, `user_schedules.setIds`에 저장한 공개 공연 중 가장 이른 시작 시각 **2시간 전**에 Live Activity 시작을 예약합니다. 이 예약은 축제 핀과 `festivalStarts` 구독 설정에 의존하지 않습니다. 이벤트 키 `live-activity-performance:<festivalId>`와 `(deviceId, eventKey)` 유니크 제약으로 여러 저장 공연이나 스케줄러 인스턴스가 같은 기기의 시작 작업을 중복 생성하지 못합니다. 이미 `liveActivityId`가 등록된 기기는 시작하지 않습니다. 일정 저장·삭제 시 미발송 작업을 재예약·취소하고, 공개 공연 시각 변경은 주기 스캔과 전송 직전 재검증에서 반영합니다. 성공 또는 결과 불명의 시작 작업은 자동 재발송하지 않습니다.
+로그인한 사용자의 기기에 `liveActivityPushToStartToken`과 APNs 환경이 등록되어 있으면, `user_schedules.setIds`에 저장한 공개 공연 중 가장 이른 시작 시각 **2시간 전**에 Live Activity 시작을 예약합니다. 이 예약은 축제 핀과 `festivalStarts` 구독 설정에 의존하지 않습니다. 이벤트 키 `live-activity-performance:<festivalId>`와 `(deviceId, eventKey)` 유니크 제약으로 여러 저장 공연이나 스케줄러 인스턴스가 같은 기기의 시작 작업을 중복 생성하지 못합니다. 이미 `liveActivityId`가 등록된 기기는 시작하지 않습니다. 일정 저장·삭제 시 미발송 작업을 재예약·취소하고, 공개 공연 시각 변경은 주기 스캔과 전송 직전 재검증에서 반영합니다. 성공 또는 결과 불명의 시작 작업은 자동 재발송하지 않습니다. 원격 시작 알림 문구는 `{아티스트} 공연이 2시간 후 시작돼요.`이며, 저장한 공연마다 보내는 `festival.set_reminder` 알림 푸시는 이와 별개로 공연 **10분 전**에 보냅니다. 두 시각이 달라 원격 시작 결과를 기다리거나 알림 푸시를 건너뛰지 않습니다.
 
 전송 직전에도 공개 상태, 사용자 일정, 기기 시작 토큰, 현재 Activity를 다시 조회합니다. 첫 행사일 시작은 핀·구독 설정도 다시 확인합니다. 공연 시작 페이로드의 `nextMine`에는 현재 저장된 다음 공개 공연의 ID·무대·아티스트·시각을 넣고, 계정 식별자는 넣지 않습니다. iOS가 시작 후 별도 업데이트 토큰을 등록하면 기존 Live Activity 갱신 경로에서 개인화된 상태를 전송합니다. 일반 APNs 기기 토큰과 개별 Activity 업데이트 토큰은 원격 시작에 사용하지 않습니다.
 
