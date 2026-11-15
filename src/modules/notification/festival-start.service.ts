@@ -15,6 +15,7 @@ import {
 import {
   festivalPeriod,
   publishedSets,
+  publishedThumbUrl,
   records,
 } from './live-activity.service';
 
@@ -715,6 +716,8 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
             body,
             eventKey: job.eventKey,
             hasPack,
+            festivalName: target.name!,
+            imageUrl: publishedThumbUrl(target.published),
           },
         ),
       );
@@ -760,6 +763,10 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
           title: `${target.name} 시작`,
           body: '페스티벌이 시작됐어요.',
           eventKey: job.eventKey,
+          type: 'festival.start',
+          festivalId: job.festivalId,
+          festivalName: target.name!,
+          imageUrl: publishedThumbUrl(target.published),
         },
       ),
     );
@@ -869,6 +876,8 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
             setId,
           }),
           expiresAt: new Date(startsAt),
+          festivalName: title,
+          imageUrl: publishedThumbUrl(target.published),
         },
       ),
     );

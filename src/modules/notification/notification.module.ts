@@ -20,6 +20,7 @@ import { UserNotificationService } from './user-notification.service';
     UserNotificationService,
   ],
   exports: [
+    ApnsService,
     SocialNotificationService,
     LiveActivityService,
     FestivalStartService,

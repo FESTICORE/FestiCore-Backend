@@ -646,6 +646,7 @@ describe('FestivalStartService', () => {
         apnsEnvironment: 'sandbox',
         name: '축제',
         days: [{ date: '2026-11-20', startsAt: '2026-11-20T12:00:00+09:00' }],
+        published: { thumbUrl: 'https://cdn.example.com/poster.jpg' },
       },
     ]);
     sendStartNotification.mockResolvedValueOnce({ accepted: true });
@@ -657,6 +658,10 @@ describe('FestivalStartService', () => {
       title: '축제 시작',
       body: '페스티벌이 시작됐어요.',
       eventKey: job.eventKey,
+      type: 'festival.start',
+      festivalId: job.festivalId,
+      festivalName: '축제',
+      imageUrl: 'https://cdn.example.com/poster.jpg',
     });
     expect(query.mock.calls[1][1]).toEqual([job.id, leaseUntil, 'sent', null]);
   });
@@ -1236,6 +1241,7 @@ describe('FestivalStartService', () => {
           eventKey: reminderJob.eventKey,
           deeplink: `festicore://festival/${festivalId}/set/${setId}`,
           expiresAt: new Date('2026-11-20T06:00:00Z'),
+          festivalName: '공개 축제',
         },
       );
       const insert = query.mock.calls.find(([sql]) =>

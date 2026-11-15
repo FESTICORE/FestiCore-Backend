@@ -36,6 +36,12 @@ APNs 토큰은 제공할 때 2~256자 짝수 길이 hex 문자열이다. JSON �
 - 꺼진 종류는 발송 직전에 다시 확인해 보내지 않는다. `flagStatus`·`crewStatus`·`crewGather`는 각각 `flag.status`·`crew.status`·`crew.gather` 소셜 알림에 적용한다. `packUpdates`가 꺼지면 축제별 구독의 `packUpdates`가 켜져 있어도 `pack.updated`를 등록·발송하지 않는다.
 - `setReminders`는 저장한 공연 10분 전 `festival.set_reminder` 알림([notifications.md](./notifications.md#저장한-공연-10분-전-알림))에 적용한다. `homecoming`은 서버 발송 기능이 아직 없어 값만 저장한다.
 
+## 개발 전용 테스트 푸시
+
+- `POST /api/v1/devices/test-push`: 환경변수 `DEVICE_TEST_PUSH_ENABLED`가 문자열 `true`일 때만 열리고, 아니면 404다. 인증·소유권 검사는 다른 기기 API와 같다(다른 소유자 403). 본문 `{"festivalId":"fst_...","delaySeconds":15}`에서 `festivalId`는 공개된 축제여야 하고, `delaySeconds`는 0~120 정수이며 기본 15다. 기기별 60초에 1회이며 초과하면 429 `RATE_LIMITED`다.
+- 202 응답 `data`는 `deviceId`, `festivalId`, `scheduledAt`, APNs 토큰 등록 여부 `alert`, Live Activity 원격 시작 토큰 등록 여부 `liveActivity`다. 토큰 값은 넣지 않는다.
+- 지연 뒤 APNs 토큰이 있으면 `festival.set_reminder` 형태의 테스트 알림(본문 `테스트 공연 알림이에요.`, `deeplink` `festicore://festival/{festivalId}`)을, 원격 시작 토큰이 있으면 공개 스냅샷으로 만든 content-state로 Live Activity 원격 시작(`테스트 Live Activity예요.`)을 보낸다. 축제가 끝났어도 보낸다. 결과는 발송 종류별로 서버 로그에만 남는다. 예약은 메모리에만 있어 서버 재시작 시 사라진다.
+
 ## 기기 조회·삭제
 
 - `GET /api/v1/devices`: 현재 기기의 등록 정보만 반환한다. 푸시 토큰은 응답에 포함하지 않는다.

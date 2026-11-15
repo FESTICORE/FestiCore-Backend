@@ -98,12 +98,58 @@ describe('ApnsService', () => {
       aps: {
         alert: { title: INPUT.title, body: INPUT.body },
         sound: 'default',
+        'mutable-content': 1,
       },
       eventKey: INPUT.eventKey,
     });
     expect(session.destroy).toHaveBeenCalledTimes(1);
     expect(importPKCS8).toHaveBeenCalledWith('line1\nline2', 'ES256');
   });
+
+  it('adds festival start type and https image for the service extension', async () => {
+    const { stream } = mockResponse(200);
+    const service = new ApnsService(config(credentials));
+    await service.sendStartNotification(DEVICE_TOKEN, 'sandbox', {
+      ...INPUT,
+      type: 'festival.start',
+      festivalId: 'fst_12345678',
+      festivalName: '공개 축제',
+      imageUrl: 'https://cdn.example.com/poster.jpg',
+    });
+    const payload = JSON.parse(
+      (stream.end.mock.calls as unknown[][])[0][0] as string,
+    ) as Record<string, unknown>;
+    expect(payload).toEqual({
+      aps: {
+        alert: { title: INPUT.title, body: INPUT.body },
+        sound: 'default',
+        'mutable-content': 1,
+      },
+      type: 'festival.start',
+      festivalId: 'fst_12345678',
+      festivalName: '공개 축제',
+      imageUrl: 'https://cdn.example.com/poster.jpg',
+      eventKey: INPUT.eventKey,
+    });
+  });
+
+  it.each(['/api/v1/festivals/images/a.webp', 'http://example.com/a.jpg'])(
+    'omits a non-https festival image %s',
+    async (imageUrl) => {
+      const { stream } = mockResponse(200);
+      const service = new ApnsService(config(credentials));
+      await service.sendStartNotification(DEVICE_TOKEN, 'sandbox', {
+        ...INPUT,
+        festivalName: '공개 축제',
+        imageUrl,
+      });
+      const payload = JSON.parse(
+        (stream.end.mock.calls as unknown[][])[0][0] as string,
+      ) as Record<string, unknown>;
+      expect(payload.festivalName).toBe('공개 축제');
+      expect(payload).not.toHaveProperty('imageUrl');
+    },
+  );
 
   it('sends gather as an audible alert with route and location', async () => {
     const { session, stream } = mockResponse(200);
@@ -404,6 +450,8 @@ describe('ApnsService', () => {
         body: '준비물 확인했어요?',
         eventKey: 'festival-reminder:fst_12345678',
         hasPack,
+        festivalName: '공개 축제',
+        imageUrl: 'https://cdn.example.com/poster.jpg',
       });
       const headers = (
         session.request.mock.calls as unknown[][]
@@ -418,9 +466,12 @@ describe('ApnsService', () => {
         festivalId: 'fst_12345678',
         route: hasPack ? '/festivals/fst_12345678/checklist' : '/',
         eventKey: 'festival-reminder:fst_12345678',
+        festivalName: '공개 축제',
+        imageUrl: 'https://cdn.example.com/poster.jpg',
         aps: {
           alert: { title: '축제 준비물', body: '준비물 확인했어요?' },
           sound: 'default',
+          'mutable-content': 1,
         },
       });
     },
@@ -442,6 +493,8 @@ describe('ApnsService', () => {
         eventKey,
         deeplink: 'festicore://festival/fst_12345678/set/set_a1b2c3d4',
         expiresAt: new Date('2026-11-20T06:00:00Z'),
+        festivalName: '공개 축제',
+        imageUrl: 'https://cdn.example.com/poster.jpg',
       });
       const headers = (
         session.request.mock.calls as unknown[][]
@@ -469,6 +522,8 @@ describe('ApnsService', () => {
         festivalId: 'fst_12345678',
         setId: 'set_a1b2c3d4',
         deeplink: 'festicore://festival/fst_12345678/set/set_a1b2c3d4',
+        festivalName: '공개 축제',
+        imageUrl: 'https://cdn.example.com/poster.jpg',
         eventKey,
       });
     } finally {
