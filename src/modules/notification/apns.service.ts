@@ -297,6 +297,8 @@ export class ApnsService {
       {
         aps: {
           alert: { title, body },
+          // 보이는 알림은 모두 Notification Service Extension을 거친다.
+          'mutable-content': 1,
           ...(gather
             ? { sound: 'default' }
             : { 'interruption-level': 'passive' }),
@@ -330,6 +332,7 @@ export class ApnsService {
               title: 'FestiCore 테스트 알림',
               body: `${type} 테스트 푸시입니다.`,
             },
+            'mutable-content': 1,
             ...(gather
               ? { sound: 'default' }
               : { 'interruption-level': 'passive' }),
