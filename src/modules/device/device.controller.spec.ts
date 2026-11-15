@@ -9,6 +9,7 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import { DeviceController } from './device.controller';
 import { DeviceService } from './device.service';
+import { DeviceTestPushService } from './device-test-push.service';
 import { NotificationSubscriptionController } from './notification-subscription.controller';
 import { JwtAuthGuard } from '../auth/guard/jwt-auth.guard';
 import { User } from '../auth/entity/user.entity';
@@ -60,11 +61,22 @@ describe('기기 API 경로와 헤더 계약', () => {
     }),
   };
 
+  const testPush = {
+    schedule: jest.fn().mockResolvedValue({
+      deviceId: 'header-device',
+      festivalId: 'fst_test',
+      scheduledAt: '2026-11-20T03:00:15.000Z',
+      alert: true,
+      liveActivity: false,
+    }),
+  };
+
   beforeAll(async () => {
     const module = await Test.createTestingModule({
       controllers: [DeviceController, NotificationSubscriptionController],
       providers: [
         { provide: DeviceService, useValue: service },
+        { provide: DeviceTestPushService, useValue: testPush },
         { provide: APP_GUARD, useClass: JwtAuthGuard },
         DeviceAuthGuard,
         { provide: JwtService, useValue: { verifyAsync } },
@@ -113,6 +125,28 @@ describe('기기 API 경로와 헤더 계약', () => {
       .put('/api/v1/devices/path-device')
       .send(body)
       .expect(404);
+  });
+
+  it('테스트 푸시를 헤더의 기기 ID로 예약하고 202를 반환한다', async () => {
+    const response = await request(app.getHttpServer() as App)
+      .post('/api/v1/devices/test-push')
+      .set('X-Device-Id', 'header-device')
+      .set('Authorization', 'Bearer valid')
+      .send({ festivalId: 'fst_test', delaySeconds: 0 })
+      .expect(202);
+    expect(testPush.schedule).toHaveBeenCalledWith(
+      'header-device',
+      { festivalId: 'fst_test', delaySeconds: 0 },
+      { kind: 'user', userId: 'user-a' },
+    );
+    expect(response.body).toEqual(
+      expect.objectContaining({ alert: true, liveActivity: false }),
+    );
+    await request(app.getHttpServer() as App)
+      .post('/api/v1/devices/test-push')
+      .set('X-Device-Id', 'header-device')
+      .send({ festivalId: 'fst_test' })
+      .expect(401);
   });
 
   it('구독 대상 축제 ID와 헤더의 기기 ID를 분리한다', async () => {

@@ -15,6 +15,11 @@
 - 발송 직전 저장 여부, 알림 설정, 로그인 세션, APNs 토큰, 공개 공연 시각을 다시 확인한다. 공연 시각이 바뀌었으면 보내지 않고 새 10분 전으로 다시 예약한다.
 - 공연 2시간 전 Live Activity 원격 시작([live-activity-start](../docs/api/live-activity-start.spec.md))과 시각이 달라 둘을 합치지 않는다. 원격 시작이 이미 발송됐어도 10분 전 알림은 따로 보낸다.
 
+## Notification Service Extension 보강
+
+- 축제 시작(`festival.start`), D-1 리마인더(`festival.reminder`), 저장한 공연 알림(`festival.set_reminder`), 개발 전용 기기 테스트 알림은 `aps.mutable-content: 1`로 보내 iOS Notification Service Extension을 거친다.
+- 확장이 App Group 없이 payload만으로 보강하도록 최상위에 `festivalName`과, 발행 팩 `thumbUrl`(공개 축제 목록의 `thumbUrl` 출처)이 https URL일 때만 `imageUrl`을 넣는다. 축제 시작 알림은 `type: "festival.start"`와 `festivalId`도 싣는다. payload는 4KB 이하다.
+
 ## 목적
 
 공개된 축제의 각 개최일 `days[].startsAt`에 맞춰 구독 기기에 시작 알림을 보낸다. 수집 단계의 발견 후보나 티켓 판매 시각은 알림 기준으로 사용하지 않는다. 서버 프로세스가 실행 중일 때 예약 작업이 주기적으로 대기 알림을 처리한다.

@@ -107,6 +107,13 @@ export function publishedSets(
   );
 }
 
+/** 공개 축제 목록의 `thumbUrl`과 같은 발행 팩 대표 이미지. https 여부는 APNs 발송부가 거른다. */
+export function publishedThumbUrl(
+  pack: Record<string, unknown> | undefined,
+): string | undefined {
+  return typeof pack?.thumbUrl === 'string' ? pack.thumbUrl : undefined;
+}
+
 function nextBoundary(
   sets: LiveActivitySet[],
   member: LiveActivityMember | null,

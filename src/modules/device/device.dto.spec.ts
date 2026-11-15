@@ -1,5 +1,9 @@
 import { validate } from 'class-validator';
-import { NotificationSettingsDto, RegisterDeviceDto } from './device.dto';
+import {
+  DeviceTestPushDto,
+  NotificationSettingsDto,
+  RegisterDeviceDto,
+} from './device.dto';
 
 describe('RegisterDeviceDto APNs 토큰', () => {
   const make = (apnsToken: string | null) =>
@@ -64,5 +68,23 @@ describe('NotificationSettingsDto', () => {
     ).toHaveLength(0);
     expect(await validate(make({ crewGather: 'false' }))).not.toHaveLength(0);
     expect(await validate(make({ homecoming: 1 }))).not.toHaveLength(0);
+  });
+});
+
+describe('DeviceTestPushDto', () => {
+  const make = (values: Record<string, unknown>) =>
+    Object.assign(new DeviceTestPushDto(), values);
+
+  it('축제 ID 형식과 0~120초 정수 지연만 허용한다', async () => {
+    expect(await validate(make({ festivalId: 'fst_abc1' }))).toHaveLength(0);
+    expect(
+      await validate(make({ festivalId: 'fst_abc1', delaySeconds: 120 })),
+    ).toHaveLength(0);
+    expect(await validate(make({}))).not.toHaveLength(0);
+    expect(await validate(make({ festivalId: 'abc' }))).not.toHaveLength(0);
+    for (const delaySeconds of [-1, 121, 1.5, '15'])
+      expect(
+        await validate(make({ festivalId: 'fst_abc1', delaySeconds })),
+      ).not.toHaveLength(0);
   });
 });

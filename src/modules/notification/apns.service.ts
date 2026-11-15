@@ -19,6 +19,22 @@ export interface ApnsSendResult {
 export type TestPushType =
   'flag.status' | 'crew.status' | 'crew.gather' | 'pack.updated';
 
+/** Notification Service Extension이 App Group 없이 알림을 보강할 축제 정보. */
+export interface FestivalContext {
+  festivalName?: string;
+  /** https URL만 넣는다. */
+  imageUrl?: string;
+}
+
+function festivalContext(input: FestivalContext): FestivalContext {
+  return {
+    ...(input.festivalName ? { festivalName: input.festivalName } : {}),
+    ...(input.imageUrl?.startsWith('https://') && input.imageUrl.length <= 1024
+      ? { imageUrl: input.imageUrl }
+      : {}),
+  };
+}
+
 const REQUEST_TIMEOUT_MS = 8_000;
 const PROVIDER_TOKEN_LIFETIME_MS = 40 * 60_000;
 const PERMANENT_TOKEN_REASONS = new Set([
@@ -47,7 +63,13 @@ export class ApnsService {
   async sendStartNotification(
     token: string,
     environment: 'sandbox' | 'production',
-    input: { title: string; body: string; eventKey: string },
+    input: {
+      title: string;
+      body: string;
+      eventKey: string;
+      type?: 'festival.start';
+      festivalId?: string;
+    } & FestivalContext,
   ): Promise<ApnsSendResult> {
     return this.send(
       token,
@@ -56,7 +78,11 @@ export class ApnsService {
         aps: {
           alert: { title: input.title, body: input.body },
           sound: 'default',
+          'mutable-content': 1,
         },
+        ...(input.type ? { type: input.type } : {}),
+        ...(input.festivalId ? { festivalId: input.festivalId } : {}),
+        ...festivalContext(input),
         eventKey: input.eventKey,
       },
       { pushType: 'alert', priority: '10', collapseKey: input.eventKey },
@@ -72,7 +98,7 @@ export class ApnsService {
       body: string;
       eventKey: string;
       hasPack: boolean;
-    },
+    } & FestivalContext,
   ): Promise<ApnsSendResult> {
     return this.send(
       token,
@@ -81,10 +107,12 @@ export class ApnsService {
         aps: {
           alert: { title: input.title, body: input.body },
           sound: 'default',
+          'mutable-content': 1,
         },
         type: 'festival.reminder',
         route: input.hasPack ? `/festivals/${input.festivalId}/checklist` : '/',
         festivalId: input.festivalId,
+        ...festivalContext(input),
         eventKey: input.eventKey,
       },
       { pushType: 'alert', priority: '10', collapseKey: input.eventKey },
@@ -97,13 +125,14 @@ export class ApnsService {
     environment: 'sandbox' | 'production',
     input: {
       festivalId: string;
-      setId: string;
+      /** 기기 테스트 알림처럼 특정 공연이 없으면 생략한다. */
+      setId?: string;
       title: string;
       body: string;
       eventKey: string;
       deeplink: string;
       expiresAt: Date;
-    },
+    } & FestivalContext,
   ): Promise<ApnsSendResult> {
     return this.send(
       token,
@@ -117,8 +146,9 @@ export class ApnsService {
         },
         type: 'festival.set_reminder',
         festivalId: input.festivalId,
-        setId: input.setId,
+        ...(input.setId ? { setId: input.setId } : {}),
         deeplink: input.deeplink,
+        ...festivalContext(input),
         eventKey: input.eventKey,
       },
       {
