@@ -8,6 +8,13 @@
 - `festival.reminder`는 준비물 확인 문구와 발행 팩 체크리스트 항목 최대 3개의 요약을 담은 소리 있는 alert다. `packDownloadedVersion`이 현재 `publishedVersion`과 다르면 `지금 팩을 받아 두세요.`를 덧붙이고 S00 경로 `/`를 보낸다. 같으면 S12 준비물 경로 `/festivals/{festivalId}/checklist`를 보낸다. `packUpdates`는 팩 업데이트 푸시 동의이므로 팩 다운로드 판정에 사용하지 않는다.
 - APNs 수락은 실제 단말 표시의 증거가 아니다. 앱은 `eventKey`로 중복 표시를 방지한다.
 
+## 저장한 공연 10분 전 알림
+
+- `user_schedules.setIds`에 저장한 공개 공연마다, `setReminders`를 켠 로그인 기기에 공연 시작 10분 전 작업을 1건씩 예약한다. `eventKey`는 `set-reminder:{festivalId}:{setId}`다. 일정 저장 때 빠진 공연의 미발송 작업은 `SCHEDULE_CHANGED`로 취소한다.
+- `festival.set_reminder` 본문은 `{아티스트} 공연이 10분 후 {무대}에서 시작돼요.`, 무대가 없으면 `{아티스트} 공연이 10분 후 시작돼요.`다. 알림함에 기록한 뒤 보낸다.
+- 발송 직전 저장 여부, 알림 설정, 로그인 세션, APNs 토큰, 공개 공연 시각을 다시 확인한다. 공연 시각이 바뀌었으면 보내지 않고 새 10분 전으로 다시 예약한다.
+- 공연 2시간 전 Live Activity 원격 시작([live-activity-start](../docs/api/live-activity-start.spec.md))과 시각이 달라 둘을 합치지 않는다. 원격 시작이 이미 발송됐어도 10분 전 알림은 따로 보낸다.
+
 ## 목적
 
 공개된 축제의 각 개최일 `days[].startsAt`에 맞춰 구독 기기에 시작 알림을 보낸다. 수집 단계의 발견 후보나 티켓 판매 시각은 알림 기준으로 사용하지 않는다. 서버 프로세스가 실행 중일 때 예약 작업이 주기적으로 대기 알림을 처리한다.
