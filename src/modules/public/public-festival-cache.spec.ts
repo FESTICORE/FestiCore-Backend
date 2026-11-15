@@ -91,6 +91,44 @@ describe('PublicFestivalService published cache', () => {
     expect(JSON.stringify(pack)).not.toContain('invented');
   });
 
+  it('publishes a trimmed one-line set note and drops other values', async () => {
+    const { service, findOne } = setup();
+    const set = {
+      stageId: 'stg_12345678',
+      startsAt: '2026-11-20T13:00:00+09:00',
+      endsAt: '2026-11-20T14:00:00+09:00',
+    };
+    findOne.mockResolvedValue({
+      publishedVersion: 1,
+      published: {
+        id,
+        packVersion: 1,
+        stages: [{ id: 'stg_12345678', name: '메인', order: 1 }],
+        sets: [
+          {
+            ...set,
+            id: 'set_a',
+            artist: 'A',
+            note: ' 앵콜 없이 정시에 끝나요 ',
+          },
+          { ...set, id: 'set_b', artist: 'B', note: '두 줄\n메모' },
+          { ...set, id: 'set_c', artist: 'C', note: 3 },
+        ],
+      },
+    });
+    const pack = await service.published(id);
+    expect(pack.sets).toMatchObject([
+      { artist: 'A', note: '앵콜 없이 정시에 끝나요' },
+      { artist: 'B', note: null },
+      { artist: 'C', note: null },
+    ]);
+    expect(pack.timetable).toMatchObject([
+      { artist: 'A', note: '앵콜 없이 정시에 끝나요' },
+      { artist: 'B', note: null },
+      { artist: 'C', note: null },
+    ]);
+  });
+
   it('serves a hit without querying the database', async () => {
     const { service, cache, findOne } = setup();
     await service.published(id);
