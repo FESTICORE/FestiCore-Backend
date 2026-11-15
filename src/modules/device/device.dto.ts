@@ -4,7 +4,6 @@ import {
   IsIn,
   IsOptional,
   IsInt,
-  Max,
   Min,
   IsString,
   Matches,
@@ -148,23 +147,4 @@ export class NotificationSettingsDto {
   @IsOptional()
   @IsBoolean()
   packUpdates?: boolean;
-}
-
-export class DeviceTestPushDto {
-  @ApiProperty({ example: 'fst_example', description: '공개된 축제 ID' })
-  @Matches(/^fst_[0-9a-z]+$/)
-  festivalId!: string;
-
-  @ApiPropertyOptional({
-    minimum: 0,
-    maximum: 120,
-    default: 15,
-    description:
-      '요청 후 발송까지 기다릴 초. 앱을 백그라운드로 보낼 시간을 둡니다.',
-  })
-  @IsOptional()
-  @IsInt()
-  @Min(0)
-  @Max(120)
-  delaySeconds?: number;
 }

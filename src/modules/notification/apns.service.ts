@@ -125,8 +125,7 @@ export class ApnsService {
     environment: 'sandbox' | 'production',
     input: {
       festivalId: string;
-      /** 기기 테스트 알림처럼 특정 공연이 없으면 생략한다. */
-      setId?: string;
+      setId: string;
       title: string;
       body: string;
       eventKey: string;
@@ -146,7 +145,7 @@ export class ApnsService {
         },
         type: 'festival.set_reminder',
         festivalId: input.festivalId,
-        ...(input.setId ? { setId: input.setId } : {}),
+        setId: input.setId,
         deeplink: input.deeplink,
         ...festivalContext(input),
         eventKey: input.eventKey,

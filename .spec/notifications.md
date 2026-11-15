@@ -17,7 +17,7 @@
 
 ## Notification Service Extension 보강
 
-- 사용자에게 보이는 알림은 모두 `aps.mutable-content: 1`로 보내 iOS Notification Service Extension을 거친다: 축제 시작(`festival.start`), D-1 리마인더(`festival.reminder`), 저장한 공연 알림(`festival.set_reminder`), 깃발·크루 알림(`flag.status`·`crew.status`·`crew.gather`), 관리자·기기 테스트 알림. 사일런트 푸시(`pack.updated`)와 Live Activity 푸시는 제외한다.
+- 사용자에게 보이는 알림은 모두 `aps.mutable-content: 1`로 보내 iOS Notification Service Extension을 거친다: 축제 시작(`festival.start`), D-1 리마인더(`festival.reminder`), 저장한 공연 알림(`festival.set_reminder`), 깃발·크루 알림(`flag.status`·`crew.status`·`crew.gather`), 관리자 테스트 알림. 사일런트 푸시(`pack.updated`)와 Live Activity 푸시는 제외한다.
 - 확장이 App Group 없이 payload만으로 보강하도록 최상위에 `festivalName`과, 발행 팩 `thumbUrl`(공개 축제 목록의 `thumbUrl` 출처)이 https URL일 때만 `imageUrl`을 넣는다. 축제 시작 알림은 `type: "festival.start"`와 `festivalId`도 싣는다. payload는 4KB 이하다.
 
 ## 목적
