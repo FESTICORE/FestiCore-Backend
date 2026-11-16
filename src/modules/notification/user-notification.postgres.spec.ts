@@ -97,7 +97,7 @@ describePostgres('UserNotificationService (PostgreSQL)', () => {
       await recordUserNotifications(db, [me], entry(n));
     await db.query(
       `UPDATE "user_notifications"
-       SET "createdAt" = '2026-10-17T06:40:00.123Z'::timestamptz + (random() * interval '900 microseconds')`,
+       SET "createdAt" = date_trunc('milliseconds', now() - interval '1 hour') + (random() * interval '900 microseconds')`,
     );
     const seen: string[] = [];
     let before: string | undefined;
