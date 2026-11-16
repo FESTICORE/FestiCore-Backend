@@ -8,6 +8,7 @@ import { createHash } from 'crypto';
 import {
   canonicalFestivalId,
   FESTIVAL_ALIASES,
+  HIDDEN_FESTIVAL_IDS,
   isHiddenFestival,
 } from '../../../scripts/festival-aliases.cjs';
 import { DataSource, Repository } from 'typeorm';
@@ -2064,7 +2065,11 @@ export class PublicFestivalService {
       .createQueryBuilder('festival')
       .where('festival.published IS NOT NULL')
       .andWhere('festival.publishedVersion > 0')
-      .andWhere(`${lastDate} >= :floor`, { floor });
+      .andWhere(`${lastDate} >= :floor`, { floor })
+      // 별칭·숨김 축제는 SQL에서 빼야 limit이 보이는 행 기준으로 걸리고, 다음 커서가 사라지지 않는다.
+      .andWhere('festival.id NOT IN (:...excludedIds)', {
+        excludedIds: [...Object.keys(FESTIVAL_ALIASES), ...HIDDEN_FESTIVAL_IDS],
+      });
     if (cursor) {
       const cursorBucket = Number(cursor[3]);
       query.andWhere(
@@ -2256,7 +2261,7 @@ export class PublicFestivalService {
       ? listSortKey(page[page.length - 1], sortToday)
       : null;
     const nextCursor =
-      ordered.length > limit && lastKey
+      (ordered.length > limit || rows.length > limit) && lastKey
         ? `${floor}~v2~${sortToday}~${lastKey.bucket}~${lastKey.date}~${lastKey.id}`
         : null;
     return { items, nextCursor };

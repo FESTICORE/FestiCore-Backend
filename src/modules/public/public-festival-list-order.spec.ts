@@ -190,7 +190,8 @@ describe('PublicFestivalService list order', () => {
       expect.stringContaining('>= :floor'),
       { floor: '2026-10-01' },
     );
-    expect(builder.andWhere.mock.calls).toHaveLength(2);
+    // 발행 여부·하한 날짜·별칭/숨김 제외만 걸고, 구형 커서 조건은 붙이지 않는다.
+    expect(builder.andWhere.mock.calls).toHaveLength(3);
 
     const second = await service.list(first.nextCursor!, '1', today);
     expect(second.items.map((item) => item.id)).toEqual(['fst_future']);

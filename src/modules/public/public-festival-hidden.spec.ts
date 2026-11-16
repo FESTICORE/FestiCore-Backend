@@ -27,14 +27,14 @@ describe('PublicFestivalService hidden and aliased catalog entries', () => {
     };
   }
 
-  function makeService() {
+  function makeService(rows: object[] = [], catalog?: string[]) {
     const builder = {
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
       orderBy: jest.fn().mockReturnThis(),
       addOrderBy: jest.fn().mockReturnThis(),
       take: jest.fn().mockReturnThis(),
-      getMany: jest.fn().mockResolvedValue([]),
+      getMany: jest.fn().mockResolvedValue(rows),
     };
     const findOne = jest.fn().mockResolvedValue(null);
     const service = new PublicFestivalService(
@@ -51,15 +51,21 @@ describe('PublicFestivalService hidden and aliased catalog entries', () => {
     jest
       .spyOn(internals, 'discoveryCatalog')
       .mockResolvedValue(
-        [dance, magic, somethingNewYes24, somethingNewNol, 'fst_music'].map(
-          discovered,
-        ),
+        (
+          catalog ?? [
+            dance,
+            magic,
+            somethingNewYes24,
+            somethingNewNol,
+            'fst_music',
+          ]
+        ).map(discovered),
       );
     jest.spyOn(internals, 'attachStoredImages').mockResolvedValue(new Map());
     const discoveryDetail = jest
       .spyOn(internals, 'discoveryDetail')
       .mockResolvedValue({ id: 'detail' });
-    return { service, findOne, discoveryDetail };
+    return { service, findOne, discoveryDetail, builder };
   }
 
   it('목록에서 축제가 아닌 항목과 중복 별칭을 뺀다', async () => {
@@ -88,5 +94,47 @@ describe('PublicFestivalService hidden and aliased catalog entries', () => {
     await service.detail(somethingNewYes24);
     expect(discoveryDetail).toHaveBeenCalledWith(somethingNewNol);
     await expect(service.discovered(somethingNewYes24)).resolves.toBeNull();
+  });
+
+  function publishedRow(id: string, date: string | null) {
+    return {
+      id,
+      publishedVersion: 1,
+      published: {
+        name: id,
+        venue: '공연장',
+        flagsEnabled: false,
+        days: date ? [{ date }] : [],
+      },
+    };
+  }
+
+  it('별칭·숨김 축제는 목록 SQL에서 뺀다', async () => {
+    const { service, builder } = makeService([], []);
+    await service.list(undefined, '10', today);
+    const calls = builder.andWhere.mock.calls as [
+      string,
+      { excludedIds?: string[] }?,
+    ][];
+    const excluded = calls.find(
+      ([sql]) => sql === 'festival.id NOT IN (:...excludedIds)',
+    );
+    expect(excluded?.[1]?.excludedIds).toEqual(
+      expect.arrayContaining([somethingNewYes24, dance, magic]),
+    );
+  });
+
+  it('읽은 행이 limit보다 많으면 걸러져 줄어도 다음 커서를 준다', async () => {
+    const { service } = makeService(
+      [
+        publishedRow('fst_a', '2026-11-10'),
+        publishedRow('fst_broken', null),
+        publishedRow('fst_b', '2026-11-09'),
+      ],
+      [],
+    );
+    const page = await service.list(undefined, '2', today);
+    expect(page.items.map((item) => item.id)).toEqual(['fst_a', 'fst_b']);
+    expect(page.nextCursor).not.toBeNull();
   });
 });
