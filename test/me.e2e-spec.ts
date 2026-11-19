@@ -52,7 +52,7 @@ describe('Me API contract (e2e)', () => {
       .set('Authorization', `Bearer ${accessToken}`)
       .send({
         nickname: '페스티',
-        acceptTerms: { version: '2026-10' },
+        acceptTerms: { version: '2026-11' },
         pushOptIn: true,
       })
       .expect(200);
@@ -60,7 +60,7 @@ describe('Me API contract (e2e)', () => {
       data: {
         nickname: '페스티',
         nicknameConfirmed: true,
-        termsVersion: '2026-10',
+        termsVersion: '2026-11',
         pushOptIn: true,
       },
     });
@@ -73,7 +73,7 @@ describe('Me API contract (e2e)', () => {
     const current = me.body as {
       data: { termsVersion: string; currentTermsVersion: string };
     };
-    expect(current.data.termsVersion).toBe('2026-10');
+    expect(current.data.termsVersion).toBe('2026-11');
     expect(current.data.currentTermsVersion).toBe(CURRENT_TERMS_VERSION);
   });
 
@@ -81,7 +81,7 @@ describe('Me API contract (e2e)', () => {
     const response = await request(server)
       .patch('/api/v1/me')
       .set('Authorization', `Bearer ${accessToken}`)
-      .send({ acceptTerms: { version: '2026-10' } })
+      .send({ acceptTerms: { version: '2026-11' } })
       .expect(200);
     expect(response.body).toMatchObject({
       data: { nickname: '기존이름', nicknameConfirmed: false },
@@ -100,7 +100,7 @@ describe('Me API contract (e2e)', () => {
     const terms = await request(server)
       .patch('/api/v1/me')
       .set('Authorization', `Bearer ${accessToken}`)
-      .send({ acceptTerms: { version: '2026-10' } })
+      .send({ acceptTerms: { version: '2026-11' } })
       .expect(200);
     expect(terms.body).toMatchObject({
       data: { nickname: '먼저정함', nicknameConfirmed: true },
