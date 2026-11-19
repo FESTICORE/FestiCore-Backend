@@ -24,7 +24,7 @@ function page(title: string, content: string): string {
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="index,follow"><title>${escapeHtml(title)} | 패스티코어</title>
 <style>body{margin:0;background:#f8fafc;color:#192334;font:16px/1.75 system-ui,-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo",sans-serif}main{max-width:760px;margin:0 auto;padding:48px 24px 80px}nav{display:flex;flex-wrap:wrap;gap:18px;border-bottom:1px solid #dbe1e8;padding-bottom:20px}a{color:#18509b}h1{font-size:2rem;line-height:1.3;margin:40px 0 24px}h2{font-size:1.25rem;margin:36px 0 12px}p,li{margin:0 0 12px}ul{padding-left:24px}.lead{font-size:1.125rem;color:#45556c}.notice{padding:16px;background:#fff6e7;border:1px solid #f2d6a2;border-radius:8px}footer{margin-top:56px;padding-top:16px;border-top:1px solid #dbe1e8;color:#667588;font-size:.875rem}</style></head>
-<body><main><nav aria-label="패스티코어 문서"><a href="${basePath}/home">홈</a><a href="${basePath}/privacy">개인정보처리방침</a><a href="${basePath}/terms">서비스 이용약관</a><a href="${basePath}/sources">정보 출처</a></nav>
+<body><main><nav aria-label="패스티코어 문서"><a href="${basePath}/home">홈</a><a href="${basePath}/privacy">개인정보처리방침</a><a href="${basePath}/terms">서비스 이용약관</a><a href="${basePath}/location">위치기반서비스 이용약관</a><a href="${basePath}/sources">정보 출처</a></nav>
 <h1>${escapeHtml(title)}</h1>${content}<footer>패스티코어 · FestiCore</footer></main></body></html>`;
 }
 
@@ -58,6 +58,16 @@ const terms = page(
 <h2>계정과 알림</h2><p>Google 또는 Apple 계정으로 로그인할 수 있습니다. 기기 알림은 기기 등록과 축제별 구독 설정에 따라 제공되며 기기에서 변경할 수 있습니다. 계정 탈퇴 기능을 제공합니다.</p>
 <h2>변경 안내</h2><p>서비스 기능이나 약관이 변경되면 새로운 버전을 서비스에서 안내합니다.</p>
 <h2>문의 및 효력</h2><p>운영: 패스티코어 운영팀<br>서비스 문의: <a href="mailto:suhwj81@gmail.com">suhwj81@gmail.com</a><br>시행일: 2026년 10월 22일</p><p>이 약관은 대한민국 법률을 따르며, 분쟁은 먼저 협의로 해결합니다.</p>`,
+);
+
+const location = page(
+  '위치기반서비스 이용약관',
+  `<p class="lead">패스티코어가 위치 정보를 쓰는 기능과 이용자의 권리를 안내합니다.</p>
+<h2>제공하는 위치기반서비스</h2><ul><li>귀가 도보 시간 안내: 위치 권한을 허용하면 기기의 현재 위치에서 역·셔틀 정류장까지 걸어서 걸리는 시간을 Apple 지도로 계산합니다. 현재 위치는 기기와 Apple 지도에서만 쓰이며 패스티코어 서버로 보내거나 저장하지 않습니다.</li><li>기수·크루 구역 공유: 이용자가 축제장 지도에서 직접 고른 구역과 상태를 서버에 저장해, 깃발을 팔로우한 이용자와 같은 크루원에게 보여 줍니다. 이 기능은 기기의 GPS 좌표를 쓰지 않습니다.</li></ul>
+<h2>이용 요금</h2><p>위치기반서비스는 무료로 제공합니다.</p>
+<h2>보관과 파기</h2><ul><li>크루원이 공유한 구역과 상태는 축제 마지막 날이 끝나면 크루가 보관 처리되고, 그로부터 30일 뒤 지웁니다.</li><li>기수가 고른 깃발 구역은 깃발 정보로 보관하며, 회원 탈퇴 시 깃발과 계정의 연결을 끊습니다.</li></ul>
+<h2>이용자의 권리</h2><p>기기 위치 권한은 iOS 설정에서 언제든 끌 수 있습니다. 구역 공유는 앱에서 상태를 바꾸거나 크루를 나가 멈출 수 있고, 회원 탈퇴로 위치기반서비스 동의를 철회할 수 있습니다. 위치 정보 이용 내역 확인과 삭제 요청은 아래 문의처로 접수할 수 있습니다.</p>
+<h2>문의 및 효력</h2><p>운영: 패스티코어 운영팀<br>위치 정보 문의: <a href="mailto:suhwj81@gmail.com">suhwj81@gmail.com</a><br>시행일: 2026년 11월 19일</p>`,
 );
 
 const sources = page(
@@ -110,6 +120,11 @@ export class LegalController {
   @Get('terms')
   terms(@Res() response: Response): void {
     this.send(response, terms);
+  }
+
+  @Get('location')
+  location(@Res() response: Response): void {
+    this.send(response, location);
   }
 
   @Get('sources')

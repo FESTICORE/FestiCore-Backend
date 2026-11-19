@@ -288,8 +288,17 @@ def check_gh_pr(action, part, base):
 
 def check_verified(root):
     """검증 게이트: 코드 변경이 있는데 verify 통과 기록과 지문이 다르면 커밋을 막는다."""
-    sys.path.insert(0, HOOK_DIR)  # -I 실행이라 직접 넣는다
-    import harness_state as hs
+    # 다른 저장소(예: AdminWeb)를 커밋하면 그 저장소의 verify 기록은 그 저장소 규칙으로 계산한 지문이다.
+    # 대상 저장소에 자기 harness_state가 있으면 그것으로 비교한다(검증 게이트 자체는 그대로 적용).
+    own = os.path.join(root, ".claude", "hooks", "harness_state.py")
+    if os.path.isfile(own):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("target_harness_state", own)
+        hs = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(hs)
+    else:
+        sys.path.insert(0, HOOK_DIR)  # -I 실행이라 직접 넣는다
+        import harness_state as hs
     try:
         files = hs.unverified(root)
     except Exception:
