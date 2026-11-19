@@ -15,7 +15,7 @@ describe('Public legal pages (e2e)', () => {
     await ctx.app.close();
   });
 
-  it.each(['home', 'privacy', 'terms', 'sources'])(
+  it.each(['home', 'privacy', 'terms', 'location', 'sources'])(
     'serves %s without authentication as HTML',
     async (name) => {
       const response = await request(server)
@@ -33,6 +33,7 @@ describe('Public legal pages (e2e)', () => {
       expect(response.text).toContain('/api/v1/legal/privacy');
       expect(response.text).toContain('/api/v1/legal/terms');
       expect(response.text).toContain('/api/v1/legal/sources');
+      expect(response.text).toContain('/api/v1/legal/location');
     },
   );
 });
