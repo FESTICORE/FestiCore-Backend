@@ -2,7 +2,6 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { INestApplication } from '@nestjs/common';
 import { ImageStorageService } from '../storage/image-storage.service';
-import { DataSource } from 'typeorm';
 import { PublicFestivalMapController } from './public-festival-map.controller';
 import { PublicFestivalService } from './public-festival.service';
 
@@ -21,8 +20,14 @@ describe('GET festival map image', () => {
           provide: ImageStorageService,
           useValue: { readFestivalMap, readCrawlImage },
         },
-        { provide: DataSource, useValue: { query } },
-        { provide: PublicFestivalService, useValue: { hasCurrentArtist } },
+        {
+          provide: PublicFestivalService,
+          useValue: {
+            hasCurrentArtist,
+            findPublicPoster: async (id: string) =>
+              ((await query(id)) as unknown[])[0] ?? null,
+          },
+        },
       ],
     }).compile();
     app = module.createNestApplication();

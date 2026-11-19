@@ -497,6 +497,14 @@ export function envelopeEtag(etag: string): string {
   return `"cdm1-${etag.slice(1, -1)}"`;
 }
 
+export interface PublicPosterRow {
+  objectKey: string;
+  seed: string | null;
+  festivalId: string | null;
+  festivalSourceUrl: string | null;
+  artistName: string | null;
+}
+
 @Injectable()
 export class PublicFestivalService {
   constructor(
@@ -507,6 +515,25 @@ export class PublicFestivalService {
     private readonly dataSource: DataSource,
     private readonly cache: CacheService,
   ) {}
+
+  /** 공개 정책을 통과한 수집 포스터 한 장과 승인 출연진 사진 검토 정보를 찾는다. */
+  async findPublicPoster(imageId: string): Promise<PublicPosterRow | null> {
+    const rows = await this.dataSource.query<PublicPosterRow[]>(
+      `SELECT image."objectKey", source."parserConfig"->>'seed' AS seed,
+         review."festivalId" AS "festivalId",
+         review."festivalSourceUrl" AS "festivalSourceUrl",
+         review."artistName" AS "artistName"
+       FROM crawl_images image
+       JOIN crawl_sources source ON source.id = image."sourceId"
+       LEFT JOIN crawl_artist_image_reviews review ON
+         review."sourceId" = source.id AND review."imageId" = image.id
+         AND review.status = 'approved'
+       WHERE image.id = $1
+         AND ${PUBLIC_CRAWL_IMAGE_SQL}`,
+      [imageId],
+    );
+    return rows[0] ?? null;
+  }
 
   /** Require one current catalog artist, without relying on any image source. */
   async hasCurrentArtist(
