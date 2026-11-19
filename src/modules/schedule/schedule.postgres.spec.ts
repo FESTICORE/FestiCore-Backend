@@ -82,6 +82,7 @@ describePostgres(
         db.getRepository(AdminFestival),
         db,
         liveActivity,
+        { syncUserSchedule: () => Promise.resolve() } as never,
       );
     });
 

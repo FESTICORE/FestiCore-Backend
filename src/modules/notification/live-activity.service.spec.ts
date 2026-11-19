@@ -22,6 +22,7 @@ describe('LiveActivityService durable queue', () => {
   const apns = {
     isConfigured: jest.fn().mockReturnValue(true),
     sendLiveActivityUpdate: jest.fn(),
+    sendLiveActivityEnd: jest.fn(),
   };
   const service = new LiveActivityService(db as never, apns as never);
 
@@ -32,6 +33,39 @@ describe('LiveActivityService durable queue', () => {
       accepted: true,
       permanent: false,
     });
+    apns.sendLiveActivityEnd.mockResolvedValue({
+      accepted: true,
+      permanent: false,
+    });
+  });
+
+  it('ends the current Activity with no personal content before disabling its update queue', async () => {
+    query.mockResolvedValueOnce([
+      { liveActivityPushToken: 'activity-token', apnsEnvironment: 'sandbox' },
+    ]);
+    await service.endDeviceForUnbind(deviceId, manager as never);
+    expect(apns.sendLiveActivityEnd).toHaveBeenCalledWith(
+      'activity-token',
+      'sandbox',
+      expect.objectContaining({
+        phase: 'finished',
+        nextMine: null,
+        crewSummary: null,
+      }),
+      true,
+    );
+    expect(query.mock.calls[1][0]).toContain('"live_activity_deliveries"');
+    apns.sendLiveActivityEnd.mockResolvedValueOnce({
+      accepted: false,
+      permanent: false,
+    });
+    query.mockResolvedValueOnce([
+      { liveActivityPushToken: 'activity-token', apnsEnvironment: 'sandbox' },
+    ]);
+    await expect(
+      service.endDeviceForUnbind(deviceId, manager as never),
+    ).rejects.toThrow();
+    expect(query.mock.calls).toHaveLength(3);
   });
 
   it('records business refreshes without touching delivery rows', async () => {
@@ -177,7 +211,15 @@ describe('LiveActivityService durable queue', () => {
         },
       ])
       .mockResolvedValueOnce([{ revision: job.revision }])
-      .mockResolvedValueOnce([{ published: { flagsEnabled: false, sets: [] } }])
+      .mockResolvedValueOnce([
+        {
+          published: {
+            flagsEnabled: false,
+            days: [{ date: '2026-10-24' }],
+            sets: [],
+          },
+        },
+      ])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([{ canSend: false }]);
     await service.deliver(job);
@@ -232,6 +274,7 @@ describe('LiveActivityService durable queue', () => {
         {
           published: {
             flagsEnabled: true,
+            days: [{ date: '2099-01-01' }],
             sets: [
               {
                 id: 'set_one',
@@ -251,6 +294,9 @@ describe('LiveActivityService durable queue', () => {
       'a'.repeat(64),
       'sandbox',
       expect.objectContaining({
+        phase: 'upcoming',
+        startDate: Date.parse('2098-12-31T15:00:00Z') / 1000 - 978307200,
+        endDate: Date.parse('2099-01-01T15:00:00Z') / 1000 - 978307200,
         nextMine: null,
         pinnedFlag: null,
         crewSummary: null,
@@ -258,7 +304,171 @@ describe('LiveActivityService durable queue', () => {
     );
     const finish = query.mock.calls.at(-1);
     expect(finish?.[1]?.[3]).toBe('pending');
-    expect(finish?.[1]?.[5]).toEqual(new Date('2099-01-01T10:00:00Z'));
+    expect(finish?.[1]?.[5]).toEqual(new Date('2098-12-31T15:00:00Z'));
+  });
+
+  it('uses published calendar days even when no sets exist and schedules the phase boundary', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-11-19T14:59:59Z'));
+    try {
+      const prepare = () => {
+        query.mockReset();
+        query
+          .mockResolvedValueOnce([
+            {
+              userId: null,
+              liveActivityFestivalId: 'fst_one',
+              liveActivityId: 'activity-one',
+              liveActivityPushToken: 'a'.repeat(64),
+              apnsEnvironment: 'sandbox',
+            },
+          ])
+          .mockResolvedValueOnce([{ revision: job.revision }])
+          .mockResolvedValueOnce([
+            {
+              published: {
+                flagsEnabled: false,
+                days: [{ date: '2026-11-20' }, { date: '2026-11-21' }],
+                sets: [],
+              },
+            },
+          ])
+          .mockResolvedValueOnce([])
+          .mockResolvedValueOnce([{ canSend: true }]);
+      };
+      prepare();
+      await service.deliver(job);
+      const firstState = apns.sendLiveActivityUpdate.mock.calls[0] as [
+        string,
+        string,
+        Record<string, unknown>,
+      ];
+      expect(firstState[2]).toMatchObject({
+        phase: 'upcoming',
+        startDate: Date.parse('2026-11-19T15:00:00Z') / 1000 - 978307200,
+        endDate: Date.parse('2026-11-21T15:00:00Z') / 1000 - 978307200,
+        nowStages: [],
+        nextMine: null,
+      });
+      expect(query.mock.calls.at(-1)?.[1]?.[5]).toEqual(
+        new Date('2026-11-19T15:00:00Z'),
+      );
+      jest.setSystemTime(new Date('2026-11-19T15:00:00Z'));
+      prepare();
+      await service.deliver(job);
+      const secondState = apns.sendLiveActivityUpdate.mock.calls[1] as [
+        string,
+        string,
+        Record<string, unknown>,
+      ];
+      expect(secondState[2]).toMatchObject({
+        phase: 'ongoing',
+      });
+      // 다음 행사일 자정(KST)에 다시 그린다.
+      expect(query.mock.calls.at(-1)?.[1]?.[5]).toEqual(
+        new Date('2026-11-20T15:00:00Z'),
+      );
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('keeps an overnight final-day performance ongoing until the published day ends', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-11-21T15:30:00Z'));
+    try {
+      const published = {
+        flagsEnabled: false,
+        days: [
+          {
+            date: '2026-11-21',
+            startsAt: '2026-11-21T09:00:00+09:00',
+            endsAt: '2026-11-22T02:00:00+09:00',
+          },
+        ],
+        sets: [
+          {
+            id: 'set-overnight',
+            stage: 'Main',
+            startsAt: '2026-11-22T00:00:00+09:00',
+            endsAt: '2026-11-22T01:00:00+09:00',
+          },
+        ],
+      };
+      const prepare = () => {
+        query.mockReset();
+        query
+          .mockResolvedValueOnce([
+            {
+              userId: null,
+              liveActivityFestivalId: 'fst_one',
+              liveActivityId: 'activity-one',
+              liveActivityPushToken: 'a'.repeat(64),
+              apnsEnvironment: 'sandbox',
+            },
+          ])
+          .mockResolvedValueOnce([{ revision: job.revision }])
+          .mockResolvedValueOnce([{ published }])
+          .mockResolvedValueOnce([])
+          .mockResolvedValueOnce([{ canSend: true }]);
+      };
+
+      prepare();
+
+      await service.deliver(job);
+
+      const state = apns.sendLiveActivityUpdate.mock.calls[0] as [
+        string,
+        string,
+        Record<string, unknown>,
+      ];
+      expect(state[2]).toMatchObject({
+        phase: 'ongoing',
+        endDate: Date.parse('2026-11-21T17:00:00Z') / 1000 - 978307200,
+      });
+      expect(query.mock.calls.at(-1)?.[1]?.[5]).toEqual(
+        new Date('2026-11-21T16:00:00Z'),
+      );
+
+      jest.setSystemTime(new Date('2026-11-21T17:00:00Z'));
+      prepare();
+      await service.deliver(job);
+      const finished = apns.sendLiveActivityEnd.mock.calls[0] as [
+        string,
+        string,
+        Record<string, unknown>,
+      ];
+      expect(finished[2]).toMatchObject({ phase: 'finished', nowStages: [] });
+      expect(apns.sendLiveActivityUpdate).toHaveBeenCalledTimes(1);
+      const cleared = query.mock.calls.find(([sql]) =>
+        sql.includes('SET "liveActivityPushToken" = NULL'),
+      );
+      expect(cleared?.[1]).toEqual([deviceId, 'a'.repeat(64), 'activity-one']);
+      expect(query.mock.calls.at(-1)?.[1]?.[3]).toBe('idle');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('stops delivery for published content without valid calendar days', async () => {
+    query
+      .mockResolvedValueOnce([
+        {
+          userId: null,
+          liveActivityFestivalId: 'fst_one',
+          liveActivityId: 'activity-one',
+          liveActivityPushToken: 'a'.repeat(64),
+          apnsEnvironment: 'sandbox',
+        },
+      ])
+      .mockResolvedValueOnce([{ revision: job.revision }])
+      .mockResolvedValueOnce([
+        { published: { flagsEnabled: false, sets: [] } },
+      ]);
+    await service.deliver(job);
+    expect(apns.sendLiveActivityUpdate).not.toHaveBeenCalled();
+    expect(query.mock.calls.at(-1)?.[1]?.slice(3, 5)).toEqual([
+      'idle',
+      'FESTIVAL_SCHEDULE_UNAVAILABLE',
+    ]);
   });
 
   it('refreshes one hour before a published day ends without repeating a delayed boundary', async () => {
@@ -281,6 +491,7 @@ describe('LiveActivityService durable queue', () => {
               flagsEnabled: true,
               days: [
                 {
+                  date: '2026-11-20',
                   startsAt: '2026-11-20T09:00:00+09:00',
                   endsAt: '2026-11-20T11:00:00+09:00',
                 },
@@ -360,6 +571,56 @@ describe('LiveActivityService durable queue', () => {
     }
   });
 
+  it('refreshes at the published opening and the next festival midnight', async () => {
+    const days = [
+      {
+        date: '2026-11-20',
+        startsAt: '2026-11-20T15:00:00+09:00',
+        endsAt: '2026-11-20T23:00:00+09:00',
+      },
+      {
+        date: '2026-11-21',
+        startsAt: '2026-11-21T15:00:00+09:00',
+        endsAt: '2026-11-21T23:00:00+09:00',
+      },
+    ];
+    const boundaryAt = async (now: string) => {
+      jest.setSystemTime(new Date(now));
+      query.mockReset();
+      query
+        .mockResolvedValueOnce([
+          {
+            userId: null,
+            liveActivityFestivalId: 'fst_one',
+            liveActivityId: 'activity-one',
+            liveActivityPushToken: 'a'.repeat(64),
+            apnsEnvironment: 'sandbox',
+          },
+        ])
+        .mockResolvedValueOnce([{ revision: job.revision }])
+        .mockResolvedValueOnce([
+          { published: { flagsEnabled: false, days, sets: [] } },
+        ])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ canSend: true }]);
+      await service.deliver(job);
+      return query.mock.calls.at(-1)?.[1]?.[5] as Date;
+    };
+    jest.useFakeTimers();
+    try {
+      // 개장 전 정오(KST)에는 개장 시각에 다시 그린다.
+      expect(await boundaryAt('2026-11-20T03:00:00Z')).toEqual(
+        new Date('2026-11-20T06:00:00Z'),
+      );
+      // 그날 공연이 끝난 23:30(KST)에는 다음 행사일 자정에 다시 그린다.
+      expect(await boundaryAt('2026-11-20T14:30:00Z')).toEqual(
+        new Date('2026-11-20T15:00:00Z'),
+      );
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('keeps the end-minus-hour boundary for a published day shorter than one hour', async () => {
     jest.useFakeTimers().setSystemTime(new Date('2026-11-19T23:55:00Z'));
     try {
@@ -380,6 +641,7 @@ describe('LiveActivityService durable queue', () => {
               flagsEnabled: false,
               days: [
                 {
+                  date: '2026-11-20',
                   startsAt: '2026-11-20T09:30:00+09:00',
                   endsAt: '2026-11-20T10:00:00+09:00',
                 },
@@ -400,30 +662,43 @@ describe('LiveActivityService durable queue', () => {
   });
 
   it('clears only the exact failed activity token on a permanent APNs rejection', async () => {
-    query
-      .mockResolvedValueOnce([
-        {
-          userId: null,
-          liveActivityFestivalId: 'fst_one',
-          liveActivityId: 'activity-one',
-          liveActivityPushToken: 'a'.repeat(64),
-          apnsEnvironment: 'sandbox',
-        },
-      ])
-      .mockResolvedValueOnce([{ revision: job.revision }])
-      .mockResolvedValueOnce([{ published: { flagsEnabled: false, sets: [] } }])
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{ canSend: true }]);
-    apns.sendLiveActivityUpdate.mockResolvedValueOnce({
-      accepted: false,
-      permanent: true,
-      reason: 'Unregistered',
-    });
-    await service.deliver(job);
-    const clear = query.mock.calls.find(([sql]) =>
-      sql.includes('SET "liveActivityPushToken" = NULL'),
-    );
-    expect(clear?.[1]).toEqual([deviceId, 'a'.repeat(64), 'activity-one']);
-    expect(query.mock.calls.at(-1)?.[1]?.[3]).toBe('failed');
+    jest.useFakeTimers().setSystemTime(new Date('2026-10-24T00:00:00Z'));
+    try {
+      query
+        .mockResolvedValueOnce([
+          {
+            userId: null,
+            liveActivityFestivalId: 'fst_one',
+            liveActivityId: 'activity-one',
+            liveActivityPushToken: 'a'.repeat(64),
+            apnsEnvironment: 'sandbox',
+          },
+        ])
+        .mockResolvedValueOnce([{ revision: job.revision }])
+        .mockResolvedValueOnce([
+          {
+            published: {
+              flagsEnabled: false,
+              days: [{ date: '2026-10-24' }],
+              sets: [],
+            },
+          },
+        ])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ canSend: true }]);
+      apns.sendLiveActivityUpdate.mockResolvedValueOnce({
+        accepted: false,
+        permanent: true,
+        reason: 'Unregistered',
+      });
+      await service.deliver(job);
+      const clear = query.mock.calls.find(([sql]) =>
+        sql.includes('SET "liveActivityPushToken" = NULL'),
+      );
+      expect(clear?.[1]).toEqual([deviceId, 'a'.repeat(64), 'activity-one']);
+      expect(query.mock.calls.at(-1)?.[1]?.[3]).toBe('failed');
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });

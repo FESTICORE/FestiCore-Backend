@@ -14,6 +14,7 @@ import { AdminPushModule } from './admin/push/admin-push.module';
 import { AdminAnalyticsModule } from './admin/analytics/admin-analytics.module';
 import { RedisModule } from './redis/redis.module';
 import { LegalModule } from './legal/legal.module';
+import { NoticesModule } from './notices/notices.module';
 
 /**
  * app.module imports 에 펼칠(...) 기능 모듈 목록.
@@ -23,6 +24,7 @@ import { LegalModule } from './legal/legal.module';
 export const featureModules = [
   RedisModule,
   LegalModule,
+  NoticesModule,
   HealthModule,
   AuthModule,
   AdminFestivalModule,

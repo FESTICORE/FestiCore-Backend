@@ -1,7 +1,17 @@
+import {
+  extractPrugioPortraits,
+  PRUGIO_PORTRAIT_PAGE_URL,
+  PRUGIO_PORTRAIT_SEED,
+  prugioPortraitConfig,
+  prugioPortraitPosterUrl,
+} from './prugio-portraits';
 import { createHash, randomUUID } from 'node:crypto';
+import { AutoPublishVerifiedService } from '../../festival/auto-publish-verified.service';
 import { isDeepStrictEqual } from 'node:util';
 import {
+  BadRequestException,
   ConflictException,
+  HttpException,
   Injectable,
   Logger,
   NotFoundException,
@@ -10,6 +20,7 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { ConfigService } from '@nestjs/config';
 import { DataSource, In, LessThan, Repository } from 'typeorm';
 import {
   AdminFestival,
@@ -37,6 +48,7 @@ import {
 } from './crawl-fetch';
 import {
   artistProfileImageUrl,
+  crawlImageQuality,
   discoverImageUrls,
   prepareCrawlImage,
   selectRunImages,
@@ -49,6 +61,7 @@ import { crawlArtistGallery } from './artist-gallery';
 import { timetableSourceConfig } from './timetable-source-config';
 import {
   collectNolWorldLineupEvidence,
+  officialOcrLineupImageCandidates,
   MAX_NOL_LINEUP_IMAGE_BYTES,
 } from './nol-world-lineup-evidence';
 import { normalizeArtistName } from '../../../../common/artist-name';
@@ -56,7 +69,11 @@ import {
   venueLabelMatches,
   venuePoint,
 } from '../../../../common/festival-location';
-import { PRUGIO_LINEUP_SEED, PRUGIO_LINEUP_URL } from './prugio-lineup';
+import {
+  parsePrugioLineup,
+  PRUGIO_LINEUP_SEED,
+  PRUGIO_LINEUP_URL,
+} from './prugio-lineup';
 import {
   parseWonderlivetBundleLineup,
   wonderlivetBundleUrl,
@@ -118,6 +135,8 @@ import {
 import {
   COMMONS_DISCOVERY_SEED,
   COMMONS_DISCOVERY_URL,
+  COMMONS_PINNED_DISCOVERY_SEED,
+  MAX_COMMONS_TARGETS,
   commonsFileUrl,
   commonsSearchUrl,
   dailyCommonsTargets,
@@ -127,6 +146,7 @@ import {
   type CommonsDiscoveryTarget,
 } from './commons-image-discovery';
 import { parseApprovedCommonsProfile } from './commons-approved-profile';
+import { TOUR_API_SOURCE, tourApiPage } from './tour-api';
 
 const kstDay = (date = new Date()) =>
   new Intl.DateTimeFormat('en-CA', {
@@ -136,20 +156,31 @@ const kstDay = (date = new Date()) =>
     day: '2-digit',
   }).format(date);
 
-function officialPageMentionsArtist(html: string, artistName: string): boolean {
+function textMentionsArtist(text: string, artistName: string): boolean {
   const name = normalizeArtistName(artistName);
   if (!name) return false;
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return new RegExp(
     `(?<![\\p{L}\\p{N}_])${escaped}(?![\\p{L}\\p{N}_])`,
     'u',
-  ).test(normalizeArtistName(plainText(html)));
+  ).test(normalizeArtistName(text));
+}
+
+function officialPageMentionsArtist(html: string, artistName: string): boolean {
+  return textMentionsArtist(plainText(html), artistName);
 }
 
 const YES24_PAGE_LIMIT = 4;
 
 function artistImageConfig(url: string, config: Record<string, string>) {
   const { artistName, artistAlias, festivalSourceUrl, imageHint } = config;
+  if (config.seed === PRUGIO_PORTRAIT_SEED) {
+    if (!prugioPortraitConfig(url, config, true))
+      throw new UnprocessableEntityException(
+        '푸르지오 공식 사진 소스 설정이 올바르지 않습니다.',
+      );
+    return { ...config };
+  }
   if (config.seed === SOHYANG_COMMONS_SEED) {
     if (
       !sohyangCommonsSourceFor(url, config) ||
@@ -288,6 +319,7 @@ function artistImageConfig(url: string, config: Record<string, string>) {
         'ticket.melon.com',
         'ticket.yes24.com',
         'nol.yanolja.com',
+        'world.nol.com',
         'mintpaper.co.kr',
       ].includes(festival.hostname)) ||
     !artistName?.trim() ||
@@ -334,7 +366,8 @@ function artistGalleryConfig(url: string, config: Record<string, string>) {
     (source.toString() === WONDERLIVET_LINEUP_URL &&
       festival.toString() === WONDERLIVET_FESTIVAL_URL) ||
     (source.toString() === GMF_LINEUP_URL &&
-      festival.toString() === GMF_FESTIVAL_URL)
+      festival.toString() === GMF_FESTIVAL_URL) ||
+    prugioPortraitConfig(source.toString(), config, false)
   ))
     throw new UnprocessableEntityException(
       '지원되는 공식 갤러리와 축제 연결 주소가 필요합니다.',
@@ -342,12 +375,15 @@ function artistGalleryConfig(url: string, config: Record<string, string>) {
   return { ...config, festivalSourceUrl: festival.toString() };
 }
 
-function validCommonsDiscoverySource(source: CrawlSource): boolean {
+function validCommonsDiscoverySource(
+  source: CrawlSource,
+  seed: string = COMMONS_DISCOVERY_SEED,
+): boolean {
   return (
     source.kind === 'artist-image-discovery' &&
     source.url === COMMONS_DISCOVERY_URL &&
     source.parser === 'commons-search' &&
-    source.parserConfig.seed === COMMONS_DISCOVERY_SEED &&
+    source.parserConfig.seed === seed &&
     Object.keys(source.parserConfig).length === 1 &&
     source.festivalId === null
   );
@@ -379,6 +415,11 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
   private timer?: NodeJS.Timeout;
   private gmfImageQueue: Promise<void> = Promise.resolve();
   private readonly gmfQueuedSources = new Set<string>();
+  // 관리자가 지정한 Commons 탐색 대상. 실행이 끝나면 지운다.
+  private readonly pinnedCommonsTargets = new Map<
+    string,
+    { festivalId: string; festivalSourceUrl: string; artistName: string }[]
+  >();
 
   constructor(
     @InjectRepository(CrawlSource)
@@ -396,6 +437,8 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     private readonly audit: AdminAuditService,
     private readonly timetableRevisions: CrawlTimetableRevisionService,
     private readonly publicFestivals: PublicFestivalService,
+    private readonly autoPublish: AutoPublishVerifiedService,
+    private readonly config: ConfigService = new ConfigService(),
   ) {}
 
   onModuleInit() {
@@ -606,6 +649,10 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
 
   async runNow(id: string, actor: string | null = null) {
     const source = await this.getSource(id);
+    if (source.parserConfig.seed === COMMONS_PINNED_DISCOVERY_SEED)
+      throw new UnprocessableEntityException(
+        '지정 Commons 탐색 소스는 지정 탐색으로만 실행합니다.',
+      );
     await this.dataSource.transaction((manager) =>
       this.audit.record(manager, {
         actor,
@@ -638,6 +685,113 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       this.logger.error('수동 크롤 실패'),
     );
     return { runId: run.id };
+  }
+
+  /**
+   * 지정한 출연진만 Commons 탐색에 넣어 바로 실행한다. 후보만 기록하며
+   * 공개는 기존 검토 준비→승인 흐름의 권리·출연 근거 검사를 그대로 거친다.
+   */
+  async runPinnedCommonsDiscovery(input: unknown, actor: string | null = null) {
+    const source = (
+      await this.sourcesRepo.findBy({ kind: 'artist-image-discovery' })
+    ).find((item) => item.parserConfig.seed === COMMONS_PINNED_DISCOVERY_SEED);
+    if (
+      !source ||
+      !validCommonsDiscoverySource(source, COMMONS_PINNED_DISCOVERY_SEED) ||
+      !source.enabled
+    )
+      throw new UnprocessableEntityException(
+        '활성 지정 Commons 탐색 소스가 없습니다.',
+      );
+    const id = source.id;
+    const body = input as Record<string, unknown> | null;
+    if (
+      !body ||
+      typeof body !== 'object' ||
+      Object.keys(body).some((key) => key !== 'targets')
+    )
+      throw new BadRequestException('탐색 요청 형식이 잘못되었습니다.');
+    const raw = body.targets;
+    if (
+      !Array.isArray(raw) ||
+      raw.length < 1 ||
+      raw.length > MAX_COMMONS_TARGETS
+    )
+      throw new BadRequestException(
+        `탐색 대상은 1~${MAX_COMMONS_TARGETS}개여야 합니다.`,
+      );
+    const targets: {
+      festivalId: string;
+      festivalSourceUrl: string;
+      artistName: string;
+    }[] = [];
+    const seen = new Set<string>();
+    for (const item of raw as Record<string, unknown>[]) {
+      const festivalId = item?.festivalId;
+      const festivalSourceUrl = item?.festivalSourceUrl;
+      const artistName = item?.artistName;
+      if (
+        !item ||
+        typeof item !== 'object' ||
+        Object.keys(item).some(
+          (key) =>
+            !['festivalId', 'festivalSourceUrl', 'artistName'].includes(key),
+        ) ||
+        typeof festivalId !== 'string' ||
+        !/^fst_[0-9a-z]+$/.test(festivalId) ||
+        typeof festivalSourceUrl !== 'string' ||
+        !festivalSourceUrl.startsWith('https://') ||
+        festivalSourceUrl.length > 2048 ||
+        typeof artistName !== 'string' ||
+        !artistName.trim() ||
+        artistName !== artistName.trim() ||
+        artistName.length > 160 ||
+        /\p{Cc}/u.test(artistName)
+      )
+        throw new BadRequestException('탐색 대상 형식이 잘못되었습니다.');
+      const key = [festivalId, festivalSourceUrl, artistName].join('\u0000');
+      if (seen.has(key)) continue;
+      seen.add(key);
+      // 승인 단계와 같은 현재 출연진 검사로 라인업 밖 이름을 막는다.
+      if (
+        !(await this.publicFestivals.hasCurrentArtist(
+          festivalId,
+          festivalSourceUrl,
+          artistName,
+        ))
+      )
+        throw new UnprocessableEntityException(
+          `현재 출연진이 아닌 탐색 대상입니다: ${artistName}`,
+        );
+      targets.push({ festivalId, festivalSourceUrl, artistName });
+    }
+    await this.dataSource.transaction((manager) =>
+      this.audit.record(manager, {
+        actor,
+        action: 'crawl.run.requested',
+        target: `crawl-source:${id}`,
+        before: null,
+        after: { sourceId: id, pinnedTargets: targets },
+      }),
+    );
+    await this.failStaleManualRun(source.id);
+    const insert = await this.runsRepo
+      .createQueryBuilder()
+      .insert()
+      .values({ sourceId: source.id })
+      .orIgnore()
+      .returning('*')
+      .execute();
+    if (!insert.identifiers.length)
+      throw new ConflictException('Commons 탐색이 이미 실행 중입니다.');
+    const run = await this.runsRepo.findOneByOrFail({
+      id: insert.identifiers[0].id as string,
+    });
+    this.pinnedCommonsTargets.set(run.id, targets);
+    void this.execute(run, source)
+      .catch(() => this.logger.error('지정 Commons 탐색 실패'))
+      .finally(() => this.pinnedCommonsTargets.delete(run.id));
+    return { runId: run.id, targets: targets.length };
   }
 
   async prepareApprovedCommonsImage(reviewId: string) {
@@ -676,34 +830,46 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     const run = await this.runsRepo.findOneByOrFail({
       id: inserted.identifiers[0].id as string,
     });
-    await this.execute(run, source);
-    const finished = await this.runsRepo
-      .createQueryBuilder('run')
-      .addSelect('run.artistImageRightsEvidence')
-      .where('run.id = :id', { id: run.id })
-      .getOneOrFail();
-    const evidence = finished.artistImageRightsEvidence;
-    if (
-      !['unchanged', 'nochange-parsed'].includes(finished.result) ||
-      evidence?.status !== 'ok'
-    )
-      throw new UnprocessableEntityException(
-        'Commons 사진의 인물·권리·원본을 검증하지 못했습니다.',
+    try {
+      await this.execute(run, source);
+      const finished = await this.runsRepo
+        .createQueryBuilder('run')
+        .addSelect('run.artistImageRightsEvidence')
+        .where('run.id = :id', { id: run.id })
+        .getOneOrFail();
+      const evidence = finished.artistImageRightsEvidence;
+      if (
+        !['unchanged', 'nochange-parsed'].includes(finished.result) ||
+        evidence?.status !== 'ok'
+      )
+        throw new UnprocessableEntityException(
+          'Commons 사진의 인물·권리·원본을 검증하지 못했습니다.',
+        );
+      const review = await this.dataSource.query<
+        { author: string; license: string; licenseUrl: string }[]
+      >(
+        `SELECT author, license, "licenseUrl" FROM crawl_artist_image_reviews WHERE id = $1::uuid`,
+        [reviewId],
       );
-    const review = await this.dataSource.query<
-      { author: string; license: string; licenseUrl: string }[]
-    >(
-      `SELECT author, license, "licenseUrl" FROM crawl_artist_image_reviews WHERE id = $1::uuid`,
-      [reviewId],
-    );
-    return {
-      runId: run.id,
-      imageId: evidence.imageId,
-      originalSha256: evidence.originalSha256,
-      author: review[0].author,
-      license: review[0].license,
-      licenseUrl: review[0].licenseUrl,
-    };
+      return {
+        runId: run.id,
+        imageId: evidence.imageId,
+        originalSha256: evidence.originalSha256,
+        author: review[0].author,
+        license: review[0].license,
+        licenseUrl: review[0].licenseUrl,
+      };
+    } catch (error) {
+      // 의도된 검증 실패(404/409/422)는 그대로 전달한다. 그 밖의 예외는
+      // 500으로 번지므로 원인 추적을 위해 전체 스택과 맥락을 남기고 다시 던진다.
+      if (!(error instanceof HttpException)) {
+        this.logger.error(
+          `Commons 승인 사진 검증 중 예기치 않은 오류: review=${reviewId}, run=${run.id}, source=${source.id}, seed=${String(source.parserConfig?.seed)}, result=${run.result}`,
+          error instanceof Error ? error.stack : String(error),
+        );
+      }
+      throw error;
+    }
   }
 
   private sourceAuditSnapshot(source: CrawlSource) {
@@ -754,6 +920,30 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     const response = await this.getListing(source);
     if (response.status !== 200)
       throw new UnprocessableEntityException(`HTTP ${response.status}`);
+    if (
+      source.url === PRUGIO_PORTRAIT_PAGE_URL &&
+      ['artist-gallery', 'artist-image'].includes(source.kind) &&
+      source.parserConfig.seed === PRUGIO_PORTRAIT_SEED
+    ) {
+      const collected = await this.collectPrugioPortraits(response.body);
+      const entries =
+        source.kind === 'artist-image'
+          ? collected.portraits.filter(
+              (entry) => entry.artistName === source.parserConfig.artistName,
+            )
+          : collected.portraits;
+      if (!entries.length)
+        throw new UnprocessableEntityException(
+          '푸르지오 공식 사진의 출연진을 찾지 못했습니다.',
+        );
+      return {
+        parsed: entries.map((entry) => ({
+          artistName: entry.artistName,
+          imageUrl: collected.url.href,
+        })),
+        excerpt: `${entries.length}명 공식 프로필 사진`,
+      };
+    }
     if (
       source.kind === 'artist-image' &&
       source.parserConfig.seed === SOHYANG_COMMONS_SEED
@@ -1043,7 +1233,11 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     const order = (source: CrawlSource) =>
       source.kind === 'artist-image-discovery'
         ? 3
-        : ![GMF_LINEUP_URL, WONDERLIVET_LINEUP_URL].includes(source.url)
+        : ![
+              GMF_LINEUP_URL,
+              WONDERLIVET_LINEUP_URL,
+              PRUGIO_PORTRAIT_PAGE_URL,
+            ].includes(source.url)
           ? 1
           : source.kind === 'artist-gallery'
             ? 0
@@ -1056,6 +1250,17 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     let wonderlivetGalleryFailed = false;
     let wonderlivetBundle: { body: string; snapshotUrl: string } | null = null;
     for (const listedSource of sources) {
+      if (
+        listedSource.url === TOUR_API_SOURCE &&
+        !this.config.get<string>('TOUR_API_SERVICE_KEY')
+      )
+        continue;
+      if (
+        listedSource.kind === 'artist-image' &&
+        listedSource.url === PRUGIO_PORTRAIT_PAGE_URL &&
+        listedSource.parserConfig.seed === PRUGIO_PORTRAIT_SEED
+      )
+        continue; // The gallery captures every verified crop in one OCR run.
       if (
         ((gmfGalleryFailed && listedSource.url === GMF_LINEUP_URL) ||
           (wonderlivetGalleryFailed &&
@@ -1073,6 +1278,8 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
           : listedSource;
       if (!source?.enabled || !['ok', 'broken'].includes(source.status))
         continue;
+      // 지정 탐색 소스는 관리자 요청으로만 실행한다.
+      if (source.parserConfig.seed === COMMONS_PINNED_DISCOVERY_SEED) continue;
       const gmfImage =
         source.kind === 'artist-image' &&
         source.url === GMF_LINEUP_URL &&
@@ -1170,7 +1377,11 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       const run = await this.runsRepo.findOneByOrFail({ id: runId });
       if (
         source.kind === 'artist-gallery' &&
-        [GMF_LINEUP_URL, WONDERLIVET_LINEUP_URL].includes(source.url)
+        [
+          GMF_LINEUP_URL,
+          WONDERLIVET_LINEUP_URL,
+          PRUGIO_PORTRAIT_PAGE_URL,
+        ].includes(source.url)
       ) {
         try {
           const verified = await this.execute(run, source);
@@ -1181,7 +1392,8 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         }
         const failed = run.result === 'failed';
         if (source.url === GMF_LINEUP_URL) gmfGalleryFailed = failed;
-        else wonderlivetGalleryFailed = failed;
+        else if (source.url === WONDERLIVET_LINEUP_URL)
+          wonderlivetGalleryFailed = failed;
         if (!failed) {
           const newChildren = await this.sourcesRepo.findBy({
             kind: 'artist-image',
@@ -1442,7 +1654,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
                 : source.url ===
                     'https://ticket.yes24.com/English/Genre/Concert'
                   ? 'ticket-list:v4'
-                  : /^https:\/\/(?:www\.)?mintpaper\.co\.kr\/posts\/4819(?:[?#]|$)/.test(
+                  : /^https:\/\/(?:www\.)?mintpaper\.co\.kr\/(?:posts\/(?:4819|4870)|festivals\/178\/notice\/4870)(?:[?#]|$)/.test(
                         source.url,
                       )
                     ? 'ticket-list:v4'
@@ -1452,6 +1664,10 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
                       ? 'ticket-list:v4'
                       : source.url.startsWith(
                             'https://ticket.melon.com/search/index.htm?',
+                          ) ||
+                          // v4: artist photos use the high-resolution Melon original.
+                          /^https:\/\/ticket\.melon\.com\/performance\/index\.htm\?prodId=\d+$/.test(
+                            source.url,
                           )
                         ? 'ticket-list:v4'
                         : source.url.startsWith(
@@ -1485,6 +1701,22 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       if (source.kind === 'artist-gallery') {
         phase = 'PARSE';
         const config = artistGalleryConfig(source.url, source.parserConfig);
+        if (source.url === PRUGIO_PORTRAIT_PAGE_URL) {
+          const collected = await this.collectPrugioPortraits(response.body);
+          run.contentHash = createHash('sha256')
+            .update(run.contentHash)
+            .update(collected.url.href)
+            .update(
+              collected.portraits.map((entry) => entry.artistName).join('|'),
+            )
+            .digest('hex');
+          phase = 'IMAGE';
+          await this.savePrugioPortraits(source, run, collected);
+          run.result = 'nochange-parsed';
+          source.lastChangedAt = new Date();
+          source.status = 'ok';
+          return;
+        }
         if (source.url === GMF_LINEUP_URL) {
           const entries = parseGmfLineup(
             response.body,
@@ -1762,6 +1994,43 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
             `XMF 갤러리 사진을 저장했지만 공식 공지 별칭을 확인하지 못했습니다: ${error instanceof Error ? error.message : String(error)}`,
           );
         }
+        run.result = 'nochange-parsed';
+        source.lastChangedAt = new Date();
+        source.status = 'ok';
+        return;
+      }
+      if (
+        source.kind === 'artist-image' &&
+        source.url === PRUGIO_PORTRAIT_PAGE_URL &&
+        source.parserConfig.seed === PRUGIO_PORTRAIT_SEED
+      ) {
+        phase = 'PARSE';
+        if (!prugioPortraitConfig(source.url, source.parserConfig, true))
+          throw new Error('푸르지오 공식 사진 소스 설정이 바뀌었습니다.');
+        const collected = await this.collectPrugioPortraits(response.body);
+        const portrait = collected.portraits.find(
+          (entry) => entry.artistName === source.parserConfig.artistName,
+        );
+        if (!portrait)
+          throw new Error('푸르지오 공식 출연진 사진을 확인하지 못했습니다.');
+        phase = 'IMAGE';
+        const stored = await this.captureImages(
+          source,
+          run,
+          [collected.url],
+          new Map([
+            [
+              collected.url.href,
+              {
+                status: 200,
+                body: portrait.body,
+                contentType: 'image/jpeg',
+              },
+            ],
+          ]),
+        );
+        if (stored.length !== 1)
+          throw new Error('푸르지오 공식 사진을 저장하지 못했습니다.');
         run.result = 'nochange-parsed';
         source.lastChangedAt = new Date();
         source.status = 'ok';
@@ -2074,8 +2343,19 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
               error.message === '요청 시간이 초과되었습니다.'
             ? 'TIMEOUT'
             : phase;
+      // 승인 Commons 사진은 단계 코드만으로 원인을 알 수 없어 세부 코드를 함께 남긴다.
+      const detail =
+        source.parserConfig.seed === 'commons-approved-profile' &&
+        error instanceof Error &&
+        /^(?:COMMONS_[A-Z_]+|APPROVED_ORIGINAL_CHANGED|HTTP \d{3})$/.test(
+          error.message,
+        )
+          ? error.message.replace(' ', '_')
+          : null;
       this.logger.warn(
-        `크롤 처리 실패: source=${source.id}, run=${run.id}, code=${run.error}`,
+        `크롤 처리 실패: source=${source.id}, run=${run.id}, code=${run.error}${
+          detail && detail !== run.error ? `, detail=${detail}` : ''
+        }`,
       );
       if (run.error === 'HTTP_403') {
         try {
@@ -2122,6 +2402,8 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
       );
       if (locationParserCompleted && run.result !== 'failed')
         source.parserConfig.locationParserVersion = '1';
+      if (['unchanged', 'proposed', 'nochange-parsed'].includes(run.result))
+        this.autoPublish.requestAfterCrawl();
       if (
         run.result === 'failed' &&
         Number(updated[0]?.[0]?.consecutiveFailures) === 3
@@ -2136,13 +2418,18 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async executeCommonsDiscovery(run: CrawlRun, source: CrawlSource) {
-    if (!validCommonsDiscoverySource(source))
+    const pinned = this.pinnedCommonsTargets.get(run.id);
+    // 정기 소스는 하루 회전만, 지정 소스는 지정 대상만 검색한다.
+    if (
+      pinned
+        ? !validCommonsDiscoverySource(source, COMMONS_PINNED_DISCOVERY_SEED)
+        : !validCommonsDiscoverySource(source)
+    )
       throw new Error('INVALID_COMMONS_SOURCE');
     const missing = await this.publicFestivals.missingArtistImages();
-    const { selected, deferredCount: deferredByCount } = dailyCommonsTargets(
-      missing,
-      run.scheduledDate ?? kstDay(),
-    );
+    const { selected, deferredCount: deferredByCount } = pinned
+      ? { selected: pinned, deferredCount: 0 }
+      : dailyCommonsTargets(missing, run.scheduledDate ?? kstDay());
     const targets: CommonsDiscoveryTarget[] = [];
     const deadline = Date.now() + 10 * 60_000;
     for (const target of selected) {
@@ -2170,6 +2457,43 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         run.error = 'COMMONS_PARTIAL';
       source.lastChangedAt = new Date();
     }
+  }
+
+  /**
+   * Additional, image-only evidence path for official pages whose lineup lives
+   * inside an image (e.g. NOL World). Accepts the stored OCR text only when the
+   * image is still referenced by the official page, the re-fetched bytes match
+   * the stored SHA-256, and the OCR text mentions the artist. This never
+   * weakens or replaces the HTML {@link officialPageMentionsArtist} check.
+   */
+  private async officialImageOcrMentionsArtist(
+    officialHtml: string,
+    officialPageUrl: string,
+    artistName: string,
+  ): Promise<boolean> {
+    const evidenceRun = await this.runsRepo
+      .createQueryBuilder('run')
+      .innerJoin(CrawlSource, 'source', 'source.id = run.sourceId')
+      .where('source.url = :url', { url: officialPageUrl })
+      .andWhere('run.lineupEvidence IS NOT NULL')
+      .andWhere("run.result != 'failed'")
+      .orderBy('run.startedAt', 'DESC')
+      .addOrderBy('run.id', 'DESC')
+      .getOne();
+    const candidates = officialOcrLineupImageCandidates(
+      officialHtml,
+      officialPageUrl,
+      evidenceRun?.lineupEvidence ?? null,
+      (rawLines) => textMentionsArtist(rawLines.join('\n'), artistName),
+    );
+    for (const candidate of candidates) {
+      await this.checkRobots(candidate.imageUrl.href);
+      const image = await this.limitedGetImage(candidate.imageUrl);
+      if (image.status !== 200) continue;
+      const hash = createHash('sha256').update(image.body).digest('hex');
+      if (hash === candidate.imageHash) return true;
+    }
+    return false;
   }
 
   private async executeApprovedCommonsImage(
@@ -2234,7 +2558,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         })
         .andWhere('source.url = :url', { url: review.officialEvidenceUrl })
         .andWhere(
-          "source.parserConfig->>'festivalSourceUrl' = :festivalSourceUrl",
+          'source."parserConfig"->>\'festivalSourceUrl\' = :festivalSourceUrl',
           { festivalSourceUrl: review.festivalSourceUrl },
         )
         .getOne();
@@ -2244,9 +2568,15 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
     const official = await this.limitedGet(
       checkedUrl(review.officialEvidenceUrl),
     );
+    if (official.status !== 200)
+      throw new Error('COMMONS_OFFICIAL_EVIDENCE_MISMATCH');
     if (
-      official.status !== 200 ||
-      !officialPageMentionsArtist(official.body, review.artistName)
+      !officialPageMentionsArtist(official.body, review.artistName) &&
+      !(await this.officialImageOcrMentionsArtist(
+        official.body,
+        review.officialEvidenceUrl,
+        review.artistName,
+      ))
     )
       throw new Error('COMMONS_OFFICIAL_EVIDENCE_MISMATCH');
     await this.checkRobots(source.url);
@@ -3039,13 +3369,17 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
           draft?: FestivalDocument | null;
         }[]
       >(
-        `SELECT item->'after'->>'url' AS url, item->'after' AS value,
+        `SELECT * FROM (
+         SELECT DISTINCT ON (item->'after'->>'url')
+           item->'after'->>'url' AS url, item->'after' AS value,
            p.id AS "proposalId", NULL::varchar AS "festivalId",
            NULL::jsonb AS draft
          FROM crawl_proposals p, jsonb_array_elements(p.items) item
          WHERE "sourceId" = $1 AND kind = 'festival.new'
            AND status IN ('open', 'partial')
            AND item->>'decision' = 'pending'
+         ORDER BY item->'after'->>'url', p."createdAt" DESC, p.id DESC
+         ) latest_pending
          UNION ALL
          SELECT draft->'source'->>'url' AS url, NULL::jsonb AS value,
            NULL::uuid AS "proposalId", id AS "festivalId", draft
@@ -3053,11 +3387,30 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
          WHERE draft->'source'->>'url' IS NOT NULL`,
         [source.id],
       );
+      const isDuplicate = (entry: unknown) =>
+        !!entry &&
+        typeof entry === 'object' &&
+        known.some(
+          (row) =>
+            row.value !== null &&
+            row.url === (entry as Record<string, unknown>).url &&
+            isDeepStrictEqual(row.value, entry),
+        );
+      // A location-only proposal must not consume changed catalog metadata.
+      const hasNewDiscovery = parsed.some(
+        (entry: Record<string, unknown>) =>
+          entry &&
+          entry.name &&
+          entry.venue &&
+          entry.date &&
+          !isDuplicate(entry),
+      );
       if (
         /^https:\/\/ticket\.melon\.com\/performance\/index\.htm\?prodId=\d+$/.test(
           source.url,
         ) &&
-        parsed.length === 1
+        parsed.length === 1 &&
+        !hasNewDiscovery
       ) {
         const entry = parsed[0] as Record<string, unknown> | null;
         const point = venuePoint(entry?.location);
@@ -3108,11 +3461,7 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
           entry && typeof entry === 'object'
             ? (entry as Record<string, unknown>).url
             : null;
-        const duplicate = known.some(
-          (row) =>
-            row.url === url &&
-            (row.value === null || isDeepStrictEqual(row.value, entry)),
-        );
+        const duplicate = isDuplicate(entry);
         return typeof url === 'string' && !duplicate
           ? [item(String(index), 'add', '/', null, entry)]
           : [];
@@ -3223,6 +3572,8 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async checkRobots(raw: string) {
+    // Official authenticated API access follows its published API contract.
+    if (raw === TOUR_API_SOURCE) return;
     let url: URL;
     try {
       url = checkedUrl(raw);
@@ -3333,6 +3684,55 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async getListing(source: CrawlSource) {
+    if (source.url === TOUR_API_SOURCE) {
+      const key = this.config.get<string>('TOUR_API_SERVICE_KEY');
+      if (!key) throw new Error('TOUR_API_SERVICE_KEY가 설정되지 않았습니다.');
+      const today = kstDay();
+      const year = Number(today.slice(0, 4));
+      const first = `${year - 1}${today.slice(5).replace('-', '')}`;
+      const last = `${year + 1}${today.slice(5).replace('-', '')}`;
+      const rows: Record<string, unknown>[] = [];
+      const contentIds = new Set<string>();
+      let totalCount: number | undefined;
+      for (let page = 1; page <= 10; page++) {
+        const url = checkedUrl(source.url);
+        url.searchParams.set('serviceKey', key);
+        url.searchParams.set('MobileOS', 'ETC');
+        url.searchParams.set('MobileApp', 'FestiCore');
+        url.searchParams.set('_type', 'json');
+        url.searchParams.set('eventStartDate', first);
+        url.searchParams.set('eventEndDate', last);
+        url.searchParams.set('arrange', 'C');
+        url.searchParams.set('numOfRows', '100');
+        url.searchParams.set('pageNo', String(page));
+        const response = await this.limitedGet(url);
+        if (response.status !== 200) return response;
+        const result = tourApiPage(response.body);
+        totalCount ??= result.totalCount;
+        if (result.totalCount !== totalCount)
+          throw new Error('TourAPI 수집 중 총건수가 변경되었습니다.');
+        for (const item of result.items) {
+          const value = item.contentid;
+          const id =
+            typeof value === 'string' || typeof value === 'number'
+              ? String(value)
+              : '';
+          if (!/^\d+$/.test(id) || contentIds.has(id))
+            throw new Error('TourAPI 목록 식별자가 없거나 중복되었습니다.');
+          contentIds.add(id);
+        }
+        rows.push(...result.items);
+        if (rows.length > totalCount)
+          throw new Error('TourAPI 목록이 총건수를 초과했습니다.');
+        if (rows.length === totalCount)
+          return { status: 200, body: JSON.stringify(rows) };
+        if (!result.items.length)
+          throw new Error('TourAPI 목록이 총건수 전에 종료되었습니다.');
+      }
+      throw new Error(
+        'TourAPI 페이지 상한으로 전체 목록을 수집하지 못했습니다.',
+      );
+    }
     const response = await this.limitedGet(checkedUrl(source.url));
     if (response.status !== 200) return response;
     if (
@@ -3362,6 +3762,145 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
 
   private async limitedGetImage(url: URL) {
     return this.withHostLock(url, () => safeGetImage(url));
+  }
+
+  private async collectPrugioPortraits(page: string) {
+    const posterUrl = prugioPortraitPosterUrl(page);
+    if (!posterUrl)
+      throw new Error(
+        '푸르지오 공식 멜론 상세에서 프로필 포스터를 확인하지 못했습니다.',
+      );
+    await this.checkRobots(PRUGIO_LINEUP_URL);
+    const official = await this.limitedGet(checkedUrl(PRUGIO_LINEUP_URL));
+    if (official.status !== 200)
+      throw new Error(`푸르지오 공식 출연진 HTTP ${official.status}`);
+    const names = parsePrugioLineup(official.body).artists.map(
+      (artist) => artist.name,
+    );
+    await this.checkRobots(posterUrl.href);
+    const image = await this.limitedGetImage(posterUrl);
+    if (image.status !== 200 || image.contentType !== 'image/jpeg')
+      throw new Error(`푸르지오 공식 프로필 이미지 HTTP ${image.status}`);
+    return {
+      url: posterUrl,
+      portraits: await extractPrugioPortraits(image.body, names),
+    };
+  }
+
+  private async savePrugioPortraits(
+    gallery: CrawlSource,
+    galleryRun: CrawlRun,
+    collected: Awaited<ReturnType<CrawlService['collectPrugioPortraits']>>,
+  ) {
+    for (const portrait of collected.portraits) {
+      const existing = await this.dataSource.query<
+        { id: string; seed: string }[]
+      >(
+        `SELECT id, "parserConfig"->>'seed' AS seed FROM crawl_sources
+         WHERE kind = 'artist-image' AND url = $1::text
+           AND "parserConfig"->>'festivalSourceUrl' = $2::text
+           AND "parserConfig"->>'artistName' = $3::text`,
+        [gallery.url, PRUGIO_LINEUP_URL, portrait.artistName],
+      );
+      if (
+        existing.some((row) => row.seed !== PRUGIO_PORTRAIT_SEED) ||
+        existing.length > 1
+      )
+        throw new Error(
+          '푸르지오 공식 사진과 충돌하는 출연진 소스가 있습니다.',
+        );
+      if (!existing.length)
+        await this.dataSource.query(
+          `INSERT INTO crawl_sources
+             (kind, url, parser, "parserConfig", "createdAt")
+           SELECT 'artist-image', $1::text, 'html-text',
+             jsonb_build_object('seed', $4::text,
+               'festivalSourceUrl', $2::text, 'artistName', $3::text),
+             now() - interval '1 day'
+           WHERE NOT EXISTS (
+             SELECT 1 FROM crawl_sources WHERE kind = 'artist-image'
+               AND url = $1::text AND "parserConfig"->>'festivalSourceUrl' = $2::text
+               AND "parserConfig"->>'artistName' = $3::text
+           )`,
+          [
+            gallery.url,
+            PRUGIO_LINEUP_URL,
+            portrait.artistName,
+            PRUGIO_PORTRAIT_SEED,
+          ],
+        );
+      const child = await this.sourcesRepo
+        .createQueryBuilder('source')
+        .where('source.kind = :kind AND source.url = :url', {
+          kind: 'artist-image',
+          url: gallery.url,
+        })
+        .andWhere(`source."parserConfig"->>'festivalSourceUrl' = :festival`, {
+          festival: PRUGIO_LINEUP_URL,
+        })
+        .andWhere(`source."parserConfig"->>'artistName' = :artist`, {
+          artist: portrait.artistName,
+        })
+        .getOneOrFail();
+      if (!child.enabled || child.parserConfig.seed !== PRUGIO_PORTRAIT_SEED)
+        continue; // A manual disable remains authoritative.
+      const childRun = await this.runsRepo.save(
+        this.runsRepo.create({
+          sourceId: child.id,
+          snapshotUrl: galleryRun.snapshotUrl,
+        }),
+      );
+      try {
+        const imageUrls = await this.captureImages(
+          child,
+          childRun,
+          [collected.url],
+          new Map([
+            [
+              collected.url.href,
+              {
+                status: 200,
+                body: portrait.body,
+                contentType: 'image/jpeg',
+              },
+            ],
+          ]),
+        );
+        if (imageUrls.length !== 1)
+          throw new Error(
+            `${portrait.artistName} 프로필 사진을 저장하지 못했습니다.`,
+          );
+        childRun.result = 'nochange-parsed';
+        child.status = 'ok';
+        child.consecutiveFailures = 0;
+        child.lastChangedAt = new Date();
+      } catch (error) {
+        childRun.result = 'failed';
+        childRun.error = 'IMAGE';
+        child.consecutiveFailures += 1;
+        if (child.consecutiveFailures >= 3) child.status = 'broken';
+        throw error;
+      } finally {
+        childRun.finishedAt = new Date();
+        child.lastRunAt = childRun.finishedAt;
+        await this.runsRepo.save(childRun);
+        // Preserve administrator changes made while image capture was awaiting.
+        await this.dataSource.query(
+          `UPDATE crawl_sources SET
+            "lastRunAt" = $1, "lastChangedAt" = COALESCE($2, "lastChangedAt"),
+            "status" = CASE WHEN "enabled" = false THEN 'disabled'
+              WHEN $3::boolean AND "consecutiveFailures" >= 2 THEN 'broken' ELSE 'ok' END,
+            "consecutiveFailures" = CASE WHEN $3::boolean THEN "consecutiveFailures" + 1 ELSE 0 END,
+            "updatedAt" = now() WHERE "id" = $4`,
+          [
+            child.lastRunAt,
+            child.lastChangedAt,
+            childRun.result === 'failed',
+            child.id,
+          ],
+        );
+      }
+    }
   }
 
   private async withHostLock<T>(
@@ -3419,6 +3958,8 @@ export class CrawlService implements OnModuleInit, OnModuleDestroy {
         const prepared = await prepareCrawlImage(
           response.body,
           response.contentType,
+          undefined,
+          crawlImageQuality(url),
         );
         if (source.kind === 'artist-image')
           run.contentHash = createHash('sha256')

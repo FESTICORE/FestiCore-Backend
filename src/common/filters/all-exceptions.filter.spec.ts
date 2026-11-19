@@ -2,6 +2,7 @@ import {
   ArgumentsHost,
   BadRequestException,
   ConflictException,
+  HttpException,
   Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -234,6 +235,28 @@ describe('AllExceptionsFilter', () => {
       data: { draftVersion: 2, draft: { name: '현재 초안' } },
       message: '초안 충돌',
       code: 'DRAFT_CONFLICT',
+    });
+  });
+
+  it('기수 코드 오류의 남은 시도 횟수를 전달한다', () => {
+    const { host, response, json } = hostFor({}, '/api/v1/bearer/claim');
+    new AllExceptionsFilter().catch(
+      new HttpException(
+        {
+          code: 'BEARER_CODE_INVALID',
+          message: '유효하지 않은 코드입니다.',
+          remainingAttempts: 2,
+          codeHash: 'never-expose',
+        },
+        422,
+      ),
+      host,
+    );
+    expect(response.status).toHaveBeenCalledWith(422);
+    expect(json).toHaveBeenCalledWith({
+      code: 'BEARER_CODE_INVALID',
+      data: { remainingAttempts: 2 },
+      message: '유효하지 않은 코드입니다.',
     });
   });
 

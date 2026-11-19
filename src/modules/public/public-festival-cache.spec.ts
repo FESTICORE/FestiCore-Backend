@@ -1,3 +1,4 @@
+import { publicFestivalTestDataSource } from '../../../test/public-festival-test-data-source';
 import { NotFoundException } from '@nestjs/common';
 import { PublicFestivalService } from './public-festival.service';
 
@@ -51,6 +52,83 @@ describe('PublicFestivalService published cache', () => {
     return { service, cache, findOne, visibleRows, dataSource };
   }
 
+  it('preserves metadata dates and lineup without exposing unverified artist times or remote images', async () => {
+    const { service, findOne } = setup();
+    findOne.mockResolvedValue({
+      publishedVersion: 1,
+      published: {
+        id,
+        packVersion: 1,
+        eventPeriod: {
+          firstDate: '2026-11-19',
+          lastDate: '2026-11-20',
+          private: 'secret',
+        },
+        timetableStatus: 'unpublished',
+        days: [],
+        stages: [],
+        sets: [],
+        artists: [
+          {
+            name: 'Band',
+            startsAt: 'invented',
+            imageUrl: 'https://example.com/image.jpg',
+          },
+        ],
+      },
+    });
+    const pack = await service.published(id);
+    expect(pack).toMatchObject({
+      eventPeriod: { firstDate: '2026-11-19', lastDate: '2026-11-20' },
+      timetableStatus: 'pending',
+      days: [],
+      stages: [],
+      sets: [],
+      timetable: [],
+      artists: [{ name: 'Band', imageUrl: null }],
+    });
+    expect(pack.eventPeriod).not.toHaveProperty('private');
+    expect(JSON.stringify(pack)).not.toContain('invented');
+  });
+
+  it('publishes a trimmed one-line set note and drops other values', async () => {
+    const { service, findOne } = setup();
+    const set = {
+      stageId: 'stg_12345678',
+      startsAt: '2026-11-20T13:00:00+09:00',
+      endsAt: '2026-11-20T14:00:00+09:00',
+    };
+    findOne.mockResolvedValue({
+      publishedVersion: 1,
+      published: {
+        id,
+        packVersion: 1,
+        stages: [{ id: 'stg_12345678', name: '메인', order: 1 }],
+        sets: [
+          {
+            ...set,
+            id: 'set_a',
+            artist: 'A',
+            note: ' 앵콜 없이 정시에 끝나요 ',
+          },
+          { ...set, id: 'set_b', artist: 'B', note: '두 줄\n메모' },
+          { ...set, id: 'set_c', artist: 'C', note: 3 },
+        ],
+      },
+    });
+    const pack = await service.published(id);
+    expect(pack.sets).toMatchObject([
+      { artist: 'A', note: '앵콜 없이 정시에 끝나요' },
+      { artist: 'B', note: null },
+      { artist: 'C', note: null },
+    ]);
+    expect(pack.timetable).toMatchObject([
+      { artist: 'A', note: '앵콜 없이 정시에 끝나요' },
+      { artist: 'B', note: null },
+      { artist: 'C', note: null },
+    ]);
+  });
+
   it('serves a hit without querying the database', async () => {
     const { service, cache, findOne } = setup();
     await service.published(id);
@@ -67,6 +145,145 @@ describe('PublicFestivalService published cache', () => {
       NotFoundException,
     );
     expect(cache.setPack).not.toHaveBeenCalled();
+  });
+
+  it('exposes a published date-only pack with an empty timetable', async () => {
+    const { service, findOne } = setup();
+    findOne.mockResolvedValue({
+      publishedVersion: 1,
+      published: {
+        id,
+        name: '날짜 확인 축제',
+        eventPeriod: { firstDate: '2026-11-19', lastDate: '2026-11-20' },
+        days: [],
+        stages: [],
+        sets: [],
+        packVersion: 1,
+      },
+    });
+    await expect(service.published(id)).resolves.toMatchObject({
+      eventPeriod: { firstDate: '2026-11-19', lastDate: '2026-11-20' },
+      days: [],
+      timetable: [],
+      timetableStatus: 'pending',
+      packVersion: 1,
+    });
+  });
+
+  it('routes old COUNTDOWN IDs to the official festival pack and detail', async () => {
+    const { service, findOne } = setup();
+    const canonical = 'fst_c39663182b10a105';
+    const alias = 'fst_c6dacea8997cd72b';
+    findOne.mockResolvedValue({
+      publishedVersion: 1,
+      published: {
+        id: canonical,
+        name: 'COUNTDOWN FANTASY 2026-2027',
+        packVersion: 1,
+      },
+    });
+    await expect(service.detail(alias)).resolves.toMatchObject({
+      id: canonical,
+    });
+    await expect(service.publishedPack(alias)).resolves.toMatchObject({
+      document: { id: canonical },
+    });
+    expect(findOne).toHaveBeenCalledWith({ where: { id: canonical } });
+    await expect(service.discovered(alias)).resolves.toBeNull();
+  });
+
+  it('shows only the official COUNTDOWN ID in the public list', async () => {
+    const canonical = 'fst_c39663182b10a105';
+    const alias = 'fst_c6dacea8997cd72b';
+    const builder = {
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      getMany: jest.fn().mockResolvedValue([]),
+    };
+    const service = new PublicFestivalService(
+      { createQueryBuilder: () => builder } as never,
+      {} as never,
+      publicFestivalTestDataSource(jest.fn().mockResolvedValue([])) as never,
+      {} as never,
+    );
+    const festival = {
+      name: 'COUNTDOWN FANTASY 2026-2027',
+      venue: 'KINTEX',
+      firstDate: '2026-12-31',
+      lastDate: '2027-01-01',
+      sortAt: '2026-12-31T00:00:00+09:00',
+      packVersion: 0,
+      flagsEnabled: false,
+      thumbUrl: null,
+      posterUrl: null,
+      ticketLinks: [],
+      status: 'discovered',
+      sourceUrl: 'https://mintpaper.co.kr/festivals/178',
+      sourceUrls: ['https://mintpaper.co.kr/festivals/178'],
+    };
+    jest.spyOn(service as never, 'discoveryCatalog').mockResolvedValue([
+      { ...festival, id: alias },
+      { ...festival, id: canonical },
+    ] as never);
+    jest
+      .spyOn(service as never, 'attachStoredImages')
+      .mockResolvedValue(new Map() as never);
+    const result = await service.list(undefined, '20', new Date('2026-11-04'));
+    expect(result.items.map((item) => item.id)).toEqual([canonical]);
+  });
+
+  it('lists a published date-only pack instead of treating it as discovered', async () => {
+    const builder = {
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      getMany: jest.fn().mockResolvedValue([
+        {
+          id,
+          publishedVersion: 1,
+          published: {
+            id,
+            name: '날짜 확인 축제',
+            venue: '공연장',
+            eventPeriod: { firstDate: '2026-11-19', lastDate: '2026-11-20' },
+            days: [],
+            stages: [],
+            sets: [],
+            flagsEnabled: false,
+          },
+        },
+      ]),
+    };
+    const service = new PublicFestivalService(
+      { createQueryBuilder: () => builder } as never,
+      {} as never,
+      publicFestivalTestDataSource(jest.fn().mockResolvedValue([])) as never,
+      {} as never,
+    );
+    const result = await service.list(
+      undefined,
+      '20',
+      new Date('2026-11-04T00:00:00Z'),
+    );
+    expect(result.items).toEqual([
+      expect.objectContaining({
+        id,
+        firstDate: '2026-11-19',
+        lastDate: '2026-11-20',
+        packVersion: 1,
+        status: 'upcoming',
+      }),
+    ]);
+    expect(
+      builder.andWhere.mock.calls.some(([sql]) =>
+        String(sql).includes('eventPeriod'),
+      ),
+    ).toBe(true);
   });
 
   it('includes each published set artist with a stored image in detail and pack', async () => {
@@ -141,6 +358,37 @@ describe('PublicFestivalService published cache', () => {
     const packed = await service.publishedPack(id);
     expect(version.etag).toBe(packed.etag);
     expect(version.etag).toMatch(/^"[0-9a-f]{64}"$/);
+  });
+
+  it('keeps stored lineup photos in publishedPack when the pack has no sets', async () => {
+    const { service, findOne, visibleRows } = setup();
+    const imageUrl =
+      '/api/v1/festivals/images/00000000-0000-4000-8000-000000000001.webp';
+    findOne.mockResolvedValue({
+      publishedVersion: 1,
+      published: {
+        id,
+        packVersion: 1,
+        sets: [],
+        artists: [{ name: '가수 A', imageUrl }],
+      },
+    });
+    visibleRows.push({
+      id: imageUrl.match(/[0-9a-f-]{36}/)![0],
+      seed: null,
+      artistName: null,
+      reviewFestivalId: null,
+      festivalSourceUrl: null,
+      author: null,
+      license: null,
+      licenseUrl: null,
+      sourceUrl: null,
+      rightsRunId: null,
+    });
+
+    const { document } = await service.publishedPack(id);
+
+    expect(document.artists).toEqual([{ name: '가수 A', imageUrl }]);
   });
 
   it('an older reader cannot revive a pack after invalidation', async () => {
@@ -276,7 +524,7 @@ describe('PublicFestivalService published cache', () => {
     const service = new PublicFestivalService(
       { createQueryBuilder: () => builder } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     const result = await service.list(
@@ -324,7 +572,7 @@ describe('PublicFestivalService published cache', () => {
     const service = new PublicFestivalService(
       { createQueryBuilder: () => builder } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
 

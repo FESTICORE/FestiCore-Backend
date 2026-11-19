@@ -12,7 +12,6 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Request } from 'express';
-import { DataSource } from 'typeorm';
 import {
   ApiBody,
   ApiConsumes,
@@ -42,7 +41,6 @@ export class AdminFestivalMapController {
     private readonly festivals: AdminFestivalService,
     private readonly storage: ImageStorageService,
     private readonly config: ConfigService,
-    private readonly db: DataSource,
     private readonly audit: AdminAuditService,
   ) {}
 
@@ -134,15 +132,13 @@ export class AdminFestivalMapController {
     }
     const key = await this.storage.saveFestivalMap(id, prepared.image);
     try {
-      await this.db.transaction((manager) =>
-        this.audit.record(manager, {
-          actor: request.admin!.id,
-          action: 'festival.map.uploaded',
-          target: `festival:${id}`,
-          before: null,
-          after: { key, aspect: prepared.aspect },
-        }),
-      );
+      await this.audit.recordStandalone({
+        actor: request.admin!.id,
+        action: 'festival.map.uploaded',
+        target: `festival:${id}`,
+        before: null,
+        after: { key, aspect: prepared.aspect },
+      });
     } catch (error) {
       try {
         await this.storage.delete(key);

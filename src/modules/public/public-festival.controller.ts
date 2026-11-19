@@ -21,11 +21,16 @@ import {
 } from '@nestjs/swagger';
 import { brotliCompressSync, gzipSync } from 'zlib';
 import type { Request, Response } from 'express';
+import { canonicalFestivalId } from '../../../scripts/festival-aliases.cjs';
 import { apiSuccess } from '../../common/interfaces/api-response.interface';
 import { Public } from '../auth/decorator/public.decorator';
 import { DeviceAuthGuard } from '../device/device-auth.guard';
 import { DeviceService } from '../device/device.service';
-import { envelopeEtag, PublicFestivalService } from './public-festival.service';
+import {
+  envelopeEtag,
+  packChangesEtag,
+  PublicFestivalService,
+} from './public-festival.service';
 import { PublicLiveService } from './public-live.service';
 
 function matchesEtag(header: string | undefined, etag: string): boolean {
@@ -110,13 +115,13 @@ export class PublicFestivalController {
   @ApiOperation({
     summary: '축제 목록',
     description:
-      '발행 축제와 판매처에서 발견한 축제를 함께 조회합니다. 각 항목의 ticketLinks(최대 5개)는 예매처·공식 링크이며 thumbUrl은 썸네일입니다. 발견 항목은 status=discovered, packVersion=0이며 팩은 아직 없습니다. 발견 항목의 날짜는 공연 날짜만 뜻하고 시작 시각은 확인되지 않았습니다. 요청 본문은 없습니다.',
+      '발행 축제와 판매처에서 발견한 축제를 함께 조회합니다. artists는 검색용 출연진 이름과 확인된 전체 공연 일정이며 사진 정보는 포함하지 않습니다. artistNames는 같은 출연진 이름 중 최대 50개입니다. 각 항목의 ticketLinks(최대 5개)는 예매처·공식 링크이며 thumbUrl은 썸네일입니다. 발견 항목은 status=discovered, packVersion=0이며 팩은 아직 없습니다. 발견 항목의 날짜는 공연 날짜만 뜻하고 시작 시각은 확인되지 않았습니다. 요청 본문은 없습니다.',
   })
   @ApiQuery({
     name: 'after',
     required: false,
     description:
-      '조회 하한 날짜 YYYY-MM-DD 또는 이전 응답의 nextCursor(조회 하한 날짜~정렬 ISO8601 시각~축제 ID, URL 인코딩 필요). 발견 항목의 정렬 시각은 공연 시작 시각이 아닙니다.',
+      '조회 하한 날짜 YYYY-MM-DD 또는 이전 응답의 nextCursor(조회 하한 날짜~v2~정렬 기준일~순위~날짜~축제 ID, URL 인코딩 필요). 진행 중, 다가오는 일정, 종료된 일정 순으로 정렬하며 같은 날짜는 ID 순입니다. 유효한 이전 형식 커서는 날짜 하한을 유지한 첫 페이지로 전환하고 새 커서를 반환합니다.',
     example: '2026-10-21',
   })
   @ApiQuery({
@@ -150,10 +155,23 @@ export class PublicFestivalController {
               firstDate: '2026-10-24',
               lastDate: '2026-10-24',
               packVersion: 1,
+              artists: [
+                {
+                  name: '샘플 밴드',
+                  performances: [
+                    {
+                      startsAt: '2026-10-24T19:00:00+09:00',
+                      date: '2026-10-24',
+                      stageName: '메인 무대',
+                    },
+                  ],
+                },
+              ],
               thumbUrl: 'https://example.com/festival.webp',
               ticketLinks: [
                 { label: '예스24', url: 'https://ticket.yes24.com/Perf/12345' },
               ],
+              artistNames: ['노이즈캔디', '삼보마스터'],
               status: 'upcoming',
             },
             {
@@ -171,6 +189,7 @@ export class PublicFestivalController {
                   url: 'https://ticket.melon.com/performance/index.htm?prodId=12345',
                 },
               ],
+              artistNames: [],
               status: 'discovered',
               sourceUrl:
                 'https://ticket.melon.com/performance/index.htm?prodId=12345',
@@ -209,9 +228,11 @@ export class PublicFestivalController {
           deviceId,
           principal,
         );
-        const pins = new Map(
-          items.map((item) => [item.festivalId, item.pinned]),
-        );
+        const pins = new Map<string, boolean>();
+        for (const item of items) {
+          const canonical = canonicalFestivalId(item.festivalId);
+          pins.set(canonical, (pins.get(canonical) ?? false) || item.pinned);
+        }
         body.items = body.items.map((item) => ({
           ...item,
           pinned: pins.get(item.id) ?? false,
@@ -342,7 +363,8 @@ export class PublicFestivalController {
         data: {
           packVersion: 1,
           packUpdatedAt: '2026-10-20T09:00:00Z',
-          etag: '"cdm3-v1"',
+          etag: '"cdm7-v1"',
+          mapVersion: 'zm-3f2a9c1d0b7e',
         },
         message: '성공적으로 처리되었습니다.',
       },
@@ -362,6 +384,98 @@ export class PublicFestivalController {
     const body = await this.service.version(id);
     response.setHeader('Cache-Control', 'public, no-cache, must-revalidate');
     this.send(response, body, body.etag, ifNoneMatch);
+  }
+
+  @Get(':id/pack/changes')
+  @ApiOperation({
+    summary: '받은 팩과 현재 발행 팩의 차이',
+    description:
+      'from에 앱이 가진 팩 버전을 보내면 현재 발행 버전, 받을 팩 크기(sizeBytes), 바뀐 공연 수(changedSets), 막차·마지막 셔틀 시각 변경(ISO8601), 날짜별 막차 변경(lastDepartures)을 돌려줍니다. 이전 버전 기록이 없으면 changedSets는 null입니다. ETag가 같으면 304입니다. 요청 본문은 없습니다.',
+  })
+  @ApiParam(festivalId)
+  @ApiQuery({
+    name: 'from',
+    required: true,
+    description: '앱에 저장된 팩 버전(1 이상 정수)',
+    example: 12,
+  })
+  @ApiResponse({
+    status: 200,
+    description: '팩 변경 요약',
+    schema: {
+      type: 'object',
+      example: {
+        code: 'SUCCESS',
+        data: {
+          fromVersion: 12,
+          toVersion: 13,
+          sizeBytes: 524288,
+          changedSets: 2,
+          lastShuttleAt: {
+            before: '2026-10-17T23:40:00+09:00',
+            after: '2026-10-17T23:20:00+09:00',
+          },
+          lastTrainAt: null,
+          lastDepartures: [
+            {
+              date: '2026-10-18',
+              before: { shuttleAt: '2026-10-18T23:40:00+09:00', trainAt: null },
+              after: {
+                shuttleAt: '2026-10-18T23:20:00+09:00',
+                trainAt: '2026-10-19T00:12:00+09:00',
+              },
+            },
+          ],
+        },
+        message: '성공적으로 처리되었습니다.',
+      },
+    },
+  })
+  @ApiHeader({
+    name: 'If-None-Match',
+    required: false,
+    description:
+      '이전 응답의 ETag. from과 현재 공개 팩(버전·이미지 승인 상태)이 같으면 304.',
+  })
+  @ApiResponse({ status: 304, description: '변경 요약이 바뀌지 않았습니다.' })
+  @ApiResponse({
+    status: 400,
+    description: 'from이 1 이상 정수가 아닙니다.',
+    schema: jsonErrorSchema('VALIDATION'),
+  })
+  @ApiResponse({
+    status: 404,
+    description: '발행된 축제가 없습니다.',
+    schema: jsonErrorSchema('FESTIVAL_NOT_FOUND'),
+  })
+  async packChanges(
+    @Param('id') id: string,
+    @Query('from') from: string | undefined,
+    @Headers('if-none-match') ifNoneMatch: string | undefined,
+    @Res() response: Response,
+  ) {
+    const fromVersion = Number(from);
+    if (
+      !from ||
+      !/^\d+$/.test(from) ||
+      !Number.isSafeInteger(fromVersion) ||
+      fromVersion < 1
+    )
+      throw new BadRequestException({
+        code: 'VALIDATION',
+        message: 'from은 1 이상 정수여야 합니다.',
+      });
+    const { changes, packEtag } = await this.service.packChanges(
+      id,
+      fromVersion,
+    );
+    response.setHeader('Cache-Control', 'public, no-cache, must-revalidate');
+    this.send(
+      response,
+      changes,
+      packChangesEtag(fromVersion, packEtag),
+      ifNoneMatch,
+    );
   }
 
   @Get(':id/pack')
@@ -563,7 +677,7 @@ export class PublicFestivalController {
   ) {
     try {
       const { body, etag } = await this.liveService.board(
-        id,
+        canonicalFestivalId(id),
         deviceId,
         authorization,
       );

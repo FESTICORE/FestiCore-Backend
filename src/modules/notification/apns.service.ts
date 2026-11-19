@@ -7,6 +7,7 @@ import {
   type ClientHttp2Stream,
 } from 'node:http2';
 import { importPKCS8, SignJWT } from 'jose';
+import { socialAlertText } from './social-notification-text';
 
 export interface ApnsSendResult {
   accepted: boolean;
@@ -17,6 +18,22 @@ export interface ApnsSendResult {
 
 export type TestPushType =
   'flag.status' | 'crew.status' | 'crew.gather' | 'pack.updated';
+
+/** Notification Service Extension이 App Group 없이 알림을 보강할 축제 정보. */
+export interface FestivalContext {
+  festivalName?: string;
+  /** https URL만 넣는다. */
+  imageUrl?: string;
+}
+
+function festivalContext(input: FestivalContext): FestivalContext {
+  return {
+    ...(input.festivalName ? { festivalName: input.festivalName } : {}),
+    ...(input.imageUrl?.startsWith('https://') && input.imageUrl.length <= 1024
+      ? { imageUrl: input.imageUrl }
+      : {}),
+  };
+}
 
 const REQUEST_TIMEOUT_MS = 8_000;
 const PROVIDER_TOKEN_LIFETIME_MS = 40 * 60_000;
@@ -46,7 +63,13 @@ export class ApnsService {
   async sendStartNotification(
     token: string,
     environment: 'sandbox' | 'production',
-    input: { title: string; body: string; eventKey: string },
+    input: {
+      title: string;
+      body: string;
+      eventKey: string;
+      type?: 'festival.start';
+      festivalId?: string;
+    } & FestivalContext,
   ): Promise<ApnsSendResult> {
     return this.send(
       token,
@@ -55,7 +78,11 @@ export class ApnsService {
         aps: {
           alert: { title: input.title, body: input.body },
           sound: 'default',
+          'mutable-content': 1,
         },
+        ...(input.type ? { type: input.type } : {}),
+        ...(input.festivalId ? { festivalId: input.festivalId } : {}),
+        ...festivalContext(input),
         eventKey: input.eventKey,
       },
       { pushType: 'alert', priority: '10', collapseKey: input.eventKey },
@@ -71,7 +98,7 @@ export class ApnsService {
       body: string;
       eventKey: string;
       hasPack: boolean;
-    },
+    } & FestivalContext,
   ): Promise<ApnsSendResult> {
     return this.send(
       token,
@@ -80,13 +107,59 @@ export class ApnsService {
         aps: {
           alert: { title: input.title, body: input.body },
           sound: 'default',
+          'mutable-content': 1,
         },
         type: 'festival.reminder',
         route: input.hasPack ? `/festivals/${input.festivalId}/checklist` : '/',
         festivalId: input.festivalId,
+        ...festivalContext(input),
         eventKey: input.eventKey,
       },
       { pushType: 'alert', priority: '10', collapseKey: input.eventKey },
+    );
+  }
+
+  /** 저장한 공연 알림. Notification Service Extension을 거치고 탭하면 `deeplink`를 연다. */
+  async sendSetReminderNotification(
+    token: string,
+    environment: 'sandbox' | 'production',
+    input: {
+      festivalId: string;
+      setId: string;
+      title: string;
+      body: string;
+      eventKey: string;
+      deeplink: string;
+      expiresAt: Date;
+    } & FestivalContext,
+  ): Promise<ApnsSendResult> {
+    return this.send(
+      token,
+      environment,
+      {
+        aps: {
+          alert: { title: input.title, body: input.body },
+          sound: 'default',
+          'thread-id': input.eventKey,
+          'mutable-content': 1,
+        },
+        type: 'festival.set_reminder',
+        festivalId: input.festivalId,
+        setId: input.setId,
+        deeplink: input.deeplink,
+        ...festivalContext(input),
+        eventKey: input.eventKey,
+      },
+      {
+        pushType: 'alert',
+        priority: '10',
+        collapseKey: input.eventKey,
+        // 공연이 시작된 뒤 켜진 기기에는 '2시간 후' 알림을 늦게 보이지 않는다.
+        expirationSeconds: Math.max(
+          1,
+          Math.floor((input.expiresAt.getTime() - Date.now()) / 1000),
+        ),
+      },
     );
   }
 
@@ -140,6 +213,72 @@ export class ApnsService {
     );
   }
 
+  async sendLiveActivityStart(
+    token: string,
+    environment: 'sandbox' | 'production',
+    input: {
+      festivalId: string;
+      festivalName: string;
+      state: Record<string, unknown>;
+      alertBody?: string;
+    },
+  ): Promise<ApnsSendResult> {
+    const timestamp = Math.floor(Date.now() / 1000);
+    return this.send(
+      token,
+      environment,
+      {
+        aps: {
+          timestamp,
+          event: 'start',
+          'attributes-type': 'FestiCoreFestivalActivityAttributes',
+          'input-push-token': 1,
+          attributes: {
+            festivalID: input.festivalId,
+            festivalName: input.festivalName,
+          },
+          'content-state': input.state,
+          alert: {
+            title: input.festivalName,
+            body: input.alertBody ?? '축제가 시작됐어요.',
+          },
+        },
+      },
+      {
+        pushType: 'liveactivity',
+        priority: '10',
+        expirationSeconds: 10 * 60,
+      },
+    );
+  }
+
+  async sendLiveActivityEnd(
+    token: string,
+    environment: 'sandbox' | 'production',
+    state: Record<string, unknown>,
+    dismissImmediately = false,
+  ): Promise<ApnsSendResult> {
+    return this.send(
+      token,
+      environment,
+      {
+        aps: {
+          timestamp: Math.floor(Date.now() / 1000),
+          event: 'end',
+          'content-state': state,
+          ...(dismissImmediately
+            ? { 'dismissal-date': Math.floor(Date.now() / 1000) - 1 }
+            : {}),
+        },
+      },
+      {
+        pushType: 'liveactivity',
+        priority: '5',
+        expirationSeconds: 10 * 60,
+      },
+    );
+  }
+
   async sendSocialNotification(
     token: string,
     environment: 'sandbox' | 'production',
@@ -150,44 +289,15 @@ export class ApnsService {
     },
   ): Promise<ApnsSendResult> {
     const gather = input.type === 'crew.gather';
-    const flag = input.type === 'flag.status';
-    const dissolved =
-      input.type === 'crew.status' && input.payload.dissolved === true;
-    const name =
-      typeof input.payload.nickname === 'string'
-        ? input.payload.nickname
-        : '크루원';
-    const zone =
-      typeof input.payload.zoneId === 'string' ? input.payload.zoneId : null;
-    const rawState = flag ? input.payload.status : input.payload.state;
-    const state = typeof rawState === 'string' ? rawState : '';
-    const title = gather
-      ? '크루 집결 요청'
-      : flag
-        ? '깃발 상태 변경'
-        : dissolved
-          ? '크루 해산'
-          : '크루원 상태 변경';
-    const body = gather
-      ? `${name}님이 ${zone ?? '현재 위치'}에서 집결을 요청했어요.`
-      : flag
-        ? `깃발 상태가 ${state}(으)로 변경됐어요.`
-        : dissolved
-          ? '크루가 해산됐어요'
-          : `${name}님의 상태가 ${state}(으)로 변경됐어요.`;
-    const subjectId = flag ? input.payload.flagId : input.payload.crewId;
-    const safeSubjectId = typeof subjectId === 'string' ? subjectId : '';
-    const route = flag
-      ? `/flags/${safeSubjectId}`
-      : dissolved
-        ? '/crews'
-        : `/crews/${safeSubjectId}`;
+    const { title, body, route } = socialAlertText(input.type, input.payload);
     return this.send(
       token,
       environment,
       {
         aps: {
           alert: { title, body },
+          // 보이는 알림은 모두 Notification Service Extension을 거친다.
+          'mutable-content': 1,
           ...(gather
             ? { sound: 'default' }
             : { 'interruption-level': 'passive' }),
@@ -221,6 +331,7 @@ export class ApnsService {
               title: 'FestiCore 테스트 알림',
               body: `${type} 테스트 푸시입니다.`,
             },
+            'mutable-content': 1,
             ...(gather
               ? { sound: 'default' }
               : { 'interruption-level': 'passive' }),

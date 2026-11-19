@@ -2,6 +2,48 @@ import { HttpException } from '@nestjs/common';
 import { AdminFestivalService } from './admin-festival.service';
 import { AdminFestival } from './festival.entity';
 
+describe('automatic pack publication', () => {
+  it('preserves a manually owned unpublished draft', async () => {
+    const row = {
+      id: 'fst_0123456789abcdef',
+      draft: { name: '관리자 초안' },
+      published: null,
+      publishedVersion: 0,
+    };
+    const findOne = jest.fn().mockResolvedValue(row);
+    const query = jest.fn().mockResolvedValue([]);
+    const save = jest.fn();
+    const service = new AdminFestivalService(
+      {} as never,
+      {} as never,
+      {
+        transaction: (callback: (manager: unknown) => Promise<unknown>) =>
+          callback({ query, getRepository: () => ({ findOne, save }) }),
+      } as never,
+      {} as never,
+      { invalidatePack: jest.fn() } as never,
+      {} as never,
+      {} as never,
+    );
+    await expect(
+      service.publishCrawled(
+        {
+          id: row.id,
+          name: '수집 항목',
+          venue: '공연장',
+          firstDate: '2026-12-31',
+          lastDate: '2027-01-01',
+          sourceUrl: 'https://mintpaper.co.kr/festivals/178',
+          ticketLinks: [],
+        },
+        null,
+      ),
+    ).resolves.toEqual({ packVersion: 0, changed: false });
+    expect(save).not.toHaveBeenCalled();
+    expect(row.draft).toEqual({ name: '관리자 초안' });
+  });
+});
+
 describe('AdminFestivalService optimistic edits', () => {
   it('lists festivals before the crawler proposal table exists', async () => {
     const query = jest.fn().mockResolvedValue([{ present: null }]);
@@ -306,7 +348,7 @@ describe('discovered festival import', () => {
 });
 
 describe('date-only draft publication', () => {
-  it('rejects publication before a verified timetable and leaves the pack untouched', async () => {
+  it('publishes a verified date range without inventing performance times', async () => {
     const row = {
       id: 'fst_0123456789abcdef',
       draft: {
@@ -316,6 +358,7 @@ describe('date-only draft publication', () => {
         timezone: 'Asia/Seoul',
         eventPeriod: { firstDate: '2026-10-23', lastDate: '2026-11-08' },
         days: [],
+        timetableStatus: 'unpublished',
         flagsEnabled: false,
         stages: [],
         sets: [],
@@ -331,35 +374,49 @@ describe('date-only draft publication', () => {
       published: null,
       publishedVersion: 0,
     };
-    const save = jest.fn();
+    const save = jest.fn().mockResolvedValue(undefined);
+    const saveVersion = jest.fn().mockResolvedValue(undefined);
     const enqueueFestival = jest.fn();
     const audit = jest.fn();
+    const invalidatePack = jest.fn();
     const service = new AdminFestivalService(
       {} as never,
       {} as never,
       {
         transaction: (callback: (manager: unknown) => Promise<unknown>) =>
           callback({
-            getRepository: () => ({
-              findOne: () => Promise.resolve(row),
-              save,
-            }),
+            getRepository: (entity: unknown) =>
+              entity === AdminFestival
+                ? { findOne: () => Promise.resolve(row), save }
+                : { save: saveVersion },
+            query: jest.fn().mockResolvedValue([]),
           }),
       } as never,
       { record: audit } as never,
-      {} as never,
+      { invalidatePack } as never,
       {} as never,
       { enqueueFestival } as never,
     );
     await expect(
       service.publish(row.id, '', '"d1"', 'adm_1'),
-    ).rejects.toMatchObject({
-      status: 400,
+    ).resolves.toMatchObject({ packVersion: 1 });
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(saveVersion).toHaveBeenCalledTimes(1);
+    const versionCalls = saveVersion.mock.calls as unknown[][];
+    const savedVersion = versionCalls[0]?.[0];
+    expect(savedVersion).toMatchObject({
+      festivalId: row.id,
+      packVersion: 1,
+      pack: {
+        eventPeriod: row.draft.eventPeriod,
+        days: [],
+        stages: [],
+        sets: [],
+      },
     });
-    expect(save).not.toHaveBeenCalled();
-    expect(enqueueFestival).not.toHaveBeenCalled();
-    expect(audit).not.toHaveBeenCalled();
-    expect(row.published).toBeNull();
+    expect(enqueueFestival).toHaveBeenCalledTimes(1);
+    expect(audit).toHaveBeenCalledTimes(1);
+    expect(invalidatePack).toHaveBeenCalledWith(row.id);
   });
 });
 
@@ -556,7 +613,10 @@ describe('pack update delivery queue', () => {
       save: jest.fn(),
       findOneBy: jest.fn().mockResolvedValue({ pack: draft }),
     };
-    const query = jest.fn().mockResolvedValue([{ id: 'one' }, { id: 'two' }]);
+    const query = jest.fn().mockResolvedValue([
+      { id: 'one', userId: '11111111-1111-4111-8111-111111111111', name: 'F' },
+      { id: 'two', userId: '22222222-2222-4222-8222-222222222222', name: 'F' },
+    ]);
     const record = jest.fn().mockResolvedValue(undefined);
     const invalidatePack = jest.fn().mockResolvedValue(undefined);
     const enqueueFestival = jest.fn().mockResolvedValue(undefined);
@@ -595,7 +655,28 @@ describe('pack update delivery queue', () => {
     });
     const calls = query.mock.calls as unknown[][];
     expect(calls[0][0]).toContain('s."packUpdates" = true');
+    expect(calls[0][0]).toContain('d."notifyPackUpdates" = true');
     expect(calls[0][1]).toEqual([draft.id, `pack-updated:${draft.id}:1`]);
+    expect(calls[1][0]).toBe('SAVEPOINT "user_notifications_record"');
+    expect(calls[2][0]).toContain('d."userId" IS NOT NULL');
+    expect(calls[2][0]).toContain('s."pinned" = true');
+    expect(calls[2][0]).not.toContain('packUpdates');
+    expect(calls[3][0]).toContain('INSERT INTO "user_notifications"');
+    expect(calls[3][0]).toContain('DO NOTHING');
+    expect(calls[4][0]).toBe('RELEASE SAVEPOINT "user_notifications_record"');
+    expect(calls[3][1]).toEqual([
+      [
+        '11111111-1111-4111-8111-111111111111',
+        '22222222-2222-4222-8222-222222222222',
+      ],
+      'pack.updated',
+      draft.id,
+      'F 정보 업데이트',
+      '새 축제 정보가 준비됐어요. 앱에서 팩을 받아 두세요.',
+      `/festivals/${draft.id}`,
+      JSON.stringify({ packVersion: '1' }),
+      `pack.updated:${draft.id}:1`,
+    ]);
     expect(enqueueFestival).toHaveBeenCalledWith(draft.id, manager);
     expect(record).toHaveBeenCalledWith(manager, {
       actor: null,
@@ -616,7 +697,7 @@ describe('pack update delivery queue', () => {
       'transaction failed',
     );
     expect(invalidatePack).toHaveBeenCalledTimes(2);
-    expect(calls[1][1]).toEqual([draft.id, `pack-updated:${draft.id}:2`]);
+    expect(calls[5][1]).toEqual([draft.id, `pack-updated:${draft.id}:2`]);
     expect(record).toHaveBeenCalledWith(manager, {
       actor: null,
       action: 'festival.rolled_back',

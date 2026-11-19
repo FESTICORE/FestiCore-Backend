@@ -1,8 +1,11 @@
 import { BadRequestException } from '@nestjs/common';
 import {
+  mapPoint,
   venueLabelMatches,
   verifiedVenueLocation,
 } from '../../../common/festival-location';
+import { isIsoInstant as iso } from '../../../common/iso-instant';
+import { SET_NOTE_MAX_LENGTH, setNote } from '../../../common/set-note';
 import type { FestivalDocument } from './festival.entity';
 
 const keys = new Set([
@@ -23,17 +26,40 @@ const keys = new Set([
   'rules',
   'mapImageUrl',
   'mapAspect',
+  'mapStages',
 ]);
 
 function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function iso(value: unknown): value is string {
+function unit(value: unknown): value is number {
+  return typeof value === 'number' && value >= 0 && value <= 1;
+}
+
+/** 존 지도 영역. 지도 왼쪽 위 기준 0..1 비율이며 지도 밖으로 나가지 않아야 한다. 없으면 null·생략. */
+function optionalMapArea(value: unknown): boolean {
+  if (value === undefined || value === null) return true;
+  if (!object(value)) return false;
+  const { x, y, w, h } = value;
+  return (
+    unit(x) &&
+    unit(y) &&
+    unit(w) &&
+    unit(h) &&
+    w > 0 &&
+    h > 0 &&
+    x + w <= 1 + 1e-9 &&
+    y + h <= 1 + 1e-9
+  );
+}
+
+function optionalLabel(value: unknown, max: number): boolean {
+  if (value === undefined || value === null) return true;
   return (
     typeof value === 'string' &&
-    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2})$/.test(value) &&
-    !Number.isNaN(Date.parse(value))
+    [...value].length >= 1 &&
+    [...value].length <= max
   );
 }
 
@@ -45,6 +71,110 @@ function calendarDate(value: unknown): value is string {
     !Number.isNaN(parsed.getTime()) &&
     parsed.toISOString().slice(0, 10) === value
   );
+}
+
+const MAX_LAST_DEPARTURES = 31;
+const LEGACY_RETURN_TIME_KEYS = ['lastShuttleAt', 'lastTrainAt'] as const;
+
+/**
+ * 형식이 정해지기 전에 저장된 막차·셔틀 단일 값(예: "23:40")은 ISO8601이 아니어도
+ * 초안 PATCH와 발행을 막지 않도록 null로 바꾼다. 이번 요청이 직접 보낸 값은 바꾸지 않아
+ * 새 자유 문장 입력은 그대로 검증 오류가 된다.
+ */
+export function normalizeLegacyReturnTimes(
+  draft: FestivalDocument,
+  patch?: unknown,
+): FestivalDocument {
+  const directions = draft.directions;
+  if (!object(directions)) return draft;
+  const sent =
+    object(patch) && object(patch.directions) ? patch.directions : {};
+  const stale = LEGACY_RETURN_TIME_KEYS.filter(
+    (key) =>
+      typeof directions[key] === 'string' &&
+      !iso(directions[key]) &&
+      sent[key] === undefined,
+  );
+  if (!stale.length) return draft;
+  return {
+    ...draft,
+    directions: {
+      ...directions,
+      ...Object.fromEntries(stale.map((key) => [key, null])),
+    },
+  };
+}
+
+/** 귀가 정보: 막차·셔틀 시각은 오프셋이 있는 ISO8601이고 날짜별로 한 번만 둔다. */
+function validateReturnDirections(
+  draft: FestivalDocument,
+  forPublish: boolean,
+): string[] {
+  const errors: string[] = [];
+  const directions = draft.directions as Record<string, unknown>;
+  for (const key of ['lastShuttleAt', 'lastTrainAt']) {
+    const value = directions[key];
+    if (value !== undefined && value !== null && !iso(value))
+      errors.push(`directions.${key}: 오프셋 포함 ISO8601 또는 null 필요`);
+  }
+  const shuttle = directions.shuttle;
+  if (
+    object(shuttle) &&
+    shuttle.stopName !== undefined &&
+    shuttle.stopName !== null &&
+    (typeof shuttle.stopName !== 'string' ||
+      [...shuttle.stopName.trim()].length < 1 ||
+      [...shuttle.stopName].length > 40)
+  )
+    errors.push('directions.shuttle.stopName: 1..40자 또는 null 필요');
+  // 앱이 현재 위치에서 걸어가는 시간을 계산하는 셔틀 정류장·역 좌표
+  for (const key of ['shuttle', 'transit'] as const) {
+    const section = directions[key];
+    if (
+      object(section) &&
+      section.location !== undefined &&
+      section.location !== null &&
+      !mapPoint(section.location)
+    )
+      errors.push(
+        `directions.${key}.location: 위도 -90..90·경도 -180..180 숫자 또는 null 필요`,
+      );
+  }
+  const departures = directions.lastDepartures;
+  if (departures === undefined) return errors;
+  if (!Array.isArray(departures) || departures.length > MAX_LAST_DEPARTURES) {
+    errors.push(
+      `directions.lastDepartures: 최대 ${MAX_LAST_DEPARTURES}개 배열 필요`,
+    );
+    return errors;
+  }
+  const dayDates = new Set(
+    (Array.isArray(draft.days) ? (draft.days as unknown[]) : [])
+      .filter(object)
+      .map((day) => day.date),
+  );
+  const seen = new Set<string>();
+  departures.forEach((item: unknown, index) => {
+    const at = `directions.lastDepartures[${index}]`;
+    if (!object(item) || !calendarDate(item.date)) {
+      errors.push(`${at}.date: YYYY-MM-DD 필요`);
+      return;
+    }
+    if (seen.has(item.date)) errors.push(`${at}.date: 날짜 중복`);
+    seen.add(item.date);
+    if (forPublish && !dayDates.has(item.date))
+      errors.push(`${at}.date: days에 있는 개최일이어야 함`);
+    const times = ['shuttleAt', 'trainAt'].map((key) => item[key]);
+    times.forEach((value, i) => {
+      if (value !== undefined && value !== null && !iso(value))
+        errors.push(
+          `${at}.${i ? 'trainAt' : 'shuttleAt'}: 오프셋 포함 ISO8601 또는 null 필요`,
+        );
+    });
+    if (times.every((value) => value === undefined || value === null))
+      errors.push(`${at}: shuttleAt 또는 trainAt 중 하나 필요`);
+  });
+  return errors;
 }
 
 export function validateDraft(
@@ -81,6 +211,22 @@ export function validateDraft(
       lastDate = period.lastDate;
     }
   }
+  const metadataOnly =
+    firstDate !== null &&
+    draft.timetableStatus === 'unpublished' &&
+    ['days', 'stages', 'sets'].every(
+      (key) => Array.isArray(draft[key]) && draft[key].length === 0,
+    );
+  if (
+    draft.timetableStatus !== undefined &&
+    draft.timetableStatus !== 'unpublished' &&
+    draft.timetableStatus !== 'verified'
+  )
+    errors.push('timetableStatus: unpublished 또는 verified 필요');
+  if (draft.timetableStatus === 'unpublished' && !metadataOnly)
+    errors.push(
+      'timetableStatus: 미공개 일정은 유효한 eventPeriod와 빈 days/stages/sets 필요',
+    );
   const days = draft.days;
   if (
     !Array.isArray(days) ||
@@ -91,7 +237,7 @@ export function validateDraft(
       'days: 1..32개 필요 (날짜 전용 초안은 eventPeriod와 빈 배열 허용)',
     );
   else {
-    if (forPublish && days.length === 0)
+    if (forPublish && !metadataOnly && days.length === 0)
       errors.push('days: 발행하려면 검증된 시작/종료 시각 필요');
     let previous = '';
     for (const [index, day] of days.entries()) {
@@ -145,6 +291,8 @@ export function validateDraft(
         'directions.location: 검증된 위도·경도, 공연장 일치 장소명과 HTTPS 출처가 필요',
       );
   }
+  if (object(draft.directions))
+    errors.push(...validateReturnDirections(draft, forPublish));
   if (
     draft.thumbUrl !== undefined &&
     draft.thumbUrl !== null &&
@@ -183,7 +331,7 @@ export function validateDraft(
     if (
       !Array.isArray(value) ||
       value.length > max ||
-      (name === 'stages' && forPublish && value.length < 1)
+      (name === 'stages' && forPublish && !metadataOnly && value.length < 1)
     )
       errors.push(`${name}: 배열 크기 오류`);
   }
@@ -205,7 +353,7 @@ export function validateDraft(
       errors.push(`stages[${i}]: ID/이름/순서 오류`);
   }
   const sets = Array.isArray(draft.sets) ? draft.sets : [];
-  if (forPublish && hasPeriod && sets.length === 0)
+  if (forPublish && !metadataOnly && hasPeriod && sets.length === 0)
     errors.push('sets: 날짜 전용 수집 초안은 검증된 공연 세트가 필요');
   const byStage = new Map<unknown, { starts: number; ends: number }[]>();
   for (const [i, set] of sets.entries()) {
@@ -233,6 +381,14 @@ export function validateDraft(
         ))
     )
       errors.push(`sets[${i}]: 보관된 출연진 이미지 경로만 허용`);
+    if (
+      set.note !== undefined &&
+      set.note !== null &&
+      setNote(set.note) === null
+    )
+      errors.push(
+        `sets[${i}]: 한 줄 메모는 줄바꿈 없는 1~${SET_NOTE_MAX_LENGTH}자`,
+      );
     if (
       Array.isArray(days) &&
       !days.some(
@@ -272,7 +428,36 @@ export function validateDraft(
       zone.y > 1
     )
       errors.push(`zones[${i}]: 좌표는 0..1`);
+    else {
+      if (!optionalMapArea(zone.area))
+        errors.push(`zones[${i}]: area는 0..1 안의 {x,y,w,h}`);
+      if (!optionalLabel(zone.landmark, 12))
+        errors.push(`zones[${i}]: landmark는 1..12자`);
+    }
   }
+  const mapStages = draft.mapStages;
+  if (mapStages !== undefined) {
+    if (!Array.isArray(mapStages) || mapStages.length > 8)
+      errors.push('mapStages: 배열 크기 오류');
+    else
+      for (const [i, item] of mapStages.entries()) {
+        if (
+          !object(item) ||
+          !stageIds.has(item.stageId) ||
+          !unit(item.x) ||
+          !unit(item.y) ||
+          !unit(item.w) ||
+          item.w === 0 ||
+          item.x + item.w > 1 + 1e-9
+        )
+          errors.push(`mapStages[${i}]: 무대 ID와 0..1 좌표·너비 필요`);
+      }
+  }
+  if (
+    zones.some((zone) => object(zone) && object(zone.area)) &&
+    (typeof draft.mapAspect !== 'number' || draft.mapAspect <= 0)
+  )
+    errors.push('mapAspect: 존 영역이 있으면 지도 종횡비(너비/높이) 필요');
   if (
     draft.mapImageUrl !== null &&
     (typeof draft.mapImageUrl !== 'string' ||

@@ -60,11 +60,16 @@ describe('AuthService logout account devices', () => {
     );
     expect(query).toHaveBeenNthCalledWith(
       3,
-      expect.stringContaining('UPDATE "refresh_token_sessions"'),
+      expect.stringContaining("'live-activity-performance:%'"),
       [userId],
     );
     expect(query).toHaveBeenNthCalledWith(
       4,
+      expect.stringContaining('UPDATE "refresh_token_sessions"'),
+      [userId],
+    );
+    expect(query).toHaveBeenNthCalledWith(
+      5,
       expect.stringContaining('UPDATE "refresh_tokens"'),
       [userId],
     );
@@ -833,6 +838,16 @@ describe('AuthService 회원 탈퇴의 깃발과 Apple 재시도', () => {
     expect(query).toHaveBeenCalledWith(
       expect.stringContaining('INSERT INTO "admin_notifications"'),
       [flagId],
+    );
+  });
+
+  it('탈퇴한 사용자가 마지막 상태 변경자인 깃발의 updatedBy를 지운다', async () => {
+    const { service, query } = setup();
+    await service.withdraw(userId);
+
+    expect(query).toHaveBeenCalledWith(
+      'UPDATE "flags" SET "statusUpdatedBy" = NULL WHERE "statusUpdatedBy" = $1',
+      [userId],
     );
   });
 

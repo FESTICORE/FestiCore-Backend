@@ -78,6 +78,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
           'errors',
           'warnings',
           'retryAfter',
+          'remainingAttempts',
         ]) {
           if (key in fields) details[key] = fields[key];
         }

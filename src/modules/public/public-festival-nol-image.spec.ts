@@ -1,3 +1,4 @@
+import { publicFestivalTestDataSource } from '../../../test/public-festival-test-data-source';
 import { PublicFestivalService } from './public-festival.service';
 
 describe('NOL festival poster', () => {
@@ -47,7 +48,7 @@ describe('NOL festival poster', () => {
     const service = new PublicFestivalService(
       { createQueryBuilder: () => builder } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     const result = await service.list(
@@ -55,14 +56,15 @@ describe('NOL festival poster', () => {
       '50',
       new Date('2026-10-22T00:00:00Z'),
     );
-    expect(result.items).toHaveLength(3);
+    expect(result.items).toHaveLength(2);
     expect(
       result.items.find((item) => item.sourceUrl === festivalUrl)?.ticketLinks,
     ).toEqual([
       { label: '공식 사이트', url: festivalUrl },
       { label: '예스24', url: yes24 },
     ]);
-    for (const url of [yes24, english]) {
+    expect(result.items.some((item) => item.sourceUrl === english)).toBe(false);
+    for (const url of [yes24]) {
       const detail = result.items.find((item) => item.sourceUrl === url);
       expect(detail).toBeDefined();
       const fetched = await service.discovered(detail!.id);
@@ -107,7 +109,7 @@ describe('NOL festival poster', () => {
     const service = new PublicFestivalService(
       { createQueryBuilder: () => builder } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     const result = await service.list(
@@ -170,7 +172,7 @@ describe('NOL festival poster', () => {
       const service = new PublicFestivalService(
         { createQueryBuilder: () => builder } as never,
         {} as never,
-        { query } as never,
+        publicFestivalTestDataSource(query) as never,
         {} as never,
       );
       const result = await service.list(
@@ -244,7 +246,7 @@ describe('NOL festival poster', () => {
     const service = new PublicFestivalService(
       { createQueryBuilder: () => builder } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     const result = await service.list(
@@ -311,7 +313,7 @@ describe('NOL festival poster', () => {
     const service = new PublicFestivalService(
       { createQueryBuilder: () => builder } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     const result = await service.list(
@@ -372,7 +374,7 @@ describe('NOL festival poster', () => {
     const service = new PublicFestivalService(
       { createQueryBuilder: () => builder } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     const result = await service.list(
@@ -443,7 +445,7 @@ describe('NOL festival poster', () => {
     const service = new PublicFestivalService(
       { createQueryBuilder: () => builder } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     const result = await service.list(
@@ -516,7 +518,7 @@ describe('NOL festival poster', () => {
     const service = new PublicFestivalService(
       { createQueryBuilder: () => builder } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     await service.list(undefined, '50', new Date('2026-10-22T00:00:00Z'));
@@ -537,6 +539,7 @@ describe('NOL festival poster', () => {
       'https://mintpaper.s3.ap-northeast-2.amazonaws.com/cdf-cover.jpg';
     const query = jest
       .fn()
+      .mockResolvedValue([])
       .mockResolvedValueOnce([
         {
           candidate: {
@@ -564,7 +567,7 @@ describe('NOL festival poster', () => {
     const service = new PublicFestivalService(
       { createQueryBuilder: () => builder } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
 
@@ -592,6 +595,7 @@ describe('NOL festival poster', () => {
       'https://ticketimage.interpark.com/Play/image/large/26/26013406_p.gif';
     const query = jest
       .fn()
+      .mockResolvedValue([])
       .mockResolvedValueOnce([
         {
           candidate: {
@@ -616,7 +620,7 @@ describe('NOL festival poster', () => {
     const service = new PublicFestivalService(
       { createQueryBuilder: () => builder } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
 
@@ -632,8 +636,9 @@ describe('NOL festival poster', () => {
         thumbUrl: '/api/v1/festivals/images/poster-26013406.webp',
       }),
     ]);
-    expect(query).toHaveBeenCalledTimes(3);
-    expect(query).toHaveBeenLastCalledWith(
+    expect(query).toHaveBeenCalledTimes(4);
+    expect(query).toHaveBeenNthCalledWith(
+      3,
       expect.stringContaining(
         "substring(source.url from '^https://nol[.]yanolja[.]com/ticket/products/([0-9]+)$')",
       ),

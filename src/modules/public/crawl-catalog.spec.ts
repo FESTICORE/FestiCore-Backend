@@ -1,6 +1,57 @@
 import { discoverySummaries, ticketDateRange } from './crawl-catalog';
 
 describe('ticket discovery catalog', () => {
+  it('suppresses a republished source after its ticket opening date is corrected to event dates', () => {
+    const candidate = {
+      name: '썸띵 뉴 뮤직 페스티벌 2026',
+      venue: '수원컨벤션센터',
+      date: '2026.12.26 ~ 2026.12.27',
+      url: 'https://nol.yanolja.com/ticket/products/26015181',
+    };
+    expect(
+      discoverySummaries(
+        [{ candidate }],
+        [
+          {
+            name: candidate.name,
+            venue: candidate.venue,
+            firstDate: '2026-10-23',
+            lastDate: '2026-10-23',
+            sourceUrl: candidate.url,
+          },
+        ],
+      ),
+    ).toEqual([]);
+    expect(discoverySummaries([{ candidate }])[0]).toMatchObject({
+      firstDate: '2026-12-26',
+      lastDate: '2026-12-27',
+    });
+  });
+
+  it('admits current CDF second-lineup names and safe profiles from the official notice', () => {
+    const candidate = {
+      name: 'COUNTDOWN FANTASY 2026-2027',
+      venue: '킨텍스',
+      date: '2026.12.31',
+      url: 'https://mintpaper.co.kr/festivals/178',
+      artistSourceUrl: 'https://mintpaper.co.kr/festivals/178/notice/4870',
+      artists: [
+        {
+          name: '까치산',
+          profileUrl: 'https://www.instagram.com/kachisanrecords/',
+        },
+        { name: 'CNBLUE', profileUrl: 'https://evil.example/profile' },
+      ],
+    };
+    expect(discoverySummaries([{ candidate }])[0].artists).toEqual([
+      {
+        name: '까치산',
+        profileUrl: 'https://www.instagram.com/kachisanrecords/',
+      },
+      { name: 'CNBLUE' },
+    ]);
+  });
+
   it('keeps official Melon venue coordinates with source evidence', () => {
     const candidate = {
       name: 'WONDERLIVET 2026',
@@ -799,5 +850,26 @@ describe('ticket discovery catalog', () => {
         },
       ])[0],
     ).not.toHaveProperty('officialInstagramUrl');
+  });
+});
+
+describe('TourAPI bounded catalog projection', () => {
+  it.each([
+    ['2026-11-01 ~ 2026-12-02', 1],
+    ['2026-11-01 ~ 2026-12-03', 0],
+    ['2026-01-01 ~ 2026-12-31', 0],
+  ])('supports at most 32 inclusive days: %s', (date, count) => {
+    expect(
+      discoverySummaries([
+        {
+          candidate: {
+            name: '지역 축제',
+            venue: '서울 광장',
+            date,
+            url: 'https://apis.data.go.kr/B551011/KorService2/detailCommon2?contentId=123',
+          },
+        },
+      ]),
+    ).toHaveLength(count);
   });
 });

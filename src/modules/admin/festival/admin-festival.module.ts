@@ -1,9 +1,11 @@
 import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AdminFestivalController } from './admin-festival.controller';
 import { AdminFestivalMapController } from './admin-festival-map.controller';
 import { AdminFestivalImageController } from './admin-festival-image.controller';
 import { AdminFestivalService } from './admin-festival.service';
+import { AutoPublishVerifiedService } from './auto-publish-verified.service';
 import { TimetableImageService } from './timetable-image.service';
 import { AdminFestival, AdminFestivalVersion } from './festival.entity';
 import { ImageStorageService } from '../../storage/image-storage.service';
@@ -13,6 +15,7 @@ import { NotificationModule } from '../../notification/notification.module';
 
 @Module({
   imports: [
+    ConfigModule,
     TypeOrmModule.forFeature([AdminFestival, AdminFestivalVersion]),
     AdminAuditModule,
     PublicFestivalModule,
@@ -23,7 +26,12 @@ import { NotificationModule } from '../../notification/notification.module';
     AdminFestivalMapController,
     AdminFestivalImageController,
   ],
-  providers: [AdminFestivalService, ImageStorageService, TimetableImageService],
-  exports: [AdminFestivalService],
+  providers: [
+    AdminFestivalService,
+    AutoPublishVerifiedService,
+    ImageStorageService,
+    TimetableImageService,
+  ],
+  exports: [AdminFestivalService, AutoPublishVerifiedService],
 })
 export class AdminFestivalModule {}

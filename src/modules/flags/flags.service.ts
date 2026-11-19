@@ -36,10 +36,13 @@ import {
   FlagStatusEvent,
 } from './flag.entity';
 import {
+  bearerStatusView,
   forcedStatus,
   isRecord,
   nextStatus,
+  repeatsAppliedStatus,
   statusView,
+  validateAdminFlagInput,
   validateProfilePatch,
 } from './flag-rules';
 import {
@@ -51,6 +54,10 @@ import { SocialNotificationService } from '../notification/social-notification.s
 import { LiveActivityService } from '../notification/live-activity.service';
 
 const codeAlphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+/** 깃발 하나의 기수 한도: 원래 기수 1명 + 공동 기수 3명(Figma S10 "공동 기수 초대 0 / 3명"). */
+export const MAX_FLAG_BEARERS = 4;
+const coBearerFullMessage = '공동 기수는 원래 기수를 빼고 최대 3명입니다.';
 function newCode(): string {
   return Array.from(
     randomBytes(6),
@@ -267,7 +274,8 @@ export class FlagsService {
     return flag;
   }
 
-  private profile(flag: Flag) {
+  /** 깃발 프로필. 비공개 계획은 공개 응답에서 가리고 기수 본인 응답에는 그대로 보낸다. */
+  private profile(flag: Flag, viewer: 'public' | 'bearer' = 'public') {
     return {
       id: flag.id,
       name: flag.name,
@@ -279,7 +287,7 @@ export class FlagsService {
       bio: flag.bio,
       followerCount: flag.followerCount,
       planVisible: flag.planVisible,
-      plan: flag.planVisible ? flag.plan : [],
+      plan: viewer === 'bearer' || flag.planVisible ? flag.plan : [],
       homeZoneId: flag.homeZoneId,
     };
   }
@@ -297,11 +305,16 @@ export class FlagsService {
     const follow = userId
       ? await this.follows.exists({ where: { flagId: id, userId } })
       : null;
+    // 앱 상세의 "잠금화면에 표시" 토글이 현재 대표 깃발인지 읽는다.
+    const pinned = userId
+      ? await this.pins.exists({ where: { userId, flagId: id } })
+      : null;
     return {
       ...this.profile(flag),
       status: statusView(flag),
       isFollowing: follow,
       isBearer: userId ? bearer : null,
+      isPinned: pinned,
       hidden: flag.hidden,
     };
   }
@@ -443,6 +456,75 @@ export class FlagsService {
       }
       return { pinnedFlagId: flagId };
     });
+  }
+
+  /** 내 대표 깃발과 상세. 대표가 없거나 공개 조회할 수 없으면 pinnedFlagId·flag 모두 null이다. */
+  async pinnedFlag(userId: string) {
+    const none = { pinnedFlagId: null, flag: null };
+    const pin = await this.pins.findOne({ where: { userId } });
+    if (!pin?.flagId) return none;
+    // 라이브 보드처럼 팔로우가 끊긴 대표는 없는 것으로 본다.
+    if (!(await this.follows.exists({ where: { userId, flagId: pin.flagId } })))
+      return none;
+    const flag = await this.flags.findOne({
+      where: { id: pin.flagId, visibility: 'public' },
+    });
+    const festival = flag
+      ? await this.festivals.findOne({ where: { id: flag.festivalId } })
+      : null;
+    if (!flag || !festival?.published) return none;
+    const bearer = await this.bearers.exists({
+      where: { flagId: flag.id, userId },
+    });
+    if (flag.hidden && !bearer) return none;
+    return {
+      pinnedFlagId: flag.id,
+      flag: {
+        ...this.profile(flag),
+        festivalId: flag.festivalId,
+        status: statusView(flag),
+        isFollowing: true,
+        isBearer: bearer,
+        isPinned: true,
+        hidden: flag.hidden,
+      },
+    };
+  }
+
+  /** 내가 기수인 깃발 목록. 발행된 축제의 깃발만 최근 등록순으로 돌려준다. */
+  async myBearerFlags(userId: string, festivalId?: string) {
+    const rows = await this.bearers.find({
+      where: festivalId ? { userId, festivalId } : { userId },
+      order: { createdAt: 'DESC' },
+    });
+    if (!rows.length) return { items: [] };
+    const flags = await this.flags.find({
+      where: { id: In(rows.map((row) => row.flagId)) },
+    });
+    const festivals = await this.festivals.find({
+      where: { id: In([...new Set(flags.map((flag) => flag.festivalId))]) },
+    });
+    const published = new Set(
+      festivals.filter((row) => row.published).map((row) => row.id),
+    );
+    const flagsById = new Map(flags.map((flag) => [flag.id, flag]));
+    return {
+      items: rows.flatMap((row) => {
+        const flag = flagsById.get(row.flagId);
+        if (!flag || !published.has(flag.festivalId)) return [];
+        return [
+          {
+            flagId: flag.id,
+            festivalId: flag.festivalId,
+            isOwner: row.isOwner,
+            joinedAt: row.createdAt.toISOString(),
+            flag: this.profile(flag, 'bearer'),
+            status: statusView(flag),
+            hidden: flag.hidden,
+          },
+        ];
+      }),
+    };
   }
 
   async report(id: string, userId: string, input: unknown) {
@@ -619,7 +701,7 @@ export class FlagsService {
       )
         return {
           flagId: flag.id,
-          flag: this.profile(flag),
+          flag: this.profile(flag, 'bearer'),
           isNew: false,
           coBearers: (await bearers.find({ where: { flagId: flag.id } })).map(
             (b) => b.userId,
@@ -660,13 +742,18 @@ export class FlagsService {
           ownerId: userId,
           restartDate: null,
           statusUpdatedAt: null,
+          statusUpdatedBy: null,
+          statusClientAt: null,
         });
         flag = await flags.save(flag);
         lockedCode.flagId = flag.id;
-      } else if ((await bearers.count({ where: { flagId: flag.id } })) >= 3)
+      } else if (
+        (await bearers.count({ where: { flagId: flag.id } })) >=
+        MAX_FLAG_BEARERS
+      )
         throw new ConflictException({
           code: 'CO_BEARER_FULL',
-          message: '공동 기수는 최대 3명입니다.',
+          message: coBearerFullMessage,
         });
       await bearers.save(
         bearers.create({
@@ -681,7 +768,7 @@ export class FlagsService {
       await codes.save(lockedCode);
       return {
         flagId: flag.id,
-        flag: this.profile(flag),
+        flag: this.profile(flag, 'bearer'),
         isNew: flag.ownerId === userId,
         coBearers: (await bearers.find({ where: { flagId: flag.id } })).map(
           (b) => b.userId,
@@ -692,14 +779,144 @@ export class FlagsService {
     return claimed;
   }
 
+  /**
+   * 코드 없이 깃발 프로필을 만들고 요청자를 원래 기수로 등록한다(11/10 회의).
+   * 코드 레코드는 만들지 않으므로 관리자 코드 목록에는 나오지 않는다.
+   */
+  async register(userId: string, key: string, input: unknown) {
+    if (!isRecord(input) || typeof input.festivalId !== 'string')
+      throw new BadRequestException({
+        code: 'VALIDATION',
+        message: 'festivalId가 필요합니다.',
+      });
+    const { festivalId, ...profile } = input;
+    if (profile.name === undefined)
+      throw new BadRequestException({
+        code: 'VALIDATION',
+        message: 'name이 필요합니다.',
+      });
+    const fields = validateProfilePatch(profile);
+    const operation = `bearer-register:${festivalId}`;
+    try {
+      const { response, changed } = await this.db.transaction(
+        async (manager) => {
+          await this.lockActiveUser(manager, userId);
+          const prior = await this.replay(
+            manager,
+            userId,
+            key,
+            operation,
+            input,
+          );
+          if (prior) return { response: prior, changed: [] as string[] };
+          const festival = await manager
+            .getRepository(AdminFestival)
+            .findOne({ where: { id: festivalId } });
+          if (!festival?.published)
+            throw new NotFoundException({
+              code: 'NOT_FOUND',
+              message: '공개된 페스티벌이 없습니다.',
+            });
+          this.assertPackReferences(festival, fields);
+          const flags = manager.getRepository(Flag);
+          const bearers = manager.getRepository(FlagBearer);
+          if (await bearers.exists({ where: { userId, festivalId } }))
+            throw new ConflictException({
+              code: 'BEARER_LIMIT',
+              message: '페스티벌당 한 깃발만 맡을 수 있습니다.',
+            });
+          if (
+            await flags.exists({
+              where: { festivalId, name: fields.name as string },
+            })
+          )
+            throw new ConflictException({
+              code: 'FLAG_NAME_TAKEN',
+              message: '이미 사용 중인 깃발 이름입니다.',
+            });
+          const flag = await flags.save(
+            flags.create({
+              id: `flg_${randomBytes(5).toString('hex')}`,
+              festivalId,
+              visibility: 'public',
+              tags: ['newbie'],
+              bio: null,
+              plan: [],
+              planVisible: true,
+              homeZoneId: null,
+              photoUrl: null,
+              thumbUrl: null,
+              ...fields,
+              followerCount: 0,
+              status: 'scheduled',
+              activity: null,
+              zoneId: null,
+              hidden: false,
+              reportCount: 0,
+              ownerId: userId,
+              restartDate: null,
+              statusUpdatedAt: null,
+              statusUpdatedBy: null,
+              statusClientAt: null,
+            }),
+          );
+          await bearers.save(
+            bearers.create({
+              flagId: flag.id,
+              festivalId,
+              userId,
+              isOwner: true,
+            }),
+          );
+          const created = {
+            flagId: flag.id,
+            flag: this.profile(flag, 'bearer'),
+            isNew: true,
+            coBearers: [userId],
+          };
+          await this.remember(manager, userId, key, operation, input, created);
+          return {
+            response: created,
+            changed: await this.packSync.sync(flag.id, manager),
+          };
+        },
+      );
+      if (changed.length) await this.packSync.invalidatePacks(changed);
+      return response;
+    } catch (cause) {
+      // 동시 요청이 사전 확인을 함께 통과하면 고유 인덱스가 막는다.
+      if (cause instanceof HttpException) throw cause;
+      const constraint =
+        (cause as { code?: string; constraint?: string }).code === '23505'
+          ? (cause as { constraint?: string }).constraint
+          : undefined;
+      if (constraint === 'IDX_flags_festival_name')
+        throw new ConflictException({
+          code: 'FLAG_NAME_TAKEN',
+          message: '이미 사용 중인 깃발 이름입니다.',
+        });
+      if (constraint === 'IDX_flag_bearers_user_festival')
+        throw new ConflictException({
+          code: 'BEARER_LIMIT',
+          message: '페스티벌당 한 깃발만 맡을 수 있습니다.',
+        });
+      throw cause;
+    }
+  }
+
   async bearerView(id: string, userId: string) {
     const flag = await this.bearerFlag(id, userId);
     const bearers = await this.bearers.find({ where: { flagId: id } });
-    const users = await this.users.findByIds(bearers.map((b) => b.userId));
+    const userIds = new Set(bearers.map((b) => b.userId));
+    if (flag.statusUpdatedBy) userIds.add(flag.statusUpdatedBy);
+    const users = await this.users.findByIds([...userIds]);
     const names = new Map(users.map((user) => [user.id, user.nickname]));
     return {
-      flag: this.profile(flag),
-      status: statusView(flag),
+      flag: this.profile(flag, 'bearer'),
+      status: bearerStatusView(
+        flag,
+        flag.statusUpdatedBy ? names.get(flag.statusUpdatedBy) : undefined,
+      ),
       planVisible: flag.planVisible,
       followerCount: flag.followerCount,
       coBearers: bearers.map((b) => ({
@@ -764,7 +981,7 @@ export class FlagsService {
     if (Object.keys(patch).length) await this.flags.update({ id }, patch);
     await this.packSync.sync(id);
     const current = await this.bearerFlag(id, userId);
-    return this.profile(current);
+    return this.profile(current, 'bearer');
   }
 
   async status(id: string, userId: string, key: string, input: unknown) {
@@ -785,6 +1002,23 @@ export class FlagsService {
         .where('flag.id = :id', { id })
         .getOne();
       if (!flag) throw new NotFoundException({ code: 'NOT_FOUND' });
+      if (repeatsAppliedStatus(flag, input)) {
+        const author = flag.statusUpdatedBy
+          ? await manager
+              .getRepository(User)
+              .findOne({ where: { id: flag.statusUpdatedBy } })
+          : null;
+        const repeated = bearerStatusView(flag, author?.nickname);
+        await this.remember(
+          manager,
+          userId,
+          key,
+          `status:${id}`,
+          input,
+          repeated,
+        );
+        return repeated;
+      }
       const next = nextStatus(flag, input);
       if (next.zoneId) {
         const festival = await manager
@@ -816,7 +1050,10 @@ export class FlagsService {
           },
           429,
         );
-      Object.assign(flag, next, { statusUpdatedAt: new Date() });
+      Object.assign(flag, next, {
+        statusUpdatedAt: new Date(),
+        statusUpdatedBy: userId,
+      });
       await flags.save(flag);
       await manager.getRepository(FlagStatusEvent).save({
         flagId: id,
@@ -827,7 +1064,10 @@ export class FlagsService {
       });
       await this.socialNotifications.enqueueFlagStatus(manager, flag, userId);
       await this.liveActivity.enqueueFestival(flag.festivalId, manager);
-      const response = statusView(flag);
+      const author = await manager
+        .getRepository(User)
+        .findOne({ where: { id: userId } });
+      const response = bearerStatusView(flag, author?.nickname);
       await this.remember(
         manager,
         userId,
@@ -868,7 +1108,15 @@ export class FlagsService {
         }
       }
       const before = statusView(flag);
-      Object.assign(flag, next, { statusUpdatedAt: new Date() });
+      // 관리자 변경보다 먼저 누른 기수 변경은 오래된 변경으로 막는다. 기준값은 낮추지 않는다.
+      const forcedAt = new Date();
+      Object.assign(flag, next, {
+        statusUpdatedAt: forcedAt,
+        statusUpdatedBy: null,
+        statusClientAt: new Date(
+          Math.max(forcedAt.getTime(), flag.statusClientAt?.getTime() ?? 0),
+        ),
+      });
       await flags.save(flag);
       await manager.getRepository(FlagStatusEvent).save({
         flagId: id,
@@ -897,10 +1145,12 @@ export class FlagsService {
         code: 'FLAG_NOT_OWNER',
         message: '원래 기수만 초대할 수 있습니다.',
       });
-    if ((await this.bearers.count({ where: { flagId: id } })) >= 3)
+    if (
+      (await this.bearers.count({ where: { flagId: id } })) >= MAX_FLAG_BEARERS
+    )
       throw new ConflictException({
         code: 'CO_BEARER_FULL',
-        message: '공동 기수는 최대 3명입니다.',
+        message: coBearerFullMessage,
       });
     const code = newCode();
     const expiresAt = new Date(Date.now() + 24 * 3600_000);
@@ -1079,13 +1329,160 @@ export class FlagsService {
       order: { name: 'ASC' },
     });
     return {
-      items: flags.map((flag) => ({
-        ...this.profile(flag),
-        hidden: flag.hidden,
-        reportCount: flag.reportCount,
-        status: statusView(flag),
-      })),
+      items: flags.map((flag) => this.adminFlagView(flag)),
     };
+  }
+
+  /** 관리자 화면용 깃발. 계획 비공개여도 전체 계획을 보여 준다. */
+  private adminFlagView(flag: Flag) {
+    return {
+      ...this.profile(flag),
+      plan: flag.plan,
+      visibility: flag.visibility,
+      hidden: flag.hidden,
+      reportCount: flag.reportCount,
+      status: statusView(flag),
+    };
+  }
+
+  /** 홈 존과 계획 셋이 축제 팩(발행본 우선, 없으면 초안)에 있는지 확인한다. */
+  private assertPackReferences(
+    festival: AdminFestival,
+    patch: Record<string, unknown>,
+  ) {
+    const pack = festival.published ?? festival.draft;
+    const zones = Array.isArray(pack?.zones) ? pack.zones : [];
+    const sets = Array.isArray(pack?.sets) ? pack.sets : [];
+    if (
+      typeof patch.homeZoneId === 'string' &&
+      !zones.some((zone) => isRecord(zone) && zone.id === patch.homeZoneId)
+    )
+      fail('ZONE_NOT_FOUND', 404, '존을 찾을 수 없습니다.');
+    if (
+      Array.isArray(patch.plan) &&
+      !patch.plan.every((id) =>
+        sets.some((set) => isRecord(set) && set.id === id),
+      )
+    )
+      throw new BadRequestException({
+        code: 'VALIDATION',
+        message: 'plan에 없는 셋이 포함되었습니다.',
+      });
+  }
+
+  /** 관리자가 축제에 기수 없는 깃발을 만든다. 현장 상태는 예정으로 시작한다. */
+  async adminCreate(festivalId: string, input: unknown, actor: string) {
+    const fields = validateAdminFlagInput(input, 'create');
+    const { flag, changed } = await this.db.transaction(async (manager) => {
+      const festival = await manager.getRepository(AdminFestival).findOne({
+        where: { id: festivalId },
+      });
+      if (!festival)
+        throw new NotFoundException({
+          code: 'NOT_FOUND',
+          message: '축제를 찾을 수 없습니다.',
+        });
+      this.assertPackReferences(festival, fields);
+      const flags = manager.getRepository(Flag);
+      if (
+        await flags.exists({
+          where: { festivalId, name: fields.name as string },
+        })
+      )
+        throw new ConflictException({
+          code: 'FLAG_NAME_TAKEN',
+          message: '이미 사용 중인 깃발 이름입니다.',
+        });
+      const created = await flags.save(
+        flags.create({
+          id: `flg_${randomBytes(5).toString('hex')}`,
+          festivalId,
+          visibility: 'public',
+          bio: null,
+          plan: [],
+          planVisible: true,
+          homeZoneId: null,
+          photoUrl: null,
+          thumbUrl: null,
+          ...fields,
+          followerCount: 0,
+          status: 'scheduled',
+          activity: null,
+          zoneId: null,
+          hidden: false,
+          reportCount: 0,
+          ownerId: null,
+          restartDate: null,
+          statusUpdatedAt: null,
+          statusUpdatedBy: null,
+          statusClientAt: null,
+        }),
+      );
+      await this.adminAudit.record(manager, {
+        actor,
+        action: 'flag.created',
+        target: `flag:${created.id}`,
+        before: null,
+        after: this.adminFlagView(created),
+      });
+      return {
+        flag: created,
+        changed: await this.packSync.sync(created.id, manager),
+      };
+    });
+    await this.packSync.invalidatePacks(changed);
+    return this.adminFlagView(flag);
+  }
+
+  /** 관리자가 깃발 프로필·사진 URL·계획·계획 공개를 고친다. 바뀐 필드만 감사 기록한다. */
+  async adminUpdate(id: string, input: unknown, actor: string) {
+    const patch = validateAdminFlagInput(input, 'update');
+    const { flag, changed } = await this.db.transaction(async (manager) => {
+      const flags = manager.getRepository(Flag);
+      const current = await flags.findOne({
+        where: { id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!current)
+        throw new NotFoundException({
+          code: 'NOT_FOUND',
+          message: '깃발을 찾을 수 없습니다.',
+        });
+      const festival = await manager.getRepository(AdminFestival).findOne({
+        where: { id: current.festivalId },
+      });
+      if (!festival)
+        throw new NotFoundException({
+          code: 'NOT_FOUND',
+          message: '축제를 찾을 수 없습니다.',
+        });
+      this.assertPackReferences(festival, patch);
+      if (
+        typeof patch.name === 'string' &&
+        patch.name !== current.name &&
+        (await flags.exists({
+          where: { festivalId: current.festivalId, name: patch.name },
+        }))
+      )
+        throw new ConflictException({
+          code: 'FLAG_NAME_TAKEN',
+          message: '이미 사용 중인 깃발 이름입니다.',
+        });
+      const keys = Object.keys(patch) as (keyof Flag)[];
+      const before = Object.fromEntries(keys.map((key) => [key, current[key]]));
+      Object.assign(current, patch);
+      const saved = await flags.save(current);
+      await this.adminAudit.record(manager, {
+        actor,
+        action: 'flag.updated',
+        target: `flag:${id}`,
+        before,
+        after: Object.fromEntries(keys.map((key) => [key, saved[key]])),
+      });
+      return { flag: saved, changed: await this.packSync.sync(id, manager) };
+    });
+    await this.packSync.invalidatePacks(changed);
+    return this.adminFlagView(flag);
   }
 
   async adminBearers(festivalId: string) {

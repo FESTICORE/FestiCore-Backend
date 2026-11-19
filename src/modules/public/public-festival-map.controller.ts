@@ -7,21 +7,21 @@ import {
   Res,
 } from '@nestjs/common';
 import { ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
-import { DataSource } from 'typeorm';
 import { ImageStorageService } from '../storage/image-storage.service';
 import { Public } from '../auth/decorator/public.decorator';
-import { PUBLIC_CRAWL_IMAGE_SQL } from './crawl-image-policy';
 import { SOHYANG_COMMONS_SEED } from '../admin/crawl/service/sohyang-commons-profile';
 import { PublicFestivalService } from './public-festival.service';
 
 @ApiTags('Public Festivals')
 @Public()
+// 한 상세 화면이 출연진 사진을 수십 장 요청하므로 전역 API 한도(분당 100회) 대신 이미지 전용 한도를 둔다.
+@Throttle({ default: { ttl: 60_000, limit: 600 } })
 @Controller('festivals')
 export class PublicFestivalMapController {
   constructor(
     private readonly storage: ImageStorageService,
-    private readonly dataSource: DataSource,
     private readonly festivals: PublicFestivalService,
   ) {}
 
@@ -41,31 +41,10 @@ export class PublicFestivalMapController {
     @Param('imageId', new ParseUUIDPipe()) imageId: string,
     @Res() response: Response,
   ) {
-    const rows = await this.dataSource.query<
-      {
-        objectKey: string;
-        seed: string | null;
-        festivalId: string | null;
-        festivalSourceUrl: string | null;
-        artistName: string | null;
-      }[]
-    >(
-      `SELECT image."objectKey", source."parserConfig"->>'seed' AS seed,
-         review."festivalId" AS "festivalId",
-         review."festivalSourceUrl" AS "festivalSourceUrl",
-         review."artistName" AS "artistName"
-       FROM crawl_images image
-       JOIN crawl_sources source ON source.id = image."sourceId"
-       LEFT JOIN crawl_artist_image_reviews review ON
-         review."sourceId" = source.id AND review."imageId" = image.id
-         AND review.status = 'approved'
-       WHERE image.id = $1
-         AND ${PUBLIC_CRAWL_IMAGE_SQL}`,
-      [imageId],
-    );
-    if (!rows[0]) throw new NotFoundException('포스터를 찾을 수 없습니다.');
-    if (rows[0].seed === 'commons-approved-profile') {
-      const { festivalId, festivalSourceUrl, artistName } = rows[0];
+    const poster = await this.festivals.findPublicPoster(imageId);
+    if (!poster) throw new NotFoundException('포스터를 찾을 수 없습니다.');
+    if (poster.seed === 'commons-approved-profile') {
+      const { festivalId, festivalSourceUrl, artistName } = poster;
       if (
         !festivalId ||
         !festivalSourceUrl ||
@@ -78,13 +57,13 @@ export class PublicFestivalMapController {
       )
         throw new NotFoundException('포스터를 찾을 수 없습니다.');
     }
-    const bytes = await this.storage.readCrawlImage(rows[0].objectKey);
+    const bytes = await this.storage.readCrawlImage(poster.objectKey);
     response
       .set({
         'Content-Type': 'image/webp',
         'Cache-Control':
-          rows[0].seed === SOHYANG_COMMONS_SEED ||
-          rows[0].seed === 'commons-approved-profile'
+          poster.seed === SOHYANG_COMMONS_SEED ||
+          poster.seed === 'commons-approved-profile'
             ? 'no-store'
             : 'public, max-age=86400',
         'Cross-Origin-Resource-Policy': 'cross-origin',

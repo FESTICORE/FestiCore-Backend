@@ -5,11 +5,19 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
+import {
+  canonicalFestivalId,
+  FESTIVAL_ALIASES,
+  HIDDEN_FESTIVAL_IDS,
+  isHiddenFestival,
+} from '../../../scripts/festival-aliases.cjs';
 import { DataSource, Repository } from 'typeorm';
 import { AdminFestival } from '../admin/festival/festival.entity';
 import { festivalSetId } from '../admin/festival/festival-set-id';
+import { setNote } from '../../common/set-note';
 import { CrawlTimetableSet } from '../admin/crawl/entity/crawl-timetable-revision.entity';
 import { PUBLIC_CRAWL_IMAGE_SQL } from './crawl-image-policy';
+import { projectSearchArtists } from './public-artist-search';
 import {
   invalidStoredImagePath,
   overlayPublishedImages,
@@ -18,7 +26,9 @@ import {
 } from './published-image-overlay';
 import { Flag } from '../flags/flag.entity';
 import { artistNameKeys, normalizeArtistName } from '../../common/artist-name';
+import { isIsoInstant } from '../../common/iso-instant';
 import {
+  mapPoint,
   venueLabelMatches,
   verifiedVenueLocation,
 } from '../../common/festival-location';
@@ -32,6 +42,8 @@ import {
   DiscoveryRow,
   DiscoverySummary,
   PublishedDiscoveryRow,
+  ticketDateRange,
+  ticketDateSpanLimit,
 } from './crawl-catalog';
 import {
   PRUGIO_LINEUP_SEED,
@@ -50,6 +62,34 @@ import {
 
 type Document = Record<string, unknown>;
 
+type ListSortKey = { bucket: 0 | 1 | 2; date: string; id: string };
+
+function listSortKey(
+  entry: { id: string; firstDate: string; lastDate: string },
+  today: string,
+): ListSortKey {
+  const bucket =
+    entry.firstDate <= today && entry.lastDate >= today
+      ? 0
+      : entry.firstDate > today
+        ? 1
+        : 2;
+  return {
+    bucket,
+    date: bucket === 2 ? entry.lastDate : entry.firstDate,
+    id: entry.id,
+  };
+}
+
+function compareListSortKeys(a: ListSortKey, b: ListSortKey): number {
+  const dateOrder = a.date < b.date ? -1 : a.date > b.date ? 1 : 0;
+  return (
+    a.bucket - b.bucket ||
+    (a.bucket === 2 ? -dateOrder : dateOrder) ||
+    (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+  );
+}
+
 function object(value: unknown): value is Document {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -63,6 +103,56 @@ function fields(value: unknown, names: readonly string[]): Document {
 
 function projectedArray(value: unknown, names: readonly string[]): Document[] {
   return requiredArray(value).map((item) => fields(item, names));
+}
+
+function unitNumber(value: unknown): value is number {
+  return typeof value === 'number' && value >= 0 && value <= 1;
+}
+
+/** 존 지도 영역 `{x,y,w,h}`(0..1). 형식이 다르면 null로 보낸다. */
+function projectMapArea(value: unknown): Document | null {
+  if (!object(value)) return null;
+  const { x, y, w, h } = value;
+  if (!unitNumber(x) || !unitNumber(y) || !unitNumber(w) || !unitNumber(h))
+    return null;
+  return { x, y, w, h };
+}
+
+function projectZones(value: unknown): Document[] {
+  return requiredArray(value).map((zone) => ({
+    ...fields(zone, ['id', 'name', 'kind', 'x', 'y', 'order']),
+    area: projectMapArea(zone.area),
+    landmark: typeof zone.landmark === 'string' ? zone.landmark : null,
+  }));
+}
+
+function projectMapStages(value: unknown): Document[] {
+  return requiredArray(value)
+    .filter(
+      (item) =>
+        typeof item.stageId === 'string' &&
+        unitNumber(item.x) &&
+        unitNumber(item.y) &&
+        unitNumber(item.w),
+    )
+    .map((item) => fields(item, ['stageId', 'x', 'y', 'w']));
+}
+
+/**
+ * 존 지도 버전. 지도 이미지·종횡비·존(이름·영역·좌표)·무대 머리글 위치가 바뀔 때만 바뀐다.
+ * 앱은 받아 둔 팩의 값과 `GET :id/pack/version`의 값을 비교해 "지도 바뀜(팩 업데이트 필요)"을 띄운다.
+ * 존이 없으면 null이다.
+ */
+export function zoneMapVersion(pack: Document): string | null {
+  const zones = projectZones(pack.zones);
+  if (zones.length === 0) return null;
+  const canonical = JSON.stringify({
+    imageUrl: typeof pack.mapImageUrl === 'string' ? pack.mapImageUrl : null,
+    aspect: typeof pack.mapAspect === 'number' ? pack.mapAspect : null,
+    zones,
+    stages: projectMapStages(pack.mapStages),
+  });
+  return `zm-${createHash('sha256').update(canonical).digest('hex').slice(0, 12)}`;
 }
 
 function projectSource(value: unknown): Document {
@@ -103,6 +193,7 @@ function projectDirections(value: unknown, venue: unknown): Document {
     'memo',
     'lastShuttleAt',
     'lastTrainAt',
+    'lastDepartures',
     'mapLinks',
     'location',
     'source',
@@ -112,18 +203,132 @@ function projectDirections(value: unknown, venue: unknown): Document {
       const section = fields(direction[key], [
         'body',
         'links',
-        ...(key === 'transit' ? ['stationName', 'walkMinutes'] : []),
+        ...(key === 'transit'
+          ? ['stationName', 'walkMinutes', 'location']
+          : []),
+        ...(key === 'shuttle' ? ['stopName', 'location'] : []),
       ]);
       section.links = projectedArray(section.links, ['label', 'url']);
+      // 역·정류장 좌표는 위도·경도만 보내고 형식이 다르면 null로 보낸다.
+      if ('location' in section) section.location = mapPoint(section.location);
       direction[key] = section;
     }
   }
+  // 형식이 정해지기 전에 발행된 자유 문장은 앱이 시각으로 해석하지 않도록 null로 보낸다.
+  for (const key of ['lastShuttleAt', 'lastTrainAt'] as const)
+    if (key in direction && !isIsoInstant(direction[key]))
+      direction[key] = null;
+  direction.lastDepartures = projectedArray(direction.lastDepartures, [
+    'date',
+    'shuttleAt',
+    'trainAt',
+  ]);
   direction.mapLinks = fields(direction.mapLinks, ['naver', 'kakao']);
   const location = verifiedVenueLocation(direction.location);
   direction.location =
     location && venueLabelMatches(location.label, venue) ? location : null;
   direction.source = projectSource(direction.source);
   return direction;
+}
+
+export interface PackValueChange {
+  before: string | null;
+  after: string | null;
+}
+
+export interface DepartureTimes {
+  shuttleAt: string | null;
+  trainAt: string | null;
+}
+
+export interface DepartureChange {
+  date: string;
+  before: DepartureTimes | null;
+  after: DepartureTimes | null;
+}
+
+export interface PackChanges {
+  fromVersion: number;
+  toVersion: number;
+  sizeBytes: number;
+  changedSets: number | null;
+  lastShuttleAt: PackValueChange | null;
+  lastTrainAt: PackValueChange | null;
+  lastDepartures: DepartureChange[] | null;
+}
+
+/** 추가·삭제되었거나 아티스트·무대·시각이 바뀐 공연 수 */
+export function changedSetCount(previous: Document, current: Document): number {
+  const key = (set: Document) =>
+    JSON.stringify([set.artist, set.stageId, set.startsAt, set.endsAt]);
+  const before = new Map(
+    requiredArray(previous.sets).map((set) => [String(set.id), key(set)]),
+  );
+  const after = new Map(
+    requiredArray(current.sets).map((set) => [String(set.id), key(set)]),
+  );
+  let count = 0;
+  for (const [id, value] of after) if (before.get(id) !== value) count += 1;
+  for (const id of before.keys()) if (!after.has(id)) count += 1;
+  return count;
+}
+
+export function changedDirection(
+  previous: Document,
+  current: Document,
+  field: 'lastShuttleAt' | 'lastTrainAt',
+): PackValueChange | null {
+  const value = (pack: Document) => {
+    const directions = pack.directions as Document | null | undefined;
+    const raw = directions?.[field];
+    return typeof raw === 'string' ? raw : null;
+  };
+  const before = value(previous);
+  const after = value(current);
+  return before === after ? null : { before, after };
+}
+
+/** 날짜별 마지막 셔틀·막차 시각이 추가·삭제·변경된 날짜만 날짜순으로 돌려준다. 변경이 없으면 null */
+export function changedDepartures(
+  previous: Document,
+  current: Document,
+): DepartureChange[] | null {
+  const byDate = (pack: Document) => {
+    const directions = pack.directions as Document | null | undefined;
+    return new Map(
+      requiredArray(directions?.lastDepartures)
+        .filter((item) => typeof item.date === 'string')
+        .map((item) => [
+          item.date as string,
+          {
+            shuttleAt:
+              typeof item.shuttleAt === 'string' ? item.shuttleAt : null,
+            trainAt: typeof item.trainAt === 'string' ? item.trainAt : null,
+          },
+        ]),
+    );
+  };
+  const before = byDate(previous);
+  const after = byDate(current);
+  const changes = [...new Set([...before.keys(), ...after.keys()])]
+    .sort()
+    .flatMap((date) => {
+      const from = before.get(date) ?? null;
+      const to = after.get(date) ?? null;
+      return JSON.stringify(from) === JSON.stringify(to)
+        ? []
+        : [{ date, before: from, after: to }];
+    });
+  return changes.length ? changes : null;
+}
+
+/**
+ * 변경 요약 ETag. 현재 팩 ETag를 키에 넣어, 같은 packVersion이라도
+ * 이미지 승인으로 공개 팩 본문·sizeBytes가 바뀌면 함께 바뀐다.
+ */
+export function packChangesEtag(fromVersion: number, packEtag: string): string {
+  const pack = packEtag.replace(/^W\//, '').replace(/^"|"$/g, '');
+  return `"cdm${PUBLIC_PACK_PROJECTION_VERSION}-chg${fromVersion}-${pack}"`;
 }
 
 export function publicPackEtag(packVersion: number): string {
@@ -136,6 +341,7 @@ function projectPack(pack: Document): Document {
     'name',
     'venue',
     'timezone',
+    'eventPeriod',
     'flagsEnabled',
     'packVersion',
     'packUpdatedAt',
@@ -143,6 +349,13 @@ function projectPack(pack: Document): Document {
     'mapImageUrl',
     'mapAspect',
   ]);
+  if (object(pack.eventPeriod))
+    result.eventPeriod = fields(pack.eventPeriod, ['firstDate', 'lastDate']);
+  if (
+    pack.timetableStatus === 'unpublished' ||
+    pack.timetableStatus === 'verified'
+  )
+    result.timetableStatus = pack.timetableStatus;
   result.thumbUrl = publicImageUrl(pack.thumbUrl);
   result.ticketLinks = projectedArray(pack.ticketLinks, ['label', 'url']);
   result.days = projectedArray(pack.days, ['date', 'startsAt', 'endsAt']);
@@ -159,6 +372,7 @@ function projectPack(pack: Document): Document {
   ]).map((set) => ({
     ...set,
     id: festivalSetId(set),
+    note: setNote(set.note),
     imageUrl: storedArtistImageUrl(set.imageUrl),
   }));
   const artists = new Map<string, { name: string; imageUrl: string | null }>();
@@ -170,6 +384,18 @@ function projectPack(pack: Document): Document {
     const existing = artists.get(key);
     if (!existing) artists.set(key, { name, imageUrl });
     else if (!existing.imageUrl && imageUrl) existing.imageUrl = imageUrl;
+  }
+  if (requiredArray(result.sets).length === 0) {
+    for (const artist of requiredArray(pack.artists)) {
+      if (typeof artist.name !== 'string' || !artist.name.trim()) continue;
+      const name = artist.name.trim();
+      const key = artistNameKeys(name)[0];
+      if (!artists.has(key))
+        artists.set(key, {
+          name,
+          imageUrl: storedArtistImageUrl(artist.imageUrl),
+        });
+    }
   }
   result.artists = [...artists.values()];
   const stageNames = new Map(
@@ -187,14 +413,11 @@ function projectPack(pack: Document): Document {
           : null,
       stageName: stageNames.get(set.stageId) ?? null,
     }));
-  result.zones = projectedArray(pack.zones, [
-    'id',
-    'name',
-    'kind',
-    'x',
-    'y',
-    'order',
-  ]);
+  result.timetableStatus =
+    requiredArray(result.sets).length > 0 ? 'available' : 'pending';
+  result.zones = projectZones(pack.zones);
+  result.mapStages = projectMapStages(pack.mapStages);
+  result.mapVersion = zoneMapVersion(pack);
   result.flags = requiredArray(pack.flags)
     .filter(
       (flag) =>
@@ -234,6 +457,24 @@ function projectPack(pack: Document): Document {
   return result;
 }
 
+const MAX_ARTIST_NAMES = 50;
+
+/** 목록 검색용 출연진 이름. 표기 변형은 첫 표기만 남기고 최대 50개로 자른다. */
+function artistNames(artists: unknown): string[] {
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const artist of requiredArray(artists)) {
+    if (typeof artist.name !== 'string') continue;
+    const name = artist.name.trim();
+    const keys = name ? artistNameKeys(name) : [];
+    if (!keys.length || keys.some((key) => seen.has(key))) continue;
+    keys.forEach((key) => seen.add(key));
+    names.push(name);
+    if (names.length === MAX_ARTIST_NAMES) break;
+  }
+  return names;
+}
+
 function requiredArray(value: unknown): Document[] {
   return Array.isArray(value)
     ? value.filter(
@@ -256,6 +497,14 @@ export function envelopeEtag(etag: string): string {
   return `"cdm1-${etag.slice(1, -1)}"`;
 }
 
+export interface PublicPosterRow {
+  objectKey: string;
+  seed: string | null;
+  festivalId: string | null;
+  festivalSourceUrl: string | null;
+  artistName: string | null;
+}
+
 @Injectable()
 export class PublicFestivalService {
   constructor(
@@ -266,6 +515,25 @@ export class PublicFestivalService {
     private readonly dataSource: DataSource,
     private readonly cache: CacheService,
   ) {}
+
+  /** 공개 정책을 통과한 수집 포스터 한 장과 승인 출연진 사진 검토 정보를 찾는다. */
+  async findPublicPoster(imageId: string): Promise<PublicPosterRow | null> {
+    const rows = await this.dataSource.query<PublicPosterRow[]>(
+      `SELECT image."objectKey", source."parserConfig"->>'seed' AS seed,
+         review."festivalId" AS "festivalId",
+         review."festivalSourceUrl" AS "festivalSourceUrl",
+         review."artistName" AS "artistName"
+       FROM crawl_images image
+       JOIN crawl_sources source ON source.id = image."sourceId"
+       LEFT JOIN crawl_artist_image_reviews review ON
+         review."sourceId" = source.id AND review."imageId" = image.id
+         AND review.status = 'approved'
+       WHERE image.id = $1
+         AND ${PUBLIC_CRAWL_IMAGE_SQL}`,
+      [imageId],
+    );
+    return rows[0] ?? null;
+  }
 
   /** Require one current catalog artist, without relying on any image source. */
   async hasCurrentArtist(
@@ -576,6 +844,7 @@ export class PublicFestivalService {
   private async publishedWithEtag(
     id: string,
   ): Promise<{ document: Document; etag: string }> {
+    id = canonicalFestivalId(id);
     const pack = await this.cachedPublished(id);
     const rows = await this.publicImageRows([id], this.storedImageIds(pack));
     // Check the current roster once even if Redis still holds an older pack.
@@ -596,7 +865,12 @@ export class PublicFestivalService {
   private storedImageIds(pack: Document): string[] {
     return [
       ...new Set(
-        [pack.thumbUrl, ...requiredArray(pack.sets).map((set) => set.imageUrl)]
+        [
+          pack.thumbUrl,
+          ...requiredArray(pack.sets).map((set) => set.imageUrl),
+          // 공연 없이 출연진만 있는 팩도 저장된 출연진 사진을 공개한다.
+          ...requiredArray(pack.artists).map((artist) => artist.imageUrl),
+        ]
           .map(storedImageId)
           .filter((imageId): imageId is string => imageId !== null),
       ),
@@ -675,9 +949,31 @@ export class PublicFestivalService {
     return this.publishedWithEtag(id);
   }
 
-  private async discoveryCatalog(): Promise<DiscoverySummary[]> {
-    const discoveryRows = await this.dataSource.query<DiscoveryRow[]>(
-      `WITH candidates AS (
+  private async discoveryCatalog(
+    includePublished = false,
+  ): Promise<DiscoverySummary[]> {
+    const discoveryRows = await this.dataSource.transaction(
+      'REPEATABLE READ',
+      async (manager) => {
+        const dateRows = await manager.query<{ url: string; date: string }[]>(
+          `SELECT DISTINCT item->'after'->>'url' AS url,
+             item->'after'->>'date' AS date
+           FROM crawl_proposals proposal
+           CROSS JOIN LATERAL jsonb_array_elements(proposal.items) item
+           WHERE proposal.kind = 'festival.new'
+             AND item->'after'->>'url' IS NOT NULL
+             AND item->>'decision' IS DISTINCT FROM 'rejected'
+             AND proposal.status IS DISTINCT FROM 'rejected'
+             AND NULLIF(btrim(item->'after'->>'name'), '') IS NOT NULL
+             AND NULLIF(btrim(item->'after'->>'venue'), '') IS NOT NULL
+             AND NULLIF(btrim(item->'after'->>'date'), '') IS NOT NULL`,
+        );
+        const validDates = dateRows.filter(({ url, date }) =>
+          ticketDateRange(date, ticketDateSpanLimit(url)),
+        );
+        if (!validDates.length) return [];
+        return manager.query<DiscoveryRow[]>(
+          `WITH candidates AS (
          SELECT item->'after' AS candidate,
            item->'after'->>'url' AS url,
            source.url AS "sourceUrl",
@@ -709,7 +1005,12 @@ export class PublicFestivalService {
            AND "proposalStatus" IS DISTINCT FROM 'rejected'
            AND NULLIF(btrim(candidate->>'name'), '') IS NOT NULL
            AND NULLIF(btrim(candidate->>'venue'), '') IS NOT NULL
-           AND NULLIF(btrim(candidate->>'date'), '') IS NOT NULL
+           AND EXISTS (
+             SELECT 1 FROM jsonb_to_recordset($3::jsonb)
+               AS valid(url text, date text)
+             WHERE valid.url = candidates.url
+               AND valid.date = candidates.candidate->>'date'
+           )
          ORDER BY url, COALESCE("sourceUrl" = url, false) DESC,
            created_at DESC, proposal_id DESC
        ), details AS (
@@ -742,7 +1043,11 @@ export class PublicFestivalService {
                AND "proposalStatus" IS DISTINCT FROM 'rejected'
                AND regexp_replace(candidate->>'url', '[?#].*$', '') IN (
                  'https://www.mintpaper.co.kr/posts/4819',
-                 'https://mintpaper.co.kr/posts/4819')
+                 'https://mintpaper.co.kr/posts/4819',
+                 'https://www.mintpaper.co.kr/posts/4870',
+                 'https://mintpaper.co.kr/posts/4870',
+                 'https://www.mintpaper.co.kr/festivals/178/notice/4870',
+                 'https://mintpaper.co.kr/festivals/178/notice/4870')
                AND jsonb_array_length(CASE WHEN jsonb_typeof(candidate->'artists') = 'array'
                  THEN candidate->'artists' ELSE '[]'::jsonb END) > 0))[1] AS "officialProfileArtists",
            (array_agg(jsonb_build_object(
@@ -796,18 +1101,23 @@ export class PublicFestivalService {
        FROM latest JOIN latest_decision USING (url)
        JOIN details USING (url)
        LEFT JOIN location_diff ON location_diff.url = latest.url`,
-      [PRUGIO_LINEUP_URL, PRUGIO_LINEUP_SEED],
+          [PRUGIO_LINEUP_URL, PRUGIO_LINEUP_SEED, JSON.stringify(validDates)],
+        );
+      },
     );
     const publishedRows = await this.dataSource.query<PublishedDiscoveryRow[]>(
       `SELECT published->>'name' AS name,
          published->>'venue' AS venue,
-         published->'days'->0->>'date' AS "firstDate",
-         published->'days'->-1->>'date' AS "lastDate",
+         COALESCE(published->'days'->0->>'date', published->'eventPeriod'->>'firstDate') AS "firstDate",
+         COALESCE(published->'days'->-1->>'date', published->'eventPeriod'->>'lastDate') AS "lastDate",
          published->'source'->>'url' AS "sourceUrl"
        FROM admin_festivals
        WHERE published IS NOT NULL AND "publishedVersion" > 0`,
     );
-    const summaries = discoverySummaries(discoveryRows, publishedRows);
+    const summaries = discoverySummaries(
+      discoveryRows,
+      includePublished ? [] : publishedRows,
+    );
     attachPrugioLineup(summaries, discoveryRows[0]?.prugioCandidate);
     await this.attachVerifiedWonderlivetTicket(summaries);
     const festivalSourceUrl = 'https://mintpaper.co.kr/festivals/178';
@@ -1102,6 +1412,7 @@ export class PublicFestivalService {
   }
 
   async discovered(id: string): Promise<DiscoverySummary | null> {
+    if (canonicalFestivalId(id) !== id || isHiddenFestival(id)) return null;
     const entry = (await this.discoveryCatalog()).find(
       (item) => item.id === id,
     );
@@ -1403,7 +1714,16 @@ export class PublicFestivalService {
             ),
           ),
         );
+        // 이 축제에 승인된 Commons 사진이 하나로 정해지면 기존 사진보다 우선한다.
+        const reviewedProfileIds = new Set(
+          artistNameKeys(artist.name).flatMap((nameKey) => [
+            ...(profileImageByName.get(
+              `${entry.id}\u0000${entry.sourceUrl}\u0000${nameKey}`,
+            ) ?? []),
+          ]),
+        );
         const imageId =
+          (reviewedProfileIds.size === 1 ? [...reviewedProfileIds][0] : null) ??
           (primaryProfileIds.size === 1 ? [...primaryProfileIds][0] : null) ??
           (artist.sourceUrl && imageByUrl.get(artist.sourceUrl)) ??
           (primaryProfileIds.size === 0 && matchingProfileIds.size === 1
@@ -1470,8 +1790,9 @@ export class PublicFestivalService {
       });
   }
 
-  async detail(id: string) {
-    if (!/^fst_[0-9a-z]+$/.test(id))
+  async detail(id: string): Promise<Document> {
+    id = canonicalFestivalId(id);
+    if (!/^fst_[0-9a-z]+$/.test(id) || isHiddenFestival(id))
       throw new NotFoundException({
         code: 'FESTIVAL_NOT_FOUND',
         message: '축제를 찾을 수 없습니다.',
@@ -1480,7 +1801,22 @@ export class PublicFestivalService {
     if (published?.published && published.publishedVersion > 0) {
       return this.published(id);
     }
-    const entry = (await this.discoveryCatalog()).find(
+    return this.discoveryDetail(id);
+  }
+
+  /** Internal reconciliation view, including festivals that already have a pack. */
+  async crawlCandidates(): Promise<DiscoverySummary[]> {
+    return (await this.discoveryCatalog(true)).filter(
+      (entry) => canonicalFestivalId(entry.id) === entry.id,
+    );
+  }
+
+  async crawlDetail(id: string) {
+    return this.discoveryDetail(id, true);
+  }
+
+  private async discoveryDetail(id: string, includePublished = false) {
+    const entry = (await this.discoveryCatalog(includePublished)).find(
       (item) => item.id === id,
     );
     if (!entry)
@@ -1551,6 +1887,7 @@ export class PublicFestivalService {
     );
     const artistImages = new Map<string, Set<string>>();
     const primaryArtistImages = new Map<string, Set<string>>();
+    const reviewedArtistImages = new Map<string, Set<string>>();
     const addArtistImage = (
       imagesByName: Map<string, Set<string>>,
       name: string,
@@ -1577,8 +1914,12 @@ export class PublicFestivalService {
       addArtistImage(artistImages, artistName, imageUrl);
       if (festivalSourceUrl === entry.sourceUrl)
         addArtistImage(primaryArtistImages, artistName, imageUrl);
+      if (festivalSourceUrl === entry.sourceUrl && scope === entry.id)
+        addArtistImage(reviewedArtistImages, artistName, imageUrl);
     }
+    // 이 축제에 승인된 Commons 사진이 하나로 정해지면 기존 사진보다 우선한다.
     const artistImage = (name: string) =>
+      artistImageForName(name, reviewedArtistImages) ??
       artistImageForName(name, primaryArtistImages) ??
       artistImageForName(name, artistImages);
     const timetable = (revisions ?? []).flatMap((revision) =>
@@ -1684,20 +2025,33 @@ export class PublicFestivalService {
         message: 'limit은 단일 정수여야 합니다.',
       });
     const cursor = after?.match(
-      /^(\d{4}-\d{2}-\d{2})~([^~]+)~(fst_[0-9a-z]+)$/,
+      /^(\d{4}-\d{2}-\d{2})~v2~(\d{4}-\d{2}-\d{2})~([012])~(\d{4}-\d{2}-\d{2})~(fst_[0-9a-z]+)$/,
+    );
+    const legacyCursor = after?.match(
+      /^(\d{4}-\d{2}-\d{2})~(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2}))~(fst_[0-9a-z]+)$/,
     );
     if (
-      cursor &&
-      (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2})$/.test(
-        cursor[2],
-      ) ||
-        Number.isNaN(Date.parse(cursor[2])))
+      after?.includes('~') &&
+      !cursor &&
+      (!legacyCursor || Number.isNaN(Date.parse(legacyCursor[2])))
     )
       throw new BadRequestException({
         code: 'VALIDATION',
-        message: 'after 커서의 시작 시각이 올바르지 않습니다.',
+        message: '지원하지 않는 after 커서입니다.',
       });
-    const afterDate = cursor?.[1] ?? after;
+    if (
+      cursor &&
+      ![cursor[2], cursor[4]].every(
+        (date) =>
+          !Number.isNaN(Date.parse(`${date}T00:00:00Z`)) &&
+          new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) === date,
+      )
+    )
+      throw new BadRequestException({
+        code: 'VALIDATION',
+        message: 'after 커서의 날짜가 올바르지 않습니다.',
+      });
+    const afterDate = cursor?.[1] ?? legacyCursor?.[1] ?? after;
     if (afterDate !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(afterDate))
       throw new BadRequestException({
         code: 'VALIDATION',
@@ -1724,27 +2078,42 @@ export class PublicFestivalService {
       });
 
     const today = dateInSeoul(now);
+    const sortToday = cursor?.[2] ?? today;
     const floor =
       afterDate ??
       new Date(Date.parse(`${today}T00:00:00Z`) - 30 * 86_400_000)
         .toISOString()
         .slice(0, 10);
-    const firstStartsAt = `festival.published->'days'->0->>'startsAt'`;
-    const firstInstant = `(${firstStartsAt})::timestamptz`;
-    const lastDate = `festival.published->'days'->-1->>'date'`;
+    const firstDate = `COALESCE(festival.published->'days'->0->>'date', festival.published->'eventPeriod'->>'firstDate')`;
+    const lastDate = `COALESCE(festival.published->'days'->-1->>'date', festival.published->'eventPeriod'->>'lastDate')`;
+    const bucket = `CASE WHEN ${firstDate} <= '${sortToday}' AND ${lastDate} >= '${sortToday}' THEN 0 WHEN ${firstDate} > '${sortToday}' THEN 1 ELSE 2 END`;
+    const sortDate = `CASE WHEN ${bucket} = 2 THEN ${lastDate} ELSE ${firstDate} END`;
     const query = this.festivals
       .createQueryBuilder('festival')
       .where('festival.published IS NOT NULL')
       .andWhere('festival.publishedVersion > 0')
-      .andWhere(`${lastDate} >= :floor`, { floor });
+      .andWhere(`${lastDate} >= :floor`, { floor })
+      // 별칭·숨김 축제는 SQL에서 빼야 limit이 보이는 행 기준으로 걸리고, 다음 커서가 사라지지 않는다.
+      .andWhere('festival.id NOT IN (:...excludedIds)', {
+        excludedIds: [...Object.keys(FESTIVAL_ALIASES), ...HIDDEN_FESTIVAL_IDS],
+      });
     if (cursor) {
+      const cursorBucket = Number(cursor[3]);
       query.andWhere(
-        `(${firstInstant} > CAST(:cursorAt AS timestamptz) OR (${firstInstant} = CAST(:cursorAt AS timestamptz) AND festival.id > :cursorId))`,
-        { cursorAt: cursor[2], cursorId: cursor[3] },
+        `(${bucket} > :cursorBucket OR (${bucket} = :cursorBucket AND (${sortDate} ${cursorBucket === 2 ? '<' : '>'} :cursorDate OR (${sortDate} = :cursorDate AND festival.id > :cursorId))))`,
+        { cursorBucket, cursorDate: cursor[4], cursorId: cursor[5] },
       );
     }
     const rows = await query
-      .orderBy(firstInstant, 'ASC')
+      .orderBy(bucket, 'ASC')
+      .addOrderBy(
+        `CASE WHEN ${bucket} = 2 THEN NULL ELSE ${firstDate} END`,
+        'ASC',
+      )
+      .addOrderBy(
+        `CASE WHEN ${bucket} = 2 THEN ${lastDate} ELSE NULL END`,
+        'DESC',
+      )
       .addOrderBy('festival.id', 'ASC')
       .take(limit + 1)
       .getMany();
@@ -1752,12 +2121,12 @@ export class PublicFestivalService {
       const pack = row.published;
       if (!pack || row.publishedVersion < 1) return [];
       const days = requiredArray(pack.days);
-      const firstDate = days[0]?.date;
+      const period = object(pack.eventPeriod) ? pack.eventPeriod : {};
+      const firstDate = days[0]?.date ?? period.firstDate;
       const startsAt = days[0]?.startsAt;
-      const lastDate = days[days.length - 1]?.date;
+      const lastDate = days[days.length - 1]?.date ?? period.lastDate;
       if (
         typeof firstDate !== 'string' ||
-        typeof startsAt !== 'string' ||
         typeof lastDate !== 'string' ||
         lastDate < floor
       )
@@ -1768,8 +2137,7 @@ export class PublicFestivalService {
           name: pack.name,
           venue: pack.venue,
           firstDate,
-          startsAt,
-          sortAt: startsAt,
+          ...(typeof startsAt === 'string' ? { startsAt } : {}),
           lastDate,
           packVersion: row.publishedVersion,
           flagsEnabled: pack.flagsEnabled,
@@ -1787,6 +2155,7 @@ export class PublicFestivalService {
               .find((url) => url !== null) ??
             null,
           ticketLinks: projectedArray(pack.ticketLinks, ['label', 'url']),
+          artistNames: artistNames(projectPack(pack).artists),
           status:
             today < firstDate
               ? 'upcoming'
@@ -1859,17 +2228,43 @@ export class PublicFestivalService {
       }
     }
     const discovered = (await this.discoveryCatalog()).filter((entry) => {
+      if (canonicalFestivalId(entry.id) !== entry.id) return false;
+      if (isHiddenFestival(entry.id)) return false;
       if (entry.lastDate < floor) return false;
       if (!cursor) return true;
-      const sort = Date.parse(entry.sortAt) - Date.parse(cursor[2]);
-      return sort > 0 || (sort === 0 && entry.id > cursor[3]);
+      return (
+        compareListSortKeys(listSortKey(entry, sortToday), {
+          bucket: Number(cursor[3]) as 0 | 1 | 2,
+          date: cursor[4],
+          id: cursor[5],
+        }) > 0
+      );
     });
     await this.attachStoredImages(discovered);
-    const ordered = [...summaries, ...discovered].sort(
-      (a, b) =>
-        Date.parse(a.sortAt) - Date.parse(b.sortAt) || a.id.localeCompare(b.id),
+    const ordered = [
+      ...summaries.filter(
+        (summary) =>
+          !(summary.id in FESTIVAL_ALIASES) && !isHiddenFestival(summary.id),
+      ),
+      ...discovered,
+    ].sort((a, b) =>
+      compareListSortKeys(listSortKey(a, sortToday), listSortKey(b, sortToday)),
     );
-    const items = ordered.slice(0, limit).map((summary) => ({
+    const page = ordered.slice(0, limit);
+    const pageIds = page.map((summary) => summary.id);
+    const publishedRows = rows
+      .filter((row) => pageIds.includes(row.id) && row.published)
+      .map((row) => ({ id: row.id, published: row.published as Document }));
+    const publishedIds = new Set(publishedRows.map((row) => row.id));
+    const artistsById = await projectSearchArtists(
+      this.dataSource,
+      pageIds,
+      publishedRows,
+      discovered.filter(
+        (entry) => pageIds.includes(entry.id) && !publishedIds.has(entry.id),
+      ),
+    );
+    const items = page.map((summary) => ({
       id: summary.id,
       name: summary.name,
       venue: summary.venue,
@@ -1879,17 +2274,73 @@ export class PublicFestivalService {
       flagsEnabled: summary.flagsEnabled,
       thumbUrl: summary.thumbUrl,
       ticketLinks: summary.ticketLinks,
+      artistNames: (artistsById.get(summary.id) ?? [])
+        .map((artist) => artist.name)
+        .slice(0, 50),
       status: summary.status,
+      artists: artistsById.get(summary.id) ?? [],
       ...('sourceUrl' in summary ? { sourceUrl: summary.sourceUrl } : {}),
       ...('officialInstagramUrl' in summary
         ? { officialInstagramUrl: summary.officialInstagramUrl }
         : {}),
     }));
+    const lastKey = page.length
+      ? listSortKey(page[page.length - 1], sortToday)
+      : null;
     const nextCursor =
-      ordered.length > limit
-        ? `${floor}~${ordered[limit - 1].sortAt}~${ordered[limit - 1].id}`
+      (ordered.length > limit || rows.length > limit) && lastKey
+        ? `${floor}~v2~${sortToday}~${lastKey.bucket}~${lastKey.date}~${lastKey.id}`
         : null;
     return { items, nextCursor };
+  }
+
+  /**
+   * 앱이 가진 팩 버전과 현재 발행 팩의 차이를 요약한다.
+   * 이전 버전 기록이 없으면 비교 값은 null이다.
+   */
+  async packChanges(
+    id: string,
+    fromVersion: number,
+  ): Promise<{ changes: PackChanges; packEtag: string }> {
+    const { document: current, etag: packEtag } =
+      await this.publishedWithEtag(id);
+    const toVersion = current.packVersion as number;
+    const base = {
+      fromVersion,
+      toVersion,
+      sizeBytes: Buffer.byteLength(JSON.stringify(current)),
+    };
+    const unchanged = {
+      lastShuttleAt: null,
+      lastTrainAt: null,
+      lastDepartures: null,
+    };
+    if (fromVersion >= toVersion)
+      return {
+        packEtag,
+        changes: { ...base, changedSets: 0, ...unchanged },
+      };
+    const rows = await this.dataSource.query<{ pack: Document }[]>(
+      `SELECT "pack" FROM "admin_festival_versions"
+       WHERE "festivalId" = $1 AND "packVersion" = $2`,
+      [id, fromVersion],
+    );
+    if (!rows[0]?.pack)
+      return {
+        packEtag,
+        changes: { ...base, changedSets: null, ...unchanged },
+      };
+    const previous = projectPack(rows[0].pack);
+    return {
+      packEtag,
+      changes: {
+        ...base,
+        changedSets: changedSetCount(previous, current),
+        lastShuttleAt: changedDirection(previous, current, 'lastShuttleAt'),
+        lastTrainAt: changedDirection(previous, current, 'lastTrainAt'),
+        lastDepartures: changedDepartures(previous, current),
+      },
+    };
   }
 
   async version(id: string) {
@@ -1898,10 +2349,12 @@ export class PublicFestivalService {
       packVersion: pack.packVersion as number,
       packUpdatedAt: pack.packUpdatedAt as string,
       etag,
+      mapVersion: zoneMapVersion(pack),
     };
   }
 
   async flags(id: string, tags: string[] | undefined) {
+    id = canonicalFestivalId(id);
     const pack = await this.published(id);
     const valid = new Set(['slam', 'sing', 'train', 'calm', 'newbie']);
     if (tags?.some((tag) => !valid.has(tag)))

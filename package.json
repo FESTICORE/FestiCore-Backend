@@ -17,13 +17,19 @@
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
+    "packs:preview": "node scripts/publish-stage-festivals.cjs",
+    "packs:publish": "node scripts/publish-stage-festivals.cjs --apply",
+    "packs:test": "node --test scripts/publish-stage-festivals.test.cjs",
     "test:e2e": "jest --config ./test/jest-e2e.json --forceExit",
     "typeorm": "typeorm-ts-node-commonjs -d src/database/data-source.ts",
     "migration:generate": "npm run typeorm -- migration:generate",
     "migration:run": "ts-node src/database/safe-migration-cli.ts run",
     "migration:revert": "ts-node src/database/safe-migration-cli.ts revert",
     "migration:show": "npm run typeorm -- migration:show",
-    "oauth-token:backfill": "ts-node src/database/backfill-oauth-tokens.ts"
+    "oauth-token:backfill": "ts-node src/database/backfill-oauth-tokens.ts",
+    "flags:seed-dev": "ts-node src/database/seed-dev-flags.ts",
+    "pack-details:seed-dev": "ts-node src/database/seed-dev-pack-details.ts",
+    "crews:seed-dev": "ts-node src/database/seed-dev-crews.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1153.0",

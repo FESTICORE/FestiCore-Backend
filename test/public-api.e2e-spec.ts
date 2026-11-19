@@ -21,8 +21,20 @@ import {
 import { PublicFestivalController } from '../src/modules/public/public-festival.controller';
 import { discoverySummaries } from '../src/modules/public/crawl-catalog';
 import { PublicFestivalService } from '../src/modules/public/public-festival.service';
+import { publicFestivalTestDataSource } from './public-festival-test-data-source';
 import { PublicLiveService } from '../src/modules/public/public-live.service';
 import { CacheService } from '../src/modules/redis/service/cache.service';
+import { LIVE_POLLS_PER_MINUTE } from '../src/modules/public/public-live.service';
+
+/** 목록 커서의 정렬 기준일. 서비스와 같이 서울 날짜로 오늘을 쓴다. */
+function seoulToday(): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+}
 
 function envelopeData<T>(body: unknown, code: string): T {
   expect(body).toBeInstanceOf(Object);
@@ -69,15 +81,19 @@ describe('Public festival API', () => {
   let discoveryRows: { candidate: Record<string, unknown> }[] = [];
   let storedOriginImages: { originUrl: string; id: string }[] = [];
   let rateLimitCount = 1;
+  let previousPackRows: { pack: Record<string, unknown> }[] = [];
+  let packImageRows: Record<string, unknown>[] = [];
   const dataSource = {
     query: jest.fn((sql: string) => {
+      if (sql.includes('FROM "admin_festival_versions"'))
+        return Promise.resolve(previousPackRows);
       if (sql.includes('INSERT INTO public_live_rate_limits'))
         return Promise.resolve([{ count: rateLimitCount }]);
       if (sql.includes('WITH candidates AS'))
         return Promise.resolve(discoveryRows);
       if (sql.includes('FROM crawl_images image')) {
         if (sql.includes('image.id = ANY($2::uuid[])'))
-          return Promise.resolve([{ id: storedPackImageId, seed: null }]);
+          return Promise.resolve(packImageRows);
         if (sql.includes('image.id = ANY($1::uuid[])'))
           return Promise.resolve([{ id: storedPackImageId, seed: null }]);
         if (sql.includes('image."originUrl" = ANY($1::text[])'))
@@ -86,6 +102,7 @@ describe('Public festival API', () => {
       return Promise.resolve([]);
     }),
   };
+  Object.assign(dataSource, publicFestivalTestDataSource(dataSource.query));
   const deviceAuth = {
     resolveOptionalPrincipal: jest.fn().mockResolvedValue(undefined),
   };
@@ -175,6 +192,7 @@ describe('Public festival API', () => {
   beforeEach(() => {
     discoveryRows = [];
     storedOriginImages = [];
+    packImageRows = [{ id: storedPackImageId, seed: null }];
     rateLimitCount = 1;
   });
 
@@ -411,6 +429,119 @@ describe('Public festival API', () => {
     expect(errorData<null>(missing.body, 'FESTIVAL_NOT_FOUND')).toBeNull();
   });
 
+  it('summarizes changes between the stored and published pack versions', async () => {
+    previousPackRows = [
+      {
+        pack: {
+          ...pack,
+          packVersion: 6,
+          sets: [
+            {
+              id: 'set_removed',
+              stageId: 'stg_a',
+              artist: '지난 밴드',
+              startsAt: '2026-11-20T12:00:00+09:00',
+              endsAt: '2026-11-20T12:30:00+09:00',
+            },
+          ],
+          directions: {
+            lastShuttleAt: '2026-11-20T23:40:00+09:00',
+            lastTrainAt: null,
+            lastDepartures: [
+              {
+                date: '2026-11-20',
+                shuttleAt: '2026-11-20T23:40:00+09:00',
+                trainAt: null,
+              },
+            ],
+          },
+        },
+      },
+    ];
+    const changed = await request(server)
+      .get(`/api/v1/festivals/${pack.id}/pack/changes?from=6`)
+      .expect(200);
+    expect(changed.headers['cache-control']).toBe(
+      'public, no-cache, must-revalidate',
+    );
+    const body = successData<Record<string, unknown>>(changed.body);
+    expect(body).toEqual({
+      fromVersion: 6,
+      toVersion: 7,
+      sizeBytes: expect.any(Number) as number,
+      changedSets: 1,
+      lastShuttleAt: { before: '2026-11-20T23:40:00+09:00', after: null },
+      lastTrainAt: null,
+      lastDepartures: [
+        {
+          date: '2026-11-20',
+          before: { shuttleAt: '2026-11-20T23:40:00+09:00', trainAt: null },
+          after: null,
+        },
+      ],
+    });
+    expect(body.sizeBytes).toBeGreaterThan(0);
+    const packVersion = await request(server)
+      .get(`/api/v1/festivals/${pack.id}/pack/version`)
+      .expect(200);
+    const packEtag = String(packVersion.headers.etag);
+    expect(changed.headers.etag).toBe(
+      `"cdm7-chg6-${packEtag.replace(/"/g, '')}"`,
+    );
+    const unchanged = await request(server)
+      .get(`/api/v1/festivals/${pack.id}/pack/changes?from=6`)
+      .set('If-None-Match', changed.headers.etag)
+      .expect(304);
+    expect(unchanged.text).toBe('');
+    await request(server)
+      .get(`/api/v1/festivals/${pack.id}/pack/changes?from=5`)
+      .set('If-None-Match', changed.headers.etag)
+      .expect(200);
+
+    // 같은 packVersion에서 이미지 승인 상태만 바뀌면 /pack ETag와 함께 바뀐다.
+    packImageRows = [
+      { id: storedPackImageId, seed: null, rightsRunId: 'run_relicensed' },
+    ];
+    const overlaid = await request(server)
+      .get(`/api/v1/festivals/${pack.id}/pack/changes?from=6`)
+      .set('If-None-Match', changed.headers.etag)
+      .expect(200);
+    expect(successData<{ toVersion: number }>(overlaid.body).toVersion).toBe(7);
+    expect(overlaid.headers.etag).not.toBe(changed.headers.etag);
+    const overlaidPack = await request(server)
+      .get(`/api/v1/festivals/${pack.id}/pack/version`)
+      .expect(200);
+    expect(overlaidPack.headers.etag).not.toBe(packEtag);
+    expect(overlaid.headers.etag).toBe(
+      `"cdm7-chg6-${String(overlaidPack.headers.etag).replace(/"/g, '')}"`,
+    );
+
+    const latest = await request(server)
+      .get(`/api/v1/festivals/${pack.id}/pack/changes?from=7`)
+      .expect(200);
+    expect(successData<{ changedSets: number }>(latest.body).changedSets).toBe(
+      0,
+    );
+
+    previousPackRows = [];
+    const unknown = await request(server)
+      .get(`/api/v1/festivals/${pack.id}/pack/changes?from=3`)
+      .expect(200);
+    expect(
+      successData<{ changedSets: number | null }>(unknown.body).changedSets,
+    ).toBeNull();
+
+    for (const from of ['', 'abc', '0', '1.5']) {
+      const invalid = await request(server)
+        .get(`/api/v1/festivals/${pack.id}/pack/changes?from=${from}`)
+        .expect(400);
+      expect(errorData<null>(invalid.body, 'VALIDATION')).toBeNull();
+    }
+    await request(server)
+      .get('/api/v1/festivals/fst_unknown/pack/changes?from=1')
+      .expect(404);
+  });
+
   it('returns a discovered festival detail with stored poster and artist images', async () => {
     const candidate = {
       candidate: {
@@ -564,7 +695,30 @@ describe('Public festival API', () => {
               },
             ],
             secret: 'SHUTTLE_SECRET',
+            stopName: '정문 셔틀 정류장',
+            location: {
+              latitude: 37.6651,
+              longitude: 126.7411,
+              secret: 'STOP_LOCATION_SECRET',
+            },
           },
+          transit: {
+            body: 'Train',
+            links: [],
+            stationName: '킨텍스역',
+            walkMinutes: 10,
+            location: { latitude: '37.66', longitude: 126.74 },
+          },
+          lastShuttleAt: '23:40',
+          lastTrainAt: '2026-11-20T23:52:00+09:00',
+          lastDepartures: [
+            {
+              date: '2026-11-20',
+              shuttleAt: '2026-11-20T23:40:00+09:00',
+              trainAt: null,
+              secret: 'DEPARTURE_SECRET',
+            },
+          ],
           mapLinks: { naver: null, kakao: null, secret: 'MAP_SECRET' },
           source: {
             name: 'Official',
@@ -589,9 +743,11 @@ describe('Public festival API', () => {
       'LINK_SECRET',
       'SHUTTLE_SECRET',
       'MAP_SECRET',
+      'DEPARTURE_SECRET',
       'DIRECTION_SECRET',
       'LOCATION_SECRET',
       'LOCATION_SOURCE_SECRET',
+      'STOP_LOCATION_SECRET',
       'flags/private-key.webp',
     ])
       expect(serialized).not.toContain(secret);
@@ -603,6 +759,38 @@ describe('Public festival API', () => {
     expect(successData<{ flags: unknown[] }>(response.body).flags).toHaveLength(
       1,
     );
+    const directions = successData<{
+      directions: {
+        shuttle: unknown;
+        transit: unknown;
+        lastDepartures: unknown;
+      };
+    }>(response.body).directions;
+    expect(directions.shuttle).toEqual({
+      body: 'Shuttle',
+      links: [{ label: 'Map', url: 'https://example.com' }],
+      stopName: '정문 셔틀 정류장',
+      location: { latitude: 37.6651, longitude: 126.7411 },
+    });
+    // 형식이 다른 역 좌표는 null로 보내고 역 이름·도보 분은 그대로 둔다.
+    expect(directions.transit).toEqual({
+      body: 'Train',
+      links: [],
+      stationName: '킨텍스역',
+      walkMinutes: 10,
+      location: null,
+    });
+    expect(directions).toMatchObject({
+      lastShuttleAt: null,
+      lastTrainAt: '2026-11-20T23:52:00+09:00',
+    });
+    expect(directions.lastDepartures).toEqual([
+      {
+        date: '2026-11-20',
+        shuttleAt: '2026-11-20T23:40:00+09:00',
+        trainAt: null,
+      },
+    ]);
     expect(
       successData<{ directions: { location: unknown } }>(response.body)
         .directions.location,
@@ -618,6 +806,117 @@ describe('Public festival API', () => {
     });
   });
 
+  it('projects the zone map and changes mapVersion only when the map changes', async () => {
+    const zoneMap = {
+      mapImageUrl: null,
+      mapAspect: 0.62,
+      stages: [{ id: 'stg_main', name: 'RIVET STAGE', order: 1 }],
+      mapStages: [
+        {
+          stageId: 'stg_main',
+          x: 0.03,
+          y: 0.02,
+          w: 0.44,
+          note: 'STAGE_POINT_SECRET',
+        },
+        { stageId: 'stg_main', x: 2, y: 0.1, w: 0.4 },
+      ],
+      zones: [
+        {
+          id: 'zon_front_left',
+          name: '리벳 스테이지 앞 왼쪽',
+          kind: '무대 앞',
+          x: 0.25,
+          y: 0.1,
+          order: 1,
+          area: { x: 0.02, y: 0.05, w: 0.44, h: 0.17, memo: 'AREA_SECRET' },
+          landmark: null,
+          staffNote: 'ZONE_SECRET',
+        },
+        {
+          id: 'zon_tent',
+          name: 'TENT 앞',
+          x: 0.75,
+          y: 0.5,
+          area: { x: 0.5, y: 'top', w: 0.4, h: 0.1 },
+          landmark: 'TENT 무대',
+        },
+      ],
+    };
+    repo.findOne.mockResolvedValueOnce({
+      ...published,
+      published: { ...pack, ...zoneMap },
+    });
+    const response = await request(server)
+      .get(`/api/v1/festivals/${pack.id}/pack`)
+      .expect(200);
+    const body = successData<{
+      zones: unknown[];
+      mapStages: unknown[];
+      mapVersion: string;
+      mapAspect: number;
+    }>(response.body);
+    expect(JSON.stringify(response.body)).not.toMatch(
+      /STAGE_POINT_SECRET|AREA_SECRET|ZONE_SECRET/,
+    );
+    expect(body.mapAspect).toBe(0.62);
+    expect(body.mapStages).toEqual([
+      { stageId: 'stg_main', x: 0.03, y: 0.02, w: 0.44 },
+    ]);
+    expect(body.zones).toEqual([
+      {
+        id: 'zon_front_left',
+        name: '리벳 스테이지 앞 왼쪽',
+        kind: '무대 앞',
+        x: 0.25,
+        y: 0.1,
+        order: 1,
+        area: { x: 0.02, y: 0.05, w: 0.44, h: 0.17 },
+        landmark: null,
+      },
+      {
+        id: 'zon_tent',
+        name: 'TENT 앞',
+        x: 0.75,
+        y: 0.5,
+        area: null,
+        landmark: 'TENT 무대',
+      },
+    ]);
+    expect(body.mapVersion).toMatch(/^zm-[0-9a-f]{12}$/);
+
+    // 지도와 관계없는 공연이 바뀌면 같은 버전, 존 영역이 바뀌면 다른 버전이다.
+    repo.findOne.mockResolvedValueOnce({
+      ...published,
+      published: { ...pack, ...zoneMap, sets: [], packVersion: 8 },
+    });
+    const sameMap = await request(server)
+      .get(`/api/v1/festivals/${pack.id}/pack/version`)
+      .expect(200);
+    expect(successData<{ mapVersion: string }>(sameMap.body).mapVersion).toBe(
+      body.mapVersion,
+    );
+    repo.findOne.mockResolvedValueOnce({
+      ...published,
+      published: {
+        ...pack,
+        ...zoneMap,
+        zones: [
+          {
+            ...zoneMap.zones[0],
+            area: { x: 0.02, y: 0.05, w: 0.44, h: 0.2 },
+          },
+        ],
+      },
+    });
+    const movedMap = await request(server)
+      .get(`/api/v1/festivals/${pack.id}/pack/version`)
+      .expect(200);
+    expect(
+      successData<{ mapVersion: string }>(movedMap.body).mapVersion,
+    ).not.toBe(body.mapVersion);
+  });
+
   it('returns version and filters flag tags with OR semantics', async () => {
     const version = await request(server)
       .get(`/api/v1/festivals/${pack.id}/pack/version`)
@@ -626,6 +925,7 @@ describe('Public festival API', () => {
       packVersion: 7,
       packUpdatedAt: pack.packUpdatedAt,
       etag: version.headers.etag,
+      mapVersion: null,
     });
     expect(version.headers.etag).toMatch(/^"[0-9a-f]{64}"$/);
     await request(server)
@@ -695,7 +995,7 @@ describe('Public festival API', () => {
       .expect(400);
   });
 
-  it('paginates by first day start time then ID without skipping a same-day festival', async () => {
+  it('paginates by festival date then ID without skipping a same-day festival', async () => {
     queryBuilder.getMany.mockResolvedValueOnce([
       published,
       {
@@ -716,7 +1016,7 @@ describe('Public festival API', () => {
     );
     expect(body.items[0].id).toBe('fst_12345678');
     expect(body.nextCursor).toBe(
-      '2026-10-21~2026-11-20T12:00:00+09:00~fst_12345678',
+      `2026-10-21~v2~${seoulToday()}~1~2026-11-20~fst_12345678`,
     );
     queryBuilder.getMany.mockResolvedValueOnce([
       {
@@ -739,15 +1039,115 @@ describe('Public festival API', () => {
     ).toBe('fst_87654321');
     expect(queryBuilder.andWhere).toHaveBeenCalledWith(
       expect.stringContaining('festival.id > :cursorId'),
-      { cursorAt: '2026-11-20T12:00:00+09:00', cursorId: 'fst_12345678' },
+      { cursorBucket: 1, cursorDate: '2026-11-20', cursorId: 'fst_12345678' },
     );
     expect(queryBuilder.orderBy).toHaveBeenCalledWith(
-      "(festival.published->'days'->0->>'startsAt')::timestamptz",
+      expect.stringContaining('THEN 0 WHEN'),
       'ASC',
     );
   });
 
-  it('orders different ISO offsets by instant and preserves the original cursor', async () => {
+  it('lists, paginates and downloads published metadata without inventing performance times', async () => {
+    const metadata = ['fst_000metadata1', 'fst_000metadata2'].map((id) => ({
+      id,
+      publishedVersion: 1,
+      published: {
+        ...pack,
+        id,
+        packVersion: 1,
+        flagsEnabled: false,
+        flags: [],
+        eventPeriod: { firstDate: '2026-11-20', lastDate: '2026-11-21' },
+        timetableStatus: 'unpublished',
+        days: [],
+        stages: [],
+        sets: [],
+        artists: [{ name: 'Official Band' }],
+      },
+    }));
+    type ListPage = {
+      items: Record<string, unknown>[];
+      nextCursor: string | null;
+    };
+    // Same-day metadata packs sort before the published pack by ID.
+    queryBuilder.getMany.mockResolvedValueOnce([...metadata, published]);
+    const first = await request(server)
+      .get('/api/v1/festivals?after=2026-10-21&limit=1')
+      .expect(200);
+    const firstPage = successData<ListPage>(first.body);
+    expect(firstPage.items).toHaveLength(1);
+    expect(firstPage.items[0]).toMatchObject({
+      id: 'fst_000metadata1',
+      packVersion: 1,
+      firstDate: '2026-11-20',
+      lastDate: '2026-11-21',
+      artists: [{ name: 'Official Band', performances: [] }],
+    });
+    expect(firstPage.items[0]).not.toHaveProperty('startsAt');
+    expect(firstPage.nextCursor).toBe(
+      `2026-10-21~v2~${seoulToday()}~1~2026-11-20~fst_000metadata1`,
+    );
+
+    queryBuilder.andWhere.mockClear();
+    queryBuilder.getMany.mockResolvedValueOnce([metadata[1], published]);
+    const second = await request(server)
+      .get(
+        `/api/v1/festivals?after=${encodeURIComponent(firstPage.nextCursor!)}&limit=1`,
+      )
+      .expect(200);
+    const secondPage = successData<ListPage>(second.body);
+    expect(secondPage.items.map((item) => item.id)).toEqual([
+      'fst_000metadata2',
+    ]);
+    expect(secondPage.nextCursor).toBe(
+      `2026-10-21~v2~${seoulToday()}~1~2026-11-20~fst_000metadata2`,
+    );
+    expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+      expect.stringContaining('festival.id > :cursorId'),
+      {
+        cursorBucket: 1,
+        cursorDate: '2026-11-20',
+        cursorId: 'fst_000metadata1',
+      },
+    );
+    queryBuilder.getMany.mockResolvedValueOnce([published]);
+    const third = await request(server)
+      .get(
+        `/api/v1/festivals?after=${encodeURIComponent(secondPage.nextCursor!)}&limit=1`,
+      )
+      .expect(200);
+    expect(
+      successData<ListPage>(third.body).items.map((item) => item.id),
+    ).toEqual([pack.id]);
+    expect(successData<ListPage>(third.body).nextCursor).toBeNull();
+
+    repo.findOne.mockResolvedValueOnce(metadata[0]);
+    const downloaded = await request(server)
+      .get('/api/v1/festivals/fst_000metadata1/pack')
+      .expect(200);
+    const document = successData<Record<string, unknown>>(downloaded.body);
+    expect(document).toMatchObject({
+      id: 'fst_000metadata1',
+      packVersion: 1,
+      eventPeriod: { firstDate: '2026-11-20', lastDate: '2026-11-21' },
+      timetableStatus: 'pending',
+      days: [],
+      stages: [],
+      sets: [],
+      timetable: [],
+      artists: [{ name: 'Official Band', imageUrl: null }],
+    });
+    expect(JSON.stringify(document)).not.toContain('startsAt');
+    expect(JSON.stringify(document)).not.toContain('endsAt');
+    expect(downloaded.headers.etag).toMatch(/^"[0-9a-f]{64}"$/);
+    repo.findOne.mockResolvedValueOnce(metadata[0]);
+    await request(server)
+      .get('/api/v1/festivals/fst_000metadata1/pack')
+      .set('If-None-Match', downloaded.headers.etag)
+      .expect(304);
+  });
+
+  it('orders same-day festivals by ID regardless of start time offset', async () => {
     const later = {
       id: 'fst_87654321',
       published: {
@@ -766,7 +1166,7 @@ describe('Public festival API', () => {
     );
     expect(body.items[0].id).toBe('fst_12345678');
     expect(body.nextCursor).toBe(
-      '2026-10-21~2026-11-20T12:00:00+09:00~fst_12345678',
+      `2026-10-21~v2~${seoulToday()}~1~2026-11-20~fst_12345678`,
     );
     queryBuilder.getMany.mockResolvedValueOnce([later]);
     await request(server)
@@ -775,8 +1175,8 @@ describe('Public festival API', () => {
       )
       .expect(200);
     expect(queryBuilder.andWhere).toHaveBeenCalledWith(
-      expect.stringContaining('CAST(:cursorAt AS timestamptz)'),
-      { cursorAt: '2026-11-20T12:00:00+09:00', cursorId: 'fst_12345678' },
+      expect.stringContaining('festival.id > :cursorId'),
+      { cursorBucket: 1, cursorDate: '2026-11-20', cursorId: 'fst_12345678' },
     );
   });
 
@@ -800,7 +1200,7 @@ describe('Public festival API', () => {
       .get(`/api/v1/festivals?after=${encodeURIComponent(cursor)}&limit=1`)
       .expect(200);
     expect(queryBuilder.andWhere).toHaveBeenCalledWith(
-      expect.stringContaining("->>'date' >= :floor"),
+      "COALESCE(festival.published->'days'->-1->>'date', festival.published->'eventPeriod'->>'lastDate') >= :floor",
       { floor: '2025-01-01' },
     );
   });
@@ -899,7 +1299,7 @@ describe('Public festival API', () => {
       .set('Authorization', 'Bearer invalid')
       .expect(401);
     expect(errorData<null>(invalidToken.body, 'UNAUTHORIZED')).toBeNull();
-    rateLimitCount = 5;
+    rateLimitCount = LIVE_POLLS_PER_MINUTE + 1;
     const limited = await request(server)
       .get(url)
       .set('X-Device-Id', device)

@@ -51,6 +51,12 @@ export function overlayPublishedImages(
     reviewedByName.set(key, [...(reviewedByName.get(key) ?? []), row]);
   }
   const imageFor = (artistName: unknown, stored: unknown) => {
+    // 이 축제에 승인된 Commons 사진이 하나로 정해지면 기존 사진보다 우선한다.
+    const reviewed =
+      typeof artistName === 'string'
+        ? (reviewedByName.get(normalizeArtistName(artistName)) ?? [])
+        : [];
+    if (reviewed.length === 1) return reviewed[0];
     const previousId = storedImageId(stored);
     const previous = previousId ? visible.get(previousId) : null;
     if (previous) {
@@ -64,10 +70,7 @@ export function overlayPublishedImages(
       )
         return previous;
     }
-    if (typeof artistName !== 'string') return null;
-    const candidates =
-      reviewedByName.get(normalizeArtistName(artistName)) ?? [];
-    return candidates.length === 1 ? candidates[0] : null;
+    return null;
   };
   const creditFor = (row: PublicImageRow | null) => {
     if (!row) return undefined;

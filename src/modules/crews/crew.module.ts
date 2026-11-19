@@ -8,6 +8,7 @@ import { CrewArchiveService } from './crew-archive.service';
 import {
   Crew,
   CrewGather,
+  CrewGatherResponse,
   CrewMember,
   CrewStatusIdempotency,
 } from './crew.entity';
@@ -21,6 +22,7 @@ import { NotificationModule } from '../notification/notification.module';
       Crew,
       CrewMember,
       CrewGather,
+      CrewGatherResponse,
       CrewStatusIdempotency,
       AdminFestival,
       User,

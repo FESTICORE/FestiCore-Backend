@@ -9,6 +9,8 @@ import { CDF_FESTIVAL_URL } from './cdf-profile';
 
 const image =
   'https://cdnimg.melon.co.kr/cm2/artistcrop/images/027/54/370/2754370_20250307154851.jpg';
+const original =
+  'https://cdnimg.melon.co.kr/cm2/artistcrop/images/027/54/370/2754370_20250307154851_org.jpg/melon/resize/1000/quality/90/optimize';
 const config = {
   seed: CDF_LOW_HIGH_LOW_PROFILE_SEED,
   festivalSourceUrl: CDF_FESTIVAL_URL,
@@ -24,7 +26,7 @@ describe('CDF LOW HIGH LOW official Melon Ticket profile', () => {
   it('reads the current photo only from the exact artist profile block', () => {
     expect(
       cdfLowHighLowProfileImageUrl(html, CDF_LOW_HIGH_LOW_PROFILE_URL, config),
-    ).toEqual(new URL(image));
+    ).toEqual(new URL(original));
     expect(cdfLowHighLowProfileFor(CDF_LOW_HIGH_LOW_PROFILE_URL, config)).toBe(
       true,
     );
@@ -72,6 +74,9 @@ describe('CDF LOW HIGH LOW official Melon Ticket profile', () => {
     );
     expect(CDF_LOW_HIGH_LOW_PUBLIC_IMAGE_SQL).toContain(
       'cdnimg[.]melon[.]co[.]kr/cm2/artistcrop/images/027/54/370/2754370_',
+    );
+    expect(CDF_LOW_HIGH_LOW_PUBLIC_IMAGE_SQL).toContain(
+      '_org[.]jpe?g/melon/resize/1000/quality/90/optimize)$',
     );
   });
 });

@@ -22,6 +22,7 @@ type SentryResult = {
 };
 type MixpanelResult = {
   status: Status;
+  reason?: 'unauthorized' | 'forbidden' | 'incomplete_export';
   scope: 'shared';
   totalEvents: number | null;
   series: Point[];
@@ -277,12 +278,12 @@ export class AdminAnalyticsService {
           .toISOString()
           .slice(0, 10),
       );
-      url.searchParams.set(
-        'to_date',
-        new Date(Date.parse(`${range.to}T00:00:00Z`) + 86_400_000)
-          .toISOString()
-          .slice(0, 10),
-      );
+      // Mixpanel은 오늘(UTC) 이후의 to_date를 400으로 거절하므로 다음 날 보정은 오늘까지만 한다.
+      const todayUtc = new Date().toISOString().slice(0, 10);
+      const nextDay = new Date(Date.parse(`${range.to}T00:00:00Z`) + 86_400_000)
+        .toISOString()
+        .slice(0, 10);
+      url.searchParams.set('to_date', nextDay > todayUtc ? todayUtc : nextDay);
       url.searchParams.set('limit', '10000');
       try {
         const raw = (await fetchAnalytics(
@@ -293,6 +294,8 @@ export class AdminAnalyticsService {
         const byDate = new Map<string, number>();
         const byEvent = new Map<string, number>();
         const lines = raw.trim() ? raw.trim().split('\n') : [];
+        if (lines.some((line) => line.trim() === 'terminated early'))
+          throw new AnalyticsFetchError('incomplete_export');
         for (const line of lines) {
           const event = JSON.parse(line) as unknown;
           if (
@@ -330,7 +333,16 @@ export class AdminAnalyticsService {
           truncated,
         };
       } catch (error) {
-        return empty(failure(error));
+        const result = empty(failure(error));
+        if (
+          error instanceof AnalyticsFetchError &&
+          (error.kind === 'unauthorized' ||
+            error.kind === 'forbidden' ||
+            error.kind === 'incomplete_export')
+        ) {
+          result.reason = error.kind;
+        }
+        return result;
       }
     });
   }

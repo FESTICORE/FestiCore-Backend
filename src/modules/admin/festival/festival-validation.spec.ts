@@ -1,5 +1,9 @@
 import { BadRequestException } from '@nestjs/common';
-import { mergeDraft, validateDraft } from './festival-validation';
+import {
+  mergeDraft,
+  normalizeLegacyReturnTimes,
+  validateDraft,
+} from './festival-validation';
 
 const draft = {
   id: 'fst_12345678',
@@ -26,6 +30,154 @@ const draft = {
 };
 
 describe('festival draft validation', () => {
+  describe('return directions', () => {
+    const withDirections = (directions: Record<string, unknown>) => ({
+      ...draft,
+      directions,
+    });
+
+    it('accepts per-day last shuttle and train times with offsets', () => {
+      const valid = withDirections({
+        lastShuttleAt: '2026-11-20T23:40:00+09:00',
+        lastTrainAt: null,
+        shuttle: { body: '정문 셔틀', links: [], stopName: '정문 셔틀 정류장' },
+        lastDepartures: [
+          {
+            date: '2026-11-20',
+            shuttleAt: '2026-11-20T23:40:00+09:00',
+            trainAt: '2026-11-21T00:12:00+09:00',
+          },
+        ],
+      });
+      expect(validateDraft(valid)).toEqual([]);
+      expect(validateDraft(valid, true)).toEqual([]);
+    });
+
+    it('rejects free-text times, duplicate or empty days and long stop names', () => {
+      const errors = validateDraft(
+        withDirections({
+          lastShuttleAt: '23:40',
+          lastTrainAt: '2026-11-20T23:52:00',
+          shuttle: { body: '셔틀', links: [], stopName: 'x'.repeat(41) },
+          lastDepartures: [
+            { date: '2026-11-20', shuttleAt: '23:40' },
+            { date: '2026-11-20', trainAt: '2026-11-20T23:52:00+09:00' },
+            { date: '2026-02-30', trainAt: '2026-11-20T23:52:00+09:00' },
+            { date: '2026-11-20' },
+          ],
+        }),
+      );
+      expect(errors).toEqual(
+        expect.arrayContaining([
+          'directions.lastShuttleAt: 오프셋 포함 ISO8601 또는 null 필요',
+          'directions.lastTrainAt: 오프셋 포함 ISO8601 또는 null 필요',
+          'directions.shuttle.stopName: 1..40자 또는 null 필요',
+          'directions.lastDepartures[0].shuttleAt: 오프셋 포함 ISO8601 또는 null 필요',
+          'directions.lastDepartures[1].date: 날짜 중복',
+          'directions.lastDepartures[2].date: YYYY-MM-DD 필요',
+          'directions.lastDepartures[3]: shuttleAt 또는 trainAt 중 하나 필요',
+        ]),
+      );
+    });
+
+    it('accepts shuttle stop and station coordinates or null', () => {
+      const valid = withDirections({
+        shuttle: {
+          body: '정문 셔틀',
+          links: [],
+          stopName: '정문 셔틀 정류장',
+          location: { latitude: 37.6651, longitude: 126.7411 },
+        },
+        transit: {
+          body: null,
+          links: [],
+          stationName: '킨텍스역',
+          location: null,
+        },
+      });
+      expect(validateDraft(valid)).toEqual([]);
+    });
+
+    it('rejects shuttle stop and station coordinates out of range or not numbers', () => {
+      const errors = validateDraft(
+        withDirections({
+          shuttle: {
+            body: '셔틀',
+            links: [],
+            location: { latitude: 91, longitude: 126.7411 },
+          },
+          transit: {
+            body: null,
+            links: [],
+            stationName: '킨텍스역',
+            location: { latitude: '37.66', longitude: 126.74 },
+          },
+        }),
+      );
+      expect(errors).toEqual(
+        expect.arrayContaining([
+          'directions.shuttle.location: 위도 -90..90·경도 -180..180 숫자 또는 null 필요',
+          'directions.transit.location: 위도 -90..90·경도 -180..180 숫자 또는 null 필요',
+        ]),
+      );
+    });
+
+    it('turns legacy free-text return times into null instead of blocking PATCH or publish', () => {
+      const legacy = withDirections({
+        lastShuttleAt: '23:40',
+        lastTrainAt: '막차 23시 52분',
+        memo: '기존 메모',
+      });
+      expect(validateDraft(legacy)).toContain(
+        'directions.lastShuttleAt: 오프셋 포함 ISO8601 또는 null 필요',
+      );
+      const patch = { name: 'Renamed' };
+      const next = normalizeLegacyReturnTimes(mergeDraft(legacy, patch), patch);
+      expect(validateDraft(next)).toEqual([]);
+      expect(validateDraft(normalizeLegacyReturnTimes(legacy), true)).toEqual(
+        [],
+      );
+      expect(next.directions).toEqual({
+        lastShuttleAt: null,
+        lastTrainAt: null,
+        memo: '기존 메모',
+      });
+      expect(legacy.directions).toMatchObject({ lastShuttleAt: '23:40' });
+    });
+
+    it('still rejects free text sent in the same PATCH', () => {
+      const legacy = withDirections({ lastShuttleAt: '23:40' });
+      const patch = { directions: { lastShuttleAt: '23:50' } };
+      const next = normalizeLegacyReturnTimes(mergeDraft(legacy, patch), patch);
+      expect(validateDraft(next)).toContain(
+        'directions.lastShuttleAt: 오프셋 포함 ISO8601 또는 null 필요',
+      );
+    });
+
+    it('keeps valid ISO values and drafts without directions unchanged', () => {
+      const valid = withDirections({
+        lastShuttleAt: '2026-11-20T23:40:00+09:00',
+      });
+      expect(normalizeLegacyReturnTimes(valid)).toBe(valid);
+      expect(normalizeLegacyReturnTimes(draft as never)).toBe(draft);
+    });
+
+    it('requires departure dates to be festival days only when publishing', () => {
+      const other = withDirections({
+        lastDepartures: [
+          { date: '2026-11-21', trainAt: '2026-11-21T23:52:00+09:00' },
+        ],
+      });
+      expect(validateDraft(other)).toEqual([]);
+      expect(validateDraft(other, true)).toContain(
+        'directions.lastDepartures[0].date: days에 있는 개최일이어야 함',
+      );
+      expect(validateDraft(withDirections({ lastDepartures: 'x' }))).toContain(
+        'directions.lastDepartures: 최대 31개 배열 필요',
+      );
+    });
+  });
+
   it('requires a complete verified coordinate pair for directions', () => {
     const location = {
       latitude: 37.66469544695199,
@@ -85,6 +237,24 @@ describe('festival draft validation', () => {
     ).toContain('sets[0]: 보관된 출연진 이미지 경로만 허용');
   });
 
+  it('accepts a one-line set note and rejects multi-line or long notes', () => {
+    const set = {
+      stageId: 'stg_12345678',
+      artist: 'A',
+      startsAt: '2026-11-20T13:00:00+09:00',
+      endsAt: '2026-11-20T14:00:00+09:00',
+    };
+    const withNote = (note: unknown) =>
+      validateDraft({ ...draft, sets: [{ ...set, note }] });
+    expect(withNote('앵콜 없이 정시에 끝나요.')).toEqual([]);
+    expect(withNote(null)).toEqual([]);
+    const error = 'sets[0]: 한 줄 메모는 줄바꿈 없는 1~80자';
+    expect(withNote('   ')).toContain(error);
+    expect(withNote('두 줄\n메모')).toContain(error);
+    expect(withNote('가'.repeat(81))).toContain(error);
+    expect(withNote(3)).toContain(error);
+  });
+
   it('rejects overlapping sets on the same stage', () => {
     const errors = validateDraft(
       {
@@ -136,21 +306,30 @@ describe('festival draft validation', () => {
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 
-  it('requires at least one stage to publish', () => {
+  it('requires a stage when publishing timed days', () => {
     expect(validateDraft({ ...draft, stages: [] }, true)).toContain(
       'stages: 배열 크기 오류',
     );
   });
 
-  it('keeps a 17-day date-only source as a valid private draft but blocks publication', () => {
+  it('publishes a date-only pack with an honest empty timetable', () => {
     const dateOnly = {
       ...draft,
       eventPeriod: { firstDate: '2026-10-23', lastDate: '2026-11-08' },
       days: [],
+      stages: [],
+      sets: [],
+      timetableStatus: 'unpublished',
     };
     expect(validateDraft(dateOnly)).toEqual([]);
-    expect(validateDraft(dateOnly, true)).toContain(
-      'days: 발행하려면 검증된 시작/종료 시각 필요',
+    expect(validateDraft(dateOnly, true)).toEqual([]);
+    expect(
+      validateDraft(
+        { ...dateOnly, stages: [], sets: [{ stageId: 'stg_12345678' }] },
+        true,
+      ),
+    ).toContain(
+      'timetableStatus: 미공개 일정은 유효한 eventPeriod와 빈 days/stages/sets 필요',
     );
     expect(() =>
       mergeDraft(dateOnly, { eventPeriod: { firstDate: '2026-10-24' } }),
@@ -247,5 +426,99 @@ describe('festival draft validation', () => {
         })),
       }),
     ).toContain('ticketLinks: 최대 5개, 1..20자 라벨과 HTTPS URL 필요');
+  });
+});
+
+describe('metadata publication', () => {
+  const metadata = {
+    ...draft,
+    eventPeriod: { firstDate: '2026-11-20', lastDate: '2026-11-21' },
+    timetableStatus: 'unpublished',
+    days: [],
+    stages: [],
+    sets: [],
+  };
+  it('publishes an explicit date-only pack', () => {
+    expect(validateDraft(metadata, true)).toEqual([]);
+  });
+  it.each([
+    { timetableStatus: undefined },
+    { timetableStatus: 'verified' },
+    { eventPeriod: undefined },
+    { eventPeriod: { firstDate: '2026-02-30', lastDate: '2026-03-01' } },
+    { days: draft.days },
+    { stages: draft.stages },
+    { sets: [{ artist: 'Unknown' }] },
+  ])('rejects ambiguous or partially populated metadata %j', (patch) => {
+    expect(
+      validateDraft({ ...metadata, ...patch }, true).length,
+    ).toBeGreaterThan(0);
+  });
+  it('keeps the legacy complete schedule valid', () => {
+    expect(validateDraft(draft, true)).toEqual([]);
+  });
+});
+
+describe('zone map', () => {
+  const zone = (extra: Record<string, unknown> = {}) => ({
+    id: 'zon_front_left',
+    name: '리벳 스테이지 앞 왼쪽',
+    kind: '무대 앞',
+    x: 0.2,
+    y: 0.2,
+    ...extra,
+  });
+
+  it('accepts zone areas, landmarks and stage header points with an aspect', () => {
+    const valid = {
+      ...draft,
+      mapAspect: 0.62,
+      zones: [
+        zone({ area: { x: 0.02, y: 0.1, w: 0.44, h: 0.17 } }),
+        zone({
+          id: 'zon_tent',
+          area: { x: 0.53, y: 0.5, w: 0.47, h: 0.5 },
+          landmark: 'TENT 무대',
+        }),
+      ],
+      mapStages: [{ stageId: 'stg_12345678', x: 0.03, y: 0.02, w: 0.44 }],
+    };
+    expect(validateDraft(valid)).toEqual([]);
+    expect(validateDraft(valid, true)).toEqual([]);
+  });
+
+  it('keeps point-only zones and drafts without mapStages valid', () => {
+    expect(validateDraft({ ...draft, zones: [zone()] })).toEqual([]);
+  });
+
+  it('rejects areas outside the map, long landmarks, unknown stages and a missing aspect', () => {
+    const errors = validateDraft({
+      ...draft,
+      zones: [
+        zone({ area: { x: 0.8, y: 0.1, w: 0.3, h: 0.2 } }),
+        zone({ id: 'zon_b', area: { x: 0.1, y: 0.1, w: 0, h: 0.2 } }),
+        zone({ id: 'zon_c', area: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 } }),
+        zone({ id: 'zon_d', landmark: '열세 글자가 넘는 표지 이름입니다' }),
+      ],
+      mapStages: [{ stageId: 'stg_unknown', x: 0.1, y: 0.1, w: 0.4 }],
+    });
+    expect(errors).toEqual(
+      expect.arrayContaining([
+        'zones[0]: area는 0..1 안의 {x,y,w,h}',
+        'zones[1]: area는 0..1 안의 {x,y,w,h}',
+        'zones[3]: landmark는 1..12자',
+        'mapStages[0]: 무대 ID와 0..1 좌표·너비 필요',
+        'mapAspect: 존 영역이 있으면 지도 종횡비(너비/높이) 필요',
+      ]),
+    );
+  });
+
+  it('accepts mapStages as a draft patch field', () => {
+    const merged = mergeDraft(draft, {
+      mapStages: [{ stageId: 'stg_12345678', x: 0.5, y: 0, w: 0.5 }],
+    });
+    expect(merged.mapStages).toEqual([
+      { stageId: 'stg_12345678', x: 0.5, y: 0, w: 0.5 },
+    ]);
   });
 });

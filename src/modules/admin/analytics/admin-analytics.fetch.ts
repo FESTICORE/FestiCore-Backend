@@ -4,7 +4,13 @@ const MAX_ERROR_BYTES = 4_096;
 export class AnalyticsFetchError extends Error {
   constructor(
     readonly kind:
-      'error' | 'rate_limited' | 'empty_environment' | 'empty_issues',
+      | 'error'
+      | 'rate_limited'
+      | 'empty_environment'
+      | 'empty_issues'
+      | 'unauthorized'
+      | 'forbidden'
+      | 'incomplete_export',
   ) {
     super(kind);
   }
@@ -72,6 +78,8 @@ export async function fetchAnalytics(
       redirect: 'error',
     });
     if (response.status === 429) throw new AnalyticsFetchError('rate_limited');
+    if (response.status === 401) throw new AnalyticsFetchError('unauthorized');
+    if (response.status === 403) throw new AnalyticsFetchError('forbidden');
     if (response.status === 404) {
       const kind = await sentryNotFoundKind(url, response);
       if (kind) throw new AnalyticsFetchError(kind);

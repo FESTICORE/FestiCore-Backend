@@ -1,6 +1,9 @@
-export type VenuePoint = {
+export type MapPoint = {
   latitude: number;
   longitude: number;
+};
+
+export type VenuePoint = MapPoint & {
   label: string;
 };
 
@@ -12,9 +15,10 @@ function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-export function venuePoint(value: unknown): VenuePoint | null {
+/** 위도 -90..90, 경도 -180..180의 유한한 숫자 한 쌍. 다른 키는 버린다. */
+export function mapPoint(value: unknown): MapPoint | null {
   if (!record(value)) return null;
-  const { latitude, longitude, label } = value;
+  const { latitude, longitude } = value;
   if (
     typeof latitude !== 'number' ||
     !Number.isFinite(latitude) ||
@@ -23,13 +27,19 @@ export function venuePoint(value: unknown): VenuePoint | null {
     typeof longitude !== 'number' ||
     !Number.isFinite(longitude) ||
     longitude < -180 ||
-    longitude > 180 ||
-    typeof label !== 'string' ||
-    !label.trim() ||
-    [...label].length > 80
+    longitude > 180
   )
     return null;
-  return { latitude, longitude, label: label.trim() };
+  return { latitude, longitude };
+}
+
+export function venuePoint(value: unknown): VenuePoint | null {
+  const point = mapPoint(value);
+  if (!point || !record(value)) return null;
+  const { label } = value;
+  if (typeof label !== 'string' || !label.trim() || [...label].length > 80)
+    return null;
+  return { ...point, label: label.trim() };
 }
 
 export function venueLabelMatches(label: string, venue: unknown): boolean {

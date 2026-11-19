@@ -16,6 +16,7 @@ import { CrewService } from '../src/modules/crews/crew.service';
 
 const id = 'flg_1234567890abcdef';
 const userId = '00000000-0000-4000-8000-000000000001';
+const gatherId = '00000000-0000-4000-8000-0000000000aa';
 
 describe('Crew HTTP contract', () => {
   const previousTermsEnforcement = process.env.CURRENT_TERMS_ENFORCED;
@@ -32,6 +33,7 @@ describe('Crew HTTP contract', () => {
       'rotate',
       'status',
       'gather',
+      'respondGather',
       'rename',
       'renameMember',
       'removeMember',
@@ -134,6 +136,52 @@ describe('Crew HTTP contract', () => {
       .send({ festivalId: 'fst_test', name: '친구들' })
       .expect(401);
     await request(server).get('/api/v1/crews/invite/K7P2QX').expect(200);
+    await request(server)
+      .post(`/api/v1/crews/${id}/gather/${gatherId}/response`)
+      .send({ response: 'going' })
+      .expect(401);
+  });
+
+  it('routes gather responses and validates the response body', async () => {
+    await request(server)
+      .post(`/api/v1/crews/${id}/gather/${gatherId}/response`)
+      .auth(token, { type: 'bearer' })
+      .send({ response: 'late' })
+      .expect(400);
+    await request(server)
+      .post(`/api/v1/crews/${id}/gather/${gatherId}/response`)
+      .auth(token, { type: 'bearer' })
+      .send({ response: 'going', userId })
+      .expect(400);
+    await request(server)
+      .post(`/api/v1/crews/${id}/gather/${gatherId}/response`)
+      .auth(token, { type: 'bearer' })
+      .send({ response: 'ack' })
+      .expect(200);
+    expect(service.respondGather).toHaveBeenCalledWith(
+      id,
+      gatherId,
+      userId,
+      'ack',
+    );
+  });
+
+  it('limits crew names to 12 characters on create and rename', async () => {
+    await request(server)
+      .post('/api/v1/crews')
+      .auth(token, { type: 'bearer' })
+      .send({ festivalId: 'fst_test', name: '열세글자크루이름입니다요!' })
+      .expect(400);
+    await request(server)
+      .patch(`/api/v1/crews/${id}`)
+      .auth(token, { type: 'bearer' })
+      .send({ name: '열세글자크루이름입니다요!' })
+      .expect(400);
+    await request(server)
+      .post('/api/v1/crews')
+      .auth(token, { type: 'bearer' })
+      .send({ festivalId: 'fst_test', name: '열두글자크루이름입니다요' })
+      .expect(201);
   });
 
   it('publishes request bodies and leaves invite preview public in Swagger', () => {

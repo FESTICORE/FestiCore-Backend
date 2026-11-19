@@ -244,6 +244,48 @@ describe('ProposalService festival discovery', () => {
     expect(festival.publishedVersion).toBe(1);
   });
 
+  it('applies a directions diff to a draft that still has legacy free-text return times', async () => {
+    const url = 'https://ticket.melon.com/performance/index.htm?prodId=213793';
+    const initial = harness({
+      name: 'WONDERLIVET 2026',
+      venue: 'KINTEX HALL 7/8/9/10',
+      days: [day],
+      url,
+    });
+    await initial.service.decide(
+      'proposal-1',
+      [{ itemId: '0', decision: 'accepted' }],
+      'admin-1',
+    );
+    const festival = initial.festivalRepo.save.mock
+      .calls[0]?.[0] as AdminFestival;
+    festival.draft.directions = {
+      ...(festival.draft.directions as Record<string, unknown>),
+      lastShuttleAt: '23:40',
+      lastTrainAt: '막차 23시 52분',
+    };
+    const { service, source, proposal, item } = harness({}, { festival });
+    source.url = url;
+    proposal.kind = 'directions.diff';
+    proposal.festivalId = festival.id;
+    item.op = 'update';
+    item.path = '/directions/memo';
+    item.before = null;
+    item.after = '정문 셔틀 운행';
+
+    const result = await service.decide(
+      'proposal-1',
+      [{ itemId: '0', decision: 'accepted' }],
+      'admin-2',
+    );
+    expect(result.conflicts).toEqual([]);
+    expect(festival.draft.directions).toMatchObject({
+      memo: '정문 셔틀 운행',
+      lastShuttleAt: null,
+      lastTrainAt: null,
+    });
+  });
+
   it.each([
     { latitude: 91, longitude: 126.9, label: '서울 공연장' },
     { latitude: '37.5', longitude: 126.9, label: '서울 공연장' },
