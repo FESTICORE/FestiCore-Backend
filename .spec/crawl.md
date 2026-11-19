@@ -19,11 +19,13 @@
 - [YES24 티켓 콘서트 목록](https://ticket.yes24.com/English/Genre/Concert): 장르가 Festival인 상품을 후보로 추린다.
 - [YES24 국내 페스티벌 장르 AJAX 목록](https://ticket.yes24.com/New/Genre/Ajax/GenreList_Data.aspx?genre=15464&sort=0&area=&genretype=2&pCurPage=1&pPageSize=30): 공개 목록의 `ListTotalCnt`를 읽어 필요할 때 최대 4페이지를 순차 수집한다(페이지당 최대 2 MB, 페이지당 robots.txt 재확인). 공연 ID로 상품 URL을 구성하고 카드의 날짜와 장소를 수집하며, 제목 검증과 중복 제거를 적용해 최대 100개 후보를 만든다. 카드의 `data-src` 포스터 URL은 기존 이미지 검증·보관 경로의 수집 후보가 된다. 네트워크, robots.txt, 이미지 형식 검증이 실패하면 해당 이미지 보관은 보장되지 않는다.
 
-확인된 멜론·YES24 상품 URL은 별도 상세 소스로 등록해 다음 KST 예약 실행부터 수집한다. 멜론 상세에서 출연진 이름과 공식 사진 URL을, YES24 국내·영어 상세의 공개 구조화 데이터에서 일정·장소·포스터·사진과 이름이 짝지어진 출연진을 읽는다. 상세 이미지 수집 한도는 81개(포스터와 출연진 사진), 다른 소스 이미지는 최대 8개다. 사진은 WebP 보관에 성공한 경우에만 공개 경로를 제공하며, 구조화 데이터에 개별 사진이 없으면 생성하지 않는다. NOL 기본 소스는 지속된 403으로 이번 마이그레이션에서 비활성화한다. 공연 시작 시각과 무대별 타임테이블은 공식 정보가 확인되기 전에는 생성하지 않는다.
+확인된 멜론·YES24 상품 URL은 별도 상세 소스로 등록해 다음 KST 예약 실행부터 수집한다. 멜론 상세에서 출연진 이름과 공식 사진 URL을, YES24 국내·영어 상세의 공개 구조화 데이터에서 일정·장소·포스터·사진과 이름이 짝지어진 출연진을 읽는다. 상세 이미지 수집 한도는 81개(포스터와 출연진 사진), 다른 소스 이미지는 최대 8개다. 멜론 출연진 사진이 `cdnimg.melon.co.kr/cm2/artistcrop/` 크롭이면 라인업의 `/melon/thumbnail/320x300`(300px) 대신 같은 크롭의 `_org` 원본을 `/melon/resize/1000/quality/90/optimize`로 받는다. 출연진 `sourceUrl`과 이미지 수집 URL은 같은 변환을 거쳐 공개 매칭이 유지되며, 이 패턴 밖의 주소(기본 이미지 등)는 그대로 둔다. 이 변환은 멜론이 같은 크롭의 `_org` 원본을 함께 제공한다는 전제에 기대며, 2026-11-10 개발 서버에 연결된 멜론 상세 11개의 출연진 사진 122개에서 모두 확인했다. 이 변환을 담은 파서 버전(`ticket-list:v4`)은 HTML이 바뀌지 않은 멜론 상세도 한 번 다시 파싱한다. 보관 WebP 품질은 기본 82이고 변환된 멜론 출연진 원본만 88이다. 사진은 WebP 보관에 성공한 경우에만 공개 경로를 제공하며, 구조화 데이터에 개별 사진이 없으면 생성하지 않는다. NOL 기본 소스는 지속된 403으로 이번 마이그레이션에서 비활성화한다. 공연 시작 시각과 무대별 타임테이블은 공식 정보가 확인되기 전에는 생성하지 않는다.
+
+자동 발행은 다시 수집한 출연진 사진을 이전 발행본에서 남겨 둔 공연(`sets[].imageUrl`)과 관리 초안의 공연·출연진에도 반영한다. 이름(별칭 포함)이 저장 사진 하나와만 맞을 때 바꾸고, 맞는 사진이 없거나 둘 이상이면 기존 사진을 유지한다. 초안은 사진 필드만 바꾸며, 초안 출연진 목록이 비어 있을 때만 수집 출연진 목록을 채운다. 바뀌면 `draftVersion`을 올리고 actor 없이 감사 기록을 남긴다. 기존 사진은 직전 발행본 출연진에 있던 사진이거나, 새 사진과 같은 수집 소스가 저장했고 사진 검토(`crawl_artist_image_reviews`)를 거치지 않은 사진일 때만 수집 사진으로 보고 바꾼다. 다른 소스 사진·검토를 거친 사진·수집 기록이 없는 사진은 관리자가 고른 사진으로 보고 유지한다. 사진 후보는 공개 상세와 같은 선택 규칙(권리 검토 사진은 해당 축제 승인분만)을 거친 수집 결과만 쓴다. 공연 없이 출연진만 있는 발행 팩도 `artists[].imageUrl`의 저장 사진을 공개 이미지 조회에 포함한다.
 
 2026-10-23 확인한 [WONDERLIVET 2026 멜론 상세](https://ticket.melon.com/performance/index.htm?prodId=213793)에는 출연진 40명이 있다. 개발 API에는 현재 40명 중 33명의 개별 사진이 보관되어 있다. 나머지 7명(CHiCO with HoneyWorks, Suisei Hoshimachi, Humbreaders, Chevon, Brandy Senki, Conton Candy, CLAN QUEEN)의 멜론 이미지 주소는 모두 동일한 기본 이미지 경로이므로 실제 사진으로 취급하지 않는다. [공동 주최사 ぴあ의 공식 발표](https://corporate.pia.jp/news/detail_wonderlivet_20260826.html)는 42팀을 명시하며, 멜론 상세에 없는 A I W E O와 KUROMI를 포함한다. [축제 공식 사이트](https://www.wonderli.vet/home)는 42팀과 타임테이블 공개를 명시하지만 `robots.txt`가 `/api` 수집을 금지하므로 해당 경로를 예약 크롤러에 연결하지 않는다. 두 팀의 이미지와 42팀 전체 시간·무대의 허용되는 공식 원본을 확인하고 출처별 중복 제거를 구현하기 전까지 42팀 및 타임테이블 수집 완료로 표시하지 않는다.
 
-아티스트 사진 대체는 소스별 `artist-image` 크롤로 처리한다. 관리자 소스 생성 API에 `kind: "artist-image"`, `parser: "html-text"`, 공식 프로필 페이지 `url`, `parserConfig: { "festivalSourceUrl": "예매 상세 URL", "artistName": "출연진 이름", "imageHint": "프로필 이미지 경로의 고유 부분" }`을 등록한다. 수집기는 매일 원본 HTML에서 힌트와 일치하는 HTTPS 이미지 주소를 다시 찾고 robots 정책·응답 MIME·디코딩·크기 제한을 통과한 파일만 WebP로 보관한다. 공개 상세 API는 축제 원본 URL과 출연진 이름이 모두 일치하는 저장 이미지를 선택한다. 코드에 특정 아티스트 사진 URL을 추가하지 않는다. 원더리벳 7팀의 후보 출처는 [CHiCO 공식 사이트](https://www.chicoxxx.com/), [hololive 프로필](https://hololive.hololivepro.com/talents/hoshimachi-suisei/), [Humbreaders 프로필](https://humbreaders.com/profile/), [Avex Chevon 프로필](https://avexnet.jp/contents/CHEVO-WORK-0001), [Brandy Senki 프로필](https://brandysenki.com/biography), [Conton Candy 공식 뉴스](https://contoncandy.fanpla.jp/news/2/), [CLAN QUEEN 공식 사이트](https://www.clanqueen.jp/)다. 소스 등록·배포·실제 이미지 보관은 별도 운영 검증이 필요하며, 외부 재배포 허락은 확인되지 않았다.
+아티스트 사진 대체는 소스별 `artist-image` 크롤로 처리한다. 관리자 소스 생성 API에 `kind: "artist-image"`, `parser: "html-text"`, 공식 프로필 페이지 `url`, `parserConfig: { "festivalSourceUrl": "예매 상세 URL", "artistName": "출연진 이름", "imageHint": "프로필 이미지 경로의 고유 부분" }`을 등록한다. 수집기는 매일 원본 HTML에서 힌트와 일치하는 HTTPS 이미지 주소를 다시 찾고 robots 정책·응답 MIME·디코딩·크기 제한을 통과한 파일만 WebP로 보관한다. 공개 상세 API는 축제 원본 URL과 출연진 이름이 모두 일치하는 저장 이미지를 선택한다. `festivalSourceUrl`은 `ticket.melon.com`·`ticket.yes24.com`·`nol.yanolja.com`·`world.nol.com`·`mintpaper.co.kr`의 HTTPS 주소만 받는다. `world.nol.com`은 `nol.yanolja.com`과 같은 NOL 티켓의 해외 사이트다. 코드에 특정 아티스트 사진 URL을 추가하지 않는다. 원더리벳 7팀의 후보 출처는 [CHiCO 공식 사이트](https://www.chicoxxx.com/), [hololive 프로필](https://hololive.hololivepro.com/talents/hoshimachi-suisei/), [Humbreaders 프로필](https://humbreaders.com/profile/), [Avex Chevon 프로필](https://avexnet.jp/contents/CHEVO-WORK-0001), [Brandy Senki 프로필](https://brandysenki.com/biography), [Conton Candy 공식 뉴스](https://contoncandy.fanpla.jp/news/2/), [CLAN QUEEN 공식 사이트](https://www.clanqueen.jp/)다. 소스 등록·배포·실제 이미지 보관은 별도 운영 검증이 필요하며, 외부 재배포 허락은 확인되지 않았다.
 
 NOL의 공개 상품·공연정보 상세 HTML이 입력되면 공연명과 명시된 `기간`/`일시`, `장소`를 축제 발견 후보로 읽는다. 상품 상세 포스터는 Interpark 이미지 URL의 상품 ID가 상세 URL의 상품 ID와 일치할 때만 수집·공개한다. 별도 티켓 오픈 날짜는 행사 날짜로 사용하지 않으며 유효하지 않은 날짜·장소는 거부한다. 2026-10-22 서버 직접 요청에서 콘서트 목록과 상품 상세가 각각 HTTP 403이었으므로 이 파서의 테스트 통과는 운영 수집 성공을 뜻하지 않는다. `robots.txt`의 `/discovery/` 제외 경로는 수집하지 않고, 비활성화된 NOL 예약 소스를 접근 가능성이 검증되기 전에 켜지 않는다.
 
@@ -35,19 +37,22 @@ NOL의 공개 상품·공연정보 상세 HTML이 입력되면 공연명과 명�
 
 ## 크롤 소스와 실행 API
 
-| 메서드 | 경로                                  | 역할   | 본문·쿼리                                                 | 결과                                      |
-| ------ | ------------------------------------- | ------ | --------------------------------------------------------- | ----------------------------------------- |
-| GET    | `/admin/crawl/sources`                | viewer | `festivalId?`, `status?`                                  | `{items: CrawlSource[]}`                  |
-| POST   | `/admin/crawl/sources`                | owner  | `{festivalId?, kind, url, parser, parserConfig}`          | 생성된 소스                               |
-| PATCH  | `/admin/crawl/sources/:id`            | owner  | `{enabled?, parserConfig?, intervalMinutes?: 1440, url?}` | 변경된 소스                               |
-| POST   | `/admin/crawl/sources/:id/run`        | editor | 없음                                                      | 202 `{runId}`                             |
-| POST   | `/admin/crawl/sources/:id/test`       | editor | 없음                                                      | `{parsed, excerpt}`                       |
-| GET    | `/admin/crawl/runs`                   | viewer | `sourceId?`, `result?`, `limit?`                          | `{items: CrawlRun[]}`; 기본 50, 최대 100  |
-| GET    | `/admin/crawl/snapshots/:id`          | viewer | 없음                                                      | `{id, runId, body, createdAt}`; 30일 보관 |
-| GET    | `/admin/crawl/images`                 | viewer | `runId?`, `sourceId?`                                     | `{items: CrawlImage[]}`; 최근 100개       |
-| GET    | `/admin/crawl/images/:id`             | viewer | 없음                                                      | `image/webp` 바이너리                     |
-| GET    | `/admin/crawl/alerts`                 | viewer | `status?`, `limit?`                                       | `{items: CrawlAlert[]}`                   |
-| PATCH  | `/admin/crawl/alerts/:id/acknowledge` | editor | 없음                                                      | 확인된 알림                               |
+| 메서드 | 경로                                  | 역할   | 본문·쿼리                                                         | 결과                                      |
+| ------ | ------------------------------------- | ------ | ----------------------------------------------------------------- | ----------------------------------------- |
+| GET    | `/admin/crawl/sources`                | viewer | `festivalId?`, `status?`                                          | `{items: CrawlSource[]}`                  |
+| POST   | `/admin/crawl/sources`                | owner  | `{festivalId?, kind, url, parser, parserConfig}`                  | 생성된 소스                               |
+| PATCH  | `/admin/crawl/sources/:id`            | owner  | `{enabled?, parserConfig?, intervalMinutes?: 1440, url?}`         | 변경된 소스                               |
+| POST   | `/admin/crawl/sources/:id/run`        | editor | 없음                                                              | 202 `{runId}`                             |
+| POST   | `/admin/crawl/sources/:id/test`       | editor | 없음                                                              | `{parsed, excerpt}`                       |
+| POST   | `/admin/crawl/pinned-discovery`       | editor | `{targets: [{festivalId, festivalSourceUrl, artistName}]}` 1~40개 | 202 `{runId, targets}`                    |
+| GET    | `/admin/crawl/runs`                   | viewer | `sourceId?`, `result?`, `limit?`                                  | `{items: CrawlRun[]}`; 기본 50, 최대 100  |
+| GET    | `/admin/crawl/snapshots/:id`          | viewer | 없음                                                              | `{id, runId, body, createdAt}`; 30일 보관 |
+| GET    | `/admin/crawl/images`                 | viewer | `runId?`, `sourceId?`                                             | `{items: CrawlImage[]}`; 최근 100개       |
+| GET    | `/admin/crawl/images/:id`             | viewer | 없음                                                              | `image/webp` 바이너리                     |
+| GET    | `/admin/crawl/alerts`                 | viewer | `status?`, `limit?`                                               | `{items: CrawlAlert[]}`                   |
+| PATCH  | `/admin/crawl/alerts/:id/acknowledge` | editor | 없음                                                              | 확인된 알림                               |
+
+`pinned-discovery`는 지정 탐색 전용 소스(`parserConfig.seed = commons-pinned-discovery-v1`)에서 실행한다. 이 소스는 예약 실행과 `run`에서 제외되고, 정기 탐색 소스와 실행 기록이 분리되어 검토 준비의 최신 실행 판정이 서로 섞이지 않는다. 대상마다 승인 단계와 같은 현재 출연진 검사(`hasCurrentArtist`)를 통과해야 하며, 하나라도 실패하면 실행을 만들지 않고 422를 반환한다. 이미 사진이 있는 출연진도 지정할 수 있다. 통과하면 지정한 대상만 검색해 후보만 기록한다. 공개는 기존 검토 준비·승인 흐름에서 라이선스·공식 출연 근거·원본 해시 검사를 거친다. 지정 실행 후보의 검토 준비는 다음 지정 실행 전에 한다. 공개 출연진 사진은 그 축제에 승인된 Commons 사진이 하나로 정해지면 기존 사진보다 우선한다.
 
 소스 등록 예시:
 

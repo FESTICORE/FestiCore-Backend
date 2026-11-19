@@ -61,6 +61,26 @@ export function nolWorldDetailImageUrls(html: string, pageUrl: string): URL[] {
       // Ignore malformed image references from untrusted HTML.
     }
   }
+  // 출연진이 메인 포스터에만 있는 상품이 있어 같은 상품의 포스터 한 장을 더 읽는다.
+  for (const match of normalized.matchAll(
+    /https?:\/\/ticketimage\.interpark\.com\/Play\/image\/large\/[\w./-]+\.(?:gif|jpe?g|png)/gi,
+  )) {
+    try {
+      const poster = checkedUrl(match[0].replace(/^http:/i, 'https:'));
+      if (
+        poster.hostname !== 'ticketimage.interpark.com' ||
+        !new RegExp(
+          `^/Play/image/large/\\d{2}/${productId}_p\\.(?:gif|jpe?g|png)$`,
+          'i',
+        ).test(poster.pathname)
+      )
+        continue;
+      urls.set(poster.toString(), poster);
+      break;
+    } catch {
+      // Ignore malformed image references from untrusted HTML.
+    }
+  }
   return [...urls.values()];
 }
 
@@ -175,7 +195,7 @@ export async function collectNolWorldLineupEvidence(
     }
   }
   const seen = new Set(images.map(String));
-  for (const old of previous?.slice(0, MAX_IMAGES) ?? []) {
+  for (const old of previous?.slice(0, MAX_IMAGES + 1) ?? []) {
     if (
       old.sourceUrl !== pageUrl ||
       seen.has(old.imageUrl) ||
@@ -194,4 +214,51 @@ export async function collectNolWorldLineupEvidence(
     seen.add(old.imageUrl);
   }
   return results;
+}
+
+/**
+ * Picks stored OCR evidence that may stand in for the HTML artist-name proof on
+ * image-only official pages. An entry qualifies only when its image is still
+ * referenced by the freshly fetched official page (validated via
+ * {@link nolWorldDetailImageUrls}), its OCR succeeded, and its OCR text mentions
+ * the artist. The caller must still re-fetch each image and confirm the stored
+ * SHA-256 before trusting the evidence.
+ */
+export function officialOcrLineupImageCandidates(
+  officialHtml: string,
+  officialPageUrl: string,
+  evidence: readonly NolLineupEvidence[] | null,
+  rawLinesMentionArtist: (rawLines: readonly string[]) => boolean,
+): { imageUrl: URL; imageHash: string }[] {
+  if (!evidence?.length) return [];
+  const valid = new Map(
+    nolWorldDetailImageUrls(officialHtml, officialPageUrl).map((url) => [
+      url.toString(),
+      url,
+    ]),
+  );
+  if (!valid.size) return [];
+  const candidates: { imageUrl: URL; imageHash: string }[] = [];
+  const seen = new Set<string>();
+  for (const entry of evidence) {
+    const url = valid.get(entry.imageUrl);
+    if (
+      !url ||
+      seen.has(entry.imageUrl) ||
+      entry.sourceUrl !== officialPageUrl ||
+      entry.status !== 'ok' ||
+      entry.parserVersion !== NOL_LINEUP_PARSER_VERSION ||
+      typeof entry.imageHash !== 'string' ||
+      !/^[0-9a-f]{64}$/i.test(entry.imageHash) ||
+      !Array.isArray(entry.rawLines) ||
+      !rawLinesMentionArtist(entry.rawLines)
+    )
+      continue;
+    seen.add(entry.imageUrl);
+    candidates.push({
+      imageUrl: url,
+      imageHash: entry.imageHash.toLowerCase(),
+    });
+  }
+  return candidates;
 }

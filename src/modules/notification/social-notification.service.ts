@@ -8,6 +8,11 @@ import { DataSource, EntityManager } from 'typeorm';
 import { Crew, CrewGather } from '../crews/crew.entity';
 import { Flag } from '../flags/flag.entity';
 import { ApnsService } from './apns.service';
+import { socialAlertText } from './social-notification-text';
+import {
+  recordUserNotifications,
+  withInboxSavepoint,
+} from './user-notification.service';
 
 type SocialType = 'flag.status' | 'crew.status' | 'crew.gather';
 type DeliveryStatus = 'sent' | 'cancelled' | 'failed';
@@ -74,22 +79,41 @@ export class SocialNotificationService
       );
       return;
     }
+    const payload = {
+      flagId: flag.id,
+      status: flag.status,
+      zoneId: flag.zoneId,
+      activity: flag.activity,
+      actorUserId,
+    };
     await this.enqueueStatus(
       manager,
       'flag.status',
       flag.id,
       actorUserId,
       5,
-      {
-        flagId: flag.id,
-        status: flag.status,
-        zoneId: flag.zoneId,
-        activity: flag.activity,
-        actorUserId,
-      },
+      payload,
       '"flag_follows" r',
       'r."flagId" = $1 AND r."userId" <> $2',
     );
+    await withInboxSavepoint(manager, async () => {
+      const followers = await manager.query<Array<{ userId: string }>>(
+        `SELECT "userId" FROM "flag_follows" WHERE "flagId" = $1 AND "userId" <> $2`,
+        [flag.id, actorUserId],
+      );
+      await recordUserNotifications(
+        manager,
+        followers.map((row) => row.userId),
+        {
+          type: 'flag.status',
+          festivalId: flag.festivalId,
+          ...socialAlertText('flag.status', payload),
+          subject: { flagId: flag.id },
+          dedupeKey: `flag.status:${flag.id}`,
+        },
+        true,
+      );
+    });
   }
 
   async enqueueCrewStatus(
@@ -105,22 +129,75 @@ export class SocialNotificationService
     );
     const actor = members[0];
     if (!actor || crew.archivedAt) return;
+    const payload = {
+      crewId: crew.id,
+      actorUserId,
+      nickname: actor.nickname,
+      zoneId: actor.zoneId,
+      state: actor.state,
+    };
     await this.enqueueStatus(
       manager,
       'crew.status',
       crew.id,
       actorUserId,
       1,
-      {
-        crewId: crew.id,
-        actorUserId,
-        nickname: actor.nickname,
-        zoneId: actor.zoneId,
-        state: actor.state,
-      },
+      payload,
       '"crew_members" r',
       'r."crewId" = $1 AND r."userId" <> $2',
     );
+    await withInboxSavepoint(manager, async () => {
+      await recordUserNotifications(
+        manager,
+        await this.otherMembers(manager, crew.id, actorUserId),
+        {
+          type: 'crew.status',
+          festivalId: crew.festivalId,
+          ...socialAlertText('crew.status', payload),
+          subject: { crewId: crew.id, userId: actorUserId },
+          dedupeKey: `crew.status:${crew.id}:${actorUserId}`,
+        },
+        true,
+      );
+    });
+  }
+
+  /** 새 크루원 합류는 푸시 없이 다른 크루원의 알림함에만 남긴다. */
+  async enqueueCrewMemberJoined(
+    manager: EntityManager,
+    crew: Crew,
+    joinedUserId: string,
+    nickname: string,
+  ): Promise<void> {
+    if (crew.archivedAt) return;
+    await withInboxSavepoint(manager, async () => {
+      await recordUserNotifications(
+        manager,
+        await this.otherMembers(manager, crew.id, joinedUserId),
+        {
+          type: 'crew.member_joined',
+          festivalId: crew.festivalId,
+          title: '새 크루원 합류',
+          body: `${nickname}님이 크루에 합류했어요.`,
+          route: `/crews/${crew.id}`,
+          subject: { crewId: crew.id, userId: joinedUserId },
+          dedupeKey: `crew.member_joined:${crew.id}:${joinedUserId}`,
+        },
+        true,
+      );
+    });
+  }
+
+  private async otherMembers(
+    manager: EntityManager,
+    crewId: string,
+    userId: string,
+  ): Promise<string[]> {
+    const rows = await manager.query<Array<{ userId: string }>>(
+      `SELECT "userId" FROM "crew_members" WHERE "crewId" = $1 AND "userId" <> $2`,
+      [crewId, userId],
+    );
+    return rows.map((row) => row.userId);
   }
 
   async enqueueCrewGather(
@@ -157,6 +234,19 @@ export class SocialNotificationService
         JSON.stringify(payload),
       ],
     );
+    await withInboxSavepoint(manager, async () => {
+      await recordUserNotifications(
+        manager,
+        await this.otherMembers(manager, crew.id, actorUserId),
+        {
+          type: 'crew.gather',
+          festivalId: crew.festivalId,
+          ...socialAlertText('crew.gather', payload),
+          subject: { crewId: crew.id, gatherId: gather.id },
+          dedupeKey: `crew.gather:${gather.id}`,
+        },
+      );
+    });
   }
 
   async enqueueCrewDissolved(
@@ -188,6 +278,22 @@ export class SocialNotificationService
         JSON.stringify({ crewId: crew.id, dissolved: true }),
       ],
     );
+    await withInboxSavepoint(manager, async () => {
+      await recordUserNotifications(
+        manager,
+        await this.otherMembers(manager, crew.id, actorUserId),
+        {
+          type: 'crew.status',
+          festivalId: crew.festivalId,
+          ...socialAlertText('crew.status', {
+            crewId: crew.id,
+            dissolved: true,
+          }),
+          subject: { crewId: crew.id },
+          dedupeKey: `crew.status:dissolved:${crew.id}`,
+        },
+      );
+    });
   }
 
   private async enqueueStatus(
@@ -225,6 +331,7 @@ export class SocialNotificationService
       JOIN "devices" d ON d."userId" = r."userId"
         AND d."apnsToken" IS NOT NULL AND d."apnsEnvironment" IS NOT NULL
       WHERE ${recipientFilter}`;
+    // Postgres는 쓰지 않는 매개변수의 형식을 정하지 못해 42P18로 실패하므로 payload($4)를 빼고 보낸다.
     await manager.query(
       `WITH targets AS (${targetSql})
       UPDATE "social_notification_deliveries" n
@@ -232,8 +339,8 @@ export class SocialNotificationService
       FROM targets t
       WHERE n."deviceId" = t."deviceId" AND n."recipientUserId" = t."recipientUserId"
         AND n."type" = $3 AND n."subjectId" = $1 AND n."status" = 'pending'
-        AND n."createdAt" <= now() - ($5 * interval '1 minute')`,
-      params,
+        AND n."createdAt" <= now() - ($4 * interval '1 minute')`,
+      [subjectId, actorUserId, type, minutes],
     );
     await manager.query(
       `WITH targets AS (${targetSql})
@@ -245,18 +352,19 @@ export class SocialNotificationService
         AND n."createdAt" > now() - ($5 * interval '1 minute')`,
       params,
     );
+    // $3을 열 값과 문자열 연결에 함께 쓰면 Postgres가 형식을 하나로 정하지 못해 42P08로 실패하므로 형식을 밝힌다.
     await manager.query(
       `WITH targets AS (${targetSql})
       INSERT INTO "social_notification_deliveries"
         ("deviceId", "recipientUserId", "type", "subjectId", "actorUserId", "eventKey", "payload", "nextAttemptAt")
-      SELECT t."deviceId", t."recipientUserId", $3, $1, $2,
-        $3 || ':' || $1 || ':' || gen_random_uuid()::text, $4::jsonb,
+      SELECT t."deviceId", t."recipientUserId", $3::varchar, $1, $2,
+        $3::varchar || ':' || $1 || ':' || gen_random_uuid()::text, $4::jsonb,
         now() + ($5 * interval '1 minute')
       FROM targets t
       WHERE NOT EXISTS (
         SELECT 1 FROM "social_notification_deliveries" n
         WHERE n."deviceId" = t."deviceId" AND n."recipientUserId" = t."recipientUserId"
-          AND n."type" = $3 AND n."subjectId" = $1 AND n."status" = 'pending'
+          AND n."type" = $3::varchar AND n."subjectId" = $1 AND n."status" = 'pending'
           AND n."createdAt" > now() - ($5 * interval '1 minute')
       )`,
       params,
@@ -279,15 +387,22 @@ export class SocialNotificationService
     }
   }
 
+  /**
+   * TypeORM Postgres는 최상위 UPDATE에 [rows, rowCount]를 돌려주므로 SELECT로 감싸 행만 받는다.
+   * 리스 시각은 JS Date와 같은 밀리초로 잘라 `"leaseUntil" = $2` 비교가 맞게 한다.
+   */
   async claim(): Promise<Delivery | null> {
     const jobs = await this.db.query<Delivery[]>(`WITH due AS (
       SELECT "id" FROM "social_notification_deliveries"
       WHERE ("status" = 'pending' AND "nextAttemptAt" <= now())
          OR ("status" = 'leased' AND "leaseUntil" <= now())
       ORDER BY "nextAttemptAt", "id" LIMIT 1 FOR UPDATE SKIP LOCKED
-    ) UPDATE "social_notification_deliveries" n
-      SET "status" = 'leased', "leaseUntil" = now() + interval '2 minutes'
-      FROM due WHERE n."id" = due."id" RETURNING n.*`);
+    ), claimed AS (
+      UPDATE "social_notification_deliveries" n
+      SET "status" = 'leased',
+        "leaseUntil" = date_trunc('milliseconds', now() + interval '2 minutes')
+      FROM due WHERE n."id" = due."id" RETURNING n.*
+    ) SELECT * FROM claimed`);
     return jobs[0] ?? null;
   }
 
@@ -300,6 +415,9 @@ export class SocialNotificationService
       `SELECT d."apnsToken", d."apnsEnvironment"
       FROM "social_notification_deliveries" n
       JOIN "devices" d ON d."id" = n."deviceId" AND d."userId" = n."recipientUserId"
+        AND ((n."type" = 'flag.status' AND d."notifyFlagStatus" = true)
+          OR (n."type" = 'crew.status' AND d."notifyCrewStatus" = true)
+          OR (n."type" = 'crew.gather' AND d."notifyCrewGather" = true))
       JOIN "users" u ON u."id" = n."recipientUserId"
         AND (n."type" = 'crew.gather' OR u."pushOptIn" = true)
       WHERE n."id" = $1 AND n."status" = 'leased' AND n."leaseUntil" = $2
@@ -371,8 +489,8 @@ export class SocialNotificationService
   ): Promise<void> {
     await this.db.query(
       `UPDATE "social_notification_deliveries"
-      SET "status" = $3, "attempts" = "attempts" + 1,
-        "sentAt" = CASE WHEN $3 = 'sent' THEN now() ELSE NULL END,
+      SET "status" = $3::varchar, "attempts" = "attempts" + 1,
+        "sentAt" = CASE WHEN $3::varchar = 'sent' THEN now() ELSE NULL END,
         "leaseUntil" = NULL, "lastErrorCode" = $4
       WHERE "id" = $1 AND "status" = 'leased' AND "leaseUntil" = $2`,
       [job.id, job.leaseUntil, status, reason?.slice(0, 128) ?? null],

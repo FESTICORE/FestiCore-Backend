@@ -152,6 +152,14 @@ export class AuthService {
         [userId],
       );
       await manager.query(
+        `UPDATE "notification_deliveries" SET "status" = 'cancelled',
+           "leaseUntil" = NULL, "lastErrorCode" = 'USER_LOGGED_OUT'
+         WHERE "deviceId" IN (SELECT "id" FROM "devices" WHERE "userId" = $1)
+           AND "eventKey" LIKE 'live-activity-performance:%'
+           AND "status" IN ('pending', 'leased')`,
+        [userId],
+      );
+      await manager.query(
         `UPDATE "refresh_token_sessions" SET "revokedAt" = now()
          WHERE "id" IN (SELECT "sessionId" FROM "refresh_tokens" WHERE "userId" = $1)
            AND "revokedAt" IS NULL`,
@@ -165,9 +173,12 @@ export class AuthService {
     });
   }
 
-  async me(
-    userId: string,
-  ): Promise<UserView & { admin: { id: string; role: string } | null }> {
+  async me(userId: string): Promise<
+    UserView & {
+      currentTermsVersion: string;
+      admin: { id: string; role: string } | null;
+    }
+  > {
     const user = await this.userRepo.findOne({ where: { id: userId } });
     if (!user) {
       throw new NotFoundException('사용자를 찾을 수 없습니다.');
@@ -179,7 +190,11 @@ export class AuthService {
             [userId],
           )
         : [];
-    return { ...this.toView(user), admin: admins[0] ?? null };
+    return {
+      ...this.toView(user),
+      currentTermsVersion: CURRENT_TERMS_VERSION,
+      admin: admins[0] ?? null,
+    };
   }
 
   async updateMe(userId: string, input: UpdateMeInput): Promise<UserView> {
@@ -410,6 +425,10 @@ export class AuthService {
         }
         await manager.query(
           `UPDATE "flag_status_events" SET "userId" = NULL WHERE "userId" = $1`,
+          [userId],
+        );
+        await manager.query(
+          `UPDATE "flags" SET "statusUpdatedBy" = NULL WHERE "statusUpdatedBy" = $1`,
           [userId],
         );
         await manager.query(

@@ -11,6 +11,7 @@ export interface LiveActivitySet {
 export interface LiveActivityFlag {
   id: string;
   festivalId: string;
+  name: string;
   status: 'scheduled' | 'active' | 'resting' | 'ended';
   visibility: 'public' | 'private';
   hidden: boolean;
@@ -39,6 +40,8 @@ export interface LiveActivityMember {
 export interface LiveActivityContentInput {
   festivalId: string;
   now: Date;
+  festivalStart: Date;
+  festivalEnd: Date;
   sets: readonly LiveActivitySet[];
   flagsEnabled: boolean;
   flags: readonly LiveActivityFlag[];
@@ -46,6 +49,10 @@ export interface LiveActivityContentInput {
 }
 
 export type LiveActivityContentState = {
+  phase: 'upcoming' | 'ongoing' | 'finished';
+  /** Swift JSONEncoder's default Date representation: seconds since 2001-01-01. */
+  startDate: number;
+  endDate: number;
   nowStages: Array<{
     setId: string;
     stageId: string;
@@ -61,6 +68,8 @@ export type LiveActivityContentState = {
   } | null;
   pinnedFlag: {
     flagId: string;
+    /** 잠금화면에 그대로 보이는 깃발 이름. */
+    name: string;
     status: 'active' | 'resting';
     zoneId: string | null;
     activity: string | null;
@@ -77,6 +86,7 @@ export type LiveActivityContentState = {
 
 const MAX_ACTIVE_SETS = 8;
 const GATHER_LIFETIME_MS = 10 * 60_000;
+const APPLE_REFERENCE_EPOCH_SECONDS = 978_307_200;
 const WITH_TIMEZONE =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 
@@ -91,6 +101,14 @@ export function buildLiveActivityContentState(
 ): LiveActivityContentState {
   const now = input.now.getTime();
   if (!Number.isFinite(now)) throw new RangeError('now must be a valid Date');
+  const festivalStart = input.festivalStart.getTime();
+  const festivalEnd = input.festivalEnd.getTime();
+  if (
+    !Number.isFinite(festivalStart) ||
+    !Number.isFinite(festivalEnd) ||
+    festivalEnd <= festivalStart
+  )
+    throw new RangeError('festival period must be valid and ordered');
 
   const sets = input.sets
     .filter((set) => set.festivalId === input.festivalId)
@@ -149,6 +167,14 @@ export function buildLiveActivityContentState(
     now - gatherAt < GATHER_LIFETIME_MS;
 
   return {
+    phase:
+      now < festivalStart
+        ? 'upcoming'
+        : now < festivalEnd
+          ? 'ongoing'
+          : 'finished',
+    startDate: festivalStart / 1000 - APPLE_REFERENCE_EPOCH_SECONDS,
+    endDate: festivalEnd / 1000 - APPLE_REFERENCE_EPOCH_SECONDS,
     nowStages,
     nextMine: next
       ? {
@@ -161,6 +187,7 @@ export function buildLiveActivityContentState(
     pinnedFlag: pinned
       ? {
           flagId: pinned.id,
+          name: pinned.name,
           status: pinned.status as 'active' | 'resting',
           zoneId: pinned.zoneId,
           activity: pinned.activity,

@@ -7,7 +7,10 @@ import {
   AdminFestivalVersion,
   FestivalDocument,
 } from '../admin/festival/festival.entity';
-import { validateDraft } from '../admin/festival/festival-validation';
+import {
+  normalizeLegacyReturnTimes,
+  validateDraft,
+} from '../admin/festival/festival-validation';
 import { Flag } from './flag.entity';
 import { CacheService } from '../redis/service/cache.service';
 
@@ -90,7 +93,9 @@ export class FlagPackSyncService {
         });
         if (!festival) continue;
 
-        const draft = changedFlags.reduce(replaceProfile, festival.draft);
+        const draft = normalizeLegacyReturnTimes(
+          changedFlags.reduce(replaceProfile, festival.draft),
+        );
         const draftErrors = validateDraft(draft);
         if (draftErrors.length)
           throw new BadRequestException({
@@ -105,7 +110,9 @@ export class FlagPackSyncService {
         }
 
         if (festival.published) {
-          const next = changedFlags.reduce(replaceProfile, festival.published);
+          const next = normalizeLegacyReturnTimes(
+            changedFlags.reduce(replaceProfile, festival.published),
+          );
           if (
             JSON.stringify(next.flags) !==
             JSON.stringify(festival.published.flags)

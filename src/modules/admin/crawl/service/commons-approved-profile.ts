@@ -32,7 +32,9 @@ export function canonicalCcByLicenseUrl(
 }
 
 function decodeText(html: string): string {
+  // Creator 템플릿이 넣는 TemplateStyles CSS와 스크립트는 보이는 글자가 아니다.
   return html
+    .replace(/<(style|script)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '')
     .replace(/<[^>]*>/g, '')
     .replace(
       /&#(?:x([a-f0-9]+)|([0-9]+));/gi,

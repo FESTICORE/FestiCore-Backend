@@ -12,6 +12,7 @@ import {
   WONDERLIVET_LINK_PAGE,
   wonderlivetMelonProduct,
 } from './wonderlivet-ticket-link';
+import { TOUR_API_SOURCE, tourApiCandidates } from './tour-api';
 
 const REGEX_TIMEOUT_MS = 1000;
 const MAX_REGEX_WORKERS = 10;
@@ -598,7 +599,9 @@ function officialLineupCandidates(
   const isMintPost =
     (source.hostname === 'mintpaper.co.kr' ||
       source.hostname === 'www.mintpaper.co.kr') &&
-    source.pathname === '/posts/4819';
+    ['/posts/4819', '/posts/4870', '/festivals/178/notice/4870'].includes(
+      source.pathname,
+    );
   const isOnewayNotice =
     source.hostname === 'ticket.melon.com' &&
     source.pathname === '/csoon/detail.htm' &&
@@ -627,7 +630,7 @@ function officialLineupCandidates(
     if (!title || !article) return [];
     const name = plainText(title)
       .normalize('NFKC')
-      .replace(/\s*1차 라인업 공개\s*$/, '')
+      .replace(/\s*[12]차 라인업 공개\s*$/, '')
       .trim();
     if (!/^COUNTDOWN FANTASY 20\d{2}-20\d{2}$/.test(name)) return [];
     const lineup = article.split(/<br\s*\/?\s*>/i);
@@ -635,6 +638,7 @@ function officialLineupCandidates(
       /12[.．]31/i.test(plainText(line).normalize('NFKC')),
     );
     if (day < 0) return [];
+    const secondLineup = source.pathname.endsWith('/4870');
     const artists: { name: string; profileUrl: string }[] = [];
     for (const line of lineup.slice(day + 1, day + 81)) {
       if (/and\s+many\s+more/i.test(plainText(line).normalize('NFKC'))) break;
@@ -642,17 +646,27 @@ function officialLineupCandidates(
         /<a\b[^>]*\bhref=["'](https:\/\/www\.instagram\.com\/[A-Za-z0-9._]+\/?)["'][^>]*>/i.exec(
           line,
         )?.[1];
-      if (!profile) continue;
-      const artistName = plainText(line.split(/<a\b/i)[0])
+      const handleLine = secondLineup
+        ? /^(.+?)\s+@([A-Za-z0-9._]+)(?:\s+N)?$/.exec(
+            plainText(line).normalize('NFKC').trim(),
+          )
+        : null;
+      const profileUrl =
+        profile ??
+        (handleLine ? `https://www.instagram.com/${handleLine[2]}/` : null);
+      if (!profileUrl) continue;
+      const artistName = (
+        handleLine ? handleLine[1] : plainText(line.split(/<a\b/i)[0])
+      )
         .normalize('NFKC')
         .trim();
       if (artistName && artistName.length <= 160)
         artists.push({
           name: artistName,
-          profileUrl: `${profile.replace(/\/$/, '')}/`,
+          profileUrl: `${profileUrl.replace(/\/$/, '')}/`,
         });
     }
-    if (artists.length !== 12) return [];
+    if (artists.length !== (secondLineup ? 20 : 12)) return [];
     return [{ name, url: source.toString(), artists }];
   }
 
@@ -987,7 +1001,7 @@ function melonDetailCandidates(
             !image.username &&
             !image.password
           ) {
-            artist.sourceUrl = image.toString();
+            artist.sourceUrl = melonArtistImageUrl(image).toString();
             break;
           }
         } catch {
@@ -1000,6 +1014,40 @@ function melonDetailCandidates(
     if (artists.size) candidate.artists = [...artists.values()];
   }
   return [candidate];
+}
+
+const MELON_ARTIST_ORIGINAL_SUFFIX = '/melon/resize/1000/quality/90/optimize';
+
+// Melon lineup cards link a `/melon/thumbnail/320x300` crop rendition (a 300px
+// image). The same crop is published as a 2000px `_org` original, so request a
+// 1000px rendition of it instead. Legacy `/cm/` crops use their `_org` as is.
+export function melonArtistImageUrl(image: URL): URL {
+  // 예전 `/cm/` 경로의 `_org` 원본은 300~2000px로 제각각이다. 1000px로 늘리지 않고
+  // 원본 크기 그대로 받는다(저장할 때 2000px 안으로 줄인다).
+  const legacy =
+    /^(\/cm\/artistcrop\/images\/[\d/]+\/\d+(?:_\d+)?)(?:_org)?\.(jpe?g|png)(?:\/melon\/.*)?$/i.exec(
+      image.pathname,
+    );
+  if (image.hostname === 'cdnimg.melon.co.kr' && legacy)
+    return new URL(`https://cdnimg.melon.co.kr${legacy[1]}_org.${legacy[2]}`);
+  const match =
+    /^(\/cm2\/artistcrop\/images\/[\d/]+\/\d+_\d+)(?:_org)?\.(jpe?g|png)(?:\/melon\/.*)?$/i.exec(
+      image.pathname,
+    );
+  if (image.hostname !== 'cdnimg.melon.co.kr' || !match) return image;
+  // Keep the extension's original casing: the CDN path is case-sensitive.
+  return new URL(
+    `https://cdnimg.melon.co.kr${match[1]}_org.${match[2]}${MELON_ARTIST_ORIGINAL_SUFFIX}`,
+  );
+}
+
+export function isMelonArtistOriginalUrl(image: URL): boolean {
+  return (
+    image.hostname === 'cdnimg.melon.co.kr' &&
+    !image.search &&
+    melonArtistImageUrl(image).toString() === image.toString() &&
+    image.pathname.endsWith(MELON_ARTIST_ORIGINAL_SUFFIX)
+  );
 }
 
 export function yes24EventJson(body: string): Record<string, unknown> | null {
@@ -1204,6 +1252,16 @@ function nolDetailCandidates(
     venue,
   };
   const artists = eventPerformers(event, base);
+  // This product publishes its official lineup as notice text, not timed sets.
+  if (!artists.length && source.pathname === '/ticket/products/26015181') {
+    const lineup = /\[1차 라인업\]\s*(.+?)(?=\s+상품\s*상세|$)/.exec(text)?.[1];
+    const names = lineup?.split(/\s*,\s*/).map((name) => name.trim());
+    if (
+      names?.length === 8 &&
+      names.every((name) => name.length > 0 && name.length <= 160)
+    )
+      artists.push(...names.map((name) => ({ name })));
+  }
   if (artists.length) candidate.artists = artists;
   const poster = nolPosterUrl(body, source);
   if (poster) candidate.posterUrl = poster;
@@ -1674,6 +1732,7 @@ export async function parseCrawl(
     };
   }
   if (source.parser === 'ticket-list') {
+    if (source.url === TOUR_API_SOURCE) return tourApiCandidates(body);
     const links = ticketCandidates(body, source.url, config);
     if (!links.length) throw new Error('공개 예매 링크를 찾지 못했습니다.');
     return links;

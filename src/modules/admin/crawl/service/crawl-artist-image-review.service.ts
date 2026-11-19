@@ -161,7 +161,7 @@ export class CrawlArtistImageReviewService {
       })
       .andWhere('source.url = :url', { url: input.officialEvidenceUrl })
       .andWhere(
-        "source.parserConfig->>'festivalSourceUrl' = :festivalSourceUrl",
+        'source."parserConfig"->>\'festivalSourceUrl\' = :festivalSourceUrl',
         {
           festivalSourceUrl: input.festivalSourceUrl,
         },

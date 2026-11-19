@@ -207,7 +207,9 @@ function verifiedArtists(
     } = { name: name.trim() };
     if (
       ['mintpaper.co.kr', 'www.mintpaper.co.kr'].includes(sourceHost) &&
-      source.pathname === '/posts/4819'
+      ['/posts/4819', '/posts/4870', '/festivals/178/notice/4870'].includes(
+        source.pathname,
+      )
     ) {
       const profile = officialInstagramUrl(
         (value as Record<string, unknown>).profileUrl,
@@ -311,9 +313,12 @@ export function ticketDateRange(
   return { firstDate: first, lastDate: last };
 }
 
-function ticketDateSpanLimit(url: unknown): number {
+export function ticketDateSpanLimit(url: unknown): number {
   return typeof url === 'string' &&
-    /^https:\/\/world\.nol\.com\/en\/ticket\/products\/\d+$/.test(url)
+    (/^https:\/\/world\.nol\.com\/en\/ticket\/products\/\d+$/.test(url) ||
+      /^https:\/\/apis\.data\.go\.kr\/B551011\/KorService2\/detailCommon2\?contentId=\d+$/.test(
+        url,
+      ))
     ? 31
     : 6;
 }
@@ -426,13 +431,19 @@ export function discoverySummaries(
       url.protocol !== 'https:' ||
       url.username ||
       url.password ||
-      ![
-        'ticket.melon.com',
-        'ticket.yes24.com',
-        'nol.yanolja.com',
-        'world.nol.com',
-        'mintpaper.co.kr',
-      ].includes(url.hostname)
+      !(
+        [
+          'ticket.melon.com',
+          'ticket.yes24.com',
+          'nol.yanolja.com',
+          'world.nol.com',
+          'mintpaper.co.kr',
+        ].includes(url.hostname) ||
+        (url.hostname === 'apis.data.go.kr' &&
+          url.pathname === '/B551011/KorService2/detailCommon2' &&
+          url.searchParams.size === 1 &&
+          /^\d+$/.test(url.searchParams.get('contentId') ?? ''))
+      )
     )
       continue;
     const name = cleanName(value.name);

@@ -2,7 +2,9 @@ import sharp from 'sharp';
 import {
   collectNolWorldLineupEvidence,
   nolWorldDetailImageUrls,
+  officialOcrLineupImageCandidates,
   NOL_LINEUP_PARSER_VERSION,
+  type NolLineupEvidence,
 } from './nol-world-lineup-evidence';
 
 const page = 'https://world.nol.com/en/ticket/products/26013510';
@@ -46,6 +48,27 @@ describe('NOL World private lineup evidence', () => {
       <img data-original-src="http://ticketimage.interpark.com/Play/image/etc/26/26013511-e01.jpg">
       <img data-original-src="http://evil.example/Play/image/etc/26/26013510-e01.jpg">`;
     expect(nolWorldDetailImageUrls(html, page).map(String)).toEqual([image]);
+  });
+
+  it('adds one main poster of the same product after the detail images', () => {
+    const poster =
+      'https://ticketimage.interpark.com/Play/image/large/26/26013510_p.gif';
+    const html = `<meta property="og:image" content="${poster}"/>
+      <meta property="twitter:image" content="${poster}"/>
+      <img src="https://ticketimage.interpark.com/Play/image/large/26/26013511_p.gif">
+      <img src="https://ticketimage.interpark.com/Play/image/large/26/26013510_s.gif">
+      <img src="https://evil.example/Play/image/large/26/26013510_p.gif">
+      <img src="${image}">`;
+    expect(nolWorldDetailImageUrls(html, page).map(String)).toEqual([
+      image,
+      poster,
+    ]);
+    expect(
+      nolWorldDetailImageUrls(
+        `<img src="https://ticketimage.interpark.com/Play/image/large/26/26013511_p.gif">`,
+        page,
+      ),
+    ).toEqual([]);
   });
 
   it('keeps raw OCR lines in run evidence, reuses only matching bytes and version', async () => {
@@ -204,5 +227,75 @@ describe('NOL World private lineup evidence', () => {
       });
       expect(JSON.stringify(result)).not.toContain('private network detail');
     }
+  });
+});
+
+describe('officialOcrLineupImageCandidates', () => {
+  const html = `<img src="${image}">`;
+  const mentions = (lines: readonly string[]) =>
+    lines.join(' ').includes('아이유');
+  const okEntry = (
+    overrides: Partial<NolLineupEvidence> = {},
+  ): NolLineupEvidence => ({
+    sourceUrl: page,
+    imageUrl: image,
+    imageHash: 'a'.repeat(64),
+    parserVersion: NOL_LINEUP_PARSER_VERSION,
+    status: 'ok',
+    failureReason: null,
+    rawLines: ['19:00 아이유'],
+    ...overrides,
+  });
+
+  it('공식 페이지가 참조하는 이미지의 OCR에 이름이 있으면 후보로 돌려준다', () => {
+    const result = officialOcrLineupImageCandidates(
+      html,
+      page,
+      [okEntry()],
+      mentions,
+    );
+    expect(result).toEqual([
+      { imageUrl: new URL(image), imageHash: 'a'.repeat(64) },
+    ]);
+  });
+
+  it('OCR 텍스트에 이름이 없으면 거부한다', () => {
+    const entry = okEntry({ rawLines: ['19:00 다른가수'] });
+    expect(
+      officialOcrLineupImageCandidates(html, page, [entry], mentions),
+    ).toEqual([]);
+  });
+
+  it('공식 페이지가 더 이상 참조하지 않는 이미지는 거부한다', () => {
+    const entry = okEntry({ imageUrl: image2 });
+    expect(
+      officialOcrLineupImageCandidates(html, page, [entry], mentions),
+    ).toEqual([]);
+  });
+
+  it('OCR 상태가 ok가 아니거나 증거가 없으면 거부한다', () => {
+    expect(
+      officialOcrLineupImageCandidates(html, page, null, mentions),
+    ).toEqual([]);
+    expect(officialOcrLineupImageCandidates(html, page, [], mentions)).toEqual(
+      [],
+    );
+    const empty = okEntry({ status: 'empty', rawLines: [] });
+    expect(
+      officialOcrLineupImageCandidates(html, page, [empty], mentions),
+    ).toEqual([]);
+  });
+
+  it('저장 호스트/소스가 공식 페이지와 다르거나 해시가 비정상이면 거부한다', () => {
+    const wrongSource = okEntry({
+      sourceUrl: 'https://world.nol.com/en/ticket/products/26013511',
+    });
+    expect(
+      officialOcrLineupImageCandidates(html, page, [wrongSource], mentions),
+    ).toEqual([]);
+    const badHash = okEntry({ imageHash: 'nothex' });
+    expect(
+      officialOcrLineupImageCandidates(html, page, [badHash], mentions),
+    ).toEqual([]);
   });
 });

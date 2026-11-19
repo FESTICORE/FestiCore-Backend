@@ -31,6 +31,9 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
+      - name: 태그 발행 회귀 검증 (원격 쓰기 없음)
+        run: python3 scripts/test-publish-auto-tag.py
+
       - name: 태그 접두사 결정
         id: prefix
         run: |
@@ -78,6 +81,8 @@ jobs:
 
       - name: 태그 생성 및 푸시
         env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_PREFIX: ${{ steps.prefix.outputs.value }}
           TAG: ${{ steps.version.outputs.tag }}
           CHANGES: ${{ steps.version.outputs.changes }}
           # 이 태그가 배포하는 GitHub 커밋 링크 (배포 메시지에 그대로 노출)
@@ -93,4 +98,4 @@ jobs:
             -m "$COMMIT_MSG" \
             -m "변경 사항:" \
             -m "$CHANGES"
-          git push origin "$TAG"
+          python3 scripts/publish-auto-tag.py

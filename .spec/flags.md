@@ -23,8 +23,62 @@
 | POST | `/api/v1/flags/:flagId/co-bearers/invite` | 소유 기수 | 공동 기수 초대 |
 | DELETE | `/api/v1/flags/:flagId/co-bearers/:userId` | 소유 기수 | 공동 기수 해제, 204 |
 | POST | `/api/v1/bearer/claim` | 앱 JWT | 등록 코드·`X-Device-Id`로 기수 권한 신청 |
+| POST | `/api/v1/bearer/register` | 앱 JWT·약관 | `Idempotency-Key` 필수, 코드 없이 깃발 프로필 생성·원래 기수 등록, 201 |
 | GET | `/api/v1/me/follows` | 앱 JWT | 내 팔로우 목록, 선택 `festivalId` |
+| GET | `/api/v1/me/pinned-flag` | 앱 JWT | 내 대표 깃발 ID와 상세, 없으면 200 `null`, `no-store` |
 | PUT | `/api/v1/me/pinned-flag` | 앱 JWT | 내 대표 깃발 지정 |
+| GET | `/api/v1/me/bearer-flags` | 앱 JWT | 내가 기수인 깃발 목록, 선택 `festivalId`, `no-store` |
+
+### 내 대표 깃발 조회
+
+- 대표 깃발은 `flag_pins`에 계정당 하나이고 축제별로 나뉘지 않으므로 `festivalId` 쿼리를 받지 않는다.
+- 응답은 `{ pinnedFlagId, flag }`다. `flag`는 공개 상세(`GET /flags/:flagId`)와 같은 필드에 `festivalId`를 더하고
+  `isFollowing`·`isPinned`는 항상 `true`다.
+- 대표가 없으면 404가 아니라 200으로 둘 다 `null`이다(`PUT`의 해제 응답 `pinnedFlagId: null`, 라이브 보드와 같은 관례).
+  팔로우가 끊긴 대표, 비공개·미발행 축제 깃발, 내가 기수가 아닌 숨김 깃발도 `null`로 본다.
+
+### 내 기수 깃발 목록
+
+- `items[]`는 `flagId`, `festivalId`, `isOwner`, `joinedAt`, `flag`(기수 시점 프로필, 비공개 계획 포함), `status`, `hidden`이다.
+- 발행된 축제의 깃발만 최근 기수 등록순으로 준다. 숨김 깃발은 `hidden: true`로 포함한다.
+
+### 코드 없는 기수 등록
+
+- 11/10 회의 결정. 요청 본문은 `festivalId`(필수)와 `PATCH /flags/:flagId`의 프로필 필드(`name` 필수, `bio`, `tags`,
+  `plan`, `planVisible`, `homeZoneId`)다. 같은 길이·값 규칙을 쓰고 다른 필드는 400이다. `tags`를 생략하면 `['newbie']`다.
+  사진은 생성 뒤 `POST /flags/:flagId/photo`로 올린다.
+- 홈 존·계획 셋은 발행 팩에 있어야 한다(없는 존 404 `ZONE_NOT_FOUND`, 없는 셋 400).
+- 발행되지 않은 축제 404 `NOT_FOUND`, 이 축제에서 이미 기수 409 `BEARER_LIMIT`, 같은 이름 409 `FLAG_NAME_TAKEN`,
+  같은 멱등키의 다른 요청 409 `IDEMPOTENCY_CONFLICT`다. 동시 요청은 고유 인덱스 위반을 같은 코드로 바꾼다.
+- 결과 데이터는 코드 등록으로 새 깃발을 만들 때와 같다. 공개 예정 상태 깃발(`ownerId`=요청자)과 `isOwner: true` 기수
+  관계를 만들고 공개 깃발 팩을 같은 트랜잭션에서 갱신한다. 응답 형식도 `claim`과 같다.
+- 등록 코드 레코드를 만들지 않으므로 관리자 코드 목록에는 나오지 않는다. 코드 없이 만든 깃발은 `ownerId`가 있으면서
+  `flag_bearer_codes`에 그 깃발·원래 기수(`flagId`, `usedBy`=`ownerId`)의 코드가 없는 깃발로 구분할 수 있어 새 컬럼과
+  마이그레이션은 두지 않았다. 공동 기수 초대 코드는 원래 기수가 쓰지 않으므로 구분에 영향을 주지 않는다.
+
+### 상태 변경의 오래됨 판단
+
+- `POST /flags/:flagId/status`는 `clientAt`이 마지막으로 반영한 기수 변경의 `clientAt`(`flags."statusClientAt"`)보다
+  이르면 409 `STATUS_STALE`이다. 서버 처리 시각(`statusUpdatedAt`)과 비교하지 않으므로, 오프라인에서 쌓인 변경을
+  누른 순서대로 보내면 모두 반영된다. 다른 기기가 더 나중에 누른 변경이 먼저 반영됐으면 이전 변경은 막힌다.
+- 저장하는 `statusClientAt`은 서버 시각을 넘지 않는다. 최대 5분까지 허용한 미래 `clientAt`은 서버 시각으로 잘라
+  다른 기수의 정상 변경이 막히지 않게 한다. `clientAt`이 기준값과 같으면 오래된 변경으로 보지 않는다.
+- 관리자 강제 변경은 서버 시계 기준 처리 시각을 `statusClientAt`으로 저장해 그 전에 누른 기수 변경을 막는다.
+  기존 기준값보다 낮추지는 않는다.
+- 마지막으로 반영한 변경과 같은 `clientAt`으로 같은 상태를 보내면(새 멱등키의 재전송) 쓰기·이벤트·알림·분당 한도
+  없이 현재 상태를 200으로 돌려준다.
+- 열이 없던 이전 깃발(`statusClientAt` null)은 첫 변경을 오래됨 검사 없이 받는다.
+
+### 기수 상태의 마지막 변경자
+
+- `GET /flags/:flagId/bearer`의 `status`와 `POST /flags/:flagId/status` 응답은
+  `updatedBy: { userId, nickname } | null`을 포함한다. 공동 기수를 포함해 마지막으로 상태를 바꾼
+  기수다. 관리자 강제 변경 뒤와 아직 바뀐 적 없는 깃발은 `null`이다. 변경한 기수가 탈퇴하면 `null`로 바꾼다.
+  닉네임을 찾지 못하면 `""`다. 컬럼 추가 전에 바뀐 깃발은 마이그레이션 `1792500099000`이 최신 상태 이력의
+  사용자로 채운다. 그 이력이 관리자 변경이거나 탈퇴로 지워졌으면 `null`로 둔다.
+- 공개 상세(`GET /flags/:flagId`)와 라이브 보드의 상태에는 넣지 않는다.
+- 기수 코드 등록 422 `BEARER_CODE_INVALID`는 `data.remainingAttempts`, 423 `BEARER_CODE_LOCKED`는
+  `data.retryAfter`(초)를 준다.
 
 ## 관리자 API
 
@@ -32,10 +86,21 @@
 | --- | --- | --- | --- |
 | POST | `/api/v1/admin/festivals/:festivalId/bearer-codes` | editor | 등록 코드 생성, 관리자 행위 감사 기록 |
 | GET | `/api/v1/admin/festivals/:festivalId/bearer-codes` | viewer | 코드 현황 |
-| GET | `/api/v1/admin/festivals/:festivalId/flags` | viewer | 깃발 현황 |
+| GET | `/api/v1/admin/festivals/:festivalId/flags` | viewer | 깃발 현황(프로필, 전체 계획과 계획 공개, 팔로워, 신고 수, 숨김, 현장 상태) |
+| POST | `/api/v1/admin/festivals/:festivalId/flags` | editor | 기수 없는 깃발 생성(이름·소개·태그·사진 URL·홈 존·계획·계획 공개), 예정 상태로 시작, 감사 기록 |
+| PATCH | `/api/v1/admin/flags/:flagId` | editor | 프로필·사진 URL·계획·계획 공개 편집, 바뀐 필드의 전후 감사 기록 |
+| POST | `/api/v1/admin/flags/:flagId/force-status` | editor | 현장 상태(존·활동·상태) 강제 변경, 전후 감사 기록 |
 | GET | `/api/v1/admin/flags/reported` | viewer | 신고된 깃발 |
 | POST | `/api/v1/admin/flags/:flagId/hide` | editor | 공개 숨김, 변경 전후 감사 기록 |
 | POST | `/api/v1/admin/flags/:flagId/unhide` | editor | 숨김 해제, 변경 전후 감사 기록 |
+
+## 개발 DB 목 데이터
+
+- `src/database/seed-dev-flags.ts`가 Figma S05의 `호락호락`(슬램·떼창·초보 환영, 팔로워 1,284, 계획 4개, 활동 중·슬램)과
+  쉬는 중·예정·오늘 종료 깃발을 고정 ID(`flg_dev_*`)로 넣고 공개 깃발 팩과 팩 캐시를 갱신한다. 다시 실행하면 덮어쓴다.
+- `RAILWAY_ENVIRONMENT_NAME=develop`과 `--apply`가 모두 있어야 쓴다. 운영 환경에서는 어떤 옵션으로도 실행하지 않는다.
+- 대상은 `--festival <id>` 또는 깃발을 쓰고 존 2개·셋 4개 이상인 첫 발행 축제다.
+- 실행: `railway run -e develop -s <백엔드 서비스> -- sh -c 'DATABASE_URL="$DATABASE_PUBLIC_URL" npm run flags:seed-dev -- --apply'`
 
 ## 실패·보안·검증
 
@@ -44,6 +109,9 @@
   서버의 refresh 비밀값에서 분리해 파생한 키를 사용한다. 코드 추측은 사용자·디바이스·IP별로 제한한다.
 - 등록 코드 원문을 반환하는 관리자 응답은 `Cache-Control: no-store`다. JWT refresh 비밀값을
   교체하면 이전 암호문을 복원할 수 없으므로, 기존 코드를 폐기하고 다시 발급해야 한다.
+- 관리자 깃발 생성·편집은 홈 존과 계획 셋을 축제 팩(발행본 우선, 없으면 초안)에서 확인하고, 감사 기록과
+  공개 깃발 팩 갱신을 같은 트랜잭션에서 처리한다. 사진 URL은 https만 받으며 썸네일도 같은 URL을 쓴다.
+  사진 URL을 바꾸면 업로드 사진 키 연결을 끊는다. 팔로워 수는 관리자 API로 바꿀 수 없다.
 - 코드 발급과 숨김 변경은 감사 기록을 같은 DB 트랜잭션에 저장한다. 감사 기록에는 코드 수,
   라벨, 만료 시각만 남기며 코드 원문·해시·암호문은 남기지 않는다. 숨김 변경과 공개 깃발 팩
   갱신도 같은 트랜잭션에서 처리한다. 코드 발급 응답은 `Cache-Control: no-store`다.

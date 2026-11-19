@@ -1,0 +1,177 @@
+#!/usr/bin/env python3
+"""변경 경로에 맞는 검사 · 빌드 · 테스트를 실행하고 결과를 증거로 남긴다. (docs/agent/harness.md 검증 게이트)
+
+사용: .claude/scripts/verify          develop 이후 바뀐 코드에 맞는 단계만 실행
+      .claude/scripts/verify --all    모든 단계 실행(eslint · jest 전체)
+      .claude/scripts/verify --e2e    위 단계에 npm run test:e2e를 더한다(Postgres 필요)
+
+- 통과하면 .claude/state/verify.json에 작업 트리 지문을 남긴다. 커밋 게이트와 종료 확인이 이 기록을 본다.
+- 모든 명령은 stdin을 /dev/null로 닫고 실행한다. 출력은 .claude/state/verify/{단계}.log에 저장하고
+  종료 코드를 파이프로 가리지 않는다.
+- 같은 단계가 2번 연속 실패하면 세 번째 시도 전에 사용자에게 보고한다.
+"""
+import os
+import re
+import subprocess
+import sys
+import time
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "hooks"))
+import harness_state as hs  # noqa: E402
+
+HARNESS_PATHS = (".claude/hooks/", ".claude/scripts/", ".claude/settings.json")
+BUILD_FILES = ("package.json", "package-lock.json", "tsconfig.json", "tsconfig.build.json", "nest-cli.json")
+LINT_FILES = BUILD_FILES + ("eslint.config.mjs", ".prettierrc")
+MIGRATIONS = "src/database/migrations/"
+MIGRATION_RE = re.compile(r"^src/database/migrations/(\d{13})-[^/]+(?<!\.spec)\.ts$")
+E2E_HINT = ("e2e는 Postgres가 필요합니다. DB_HOST(기본 localhost) · DB_PORT(5432) · DB_USERNAME/DB_PASSWORD(postgres) · "
+            "DB_NAME(festicore)를 맞추고, postgres 단위 검사는 LIVE_ACTIVITY_PG_URL을 줍니다. "
+            "예: docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=festicore postgres:16-alpine")
+
+
+def is_ts(path):
+    return path.endswith(".ts") and path.startswith(("src/", "test/"))
+
+
+def jest_paths(files):
+    """바뀐 모듈의 단위 테스트 경로. None이면 전체 jest(빌드 설정 · 공용 테스트 설정 변경)."""
+    paths = set()
+    for path in files:
+        if path in BUILD_FILES:
+            return None
+        parts = path.split("/")
+        if parts[0] != "src":
+            continue
+        if len(parts) == 2:  # src/main.ts 등 루트 파일
+            paths.add(path[:-3] if path.endswith(".ts") else path)
+        elif parts[1] == "modules" and len(parts) > 3:
+            depth = 4 if parts[2] == "admin" and len(parts) > 4 else 3  # admin은 하위 모듈 단위
+            paths.add("/".join(parts[:depth]))
+        else:
+            paths.add("/".join(parts[:2]))
+    return sorted(paths)
+
+
+def migration_changes(files):
+    return [f for f in files if f.startswith(MIGRATIONS) or f.endswith(".entity.ts")]
+
+
+def check_migrations(base):
+    """DB 없이 확인: 새 마이그레이션 클래스 이름 · name이 파일 타임스탬프와 맞고 develop의 마지막 것보다 뒤인지."""
+    root = hs.repo_root(os.getcwd())
+    existing = hs.git(root, "ls-tree", "--name-only", base, MIGRATIONS).splitlines()
+    latest = max((m.group(1) for m in map(MIGRATION_RE.match, existing) if m), default="0")
+    problems = []
+    for path in hs.changed_code_files(root):
+        m = MIGRATION_RE.match(path)
+        if not m or not os.path.isfile(path) or path in existing:
+            continue
+        stamp = m.group(1)
+        text = open(path, encoding="utf-8").read()
+        cls = re.search(r"export class (\w+) implements MigrationInterface", text)
+        if not cls or not cls.group(1).endswith(stamp):
+            problems.append(f"{path}: 클래스 이름이 타임스탬프 {stamp}로 끝나야 합니다")
+        elif not re.search(rf"name = '{cls.group(1)}'", text):
+            problems.append(f"{path}: name = '{cls.group(1)}'가 필요합니다")
+        if stamp <= latest:
+            problems.append(f"{path}: 타임스탬프 {stamp}가 develop의 마지막 마이그레이션 {latest}보다 앞입니다")
+    print("\n".join(problems) or "마이그레이션 이름 · 순서 확인 통과")
+    return 1 if problems else 0
+
+
+def steps_for(files, run_all, base, e2e=False):
+    def touched(prefixes=(), names=()):
+        return run_all or any(f.startswith(prefixes) or f in names for f in files)
+
+    steps = []  # (이름, 명령)
+    if touched(HARNESS_PATHS, (".claude/settings.json",)):
+        steps.append(("harness-syntax", ["bash", "-c",
+                                         'for f in .claude/hooks/*.sh; do bash -n "$f" || exit 1; done && '
+                                         'python3 -c "import json; json.load(open(\'.claude/settings.json\'))"']))
+        steps.append(("harness-tests", ["python3", "-m", "unittest", "discover", "-s", ".claude/hooks/tests"]))
+    if touched(("src/",)):
+        steps.append(("boundaries", [os.path.join(".claude", "scripts", "check-boundaries")]
+                      + ([] if run_all else ["--base", base])))
+    if run_all or migration_changes(files):
+        steps.append(("migrations", [sys.executable, os.path.abspath(__file__), "--check-migrations", base]))
+    ts_files = [f for f in files if is_ts(f) and os.path.isfile(f)]
+    if run_all or any(f in LINT_FILES for f in files):
+        steps.append(("lint", ["npx", "eslint", "src/**/*.ts", "test/**/*.ts"]))
+    elif ts_files:
+        steps.append(("lint", ["npx", "eslint", *ts_files]))
+    if run_all or ts_files or touched(names=BUILD_FILES):
+        steps.append(("typecheck", ["npx", "tsc", "--noEmit", "--incremental", "false"]))
+    if touched(("src/",), BUILD_FILES):
+        steps.append(("build", ["npm", "run", "build"]))
+    paths = None if run_all else jest_paths(files)
+    if paths is None:
+        steps.append(("unit", ["npx", "jest", "--runInBand"]))
+    elif paths:
+        steps.append(("unit", ["npx", "jest", "--runInBand", "--passWithNoTests", *paths]))
+    if touched(("scripts/",)):
+        steps.append(("scripts", ["bash", "-c", "npm run packs:test && python3 scripts/test-publish-auto-tag.py"]))
+    if e2e:
+        steps.append(("e2e", ["npm", "run", "test:e2e", "--", "--runInBand"]))
+    return steps
+
+
+def main():
+    root = hs.repo_root(os.getcwd())
+    os.chdir(root)
+    args = sys.argv[1:]
+    if args[:1] == ["--check-migrations"]:
+        return check_migrations(args[1])
+    run_all = "--all" in args
+    e2e = "--e2e" in args
+    files = hs.changed_code_files(root)
+    state = hs.load(root)
+    failures = state.get("failures", {})
+
+    steps = steps_for(files, run_all, hs.base_ref(root), e2e)
+    if not steps:
+        print("검증할 코드 변경이 없습니다(.md만 바뀌었거나 변경 없음).")
+        hs.save(root, {"passed": True, "fingerprint": hs.fingerprint(root), "steps": [], "failures": {}})
+        return 0
+
+    if migration_changes(files):
+        print("⚠ 엔티티 · 마이그레이션이 바뀌었습니다. 운영은 부팅 때 migrationsRun으로 자동 적용합니다(develop · main 배포 즉시).\n"
+              "  되돌리기(down)와 기존 데이터 영향을 확인하고, 로컬 Postgres에서 npm run migration:run 후\n"
+              "  npm run typeorm -- migration:generate src/database/migrations/Check --dryrun --check 로 엔티티와 동기인지 봅니다.")
+    if e2e:
+        print("ℹ " + E2E_HINT)
+
+    log_dir = os.path.join(hs.STATE_DIR, "verify")
+    os.makedirs(log_dir, exist_ok=True)
+    results = []
+    total_started = time.monotonic()
+    for name, cmd in steps:
+        log_path = os.path.join(log_dir, f"{name}.log")
+        print(f"▶ {name}: {' '.join(cmd)} < /dev/null (로그: {log_path})", flush=True)
+        started = time.monotonic()
+        with open(log_path, "w", encoding="utf-8") as log_file:
+            code = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=log_file, stderr=subprocess.STDOUT).returncode
+        seconds = round(time.monotonic() - started)
+        if code != 0:
+            with open(log_path, encoding="utf-8", errors="replace") as log_file:
+                log = log_file.read()
+            failures[name] = failures.get(name, 0) + 1
+            print(f"✘ {name} 실패 ({seconds}초): 종료 코드 {code}")
+            print("  마지막 로그:\n    " + "\n    ".join(log.strip().splitlines()[-15:]))
+            if failures[name] >= hs.MAX_FAILURES:
+                print(f"\n같은 단계({name})가 {failures[name]}번 연속 실패했습니다. "
+                      "세 번째 시도 전에 시도한 내용과 실패 원인을 사용자에게 보고하고 승인을 받으세요.")
+            hs.save(root, {"passed": False, "fingerprint": hs.fingerprint(root),
+                           "steps": results + [{"name": name, "ok": False, "seconds": seconds, "code": code}],
+                           "failures": failures})
+            return 1
+        failures.pop(name, None)
+        results.append({"name": name, "ok": True, "seconds": seconds})
+        print(f"✔ {name} ({seconds}초)")
+
+    hs.save(root, {"passed": True, "fingerprint": hs.fingerprint(root), "steps": results, "failures": failures})
+    print(f"검증 통과 ({round(time.monotonic() - total_started)}초). 기록: {hs.VERIFY_FILE}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

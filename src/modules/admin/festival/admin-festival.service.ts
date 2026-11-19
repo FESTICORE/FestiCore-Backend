@@ -9,17 +9,225 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { randomBytes } from 'crypto';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 import { brotliCompressSync } from 'zlib';
+import { artistNameKeys } from '../../../common/artist-name';
+import { verifiedVenueLocation } from '../../../common/festival-location';
 import {
   AdminFestival,
   AdminFestivalVersion,
   FestivalDocument,
 } from './festival.entity';
-import { mergeDraft, validateDraft } from './festival-validation';
+import {
+  mergeDraft,
+  normalizeLegacyReturnTimes,
+  validateDraft,
+} from './festival-validation';
 import { AdminAuditService } from '../audit/admin-audit.service';
 import { CacheService } from '../../redis/service/cache.service';
 import { PublicFestivalService } from '../../public/public-festival.service';
 import { DiscoverySummary } from '../../public/crawl-catalog';
 import { LiveActivityService } from '../../notification/live-activity.service';
+import {
+  recordUserNotifications,
+  withInboxSavepoint,
+} from '../../notification/user-notification.service';
+
+export interface CrawledFestivalDetail {
+  id: string;
+  name: string;
+  venue: string;
+  firstDate: string;
+  lastDate: string;
+  sourceUrl: string;
+  thumbUrl?: string | null;
+  ticketLinks: { label: string; url: string }[];
+  artists?: unknown[];
+  location?: unknown;
+  officialInstagramUrl?: string | null;
+}
+
+export interface CrawledFestivalTimetable {
+  days: unknown[];
+  stages: unknown[];
+  sets: unknown[];
+}
+
+function contentKey(document: FestivalDocument): string {
+  return JSON.stringify(publicationContent(document), (_key, value: unknown) =>
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? Object.fromEntries(
+          Object.entries(value).sort(([a], [b]) => a.localeCompare(b)),
+        )
+      : value,
+  );
+}
+
+function publicationContent(document: FestivalDocument): FestivalDocument {
+  const content = { ...document };
+  delete content.packVersion;
+  delete content.packUpdatedAt;
+  return content;
+}
+
+type ArtistImage = { imageUrl: string; imageCredit?: unknown };
+const STORED_ARTIST_IMAGE =
+  /^\/api\/v1\/festivals\/images\/[0-9a-f-]{36}\.webp$/;
+
+function item(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function artistName(value: unknown): string | null {
+  if (typeof value === 'string') return value;
+  const name = item(value)?.name;
+  return typeof name === 'string' ? name : null;
+}
+
+/**
+ * 수집 출연진의 저장 사진을 이름으로 찾는다. 사진이 없는 출연진도 이름을 등록해,
+ * 이름 하나가 출연진 둘 이상과 맞으면 모호한 것으로 보고 고르지 않는다.
+ */
+function crawledArtistImages(
+  artists: unknown[] | undefined,
+): (name: unknown) => ArtistImage | null {
+  const people = new Map<string, Set<number>>();
+  const images: (ArtistImage | null)[] = [];
+  (artists ?? []).forEach((value, index) => {
+    const name = artistName(value);
+    const artist = item(value);
+    images[index] =
+      typeof artist?.imageUrl === 'string' &&
+      STORED_ARTIST_IMAGE.test(artist.imageUrl)
+        ? {
+            imageUrl: artist.imageUrl,
+            ...(artist.imageCredit ? { imageCredit: artist.imageCredit } : {}),
+          }
+        : null;
+    if (name === null) return;
+    for (const key of artistNameKeys(name))
+      people.set(key, (people.get(key) ?? new Set<number>()).add(index));
+  });
+  return (name) => {
+    if (typeof name !== 'string') return null;
+    const found = new Set(
+      artistNameKeys(name).flatMap((key) => [...(people.get(key) ?? [])]),
+    );
+    return found.size === 1 ? (images[[...found][0]] ?? null) : null;
+  };
+}
+
+/** 직전 발행본의 수집 출연진에서 이름이 맞는 사진 주소를 모두 찾는다. */
+function collectedImageUrls(artists: unknown): (name: unknown) => Set<string> {
+  const urls = new Map<string, Set<string>>();
+  for (const value of Array.isArray(artists) ? (artists as unknown[]) : []) {
+    const name = artistName(value);
+    const imageUrl = item(value)?.imageUrl;
+    if (name === null || typeof imageUrl !== 'string' || !imageUrl) continue;
+    for (const key of artistNameKeys(name))
+      urls.set(key, (urls.get(key) ?? new Set<string>()).add(imageUrl));
+  }
+  return (name) =>
+    typeof name === 'string'
+      ? new Set(
+          artistNameKeys(name).flatMap((key) => [...(urls.get(key) ?? [])]),
+        )
+      : new Set<string>();
+}
+
+/** 지금 사진이 수집기가 넣은 사진인지 판단한다. (이름, 지금 사진, 새 수집 사진) */
+type CollectedImage = (
+  name: unknown,
+  current: string,
+  latest: string,
+) => boolean;
+
+function storedImageId(url: unknown): string | null {
+  return typeof url === 'string' && STORED_ARTIST_IMAGE.test(url)
+    ? url.slice('/api/v1/festivals/images/'.length, -'.webp'.length)
+    : null;
+}
+
+function imageUrlsIn(items: unknown): unknown[] {
+  return Array.isArray(items)
+    ? (items as unknown[]).map((value) => item(value)?.imageUrl)
+    : [];
+}
+
+/**
+ * 직전 발행본 출연진에 있던 사진과, 새 사진과 같은 수집 소스가 저장한 사진을 수집 사진으로 본다.
+ * 사진 검토(crawl_artist_image_reviews)를 거친 사진, 다른 소스 사진, 외부 주소는 관리자가
+ * 고른 사진으로 보고 바꾸지 않는다. 출연진 발행이 소스 재수집보다 늦게 반영된 경우를 위한 보완이다.
+ */
+async function collectedImages(
+  manager: EntityManager,
+  previousArtists: unknown,
+  urls: unknown[],
+): Promise<CollectedImage> {
+  const previouslyCollected = collectedImageUrls(previousArtists);
+  const ids = [...new Set(urls.map(storedImageId).filter((id) => id !== null))];
+  const rows = ids.length
+    ? await manager.query<
+        { id: string; sourceId: string; reviewed: boolean }[]
+      >(
+        `SELECT image.id, image."sourceId",
+           EXISTS (
+             SELECT 1 FROM crawl_artist_image_reviews review
+             WHERE review."imageId" = image.id
+           ) AS reviewed
+         FROM crawl_images image
+         WHERE image.id = ANY($1::uuid[])`,
+        [ids],
+      )
+    : [];
+  const sourceOf = new Map(
+    rows
+      .filter((row) => !row.reviewed)
+      .map((row) => [row.id, row.sourceId] as const),
+  );
+  return (name, current, latest) => {
+    if (previouslyCollected(name).has(current)) return true;
+    const currentSource = sourceOf.get(storedImageId(current) ?? '');
+    return (
+      currentSource !== undefined &&
+      currentSource === sourceOf.get(storedImageId(latest) ?? '')
+    );
+  };
+}
+
+/**
+ * 이름이 맞는 항목의 사진을 최신 수집 사진으로 바꾼다. 사진이 비어 있거나 직전에 수집한
+ * 사진 그대로일 때만 바꾸고, 관리자가 다른 사진을 골랐으면 그대로 둔다.
+ */
+function withLatestImages(
+  items: unknown,
+  nameField: 'artist' | 'name',
+  imageFor: (name: unknown) => ArtistImage | null,
+  collected: CollectedImage,
+): unknown {
+  if (!Array.isArray(items)) return items;
+  return (items as unknown[]).map((value) => {
+    const entry = item(value);
+    const image = entry ? imageFor(entry[nameField]) : null;
+    if (!entry || !image || entry.imageUrl === image.imageUrl) return value;
+    const current = entry.imageUrl;
+    if (
+      typeof current === 'string' &&
+      current &&
+      !collected(entry[nameField], current, image.imageUrl)
+    )
+      return value;
+    // 공연에는 사진 출처를 두지 않는다. 공개 응답이 저장된 권리 정보로 다시 붙인다.
+    if (nameField === 'artist') return { ...entry, imageUrl: image.imageUrl };
+    const next: Record<string, unknown> = {
+      ...entry,
+      imageUrl: image.imageUrl,
+    };
+    delete next.imageCredit;
+    if (image.imageCredit) next.imageCredit = image.imageCredit;
+    return next;
+  });
+}
 
 const alphabet = '0123456789abcdefghjkmnpqrstvwxyz';
 const SOURCE_STALE_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
@@ -79,6 +287,7 @@ function draftFor(
     rules: [],
     mapImageUrl: null,
     mapAspect: null,
+    mapStages: [],
     source,
   };
 }
@@ -282,7 +491,25 @@ export class AdminFestivalService {
       });
       if (!row) throw new NotFoundException('페스티벌을 찾을 수 없습니다.');
       if (row.draftVersion !== expected) conflict(row);
-      const next = mergeDraft(row.draft, patch);
+      const next = normalizeLegacyReturnTimes(
+        mergeDraft(row.draft, patch),
+        patch,
+      );
+      // Metadata drafts must remain editable through the ordinary admin API.
+      // A partial schedule is a draft, not an unpublished metadata pack.
+      if (
+        next.timetableStatus === 'unpublished' &&
+        ['days', 'stages', 'sets'].some(
+          (key) => Array.isArray(next[key]) && next[key].length > 0,
+        )
+      )
+        delete next.timetableStatus;
+      if (
+        next.eventPeriod &&
+        next.timetableStatus === undefined &&
+        validateDraft(next, true).length === 0
+      )
+        next.timetableStatus = 'verified';
       const errors = validateDraft(next);
       if (errors.length)
         throw new BadRequestException({
@@ -354,59 +581,278 @@ export class AdminFestivalService {
       });
       if (!row) throw new NotFoundException('페스티벌을 찾을 수 없습니다.');
       if (row.draftVersion !== expected) conflict(row);
-      const errors = validateDraft(row.draft, true);
+      const draft = normalizeLegacyReturnTimes(row.draft);
+      const errors = validateDraft(draft, true);
       if (errors.length)
         throw new BadRequestException({
           code: 'VALIDATION',
           message: errors.join('; '),
           errors,
         });
-      const packVersion = row.publishedVersion + 1;
-      const pack = {
-        ...row.draft,
-        packVersion,
-        packUpdatedAt: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
-      };
-      if (
-        brotliCompressSync(Buffer.from(JSON.stringify(pack))).length >
-        200 * 1024
-      )
-        throw new BadRequestException('압축된 팩이 200KB를 초과합니다.');
-      const sizeBytes = Buffer.byteLength(JSON.stringify(pack));
-      const previousVersion = row.publishedVersion;
-      row.published = pack;
-      row.publishedVersion = packVersion;
-      await repo.save(row);
-      await manager.getRepository(AdminFestivalVersion).save({
-        festivalId: id,
-        packVersion,
-        pack,
-        publishedBy: actor,
-        note,
-        sizeBytes,
-      });
-      const pushedDevices = await this.queuePackUpdate(
-        manager,
-        id,
-        packVersion,
-      );
-      await this.liveActivity.enqueueFestival(id, manager);
-      await this.audit.record(manager, {
-        actor,
-        action: 'festival.published',
-        target: `festival:${id}`,
-        before: { packVersion: previousVersion },
-        after: { packVersion, note },
-      });
-      return {
-        packVersion,
-        etag: `"v${packVersion}"`,
-        pushedDevices,
-        warnings: sourceWarnings(row.draft),
-      };
+      return this.writePublication(manager, row, draft, note, actor);
     });
     await this.cache.invalidatePack(id);
     return result;
+  }
+
+  async publishCrawled(
+    detail: CrawledFestivalDetail,
+    timetable: CrawledFestivalTimetable | null,
+  ): Promise<{ packVersion: number; changed: boolean }> {
+    if (!/^fst_[0-9a-f]{16}$/.test(detail.id))
+      throw new BadRequestException('수집된 축제 ID가 올바르지 않습니다.');
+    const result = await this.dataSource.transaction(async (manager) => {
+      // Serialize corrections to the same source before resolving its stable ID.
+      await manager.query(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+        [`crawl-source:${detail.sourceUrl}`],
+      );
+      const matches = await manager.query<{ id: string }[]>(
+        `SELECT "id" FROM "admin_festivals"
+         WHERE "published"->'source'->>'url' = $1
+            OR ("published" IS NULL AND "draft"->'source'->>'url' = $1)`,
+        [detail.sourceUrl],
+      );
+      if (matches.length > 1)
+        throw new ConflictException('같은 출처의 관리 축제가 여러 개입니다.');
+      const id = matches[0]?.id ?? detail.id;
+      // Covers absent rows; manual publishers take the same existing-row lock.
+      await manager.query(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+        [id],
+      );
+      const repo = manager.getRepository(AdminFestival);
+      let row = await repo.findOne({
+        where: { id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      // 관리자가 보유한 미발행 초안은 자동 발행으로 덮어쓰지 않는다.
+      if (row && !row.published)
+        return { id, packVersion: row.publishedVersion, changed: false };
+      const previous = row?.published;
+      const previousSource = previous?.source as
+        { verifiedAt?: string } | undefined;
+      const source = {
+        name: '공개 수집 카탈로그',
+        url: detail.sourceUrl,
+        verifiedAt:
+          previousSource?.verifiedAt ??
+          new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+      };
+      const document = previous
+        ? publicationContent(previous)
+        : draftFor(id, { ...detail, days: [] }, source);
+      Object.assign(document, {
+        name: detail.name,
+        venue: detail.venue,
+        eventPeriod: { firstDate: detail.firstDate, lastDate: detail.lastDate },
+        thumbUrl: detail.thumbUrl ?? null,
+        ticketLinks: detail.ticketLinks,
+        source,
+      });
+      // Date corrections cannot invalidate a retained verified timetable.
+      // Adopt their new period only together with its complete replacement.
+      if (!timetable && Array.isArray(previous?.days) && previous.days.length) {
+        if (previous.eventPeriod === undefined) delete document.eventPeriod;
+        else document.eventPeriod = previous.eventPeriod;
+      }
+      if (detail.artists !== undefined) document.artists = detail.artists;
+      const imageFor = crawledArtistImages(detail.artists);
+      const collected = await collectedImages(manager, previous?.artists, [
+        ...imageUrlsIn(detail.artists),
+        ...imageUrlsIn(previous?.sets),
+        ...imageUrlsIn(row?.draft.sets),
+        ...imageUrlsIn(row?.draft.artists),
+      ]);
+      if (detail.officialInstagramUrl !== undefined)
+        document.officialInstagramUrl = detail.officialInstagramUrl;
+      if (detail.location !== undefined) {
+        const directions = document.directions as Record<string, unknown>;
+        const oldLocation = verifiedVenueLocation(directions?.location);
+        const nextLocation = verifiedVenueLocation(detail.location);
+        const stableLocation =
+          oldLocation?.source && nextLocation?.source
+            ? {
+                ...nextLocation,
+                source: {
+                  ...nextLocation.source,
+                  verifiedAt: oldLocation.source.verifiedAt,
+                },
+              }
+            : nextLocation;
+        document.directions = {
+          ...directions,
+          location:
+            oldLocation &&
+            stableLocation &&
+            contentKey(oldLocation) === contentKey(stableLocation)
+              ? oldLocation
+              : detail.location,
+        };
+      }
+      if (timetable) {
+        if (
+          !timetable.days.length ||
+          !timetable.stages.length ||
+          !timetable.sets.length
+        )
+          throw new BadRequestException('완전한 검증 시간표가 필요합니다.');
+        Object.assign(document, timetable, { timetableStatus: 'verified' });
+      } else if (!Array.isArray(document.days) || !document.days.length) {
+        Object.assign(document, {
+          days: [],
+          stages: [],
+          sets: [],
+          timetableStatus: 'unpublished',
+        });
+      }
+      // 남겨 둔 공연도 다시 수집한 출연진 사진을 쓴다.
+      document.sets = withLatestImages(
+        document.sets,
+        'artist',
+        imageFor,
+        collected,
+      );
+      const errors = validateDraft(document, true);
+      if (errors.length)
+        throw new BadRequestException({
+          code: 'VALIDATION',
+          message: errors.join('; '),
+          errors,
+        });
+      if (row)
+        await this.refreshDraftImages(
+          manager,
+          row,
+          detail,
+          imageFor,
+          collected,
+        );
+      if (previous && contentKey(previous) === contentKey(document))
+        return { id, packVersion: row!.publishedVersion, changed: false };
+      if (!row) {
+        row = repo.create({
+          id,
+          draft: document,
+          draftVersion: 1,
+          draftUpdatedBy: null,
+          published: null,
+          publishedVersion: 0,
+        });
+        // A concurrent manual import does not take our advisory lock. Insert
+        // explicitly so its draft wins instead of save() updating that row.
+        await manager.query(
+          `INSERT INTO "admin_festivals"
+           ("id", "draft", "draftVersion", "draftUpdatedBy", "published", "publishedVersion")
+           VALUES ($1, $2::jsonb, 1, NULL, NULL, 0)`,
+          [id, JSON.stringify(document)],
+        );
+      }
+      // Existing drafts belong to their editors, even when actor is null.
+      const published = await this.writePublication(
+        manager,
+        row,
+        document,
+        '공개 수집 정보 자동 발행',
+        null,
+      );
+      return { id, packVersion: published.packVersion, changed: true };
+    });
+    if (result.changed) await this.cache.invalidatePack(result.id);
+    return { packVersion: result.packVersion, changed: result.changed };
+  }
+
+  /**
+   * 관리 초안에 다시 수집한 출연진 사진을 넣는다. 초안의 다른 편집 내용은 건드리지 않고,
+   * 초안과 직전 발행본 모두 출연진을 채운 적이 없을 때만 수집 목록을 채운다.
+   */
+  private async refreshDraftImages(
+    manager: EntityManager,
+    row: AdminFestival,
+    detail: CrawledFestivalDetail,
+    imageFor: (name: unknown) => ArtistImage | null,
+    collected: CollectedImage,
+  ) {
+    const draft = row.draft;
+    const next: FestivalDocument = {
+      ...draft,
+      sets: withLatestImages(draft.sets, 'artist', imageFor, collected),
+    };
+    if (draft.sets === undefined) delete next.sets;
+    const filled = (artists: unknown) =>
+      Array.isArray(artists) && artists.length > 0;
+    if (filled(draft.artists))
+      next.artists = withLatestImages(
+        draft.artists,
+        'name',
+        imageFor,
+        collected,
+      );
+    // 관리자가 비운 출연진은 다시 채우지 않는다.
+    else if (!filled(row.published?.artists) && detail.artists?.length)
+      next.artists = detail.artists;
+    if (contentKey(next) === contentKey(draft)) return;
+    const before = { draftVersion: row.draftVersion, draft };
+    row.draft = next;
+    row.draftVersion++;
+    await manager.getRepository(AdminFestival).save(row);
+    await this.audit.record(manager, {
+      actor: null,
+      action: 'festival.draft.updated',
+      target: `festival:${row.id}`,
+      before,
+      after: { draftVersion: row.draftVersion, draft: row.draft },
+    });
+  }
+
+  private async writePublication(
+    manager: EntityManager,
+    row: AdminFestival,
+    draft: FestivalDocument,
+    note: string,
+    actor: string | null,
+  ) {
+    const id = row.id;
+    const repo = manager.getRepository(AdminFestival);
+    const packVersion = row.publishedVersion + 1;
+    const pack = {
+      ...draft,
+      packVersion,
+      packUpdatedAt: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+    };
+    if (
+      brotliCompressSync(Buffer.from(JSON.stringify(pack))).length >
+      200 * 1024
+    )
+      throw new BadRequestException('압축된 팩이 200KB를 초과합니다.');
+    const sizeBytes = Buffer.byteLength(JSON.stringify(pack));
+    const previousVersion = row.publishedVersion;
+    row.published = pack;
+    row.publishedVersion = packVersion;
+    await repo.save(row);
+    await manager.getRepository(AdminFestivalVersion).save({
+      festivalId: id,
+      packVersion,
+      pack,
+      publishedBy: actor,
+      note,
+      sizeBytes,
+    });
+    const pushedDevices = await this.queuePackUpdate(manager, id, packVersion);
+    await this.liveActivity.enqueueFestival(id, manager);
+    await this.audit.record(manager, {
+      actor,
+      action: 'festival.published',
+      target: `festival:${id}`,
+      before: { packVersion: previousVersion },
+      after: { packVersion, note },
+    });
+    return {
+      packVersion,
+      etag: `"v${packVersion}"`,
+      pushedDevices,
+      warnings: sourceWarnings(row.draft),
+    };
   }
 
   async versionsList(id: string) {
@@ -492,15 +938,42 @@ export class AdminFestivalService {
     const queued = await manager.query<{ id: string }[]>(
       `INSERT INTO "notification_deliveries"
         ("id", "deviceId", "festivalId", "eventKey", "scheduledAt", "nextAttemptAt")
-       SELECT gen_random_uuid(), s."deviceId", $1, $2, now(), now()
+       SELECT gen_random_uuid(), s."deviceId", $1::varchar, $2::varchar, now(), now()
        FROM "device_subscriptions" s
        JOIN "devices" d ON d."id" = s."deviceId"
        WHERE s."festivalId" = $1 AND s."packUpdates" = true
+         AND d."notifyPackUpdates" = true
          AND d."apnsToken" IS NOT NULL AND d."apnsEnvironment" IS NOT NULL
        ON CONFLICT ("deviceId", "eventKey") DO NOTHING
        RETURNING "id"`,
       [id, `pack-updated:${id}:${version}`],
     );
+    await withInboxSavepoint(manager, async () => {
+      // 알림함은 푸시 설정과 무관하게 이 축제를 핀한 로그인 계정에 남긴다.
+      const owners = await manager.query<
+        Array<{ userId: string; name: string | null }>
+      >(
+        `SELECT DISTINCT d."userId", f."published"->>'name' AS "name"
+         FROM "device_subscriptions" s
+         JOIN "devices" d ON d."id" = s."deviceId" AND d."userId" IS NOT NULL
+         JOIN "admin_festivals" f ON f."id" = s."festivalId"
+         WHERE s."festivalId" = $1::varchar AND s."pinned" = true`,
+        [id],
+      );
+      await recordUserNotifications(
+        manager,
+        owners.map((row) => row.userId),
+        {
+          type: 'pack.updated',
+          festivalId: id,
+          title: `${owners[0]?.name ?? '축제'} 정보 업데이트`,
+          body: '새 축제 정보가 준비됐어요. 앱에서 팩을 받아 두세요.',
+          route: `/festivals/${id}`,
+          subject: { packVersion: String(version) },
+          dedupeKey: `pack.updated:${id}:${version}`,
+        },
+      );
+    });
     return queued.length;
   }
 

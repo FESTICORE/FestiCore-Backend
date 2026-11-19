@@ -56,7 +56,7 @@ describe('SocialNotificationService', () => {
       } as never,
       actorUserId,
     );
-    expect(query).toHaveBeenCalledTimes(5);
+    expect(query).toHaveBeenCalledTimes(8);
     expect(query.mock.calls[0][0]).toContain('pg_advisory_xact_lock');
     expect(query.mock.calls[1][0]).toContain('ACTOR_CHANGED');
     expect(query.mock.calls[2][0]).toContain('SUPERSEDED');
@@ -64,6 +64,57 @@ describe('SocialNotificationService', () => {
     expect(query.mock.calls[4][0]).toContain('u."pushOptIn" = true');
     expect(query.mock.calls[4][0]).toContain('now() + ($5 * interval');
     expect(query.mock.calls[4][1]?.[4]).toBe(5);
+  });
+
+  it('sends exactly the parameters each status query references', async () => {
+    const query = jest
+      .fn<Promise<unknown>, [string, unknown[]?]>()
+      .mockResolvedValue([]);
+    const { service } = setup();
+    await service.enqueueFlagStatus(
+      { query } as never,
+      {
+        id: 'flag_123',
+        visibility: 'public',
+        hidden: false,
+        status: 'active',
+        zoneId: 'zone_123',
+        activity: 'sing',
+      } as never,
+      actorUserId,
+    );
+    // 쓰지 않는 매개변수가 있으면 Postgres가 형식을 정하지 못해 42P18로 실패한다.
+    for (const [sql, params = []] of query.mock.calls) {
+      const used = new Set(
+        [...sql.matchAll(/\$(\d+)/g)].map((match) => Number(match[1])),
+      );
+      expect(params.length).toBe(used.size === 0 ? 0 : Math.max(...used));
+      for (let index = 1; index <= params.length; index++)
+        expect(used.has(index)).toBe(true);
+    }
+  });
+
+  it('types the status type parameter wherever the insert reuses it', async () => {
+    const query = jest
+      .fn<Promise<unknown>, [string, unknown[]?]>()
+      .mockResolvedValue([]);
+    const { service } = setup();
+    await service.enqueueFlagStatus(
+      { query } as never,
+      {
+        id: 'flag_123',
+        visibility: 'public',
+        hidden: false,
+        status: 'active',
+        zoneId: 'zone_123',
+        activity: 'sing',
+      } as never,
+      actorUserId,
+    );
+    const insert = query.mock.calls.find(([sql]) => sql.includes('INSERT'));
+    // 열 값과 문자열 연결에 같은 매개변수를 형식 없이 쓰면 Postgres가 42P08로 실패한다.
+    expect(insert?.[0]).toContain('$3::varchar ||');
+    expect(insert?.[0].match(/\$3(?!::varchar)/g)).toBeNull();
   });
 
   it('excludes resting flags and cancels pending status jobs', async () => {
@@ -144,6 +195,192 @@ describe('SocialNotificationService', () => {
     expect(query.mock.calls[1][1]?.[2]).toBe(`crew.status:dissolved:${crewId}`);
   });
 
+  describe('inbox records', () => {
+    const followerId = '55555555-5555-4555-8555-555555555555';
+    const inboxCall = (query: jest.Mock) =>
+      query.mock.calls.find(([sql]) =>
+        String(sql).includes('INSERT INTO "user_notifications"'),
+      ) as [string, unknown[]] | undefined;
+
+    it('merges flag status per flag for followers except the actor', async () => {
+      const { service } = setup();
+      const query = jest.fn((sql: string) =>
+        Promise.resolve(
+          sql.startsWith('SELECT "userId" FROM "flag_follows"')
+            ? [{ userId: followerId }]
+            : [],
+        ),
+      );
+      await service.enqueueFlagStatus(
+        { query } as never,
+        {
+          id: 'flag_123',
+          festivalId: 'fst_2026',
+          visibility: 'public',
+          hidden: false,
+          status: 'active',
+          zoneId: 'zone_123',
+          activity: 'sing',
+        } as never,
+        actorUserId,
+      );
+      const follower = query.mock.calls.find(([sql]) =>
+        sql.startsWith('SELECT "userId" FROM "flag_follows"'),
+      ) as unknown as [string, unknown[]];
+      expect(follower[1]).toEqual(['flag_123', actorUserId]);
+      const insert = inboxCall(query)!;
+      expect(insert[0]).toContain('DO UPDATE SET');
+      expect(insert[1]).toEqual([
+        [followerId],
+        'flag.status',
+        'fst_2026',
+        '깃발 상태 변경',
+        '깃발 상태가 active(으)로 변경됐어요.',
+        '/flags/flag_123',
+        JSON.stringify({ flagId: 'flag_123' }),
+        'flag.status:flag_123',
+      ]);
+    });
+
+    it('keeps the status push queue when the inbox write fails', async () => {
+      const { service } = setup();
+      const query = jest.fn((sql: string) =>
+        sql.startsWith('SELECT "userId" FROM "flag_follows"')
+          ? Promise.reject(new Error('inbox down'))
+          : Promise.resolve([]),
+      );
+      await expect(
+        service.enqueueFlagStatus(
+          { query } as never,
+          {
+            id: 'flag_123',
+            festivalId: 'fst_2026',
+            visibility: 'public',
+            hidden: false,
+            status: 'active',
+          } as never,
+          actorUserId,
+        ),
+      ).resolves.toBeUndefined();
+      const sqls = query.mock.calls.map(([sql]) => sql);
+      expect(
+        sqls.some((sql) =>
+          sql.includes('INSERT INTO "social_notification_deliveries"'),
+        ),
+      ).toBe(true);
+      expect(sqls).toContain(
+        'ROLLBACK TO SAVEPOINT "user_notifications_record"',
+      );
+      expect(inboxCall(query)).toBeUndefined();
+    });
+
+    it('does not record hidden or resting flags', async () => {
+      const { service } = setup();
+      const query = jest.fn().mockResolvedValue([{ userId: followerId }]);
+      for (const flag of [
+        { hidden: true, status: 'active' },
+        { hidden: false, status: 'resting' },
+      ])
+        await service.enqueueFlagStatus(
+          { query } as never,
+          { id: 'flag_123', visibility: 'public', ...flag } as never,
+          actorUserId,
+        );
+      expect(inboxCall(query)).toBeUndefined();
+    });
+
+    it.each([
+      [
+        'status',
+        (service: SocialNotificationService, query: jest.Mock) =>
+          service.enqueueCrewStatus(
+            { query } as never,
+            { id: crewId, festivalId: 'fst_2026', archivedAt: null } as never,
+            actorUserId,
+          ),
+        'crew.status',
+        `crew.status:${crewId}:${actorUserId}`,
+        true,
+      ],
+      [
+        'gather',
+        (service: SocialNotificationService, query: jest.Mock) =>
+          service.enqueueCrewGather(
+            { query } as never,
+            { id: crewId, festivalId: 'fst_2026', archivedAt: null } as never,
+            actorUserId,
+            { id: 'gather_123', zoneId: 'zone_123' } as never,
+          ),
+        'crew.gather',
+        'crew.gather:gather_123',
+        false,
+      ],
+      [
+        'dissolution',
+        (service: SocialNotificationService, query: jest.Mock) =>
+          service.enqueueCrewDissolved(
+            { query } as never,
+            { id: crewId, festivalId: 'fst_2026' } as never,
+            actorUserId,
+          ),
+        'crew.status',
+        `crew.status:dissolved:${crewId}`,
+        false,
+      ],
+      [
+        'member join',
+        (service: SocialNotificationService, query: jest.Mock) =>
+          service.enqueueCrewMemberJoined(
+            { query } as never,
+            { id: crewId, festivalId: 'fst_2026', archivedAt: null } as never,
+            actorUserId,
+            '새친구',
+          ),
+        'crew.member_joined',
+        `crew.member_joined:${crewId}:${actorUserId}`,
+        true,
+      ],
+    ])(
+      'records crew %s for other members only',
+      async (_name, run, type, dedupeKey, replace) => {
+        const { service } = setup();
+        const query = jest.fn((sql: string) =>
+          Promise.resolve(
+            sql.startsWith('SELECT "nickname"')
+              ? [{ nickname: '요청자', zoneId: null, state: 'here' }]
+              : sql.startsWith('SELECT "userId" FROM "crew_members"')
+                ? [{ userId: followerId }]
+                : [],
+          ),
+        );
+        await run(service, query);
+        const members = query.mock.calls.find(([sql]) =>
+          sql.startsWith('SELECT "userId" FROM "crew_members"'),
+        ) as unknown as [string, unknown[]];
+        expect(members[0]).toContain('"userId" <> $2');
+        expect(members[1]).toEqual([crewId, actorUserId]);
+        const insert = inboxCall(query)!;
+        expect(insert[1][0]).toEqual([followerId]);
+        expect(insert[1][1]).toBe(type);
+        expect(insert[1][2]).toBe('fst_2026');
+        expect(insert[1][7]).toBe(dedupeKey);
+        expect(insert[0].includes('DO UPDATE SET')).toBe(replace);
+      },
+    );
+
+    it('skips member-join records for an archived crew', async () => {
+      const { service } = setup();
+      const query = jest.fn().mockResolvedValue([{ userId: followerId }]);
+      await service.enqueueCrewMemberJoined(
+        { query } as never,
+        { id: crewId, archivedAt: new Date() } as never,
+        actorUserId,
+        '새친구',
+      );
+      expect(query).not.toHaveBeenCalled();
+    });
+  });
+
   it('delivers a queued dissolution notice after the crew is deleted', async () => {
     const { service, query, sendSocialNotification } = setup();
     query.mockResolvedValueOnce([
@@ -173,6 +410,10 @@ describe('SocialNotificationService', () => {
       'd."userId" = n."recipientUserId"',
     );
     expect(query.mock.calls[0][0]).toContain('"crew_members"');
+    // 기기 알림 설정에서 끈 종류는 발송 대상이 되지 않는다.
+    expect(query.mock.calls[0][0]).toContain('d."notifyFlagStatus" = true');
+    expect(query.mock.calls[0][0]).toContain('d."notifyCrewStatus" = true');
+    expect(query.mock.calls[0][0]).toContain('d."notifyCrewGather" = true');
     expect(sendSocialNotification).not.toHaveBeenCalled();
     expect(query.mock.calls[1][1]).toEqual([
       job.id,

@@ -21,6 +21,7 @@ export type DevicePrincipal =
 export type DeviceRequest = Request & { devicePrincipal: DevicePrincipal };
 export const ALLOW_ANONYMOUS_DEVICE_REGISTRATION =
   'allowAnonymousDeviceRegistration';
+export const ALLOW_DEVICE_BINDING_RECOVERY = 'allowDeviceBindingRecovery';
 
 @Injectable()
 export class DeviceAuthGuard implements CanActivate {
@@ -39,11 +40,22 @@ export class DeviceAuthGuard implements CanActivate {
       ALLOW_ANONYMOUS_DEVICE_REGISTRATION,
       context.getHandler(),
     );
+    const bindingRecovery = this.reflector.get<boolean>(
+      ALLOW_DEVICE_BINDING_RECOVERY,
+      context.getHandler(),
+    );
+    if (!header && bindingRecovery && request.method === 'DELETE') {
+      request.devicePrincipal = { kind: 'anonymous' };
+      return true;
+    }
     if (!header && anonymousRegistration && request.method === 'PUT') {
       request.devicePrincipal = { kind: 'anonymous' };
       return true;
     }
-    request.devicePrincipal = await this.resolvePrincipal(request);
+    request.devicePrincipal = await this.resolvePrincipal(
+      request,
+      !!bindingRecovery,
+    );
     return true;
   }
 
@@ -58,7 +70,10 @@ export class DeviceAuthGuard implements CanActivate {
     }
   }
 
-  private async resolvePrincipal(request: Request): Promise<DevicePrincipal> {
+  private async resolvePrincipal(
+    request: Request,
+    allowBoundDevice = false,
+  ): Promise<DevicePrincipal> {
     const match = /^Bearer (\S+)$/.exec(request.headers.authorization ?? '');
     if (!match) throw new UnauthorizedException('인증 토큰이 없습니다.');
     let payload: {
@@ -79,7 +94,11 @@ export class DeviceAuthGuard implements CanActivate {
       if (deviceId !== payload.sub)
         throw new UnauthorizedException('기기 토큰과 기기 ID가 다릅니다.');
       const device = await this.devices.findOne({ where: { id: deviceId } });
-      if (!device || device.deviceTokenId !== payload.jti) {
+      if (
+        !device ||
+        device.deviceTokenId !== payload.jti ||
+        (device.userId !== null && !allowBoundDevice)
+      ) {
         throw new UnauthorizedException('유효하지 않은 기기 토큰입니다.');
       }
       return { kind: 'device', deviceId, tokenId: payload.jti };

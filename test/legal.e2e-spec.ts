@@ -15,7 +15,7 @@ describe('Public legal pages (e2e)', () => {
     await ctx.app.close();
   });
 
-  it.each(['home', 'privacy', 'terms'])(
+  it.each(['home', 'privacy', 'terms', 'sources'])(
     'serves %s without authentication as HTML',
     async (name) => {
       const response = await request(server)
@@ -32,6 +32,7 @@ describe('Public legal pages (e2e)', () => {
       expect(response.text).toContain('패스티코어');
       expect(response.text).toContain('/api/v1/legal/privacy');
       expect(response.text).toContain('/api/v1/legal/terms');
+      expect(response.text).toContain('/api/v1/legal/sources');
     },
   );
 });

@@ -10,7 +10,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { randomUUID } from 'crypto';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, IsNull, Not, Repository } from 'typeorm';
 import { AdminFestival } from '../admin/festival/festival.entity';
 import { Device, DeviceSubscription } from './device.entity';
 import type { DevicePrincipal } from './device-auth.guard';
@@ -18,9 +18,25 @@ import { LiveActivityService } from '../notification/live-activity.service';
 import {
   DeviceSubscriptionDto,
   LiveActivityDto,
+  NotificationSettingsDto,
   RegisterDeviceDto,
   PackDownloadDto,
 } from './device.dto';
+
+/** API 항목 이름과 devices 열 이름 */
+const NOTIFICATION_SETTING_COLUMNS = {
+  flagStatus: 'notifyFlagStatus',
+  crewStatus: 'notifyCrewStatus',
+  crewGather: 'notifyCrewGather',
+  setReminders: 'notifySetReminders',
+  homecoming: 'notifyHomecoming',
+  packUpdates: 'notifyPackUpdates',
+} as const;
+
+export type NotificationSettings = Record<
+  keyof typeof NOTIFICATION_SETTING_COLUMNS,
+  boolean
+>;
 
 @Injectable()
 export class DeviceService {
@@ -146,6 +162,143 @@ export class DeviceService {
     };
   }
 
+  async bindUser(
+    id: string,
+    deviceAccessToken: string,
+    principal: DevicePrincipal,
+  ) {
+    this.requireId(id);
+    if (principal.kind !== 'user')
+      throw new ForbiddenException('사용자 인증이 필요합니다.');
+    let payload: { typ?: string; sub?: string; jti?: string };
+    try {
+      payload = await this.jwt.verifyAsync(deviceAccessToken, {
+        secret: this.config.get<string>('auth.jwt.accessSecret'),
+      });
+    } catch {
+      throw new ForbiddenException('유효하지 않은 기기 토큰입니다.');
+    }
+    if (payload.typ !== 'device' || payload.sub !== id || !payload.jti)
+      throw new ForbiddenException('기기 토큰과 기기 ID가 다릅니다.');
+    const result = await this.devices.update(
+      { id, userId: IsNull(), deviceTokenId: payload.jti },
+      { userId: principal.userId },
+    );
+    if (result.affected !== 1) {
+      const alreadyBound = await this.devices.findOne({
+        where: { id, userId: principal.userId, deviceTokenId: payload.jti },
+      });
+      if (!alreadyBound)
+        throw new ForbiddenException('기기 소유권을 확인할 수 없습니다.');
+    }
+    return { deviceId: id, userId: principal.userId };
+  }
+
+  async unbindUser(id: string, unbindKey: string, principal: DevicePrincipal) {
+    this.requireId(id);
+    this.requireId(unbindKey);
+    if (principal.kind !== 'user')
+      throw new ForbiddenException('사용자 인증이 필요합니다.');
+    const deviceAccessToken = await this.jwt.signAsync(
+      { typ: 'device', sub: id, jti: unbindKey },
+      {
+        secret: this.config.get<string>('auth.jwt.accessSecret'),
+        expiresIn: '365d',
+      },
+    );
+    await this.dataSource.transaction(async (manager) => {
+      const result = await manager.update(
+        Device,
+        { id, userId: principal.userId },
+        { userId: null, deviceTokenId: unbindKey },
+      );
+      if (result.affected !== 1) {
+        const previouslyUnbound = await manager.findOne(Device, {
+          where: { id, userId: IsNull(), deviceTokenId: unbindKey },
+        });
+        if (!previouslyUnbound)
+          throw new ForbiddenException('기기 소유권을 확인할 수 없습니다.');
+        return;
+      }
+      await this.liveActivity.endDeviceForUnbind(id, manager);
+      await manager.update(
+        Device,
+        { id, deviceTokenId: unbindKey },
+        {
+          apnsToken: null,
+          liveActivityPushToStartToken: null,
+          liveActivityPushToken: null,
+          liveActivityFestivalId: null,
+          liveActivityId: null,
+        },
+      );
+      await manager.query(
+        `UPDATE "notification_deliveries" SET "status" = 'cancelled',
+           "leaseUntil" = NULL, "lastErrorCode" = 'USER_UNBOUND'
+         WHERE "deviceId" = $1 AND ("eventKey" LIKE 'live-activity-performance:%'
+           OR "eventKey" LIKE 'live-activity-start:%')
+           AND "status" IN ('pending', 'leased')`,
+        [id],
+      );
+    });
+    return { deviceId: id, userId: null, deviceAccessToken };
+  }
+
+  async recoverUnbindUser(
+    id: string,
+    unbindKey: string,
+    principal: DevicePrincipal,
+  ) {
+    this.requireId(id);
+    this.requireId(unbindKey);
+    const deviceAccessToken = await this.jwt.signAsync(
+      { typ: 'device', sub: id, jti: unbindKey },
+      {
+        secret: this.config.get<string>('auth.jwt.accessSecret'),
+        expiresIn: '365d',
+      },
+    );
+    await this.dataSource.transaction(async (manager) => {
+      const result =
+        principal.kind === 'device'
+          ? await manager.update(
+              Device,
+              { id, userId: Not(IsNull()), deviceTokenId: principal.tokenId },
+              { userId: null, deviceTokenId: unbindKey },
+            )
+          : { affected: 0 };
+      if (result.affected !== 1) {
+        const previouslyUnbound = await manager.findOne(Device, {
+          where: { id, userId: IsNull(), deviceTokenId: unbindKey },
+        });
+        if (!previouslyUnbound)
+          throw new ForbiddenException('기기 소유권을 확인할 수 없습니다.');
+        return;
+      }
+      await this.liveActivity.endDeviceForUnbind(id, manager);
+      await manager.update(
+        Device,
+        { id, deviceTokenId: unbindKey },
+        {
+          apnsToken: null,
+          liveActivityPushToStartToken: null,
+          liveActivityPushToken: null,
+          liveActivityFestivalId: null,
+          liveActivityId: null,
+        },
+      );
+      await manager.query(
+        `UPDATE "notification_deliveries" SET "status" = 'cancelled',
+           "leaseUntil" = NULL, "lastErrorCode" = 'USER_UNBOUND'
+         WHERE "deviceId" = $1 AND ("eventKey" LIKE 'live-activity-performance:%'
+           OR "eventKey" LIKE 'live-activity-start:%')
+           AND "status" IN ('pending', 'leased')`,
+        [id],
+      );
+    });
+    return { deviceId: id, userId: null, deviceAccessToken };
+  }
+
   async remove(id: string, principal: DevicePrincipal) {
     await this.ownedDevice(id, principal);
     await this.dataSource.transaction(async (manager) => {
@@ -161,6 +314,48 @@ export class DeviceService {
     });
   }
 
+  async notificationSettings(
+    id: string,
+    principal: DevicePrincipal,
+  ): Promise<NotificationSettings> {
+    return this.settingsView(await this.ownedDevice(id, principal));
+  }
+
+  /** 보낸 항목만 바꾸고 바뀐 전체 설정을 돌려준다. */
+  async updateNotificationSettings(
+    id: string,
+    body: NotificationSettingsDto,
+    principal: DevicePrincipal,
+  ): Promise<NotificationSettings> {
+    const device = await this.ownedDevice(id, principal);
+    const changes: Partial<Device> = {};
+    for (const [key, column] of Object.entries(NOTIFICATION_SETTING_COLUMNS)) {
+      const value = body[key as keyof NotificationSettingsDto];
+      if (typeof value === 'boolean') {
+        changes[column] = value;
+        device[column] = value;
+      }
+    }
+    if (Object.keys(changes).length > 0) {
+      const result = await this.devices.update(
+        this.ownerCondition(id, principal),
+        changes,
+      );
+      if (result.affected !== 1)
+        throw new ForbiddenException('기기 소유권을 확인할 수 없습니다.');
+    }
+    return this.settingsView(device);
+  }
+
+  private settingsView(device: Device): NotificationSettings {
+    return Object.fromEntries(
+      Object.entries(NOTIFICATION_SETTING_COLUMNS).map(([key, column]) => [
+        key,
+        device[column] !== false,
+      ]),
+    ) as NotificationSettings;
+  }
+
   async startLiveActivity(
     id: string,
     body: LiveActivityDto,
@@ -169,6 +364,12 @@ export class DeviceService {
     await this.ownedDevice(id, principal);
     await this.publishedFestival(body.festivalId);
     await this.dataSource.transaction(async (manager) => {
+      const current = await manager.findOne(Device, {
+        where: this.ownerCondition(id, principal),
+        select: { id: true, liveActivityId: true },
+      });
+      // 같은 활동의 토큰 교체는 등록 시각을 유지해 iOS의 8시간 한도와 맞춘다.
+      const isNewActivity = current?.liveActivityId !== body.activityId;
       const result = await manager.update(
         Device,
         this.ownerCondition(id, principal),
@@ -176,6 +377,7 @@ export class DeviceService {
           liveActivityFestivalId: body.festivalId,
           liveActivityId: body.activityId,
           liveActivityPushToken: body.pushToken,
+          ...(isNewActivity ? { liveActivityRegisteredAt: new Date() } : {}),
         },
       );
       if (result.affected !== 1)
@@ -345,7 +547,7 @@ export class DeviceService {
   private ownerCondition(id: string, principal: DevicePrincipal) {
     if (principal.kind === 'user') return { id, userId: principal.userId };
     if (principal.kind === 'device')
-      return { id, deviceTokenId: principal.tokenId };
+      return { id, userId: IsNull(), deviceTokenId: principal.tokenId };
     throw new ForbiddenException('기기 인증이 필요합니다.');
   }
 
@@ -361,6 +563,7 @@ export class DeviceService {
       (principal.kind === 'user' && device.userId !== principal.userId) ||
       (principal.kind === 'device' &&
         (device.id !== principal.deviceId ||
+          device.userId !== null ||
           device.deviceTokenId !== principal.tokenId))
     )
       throw new ForbiddenException('기기 소유자가 다릅니다.');

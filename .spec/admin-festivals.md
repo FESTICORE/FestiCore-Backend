@@ -17,14 +17,18 @@
 | GET    | `/:id/draft`             | ID                                                                      | 현재 초안·버전                                                    |
 | PATCH  | `/:id/draft`             | `If-Match: "d{draftVersion}"`, JSON 병합 패치                           | 검증된 새 초안·버전                                               |
 | PUT    | `/:id/draft/sets`        | 같은 `If-Match`, 배열                                                   | 공연 목록 전체 교체                                               |
-| PUT    | `/:id/draft/zones`       | 같은 `If-Match`, 배열                                                   | 존 목록 전체 교체                                                 |
+| PUT    | `/:id/draft/zones`       | 같은 `If-Match`, 배열                                                   | 존 목록 전체 교체. 선택 `kind`·`area {x,y,w,h}`·`landmark`(1~12자)                 |
 | GET    | `/:id/draft/diff`        | ID                                                                      | 발행본 대비 최상위 필드 차이                                      |
 | POST   | `/:id/publish`           | `If-Match: "d{draftVersion}"`, `{ note?: string }`                     | 검토한 초안 버전만 발행. 새 `packVersion`, ETag, `pushedDevices`(알림 대기열 등록 수) |
 | GET    | `/:id/versions`          | ID                                                                      | 발행 이력                                                         |
 | POST   | `/:id/rollback`          | `{ toVersion }`                                                         | 이전 팩을 새 버전으로 재발행                                      |
 | POST   | `/:id/pack/import-image` | multipart `image` (JPEG/PNG/WebP, 최대 10MB), `date` (등록된 축제 날짜) | HTTP 200 `{ draft: Set[], confidence: 0..1, unparsed: string[] }` |
 
+존 지도: 초안 `zones[].area`는 지도 왼쪽 위 기준 0~1 비율 사각형이며 지도 밖으로 나갈 수 없다(w·h > 0, x+w ≤ 1, y+h ≤ 1). 영역이 있는 존이 하나라도 있으면 `mapAspect`(지도 너비/높이)가 필요하다. 초안 PATCH의 `mapStages`는 최대 8개의 `{ stageId, x, y, w }`(0~1)로 존 지도의 무대 머리글 줄 위치를 정하며, `stageId`는 초안 `stages`에 있어야 한다. 발행하면 공개 팩 `mapVersion`이 바뀐다(공개 축제 명세의 존 지도 참고).
+
 공연 `Set`의 선택 필드 `imageUrl`에는 서버가 보관한 `/api/v1/festivals/images/{imageId}.webp` 경로만 넣는다. 외부 URL은 거부한다. 발행 후 공개 상세의 `sets`와 `timetable`에 이 경로가 전달되며, 사진이 없는 공연은 `imageUrl: null`이다. `timetable`의 각 항목에는 `date`와 `stageName`도 포함된다. 공연별 공식 시작·종료 시각이 없으면 공연을 임의 생성하지 않는다.
+
+공연 `Set`의 선택 필드 `note`는 공연 상세 시트(S03)의 한 줄 메모다. 앞뒤 공백을 뺀 1~80자이고 줄바꿈·제어 문자(유니코드 줄 구분자 포함)가 없는 문자열 또는 `null`만 검증을 통과한다. 공개 상세·팩의 `sets`와 `timetable`에는 앞뒤 공백을 뺀 값이 전달되며, 메모가 없거나 형식이 다르면 `note: null`이다. 메모는 공식 출처에서 확인한 내용만 넣는다.
 
 발견 항목 가져오기는 서버의 원본 `firstDate`·`lastDate`를 읽기 전용 `eventPeriod`로 저장한다. 날짜만 확인된 항목은 `days: []`로 승인하고 발행본은 만들지 않는다. 기존 시각 포함 `days` 입력도 유지한다. 입력한 첫날·마지막 날은 원본 기간과 같아야 하며, 최장 32일(양끝 포함)까지 허용한다. 날짜만 알려진 후보에서 매일 운영한다고 추정해 `days`를 채우지 않는다. `PATCH`로 `eventPeriod`를 수정할 수 없다. 발행 전에는 검증된 시작·종료 시각, 무대와 공연 세트가 필요하다. 기존 발행 팩에 `eventPeriod`가 없더라도 조회와 롤백 계약은 유지한다.
 
@@ -41,3 +45,38 @@
 ## 검증
 
 `src/modules/admin/festival/*.spec.ts`에서 입력 검증·동시 수정·권한·발행·롤백을 확인한다.
+
+## 귀가 정보 입력 (`directions`)
+
+관리자는 `PATCH /:id/draft`의 `directions`로 귀가 정보를 입력하고 발행하면 공개 팩에 반영된다.
+
+```json
+"directions": {
+  "shuttle": { "body": "정문 셔틀 운행", "links": [], "stopName": "정문 셔틀 정류장" },
+  "lastShuttleAt": "2026-10-17T23:40:00+09:00",
+  "lastTrainAt": "2026-10-17T23:52:00+09:00",
+  "lastDepartures": [
+    { "date": "2026-10-17", "shuttleAt": "2026-10-17T23:40:00+09:00", "trainAt": "2026-10-17T23:52:00+09:00" }
+  ]
+}
+```
+
+- 날짜마다 다를 수 있는 막차·마지막 셔틀은 `lastDepartures`에 둔다. 최대 31개이며 `date`는 `YYYY-MM-DD`, 날짜는 중복할 수 없다. `shuttleAt`·`trainAt`은 오프셋을 포함한 ISO8601 또는 null이고 둘 중 하나는 있어야 한다. 자정을 넘는 막차는 다음 날짜의 시각을 그대로 쓴다.
+- 발행할 때는 `lastDepartures[].date`가 `days[].date` 중 하나여야 한다. 초안 저장 시에는 날짜 형식만 검사한다.
+- 단일 값 `lastShuttleAt`·`lastTrainAt`은 기존 앱 호환용으로 남기며 오프셋 포함 ISO8601 또는 null만 허용한다. PATCH 본문에 자유 문장(예: `23:40`)을 직접 보내면 400이다.
+- 형식을 정하기 전에 저장된 초안에 자유 문장이 남아 있으면, 그 키를 보내지 않은 PATCH와 발행에서 경고 없이 null로 정규화한다. PATCH는 정규화된 값을 초안에 저장하고, 발행은 팩에만 null을 넣고 초안은 그대로 둔다. 다른 필드를 고치는 PATCH나 발행이 예전 값 때문에 막히지 않게 하려는 것이다. 자유 문장은 앱이 시각으로 해석할 수 없어 보존할 가치가 없으므로, 관용 처리로 남기기보다 null로 바꿨다. 이미 발행된 팩에 남은 자유 문장도 공개 투영에서 null로 보낸다.
+- 마이그레이션 `1792500101000`이 `admin_festivals`의 초안·현재 발행본에 남은 자유 문장을 null로 정리한다. 공개 응답은 이미 null이므로 팩 버전은 올리지 않고, 과거 버전 기록은 바꾸지 않는다. 마이그레이션 뒤에 들어온 값과 롤백한 과거 팩에 대비해, 같은 정규화를 초안 PATCH·발행 외에 깃발 변경·회원 탈퇴의 팩 동기화와 크롤 제안 적용의 검증 앞에도 적용한다.
+- `shuttle.stopName`은 셔틀 정류장 이름 1~40자 또는 null이다. 상세 안내는 기존 `shuttle.body`에 둔다.
+- `shuttle.location`·`transit.location`은 셔틀 정류장·역 좌표 `{ "latitude": 37.3836, "longitude": 127.1268 }` 또는 null이다. 위도 -90~90, 경도 -180~180의 숫자가 아니면 400이다. 앱은 이 좌표로 현재 위치에서 걸어가는 시간을 Apple 지도로 계산하고, 없으면 정류장·역 이름을 축제 장소(`directions.location`) 근처에서 찾는다.
+
+## 개발 DB 팩 상세 목 데이터
+
+- `src/database/seed-dev-pack-details.ts`가 발행 축제 중 가는 길·준비물·반입 금지가 모두 빈 곳만 시안 Pack A·B 값으로 채운다.
+  - 셔틀·대중교통·주차 본문, 팀 추천 메모, 공연장 이름으로 만든 네이버·카카오 지도 검색 링크를 넣는다. 역 이름·좌표는 지어내지 않는다.
+  - 마지막 셔틀·막차는 마지막 공연일 종료 40·52분 뒤로 적는다.
+  - 준비물 7개 중 모바일 티켓·신분증은 필수다. 반입 금지는 6개다.
+- 출처·장소 좌표 같은 기존 가는 길 필드는 그대로 둔다. 초안이나 발행본에 관리자가 넣은 값이 하나라도 있는 축제는 건너뛴다.
+- 초안과 발행본을 같이 채운다. 값이 실제로 바뀐 축제만 팩 버전을 올리고, 버전 기록(`Dev pack detail seed`)과 팩 캐시 세대 키를 갱신한다. 다시 실행하면 값이 있어 바뀌지 않는다.
+- 발행 알림 작업은 만들지 않는다. 기기에는 다음 팩 버전 확인 때 반영된다.
+- `RAILWAY_ENVIRONMENT_NAME=develop`이 아니면 실행하지 않는다. 기본은 바꿀 축제만 보여 주는 미리보기이고, `--apply`가 있어야 쓴다.
+- 실행: `railway run -e develop -s <백엔드 서비스> -- sh -c 'DATABASE_URL="$DATABASE_PUBLIC_URL" npm run pack-details:seed-dev -- --apply'`

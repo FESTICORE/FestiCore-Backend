@@ -1,6 +1,7 @@
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { createTestApp, TestContext } from './app-factory';
+import { CURRENT_TERMS_VERSION } from '../src/modules/auth/terms';
 
 describe('Me API contract (e2e)', () => {
   let ctx: TestContext;
@@ -39,6 +40,7 @@ describe('Me API contract (e2e)', () => {
         nicknameConfirmed: false,
         termsAcceptedAt: null,
         termsVersion: null,
+        currentTermsVersion: CURRENT_TERMS_VERSION,
         pushOptIn: false,
       },
     });
@@ -68,8 +70,11 @@ describe('Me API contract (e2e)', () => {
       .get('/api/v1/me')
       .set('Authorization', `Bearer ${accessToken}`)
       .expect(200);
-    const current = me.body as { data: { termsVersion: string } };
+    const current = me.body as {
+      data: { termsVersion: string; currentTermsVersion: string };
+    };
     expect(current.data.termsVersion).toBe('2026-10');
+    expect(current.data.currentTermsVersion).toBe(CURRENT_TERMS_VERSION);
   });
 
   it('약관 동의만으로 소셜 프로필 닉네임을 확정하지 않는다', async () => {

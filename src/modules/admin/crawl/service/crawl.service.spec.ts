@@ -1,7 +1,7 @@
 import { CrawlService } from './crawl.service';
 import { CrawlSource } from '../entity/crawl-source.entity';
 import { CrawlRun } from '../entity/crawl-run.entity';
-import { Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Logger, NotFoundException } from '@nestjs/common';
 import { In } from 'typeorm';
 import { createHash } from 'crypto';
 import sharp from 'sharp';
@@ -49,7 +49,9 @@ import {
 import {
   COMMONS_DISCOVERY_SEED,
   COMMONS_DISCOVERY_URL,
+  COMMONS_PINNED_DISCOVERY_SEED,
 } from './commons-image-discovery';
+import { TOUR_API_SOURCE } from './tour-api';
 
 type PrivateCrawl = {
   onModuleInit(): void;
@@ -59,6 +61,12 @@ type PrivateCrawl = {
   gmfQueuedSources: Set<string>;
   reconcileRecentXmf403(): Promise<void>;
   runNow(id: string): Promise<{ runId: string }>;
+  runPinnedCommonsDiscovery(
+    input: unknown,
+    actor?: string | null,
+  ): Promise<{ runId: string; targets: number }>;
+  executeCommonsDiscovery(run: CrawlRun, source: CrawlSource): Promise<void>;
+  pinnedCommonsTargets: Map<string, unknown>;
   createSource(
     dto: CreateCrawlSourceDto,
     actor: string | null,
@@ -272,6 +280,167 @@ describe('Commons 사진 후보 일일 수집', () => {
   });
 });
 
+describe('Commons 지정 출연진 탐색', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  const pinned = {
+    festivalId: 'fst_pin',
+    festivalSourceUrl: 'https://festival.example.com/pin',
+    artistName: 'CNBLUE',
+  };
+
+  function commonsHarness() {
+    const fixture = harness();
+    fixture.source.kind = 'artist-image-discovery';
+    fixture.source.parser = 'commons-search';
+    fixture.source.url = COMMONS_DISCOVERY_URL;
+    fixture.source.parserConfig = { seed: COMMONS_PINNED_DISCOVERY_SEED };
+    const hasCurrentArtist = jest.fn().mockResolvedValue(true);
+    Object.assign(fixture.publicFestivals, { hasCurrentArtist });
+    return { ...fixture, hasCurrentArtist };
+  }
+
+  it('지정한 현재 출연진만 기존 탐색 실행으로 검색해 후보로 기록한다', async () => {
+    const { service, source, run, execute, insertQb, publicFestivals, audit } =
+      commonsHarness();
+    publicFestivals.missingArtistImages.mockResolvedValue([
+      {
+        festivalId: 'fst_other',
+        festivalSourceUrl: 'https://festival.example.com/other',
+        artistName: '다른 출연진',
+      },
+    ]);
+    const searched: string[] = [];
+    jest.spyOn(service, 'limitedGetCommonsJson').mockImplementation((url) => {
+      searched.push(url.searchParams.get('q') ?? '');
+      return Promise.resolve({ status: 200, body: '{"pages":[]}' });
+    });
+    const done = new Promise<void>((resolve) =>
+      execute.mockImplementation(async (r: CrawlRun, s: CrawlSource) => {
+        await service.executeCommonsDiscovery(r, s);
+        resolve();
+      }),
+    );
+
+    await expect(
+      service.runPinnedCommonsDiscovery(
+        { targets: [pinned, pinned] },
+        'admin-1',
+      ),
+    ).resolves.toEqual({ runId: run.id, targets: 1 });
+    await done;
+
+    expect(insertQb.values).toHaveBeenCalledWith({ sourceId: source.id });
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        actor: 'admin-1',
+        action: 'crawl.run.requested',
+        after: { sourceId: source.id, pinnedTargets: [pinned] },
+      }),
+    );
+    expect(searched).toHaveLength(1);
+    expect(searched[0]).toContain('CNBLUE');
+    expect(run.artistImageEvidence).toMatchObject({
+      totalMissing: 1,
+      deferredCount: 0,
+      targets: [{ ...pinned, status: 'no-results' }],
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(service.pinnedCommonsTargets.size).toBe(0);
+  });
+
+  it('지정하지 않은 실행은 하루 회전 대상을 그대로 쓴다', async () => {
+    const { service, source, run, publicFestivals } = commonsHarness();
+    source.parserConfig = { seed: COMMONS_DISCOVERY_SEED };
+    run.scheduledDate = '2026-10-21';
+    publicFestivals.missingArtistImages.mockResolvedValue([
+      {
+        festivalId: 'fst_daily',
+        festivalSourceUrl: 'https://festival.example.com/daily',
+        artistName: '매일 대상',
+      },
+    ]);
+    jest
+      .spyOn(service, 'limitedGetCommonsJson')
+      .mockResolvedValue({ status: 200, body: '{"pages":[]}' });
+
+    await service.executeCommonsDiscovery(run, source);
+
+    expect(run.artistImageEvidence?.targets).toEqual([
+      expect.objectContaining({ artistName: '매일 대상' }),
+    ]);
+  });
+
+  it('현재 출연진이 아닌 이름은 실행을 만들지 않고 거절한다', async () => {
+    const { service, execute, insertQb, hasCurrentArtist } = commonsHarness();
+    hasCurrentArtist.mockResolvedValue(false);
+
+    await expect(
+      service.runPinnedCommonsDiscovery({ targets: [pinned] }),
+    ).rejects.toThrow('현재 출연진이 아닌 탐색 대상입니다');
+    expect(hasCurrentArtist).toHaveBeenCalledWith(
+      pinned.festivalId,
+      pinned.festivalSourceUrl,
+      pinned.artistName,
+    );
+    expect(insertQb.values).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('지정 탐색 전용 소스가 없거나 꺼져 있으면 거절한다', async () => {
+    for (const change of [
+      { kind: 'discovery' },
+      { enabled: false },
+      { parserConfig: { seed: COMMONS_DISCOVERY_SEED } },
+      { parserConfig: { seed: COMMONS_PINNED_DISCOVERY_SEED, extra: 1 } },
+    ]) {
+      const { service, source, execute } = commonsHarness();
+      Object.assign(source, change);
+      await expect(
+        service.runPinnedCommonsDiscovery({ targets: [pinned] }),
+      ).rejects.toThrow('활성 지정 Commons 탐색 소스가 없습니다.');
+      expect(execute).not.toHaveBeenCalled();
+    }
+  });
+
+  it('지정 탐색 소스는 예약·수동 실행이나 지정 대상 없는 실행을 하지 않는다', async () => {
+    const { service, source, run, insertQb, execute } = commonsHarness();
+
+    await service.scheduleDue();
+    expect(insertQb.values).not.toHaveBeenCalled();
+
+    await expect(service.runNow(source.id)).rejects.toThrow(
+      '지정 Commons 탐색 소스는 지정 탐색으로만 실행합니다.',
+    );
+    expect(execute).not.toHaveBeenCalled();
+
+    await expect(service.executeCommonsDiscovery(run, source)).rejects.toThrow(
+      'INVALID_COMMONS_SOURCE',
+    );
+  });
+
+  it('대상 개수와 형식이 맞지 않으면 거절한다', async () => {
+    const { service, execute } = commonsHarness();
+    for (const input of [
+      null,
+      { targets: [] },
+      { targets: Array.from({ length: 41 }, () => pinned) },
+      { targets: [{ ...pinned, festivalId: 'bad' }] },
+      { targets: [{ ...pinned, festivalSourceUrl: 'http://x.example' }] },
+      { targets: [{ ...pinned, artistName: ' ' }] },
+      { targets: [{ ...pinned, artistName: ' CNBLUE ' }] },
+      { targets: [{ ...pinned, artistName: 'CN\u0007BLUE' }] },
+      { targets: [{ ...pinned, extra: 1 }] },
+      { targets: [pinned], extra: 1 },
+    ])
+      await expect(service.runPinnedCommonsDiscovery(input)).rejects.toThrow(
+        BadRequestException,
+      );
+    expect(execute).not.toHaveBeenCalled();
+  });
+});
+
 describe('소향 Commons 사진 수집', () => {
   const config = {
     seed: SOHYANG_COMMONS_SEED,
@@ -366,6 +535,70 @@ describe('소향 Commons 사진 수집', () => {
     await service.execute(run, source);
     expect(run.result).toBe('failed');
     expect(run.error).toBe('COMMONS_RIGHTS');
+  });
+});
+
+describe('승인 Commons 사진 실패 로그', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  function approvedHarness(error: Error) {
+    const fixture = harness();
+    fixture.execute.mockRestore();
+    Object.assign(fixture.source, {
+      kind: 'artist-image',
+      url: 'https://commons.wikimedia.org/wiki/File:Example.jpg',
+      parser: 'html-text',
+      parserConfig: {
+        seed: 'commons-approved-profile',
+        reviewId: '00000000-0000-4000-8000-000000000001',
+        festivalSourceUrl: 'https://festival.example.com',
+        artistName: 'CNBLUE',
+      },
+    });
+    jest
+      .spyOn(
+        fixture.service as unknown as {
+          executeApprovedCommonsImage: () => Promise<void>;
+        },
+        'executeApprovedCommonsImage',
+      )
+      .mockRejectedValue(error);
+    const warn = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+    return { ...fixture, warn };
+  }
+
+  it('단계 코드와 함께 세부 실패 코드를 남긴다', async () => {
+    for (const [message, detail] of [
+      [
+        'COMMONS_OFFICIAL_EVIDENCE_MISMATCH',
+        'COMMONS_OFFICIAL_EVIDENCE_MISMATCH',
+      ],
+      ['COMMONS_LINEUP_MISMATCH', 'COMMONS_LINEUP_MISMATCH'],
+      ['COMMONS_IMAGE_UNVERIFIED', 'COMMONS_IMAGE_UNVERIFIED'],
+    ]) {
+      const { service, source, run, warn } = approvedHarness(
+        new Error(message),
+      );
+      await service.execute(run, source);
+      expect(run.result).toBe('failed');
+      expect(run.error).toBe('COMMONS_RIGHTS');
+      expect(warn).toHaveBeenCalledWith(
+        `크롤 처리 실패: source=${source.id}, run=${run.id}, code=COMMONS_RIGHTS, detail=${detail}`,
+      );
+      jest.restoreAllMocks();
+    }
+  });
+
+  it('세부 코드가 아닌 오류 문구는 로그에 넣지 않는다', async () => {
+    const { service, source, run, warn } = approvedHarness(
+      new Error('https://secret.example.com/token 실패'),
+    );
+    await service.execute(run, source);
+    expect(warn).toHaveBeenCalledWith(
+      `크롤 처리 실패: source=${source.id}, run=${run.id}, code=COMMONS_RIGHTS`,
+    );
   });
 });
 
@@ -496,6 +729,7 @@ function harness() {
   const publicFestivals = {
     missingArtistImages: jest.fn().mockResolvedValue([]),
   };
+  const autoPublish = { requestAfterCrawl: jest.fn() };
   const service = new CrawlService(
     sourcesRepo as never,
     runsRepo as never,
@@ -508,6 +742,8 @@ function harness() {
     audit as never,
     timetableRevisions as never,
     publicFestivals as never,
+    autoPublish as never,
+    { get: (name: string) => process.env[name] } as never,
   ) as unknown as PrivateCrawl;
   const execute = jest.spyOn(service, 'execute').mockResolvedValue(undefined);
   return {
@@ -524,6 +760,7 @@ function harness() {
     audit,
     timetableRevisions,
     publicFestivals,
+    autoPublish,
     insertQb,
     insertResult,
     updateQb,
@@ -531,6 +768,75 @@ function harness() {
     execute,
   };
 }
+
+describe('CrawlService auto publication after persisted crawl', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  function prepared() {
+    const fixture = harness();
+    fixture.execute.mockRestore();
+    jest.spyOn(fixture.service, 'checkRobots').mockResolvedValue();
+    jest
+      .spyOn(fixture.service, 'getListing')
+      .mockResolvedValue({ status: 200, body: '<html>official</html>' });
+    jest
+      .spyOn(
+        fixture.service as unknown as { captureImages(): Promise<string[]> },
+        'captureImages',
+      )
+      .mockResolvedValue([]);
+    jest.spyOn(crawlParser, 'parseCrawl').mockResolvedValue([]);
+    fixture.runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(null),
+    }));
+    return fixture;
+  }
+
+  it('requests publication only after both run and source saves complete', async () => {
+    const { service, run, source, runsRepo, dataSource, autoPublish } =
+      prepared();
+    autoPublish.requestAfterCrawl.mockImplementation(() => {
+      expect(runsRepo.save).toHaveBeenCalledWith(run);
+      expect(dataSource.query).toHaveBeenCalledWith(
+        expect.stringContaining('UPDATE crawl_sources SET'),
+        expect.any(Array),
+      );
+    });
+    await service.execute(run, source);
+    expect(run.result).toBe('nochange-parsed');
+    expect(autoPublish.requestAfterCrawl).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not request publication after a failed fetch', async () => {
+    const { service, run, source, autoPublish } = prepared();
+    jest
+      .spyOn(service, 'getListing')
+      .mockResolvedValue({ status: 503, body: '' });
+    await service.execute(run, source);
+    expect(run.result).toBe('failed');
+    expect(autoPublish.requestAfterCrawl).not.toHaveBeenCalled();
+  });
+
+  it.each(['run', 'source'])(
+    'does not request publication when the %s save fails',
+    async (target) => {
+      const { service, run, source, runsRepo, dataSource, autoPublish } =
+        prepared();
+      if (target === 'run')
+        runsRepo.save.mockRejectedValueOnce(new Error('save failed'));
+      else
+        dataSource.query.mockImplementation((sql: string) => {
+          if (sql.includes('UPDATE crawl_sources SET'))
+            return Promise.reject(new Error('save failed'));
+          return Promise.resolve([]);
+        });
+      await expect(service.execute(run, source)).rejects.toThrow('save failed');
+      expect(autoPublish.requestAfterCrawl).not.toHaveBeenCalled();
+    },
+  );
+});
 
 describe('CrawlService scheduled runs', () => {
   beforeEach(() =>
@@ -1189,6 +1495,8 @@ describe('DRDR official profile sources', () => {
 describe('CDF LOW HIGH LOW official Melon Ticket profile source', () => {
   const photo =
     'https://cdnimg.melon.co.kr/cm2/artistcrop/images/027/54/370/2754370_20250307154851.jpg';
+  const original =
+    'https://cdnimg.melon.co.kr/cm2/artistcrop/images/027/54/370/2754370_20250307154851_org.jpg/melon/resize/1000/quality/90/optimize';
   const config = {
     seed: CDF_LOW_HIGH_LOW_PROFILE_SEED,
     festivalSourceUrl: CDF_FESTIVAL_URL,
@@ -1240,11 +1548,11 @@ describe('CDF LOW HIGH LOW official Melon Ticket profile source', () => {
     ).testSource(source.id);
     expect(test.parsed).toEqual({
       artistName: '로우하이로우',
-      imageUrl: photo,
+      imageUrl: original,
     });
     expect(robots.mock.calls.map(([url]) => url)).toEqual([
       CDF_LOW_HIGH_LOW_PROFILE_URL,
-      photo,
+      original,
     ]);
 
     const capture = jest
@@ -1261,7 +1569,7 @@ describe('CDF LOW HIGH LOW official Melon Ticket profile source', () => {
       getOne: jest.fn().mockResolvedValue(null),
     }));
     await service.execute(run, source);
-    expect(capture.mock.calls[0][2]).toEqual([new URL(photo)]);
+    expect(capture.mock.calls[0][2]).toEqual([new URL(original)]);
     expect(run.result).toBe('nochange-parsed');
   });
 });
@@ -1856,6 +2164,57 @@ describe('CrawlService source audit', () => {
       parserConfig: {
         artistName: 'Artist',
         festivalSourceUrl: 'http://127.0.0.1/private',
+        imageHint: 'profile-photo',
+      },
+    } as CreateCrawlSourceDto;
+    await expect(service.createSource(dto, 'admin-1')).rejects.toThrow(
+      'festivalSourceUrl',
+    );
+    expect(dataSource.transaction).not.toHaveBeenCalled();
+  });
+
+  it('NOL World 예매 상세를 축제 원본으로 둔 출연진 프로필 소스를 등록한다', async () => {
+    const { service, dataSource } = harness();
+    jest.spyOn(service, 'checkRobots').mockResolvedValue(undefined);
+    const repo = {
+      create: jest.fn((value: CrawlSource) => value),
+      save: jest.fn((value: CrawlSource) =>
+        Promise.resolve({ ...value, id: 'source-nol-world' }),
+      ),
+    };
+    const manager = { getRepository: jest.fn(() => repo) };
+    dataSource.transaction.mockImplementation(
+      (callback: (transactionManager: typeof manager) => Promise<unknown>) =>
+        callback(manager),
+    );
+    const dto = {
+      kind: 'artist-image',
+      url: 'https://artist.example.com/profile',
+      parser: 'html-text',
+      parserConfig: {
+        artistName: 'Artist',
+        festivalSourceUrl: 'https://world.nol.com/en/ticket/products/26015253',
+        imageHint: 'profile-photo',
+      },
+    } as CreateCrawlSourceDto;
+
+    await expect(service.createSource(dto, 'admin-1')).resolves.toMatchObject({
+      id: 'source-nol-world',
+      parserConfig: {
+        festivalSourceUrl: 'https://world.nol.com/en/ticket/products/26015253',
+      },
+    });
+  });
+
+  it('허용 목록 밖 예매 호스트를 축제 원본으로 둔 출연진 프로필 소스는 거절한다', async () => {
+    const { service, dataSource } = harness();
+    const dto = {
+      kind: 'artist-image',
+      url: 'https://artist.example.com/profile',
+      parser: 'html-text',
+      parserConfig: {
+        artistName: 'Artist',
+        festivalSourceUrl: 'https://nol.com/en/ticket/products/26015253',
         imageHint: 'profile-photo',
       },
     } as CreateCrawlSourceDto;
@@ -3895,7 +4254,7 @@ describe('CrawlService manual runs and snapshots', () => {
       getOne: jest.fn().mockResolvedValue({
         contentHash: createHash('sha256')
           .update(body)
-          .update('ticket-list:v3')
+          .update('ticket-list:v4')
           .digest('hex'),
       }),
     }));
@@ -3943,7 +4302,7 @@ describe('CrawlService manual runs and snapshots', () => {
       .mockResolvedValue([]);
     const oldHash = createHash('sha256')
       .update(body)
-      .update('ticket-list:v3')
+      .update('ticket-list:v4')
       .digest('hex');
     runsRepo.createQueryBuilder = jest.fn(() => ({
       where: jest.fn().mockReturnThis(),
@@ -3978,6 +4337,59 @@ describe('CrawlService manual runs and snapshots', () => {
     await service.execute(nextRun, source);
     expect(nextRun.result).toBe('unchanged');
     expect(proposalItems).toHaveBeenCalledTimes(1);
+  });
+
+  it('reparses an unchanged Melon detail parsed by v3 to link high-resolution artist photos', async () => {
+    const { service, source, run, runsRepo, execute } = harness();
+    execute.mockRestore();
+    source.url = 'https://ticket.melon.com/performance/index.htm?prodId=213665';
+    source.parserConfig = { seed: 'ticket-detail', locationParserVersion: '1' };
+    const body = `<strong class="tit">2026 대구힙합페스티벌</strong>
+      <span class="txt_info">2026.11.28 - 2026.11.29</span>
+      <span class="place">EXCO</span>
+      <ul class="list_artist"><li><img src="https://cdnimg.melon.co.kr/cm2/artistcrop/images/007/39/740/739740_20260529133007.jpg/melon/thumbnail/320x300"><span class="singer">빈첸</span></li></ul>`;
+    jest.spyOn(service, 'checkRobots').mockResolvedValue();
+    jest.spyOn(service, 'getListing').mockResolvedValue({ status: 200, body });
+    const captureImages = jest
+      .spyOn(
+        service as unknown as {
+          captureImages(
+            source: CrawlSource,
+            run: CrawlRun,
+            urls: URL[],
+          ): Promise<string[]>;
+        },
+        'captureImages',
+      )
+      .mockResolvedValue([]);
+    runsRepo.createQueryBuilder = jest.fn(() => ({
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue({
+        contentHash: createHash('sha256')
+          .update(body)
+          .update('ticket-list:v3')
+          .digest('hex'),
+      }),
+    }));
+    const proposalItems = jest
+      .spyOn(service, 'proposalItems')
+      .mockResolvedValue({ kind: 'festival.new', items: [] });
+
+    await service.execute(run, source);
+
+    const highResolution =
+      'https://cdnimg.melon.co.kr/cm2/artistcrop/images/007/39/740/739740_20260529133007_org.jpg/melon/resize/1000/quality/90/optimize';
+    expect(run.result).not.toBe('unchanged');
+    expect(proposalItems).toHaveBeenCalledTimes(1);
+    expect(proposalItems.mock.calls[0]?.[1]).toEqual([
+      expect.objectContaining({
+        artists: [{ name: '빈첸', sourceUrl: highResolution }],
+      }),
+    ]);
+    expect(captureImages.mock.calls[0]?.[2].map(String)).toContain(
+      highResolution,
+    );
   });
 
   it('registers a dynamic official WONDERLIVET Melon product on the daily crawl', async () => {
@@ -4725,6 +5137,56 @@ describe('CrawlService manual runs and snapshots', () => {
 });
 
 describe('CrawlService proposal changes', () => {
+  it('persists corrected dates for imported packs and compares only the latest pending evidence', async () => {
+    const { service, source, dataSource } = harness();
+    const url = 'https://ticket.yes24.com/Perf/60785';
+    const entry = {
+      url,
+      name: '썸띵 뉴',
+      venue: '수원',
+      date: '2026.12.26~2026.12.27',
+    };
+    dataSource.query.mockResolvedValueOnce([
+      { url, value: { ...entry, date: '2026.12.26' }, proposalId: 'latest' },
+      { url, value: null, festivalId: 'existing', draft: { source: { url } } },
+    ]);
+    const result = await service.proposalItems(source, [entry]);
+    expect(result.items).toEqual([expect.objectContaining({ after: entry })]);
+    const sql = (
+      dataSource.query.mock.calls as unknown as [string, unknown[]][]
+    )[0][0];
+    expect(sql).toContain("DISTINCT ON (item->'after'->>'url')");
+    expect(sql).toContain('p."createdAt" DESC, p.id DESC');
+  });
+
+  it('does not let a location proposal consume changed complete festival metadata', async () => {
+    const { service, source, dataSource } = harness();
+    source.url = 'https://ticket.melon.com/performance/index.htm?prodId=213793';
+    const entry = {
+      url: source.url,
+      name: 'Festival',
+      venue: 'KINTEX',
+      date: '2026.11.20~2026.11.21',
+      location: {
+        latitude: 37.66469544695199,
+        longitude: 126.742064181796,
+        label: 'KINTEX',
+      },
+    };
+    dataSource.query.mockResolvedValueOnce([
+      {
+        url: source.url,
+        value: null,
+        festivalId: 'existing',
+        draft: { venue: 'KINTEX', directions: {}, source: { url: source.url } },
+      },
+    ]);
+    const result = await service.proposalItems(source, [entry]);
+    expect(result.kind).toBe('festival.new');
+    expect(result.items).toEqual([expect.objectContaining({ after: entry })]);
+    expect(dataSource.query).toHaveBeenCalledTimes(1);
+  });
+
   it('proposes reviewed coordinates for a same-source accepted Melon draft only once', async () => {
     const { service, source, dataSource } = harness();
     source.url = 'https://ticket.melon.com/performance/index.htm?prodId=213793';
@@ -4786,7 +5248,7 @@ describe('CrawlService proposal changes', () => {
     const duplicate = await service.proposalItems(source, [
       { name: 'WONDERLIVET 2026', url: source.url, location: point },
     ]);
-    expect(duplicate.items).toEqual([]);
+    expect(duplicate.items).toHaveLength(1);
     expect(duplicate.kind).toBe('festival.new');
 
     dataSource.query.mockResolvedValueOnce([
@@ -4795,10 +5257,10 @@ describe('CrawlService proposal changes', () => {
     const mismatch = await service.proposalItems(source, [
       { name: 'WONDERLIVET 2026', url: source.url, location: point },
     ]);
-    expect(mismatch.items).toEqual([]);
+    expect(mismatch.items).toHaveLength(1);
   });
 
-  it('omits festival URLs already proposed or present in a draft', async () => {
+  it('keeps rediscovery evidence even when the source URL already has a draft', async () => {
     const { service, source, dataSource } = harness();
     dataSource.query.mockResolvedValueOnce([
       { url: 'https://tickets.example.com/one', value: null },
@@ -4810,6 +5272,9 @@ describe('CrawlService proposal changes', () => {
     ]);
 
     expect(result.items).toEqual([
+      expect.objectContaining({
+        after: { name: '기존 축제', url: 'https://tickets.example.com/one' },
+      }),
       expect.objectContaining({
         after: { name: '새 축제', url: 'https://tickets.example.com/two' },
       }),
@@ -4863,7 +5328,7 @@ describe('CrawlService proposal changes', () => {
       { url, value: null, proposalId: null },
     ]);
     const draftOnly = await service.proposalItems(source, [entry]);
-    expect(draftOnly.items).toEqual([]);
+    expect(draftOnly.items).toHaveLength(1);
     expect(draftOnly.matchedProposalId).toBeUndefined();
 
     dataSource.query.mockResolvedValueOnce([
@@ -4906,4 +5371,224 @@ describe('CrawlService proposal changes', () => {
       expect.objectContaining({ id: 'owned', op: 'remove', path: '/sets/0' }),
     ]);
   });
+});
+
+describe('TourAPI collection', () => {
+  it('fetches TourAPI pages without persisting the service key in source or body', async () => {
+    const previous = process.env.TOUR_API_SERVICE_KEY;
+    process.env.TOUR_API_SERVICE_KEY = 'test-service-key';
+    try {
+      const { service, source } = harness();
+      source.url = TOUR_API_SOURCE;
+      const crawler = service as unknown as {
+        limitedGet(url: URL): Promise<{ status: number; body: string }>;
+      };
+      const page = (items: unknown[]) =>
+        JSON.stringify({
+          response: {
+            header: { resultCode: '0000' },
+            body: { totalCount: 2, items: { item: items } },
+          },
+        });
+      const get = jest
+        .spyOn(crawler, 'limitedGet')
+        .mockResolvedValueOnce({
+          status: 200,
+          body: page([{ contentid: '1' }]),
+        })
+        .mockResolvedValueOnce({
+          status: 200,
+          body: page([{ contentid: '2' }]),
+        });
+
+      const result = await service.getListing(source);
+
+      expect(JSON.parse(result.body)).toEqual([
+        { contentid: '1' },
+        { contentid: '2' },
+      ]);
+      expect(result.body).not.toContain('test-service-key');
+      expect(source.url).toBe(TOUR_API_SOURCE);
+      expect(
+        get.mock.calls.map(([url]) => url.searchParams.get('pageNo')),
+      ).toEqual(['1', '2']);
+      expect(get.mock.calls[0][0].searchParams.get('serviceKey')).toBe(
+        'test-service-key',
+      );
+    } finally {
+      if (previous === undefined) delete process.env.TOUR_API_SERVICE_KEY;
+      else process.env.TOUR_API_SERVICE_KEY = previous;
+    }
+  });
+});
+
+describe('TourAPI completeness', () => {
+  it.each([true, false])(
+    'rejects an incomplete listing (empty page: %s)',
+    async (empty) => {
+      const previous = process.env.TOUR_API_SERVICE_KEY;
+      process.env.TOUR_API_SERVICE_KEY = 'test-service-key';
+      try {
+        const { service, source } = harness();
+        source.url = TOUR_API_SOURCE;
+        const crawler = service as unknown as {
+          limitedGet(url: URL): Promise<{ status: number; body: string }>;
+        };
+        let page = 0;
+        const get = jest.spyOn(crawler, 'limitedGet').mockImplementation(() =>
+          Promise.resolve({
+            status: 200,
+            body: JSON.stringify({
+              response: {
+                header: { resultCode: '0000' },
+                body: {
+                  totalCount: 1001,
+                  items: { item: empty ? [] : [{ contentid: String(++page) }] },
+                },
+              },
+            }),
+          }),
+        );
+        await expect(service.getListing(source)).rejects.toThrow(
+          empty ? '총건수 전에' : '페이지 상한',
+        );
+        expect(get).toHaveBeenCalledTimes(empty ? 1 : 10);
+      } finally {
+        if (previous === undefined) delete process.env.TOUR_API_SERVICE_KEY;
+        else process.env.TOUR_API_SERVICE_KEY = previous;
+      }
+    },
+  );
+});
+
+describe('Prugio portrait completion preserves administrator edits', () => {
+  it.each([false, true])(
+    'keeps a concurrent disable and parser edit (capture fails: %s)',
+    async (fails) => {
+      const { service, source, run, sourcesRepo, runsRepo, dataSource } =
+        harness();
+      const seed = 'prugio-official-portraits';
+      const child = {
+        ...source,
+        id: 'portrait-child',
+        kind: 'artist-image',
+        parserConfig: { seed, artistName: '홍길동' },
+      } as CrawlSource;
+      const persisted = { ...child, parserConfig: { ...child.parserConfig } };
+      const builder = {
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getOneOrFail: jest.fn().mockResolvedValue(child),
+      };
+      const save = jest.fn((value: CrawlSource) => {
+        Object.assign(persisted, value);
+        return Promise.resolve(value);
+      });
+      Object.assign(sourcesRepo, { createQueryBuilder: () => builder, save });
+      Object.assign(runsRepo, { create: (value: unknown) => value });
+      dataSource.query.mockImplementation((sql: string) => {
+        if (sql.startsWith('SELECT id'))
+          return Promise.resolve([{ id: child.id, seed }]);
+        if (sql.startsWith('UPDATE crawl_sources')) {
+          expect(sql).toContain(
+            'CASE WHEN "enabled" = false THEN \'disabled\'',
+          );
+          expect(sql).not.toContain('"parserConfig" =');
+          expect(sql).not.toContain('"enabled" = $');
+          persisted.status = persisted.enabled ? 'ok' : 'disabled';
+        }
+        return Promise.resolve([]);
+      });
+      let release!: () => void;
+      let started!: () => void;
+      const pending = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const entered = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const portraits = service as unknown as {
+        captureImages(): Promise<string[]>;
+        savePrugioPortraits(
+          gallery: CrawlSource,
+          run: CrawlRun,
+          collected: {
+            url: URL;
+            portraits: { artistName: string; body: Buffer }[];
+          },
+        ): Promise<void>;
+      };
+      jest.spyOn(portraits, 'captureImages').mockImplementation(async () => {
+        started();
+        await pending;
+        if (fails) throw new Error('capture failed');
+        return ['stored.jpg'];
+      });
+      const result = portraits.savePrugioPortraits(source, run, {
+        url: new URL('https://cdnticket.melon.co.kr/poster.jpg'),
+        portraits: [{ artistName: '홍길동', body: Buffer.from('photo') }],
+      });
+      const checked = fails
+        ? expect(result).rejects.toThrow('capture failed')
+        : expect(result).resolves.toBeUndefined();
+      await entered;
+      persisted.enabled = false;
+      persisted.status = 'disabled';
+      persisted.parserConfig = {
+        seed: 'administrator-edited',
+        artistName: '김수정',
+      };
+      release();
+      await checked;
+      expect(persisted).toMatchObject({
+        enabled: false,
+        status: 'disabled',
+        parserConfig: { seed: 'administrator-edited', artistName: '김수정' },
+      });
+      expect(save).not.toHaveBeenCalled();
+      expect(
+        dataSource.query.mock.calls.some(([sql]) =>
+          String(sql).startsWith('UPDATE crawl_sources'),
+        ),
+      ).toBe(true);
+    },
+  );
+});
+
+describe('TourAPI stable pagination', () => {
+  it.each([false, true])(
+    'rejects repeated IDs or changed totals (total changes: %s)',
+    async (changedTotal) => {
+      const previous = process.env.TOUR_API_SERVICE_KEY;
+      process.env.TOUR_API_SERVICE_KEY = 'test-service-key';
+      try {
+        const { service, source } = harness();
+        source.url = TOUR_API_SOURCE;
+        const crawler = service as unknown as {
+          limitedGet(url: URL): Promise<{ status: number; body: string }>;
+        };
+        const page = (totalCount: number, contentid: string) => ({
+          status: 200,
+          body: JSON.stringify({
+            response: {
+              header: { resultCode: '0000' },
+              body: { totalCount, items: { item: [{ contentid }] } },
+            },
+          }),
+        });
+        jest
+          .spyOn(crawler, 'limitedGet')
+          .mockResolvedValueOnce(page(2, '1'))
+          .mockResolvedValueOnce(
+            page(changedTotal ? 1 : 2, changedTotal ? '2' : '1'),
+          );
+        await expect(service.getListing(source)).rejects.toThrow(
+          changedTotal ? '총건수가 변경' : '중복',
+        );
+      } finally {
+        if (previous === undefined) delete process.env.TOUR_API_SERVICE_KEY;
+        else process.env.TOUR_API_SERVICE_KEY = previous;
+      }
+    },
+  );
 });

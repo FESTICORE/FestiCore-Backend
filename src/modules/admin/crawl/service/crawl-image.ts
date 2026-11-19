@@ -4,6 +4,8 @@ import { checkedUrl } from './crawl-fetch';
 import { imageTagAttributes } from './image-tag-attributes';
 import {
   eventPerformers,
+  isMelonArtistOriginalUrl,
+  melonArtistImageUrl,
   melonSearchCandidates,
   nolPosterUrl,
   ticketCandidates,
@@ -12,6 +14,8 @@ import {
 
 const MAX_INPUT_BYTES = 5 * 1024 * 1024;
 const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
+const DEFAULT_WEBP_QUALITY = 82;
+const MELON_ARTIST_WEBP_QUALITY = 88;
 const MAX_IMAGES_PER_RUN = 8;
 const MAX_MELON_DETAIL_IMAGES = 81;
 
@@ -65,7 +69,9 @@ function melonDetailImages(html: string, pageUrl: string): URL[] | null {
   const urls: URL[] = [];
   const add = (raw: string, hostname: string): boolean => {
     try {
-      const url = checkedUrl(new URL(raw, page).toString());
+      const url = melonArtistImageUrl(
+        checkedUrl(new URL(raw, page).toString()),
+      );
       if (url.hostname !== hostname) return false;
       if (!urls.some((item) => item.toString() === url.toString()))
         urls.push(url);
@@ -382,10 +388,19 @@ export function discoverImageUrls(html: string, pageUrl: string): URL[] {
   return urls;
 }
 
+// Only the high-resolution Melon artist originals use the higher quality, so
+// other stored images keep their existing content hashes and objects.
+export function crawlImageQuality(url: URL): number {
+  return isMelonArtistOriginalUrl(url)
+    ? MELON_ARTIST_WEBP_QUALITY
+    : DEFAULT_WEBP_QUALITY;
+}
+
 export async function prepareCrawlImage(
   bytes: Buffer,
   declaredType: string,
   maxInputBytes = MAX_INPUT_BYTES,
+  quality = DEFAULT_WEBP_QUALITY,
 ): Promise<{
   body: Buffer;
   hash: string;
@@ -421,7 +436,7 @@ export async function prepareCrawlImage(
         fit: 'inside',
         withoutEnlargement: true,
       })
-      .webp({ quality: 82 })
+      .webp({ quality })
       .toBuffer();
     if (body.length > MAX_OUTPUT_BYTES)
       throw new Error('변환 이미지 크기 제한을 초과했습니다.');

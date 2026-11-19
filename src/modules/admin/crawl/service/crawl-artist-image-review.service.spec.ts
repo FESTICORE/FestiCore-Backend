@@ -240,6 +240,82 @@ describe('CrawlArtistImageReviewService', () => {
     expect(dataSource.transaction).not.toHaveBeenCalled();
   });
 
+  it('축제 원본과 다른 공식 근거 URL은 parserConfig 열을 따옴표로 참조해 연결 소스를 찾는다', async () => {
+    const officialEvidenceUrl =
+      'https://ticket.melon.com/performance/notice.htm?prodId=213666';
+    const run = {
+      id: runId,
+      sourceId,
+      finishedAt: new Date(),
+      result: 'nochange-parsed',
+      artistImageEvidence: {
+        targets: [
+          {
+            festivalId: input.festivalId,
+            festivalSourceUrl,
+            artistName: input.artistName,
+            status: 'candidates',
+            candidates: [
+              { fileId: input.fileId, filePageUrl, status: 'pending' },
+            ],
+          },
+        ],
+      },
+    };
+    repositories.set(CrawlRun, {
+      createQueryBuilder: () => ({
+        addSelect: () => ({
+          where: () => ({ getOne: () => Promise.resolve(run) }),
+        }),
+      }),
+      findOne: () => Promise.resolve(run),
+    });
+    // 실제 TypeORM 메타데이터로 SQL을 만들어 Postgres가 받을 열 이름을 확인한다.
+    const metadataSource = new DataSource({
+      type: 'postgres',
+      entities: [CrawlSource],
+    });
+    await (
+      metadataSource as unknown as { buildMetadatas(): Promise<void> }
+    ).buildMetadatas();
+    let linkedSql = '';
+    let linkedParameters: Record<string, unknown> = {};
+    repositories.set(CrawlSource, {
+      findOneBy: () =>
+        Promise.resolve({
+          id: sourceId,
+          kind: 'artist-image-discovery',
+          enabled: true,
+        }),
+      createQueryBuilder: (alias: string) => {
+        const builder = metadataSource
+          .getRepository(CrawlSource)
+          .createQueryBuilder(alias);
+        builder.getOne = () => {
+          linkedSql = builder.getQuery();
+          linkedParameters = builder.getParameters();
+          return Promise.resolve({ id: 'linked-notice' } as CrawlSource);
+        };
+        return builder;
+      },
+    });
+    dataSource.transaction.mockRejectedValueOnce(new Error('stop'));
+
+    await expect(
+      service.stage({ ...input, officialEvidenceUrl }, reviewId),
+    ).rejects.toThrow('stop');
+
+    expect(linkedSql).toContain(
+      `source."parserConfig"->>'festivalSourceUrl' = :festivalSourceUrl`,
+    );
+    expect(linkedSql).not.toMatch(/source\.parserConfig/);
+    expect(linkedParameters).toMatchObject({
+      url: officialEvidenceUrl,
+      festivalSourceUrl,
+    });
+    expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+  });
+
   it('does not approve when the inspected SHA differs from the prepared image', async () => {
     repositories.set(CrawlArtistImageReview, {
       findOneBy: jest.fn().mockResolvedValue({

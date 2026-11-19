@@ -3,6 +3,7 @@ import {
   Logger,
   OnModuleDestroy,
   OnModuleInit,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { DataSource, EntityManager } from 'typeorm';
@@ -46,7 +47,36 @@ interface FestivalTarget {
   published: Record<string, unknown>;
 }
 
-function records(value: unknown): Record<string, unknown>[] {
+export function festivalPeriod(
+  days: Record<string, unknown>[],
+): { start: Date; end: Date } | null {
+  const first = days[0]?.date;
+  const last = days[days.length - 1]?.date;
+  if (typeof first !== 'string' || typeof last !== 'string') return null;
+  const validDate = (value: string) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    const parsed = new Date(`${value}T00:00:00Z`);
+    return (
+      Number.isFinite(parsed.getTime()) &&
+      parsed.toISOString().slice(0, 10) === value
+    );
+  };
+  if (!validDate(first) || !validDate(last) || last < first) return null;
+  const start = new Date(`${first}T00:00:00+09:00`);
+  const calendarEnd = Date.parse(`${last}T00:00:00+09:00`) + 86_400_000;
+  const actualEnd = Math.max(
+    calendarEnd,
+    ...days
+      .map((day) =>
+        typeof day.endsAt === 'string' ? Date.parse(day.endsAt) : NaN,
+      )
+      .filter(Number.isFinite),
+  );
+  const end = new Date(actualEnd);
+  return { start, end };
+}
+
+export function records(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value)
     ? value.filter(
         (item): item is Record<string, unknown> =>
@@ -55,7 +85,7 @@ function records(value: unknown): Record<string, unknown>[] {
     : [];
 }
 
-function publishedSets(
+export function publishedSets(
   pack: Record<string, unknown>,
   festivalId: string,
 ): LiveActivitySet[] {
@@ -77,17 +107,36 @@ function publishedSets(
   );
 }
 
+/** 공개 축제 목록의 `thumbUrl`과 같은 발행 팩 대표 이미지. https 여부는 APNs 발송부가 거른다. */
+export function publishedThumbUrl(
+  pack: Record<string, unknown> | undefined,
+): string | undefined {
+  return typeof pack?.thumbUrl === 'string' ? pack.thumbUrl : undefined;
+}
+
 function nextBoundary(
   sets: LiveActivitySet[],
   member: LiveActivityMember | null,
   days: Record<string, unknown>[],
+  festival: { start: Date; end: Date },
   now: Date,
 ): Date | null {
-  const future = sets
-    .flatMap((set) => [set.startsAt, set.endsAt])
-    .filter((value): value is string => value !== null)
-    .map((value) => Date.parse(value));
+  const future = [
+    festival.start.getTime(),
+    festival.end.getTime(),
+    ...sets
+      .flatMap((set) => [set.startsAt, set.endsAt])
+      .filter((value): value is string => value !== null)
+      .map((value) => Date.parse(value)),
+  ];
   for (const day of days) {
+    // 앱이 행사일이 바뀔 때와 개장·종료 시각에 '개장 전'·'오늘 끝' 상태를 다시 그린다.
+    if (typeof day.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(day.date)) {
+      future.push(Date.parse(`${day.date}T00:00:00+09:00`));
+    }
+    for (const value of [day.startsAt, day.endsAt]) {
+      if (typeof value === 'string') future.push(Date.parse(value));
+    }
     if (typeof day.startsAt !== 'string' || typeof day.endsAt !== 'string')
       continue;
     const start = Date.parse(day.startsAt);
@@ -257,6 +306,49 @@ export class LiveActivityService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
+  async endDeviceForUnbind(
+    deviceId: string,
+    manager: EntityManager,
+  ): Promise<void> {
+    const rows = await manager.query<
+      Array<{
+        liveActivityPushToken: string | null;
+        apnsEnvironment: 'sandbox' | 'production' | null;
+      }>
+    >(
+      `SELECT "liveActivityPushToken", "apnsEnvironment" FROM "devices"
+       WHERE "id" = $1 FOR NO KEY UPDATE`,
+      [deviceId],
+    );
+    const target = rows[0];
+    if (target?.liveActivityPushToken) {
+      if (!target.apnsEnvironment || !this.apns.isConfigured())
+        throw new ServiceUnavailableException(
+          'Live Activity 종료를 재시도해야 합니다.',
+        );
+      const result = await this.apns.sendLiveActivityEnd(
+        target.liveActivityPushToken,
+        target.apnsEnvironment,
+        {
+          phase: 'finished',
+          startDate: 0,
+          endDate: 0,
+          nowStages: [],
+          nextMine: null,
+          pinnedFlag: null,
+          crewSummary: null,
+          leaveAt: null,
+        },
+        true,
+      );
+      if (!result.accepted && !result.permanent)
+        throw new ServiceUnavailableException(
+          'Live Activity 종료를 재시도해야 합니다.',
+        );
+    }
+    await this.stopDevice(deviceId, manager);
+  }
+
   async tick(): Promise<void> {
     if (this.running) return;
     this.running = true;
@@ -409,8 +501,19 @@ export class LiveActivityService implements OnModuleInit, OnModuleDestroy {
       }
       const festivalId = target.liveActivityFestivalId;
       const pack = festivals[0].published;
+      const days = records(pack.days);
+      const festival = festivalPeriod(days);
+      if (!festival) {
+        await this.finish(
+          manager,
+          job,
+          'idle',
+          'FESTIVAL_SCHEDULE_UNAVAILABLE',
+        );
+        return;
+      }
       const flags = await manager.query<LiveActivityFlag[]>(
-        `SELECT "id", "festivalId",
+        `SELECT "id", "festivalId", "name",
         "status", "visibility", "hidden", "zoneId", "activity" FROM "flags"
         WHERE "festivalId" = $1 AND "visibility" = 'public' AND "hidden" = false`,
         [festivalId],
@@ -423,12 +526,14 @@ export class LiveActivityService implements OnModuleInit, OnModuleDestroy {
       const state = buildLiveActivityContentState({
         festivalId,
         now,
+        festivalStart: festival.start,
+        festivalEnd: festival.end,
         sets,
         flagsEnabled: pack.flagsEnabled === true,
         flags,
         member,
       });
-      const boundary = nextBoundary(sets, member, records(pack.days), now);
+      const boundary = nextBoundary(sets, member, days, festival, now);
 
       // A late send could approach lease expiry and defeat crash recovery's
       // persisted 90-second reservation. Requeue instead of attempting it.
@@ -450,21 +555,36 @@ export class LiveActivityService implements OnModuleInit, OnModuleDestroy {
       }
 
       let result: Awaited<ReturnType<ApnsService['sendLiveActivityUpdate']>>;
+      const finished = state.phase === 'finished';
       try {
-        result = await this.apns.sendLiveActivityUpdate(
-          target.liveActivityPushToken,
-          target.apnsEnvironment,
-          state,
-        );
+        result = finished
+          ? await this.apns.sendLiveActivityEnd(
+              target.liveActivityPushToken,
+              target.apnsEnvironment,
+              state,
+            )
+          : await this.apns.sendLiveActivityUpdate(
+              target.liveActivityPushToken,
+              target.apnsEnvironment,
+              state,
+            );
       } catch {
         await this.retryOrFail(manager, job, 'APNS_ERROR');
         return;
       }
       if (result.accepted) {
+        if (finished) {
+          await manager.query(
+            `UPDATE "devices" SET "liveActivityPushToken" = NULL
+            WHERE "id" = $1 AND "liveActivityPushToken" = $2
+              AND "liveActivityId" = $3`,
+            [job.deviceId, target.liveActivityPushToken, target.liveActivityId],
+          );
+        }
         await this.finish(
           manager,
           job,
-          boundary ? 'pending' : 'idle',
+          finished || !boundary ? 'idle' : 'pending',
           null,
           boundary,
         );

@@ -17,8 +17,30 @@ import { ADDITIONAL_FESTIVAL_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/add
 import { PRUGIO_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/prugio-profile';
 import { CDF_LOW_HIGH_LOW_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/cdf-low-high-low-profile';
 import { SOHYANG_COMMONS_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/sohyang-commons-profile';
+import { PRUGIO_PORTRAIT_PUBLIC_IMAGE_SQL } from '../admin/crawl/service/prugio-portraits';
 
 describe('public crawl image policy', () => {
+  it('일반 출연진 사진은 허용된 예매·공식 호스트의 축제 원본에만 공개한다', () => {
+    const hostRule = /festivalSourceUrl' ~ '(\^https:\/\/\([^']+\)\/)'/.exec(
+      PUBLIC_CRAWL_IMAGE_SQL,
+    )?.[1];
+    expect(hostRule).toBeDefined();
+    const allowed = new RegExp(hostRule!);
+    for (const url of [
+      'https://ticket.melon.com/performance/index.htm?prodId=213666',
+      'https://ticket.yes24.com/Perf/60590',
+      'https://nol.yanolja.com/ticket/products/26014568',
+      'https://world.nol.com/en/ticket/products/26015253',
+      'https://mintpaper.co.kr/festivals/178',
+    ])
+      expect(allowed.test(url)).toBe(true);
+    for (const url of [
+      'https://nol.com/en/ticket/products/26015253',
+      'https://worldxnol.com/en/ticket/products/26015253',
+      'https://evil.example/world.nol.com/',
+    ])
+      expect(allowed.test(url)).toBe(false);
+  });
   it('hides the Commons photo after rights drift, stale validation, or a replaced file', () => {
     expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(
       "source.\"parserConfig\"->>'seed' IS DISTINCT FROM 'sohyang-commons-profile'",
@@ -57,6 +79,18 @@ describe('public crawl image policy', () => {
       "source.\"parserConfig\"->>'seed' = 'prugio-official-profile'",
     );
     expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(PRUGIO_PUBLIC_IMAGE_SQL);
+  });
+  it('serves cropped Prugio photos only through the active official gallery and exact poster origin', () => {
+    expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(
+      "source.\"parserConfig\"->>'seed' IS DISTINCT FROM 'prugio-official-portraits'",
+    );
+    expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(PRUGIO_PORTRAIT_PUBLIC_IMAGE_SQL);
+    expect(PRUGIO_PORTRAIT_PUBLIC_IMAGE_SQL).toContain(
+      'gallery.enabled = true',
+    );
+    expect(PRUGIO_PORTRAIT_PUBLIC_IMAGE_SQL).toContain(
+      'cdnticket[.]melon[.]co[.]kr',
+    );
   });
   it('publishes additional Seoul portraits only through the verified profile branch', () => {
     expect(PUBLIC_CRAWL_IMAGE_SQL).toContain(

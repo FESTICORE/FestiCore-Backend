@@ -9,6 +9,7 @@ import {
 } from 'typeorm';
 
 export type CrewState = 'here' | 'eating' | 'toilet' | 'leaving';
+export type CrewGatherReply = 'going' | 'ack';
 
 @Entity('crews')
 @Index('UQ_crews_invite_code', ['inviteCode'], { unique: true })
@@ -90,6 +91,22 @@ export class CrewGather {
 
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt!: Date;
+}
+
+/** 모여! 요청에 크루원이 남긴 '가는 중'·'확인' 응답. 같은 사람의 다시 응답은 덮어쓴다. */
+@Entity('crew_gather_responses')
+export class CrewGatherResponse {
+  @PrimaryColumn({ type: 'uuid' })
+  gatherId!: string;
+
+  @PrimaryColumn({ type: 'uuid' })
+  userId!: string;
+
+  @Column({ type: 'varchar', length: 8 })
+  response!: CrewGatherReply;
+
+  @Column({ type: 'timestamptz' })
+  respondedAt!: Date;
 }
 
 @Entity('crew_status_idempotency')

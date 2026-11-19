@@ -21,11 +21,35 @@ import {
 import { Public } from '../auth/decorator/public.decorator';
 import {
   ALLOW_ANONYMOUS_DEVICE_REGISTRATION,
+  ALLOW_DEVICE_BINDING_RECOVERY,
   DeviceAuthGuard,
   type DeviceRequest,
 } from './device-auth.guard';
-import { LiveActivityDto, RegisterDeviceDto } from './device.dto';
+import {
+  LiveActivityDto,
+  NotificationSettingsDto,
+  RegisterDeviceDto,
+} from './device.dto';
 import { DeviceService } from './device.service';
+
+const notificationSettingsSchema = {
+  type: 'object',
+  properties: {
+    code: { type: 'string', example: 'SUCCESS' },
+    data: {
+      type: 'object',
+      properties: {
+        flagStatus: { type: 'boolean', example: true },
+        crewStatus: { type: 'boolean', example: true },
+        crewGather: { type: 'boolean', example: true },
+        setReminders: { type: 'boolean', example: true },
+        homecoming: { type: 'boolean', example: true },
+        packUpdates: { type: 'boolean', example: true },
+      },
+    },
+    message: { type: 'string', example: '성공적으로 처리되었습니다.' },
+  },
+};
 
 @ApiTags('Devices')
 @Controller('devices')
@@ -98,6 +122,51 @@ export class DeviceController {
     );
   }
 
+  @Put('bind-user')
+  @ApiHeader({
+    name: 'X-Device-Access-Token',
+    required: true,
+    description: '현재 기기에 발급된 익명 deviceAccessToken',
+  })
+  @ApiOperation({ summary: '익명 기기를 로그인한 사용자에게 연결' })
+  @ApiResponse({ status: 200, description: '연결된 기기 ID와 사용자 ID' })
+  async bindUser(@Req() request: DeviceRequest) {
+    return this.service.bindUser(
+      this.deviceId(request),
+      request.header('x-device-access-token') ?? '',
+      request.devicePrincipal,
+    );
+  }
+
+  @Delete('bind-user')
+  @ApiHeader({
+    name: 'X-Device-Unbind-Key',
+    required: true,
+    description: '연결 해제 전에 기기에 저장한 UUID v4 재시도 키',
+  })
+  @ApiOperation({ summary: '로그아웃한 기기의 사용자 연결 해제' })
+  @ApiResponse({ status: 200, description: '새 익명 deviceAccessToken' })
+  async unbindUser(@Req() request: DeviceRequest) {
+    return this.service.unbindUser(
+      this.deviceId(request),
+      request.header('x-device-unbind-key') ?? '',
+      request.devicePrincipal,
+    );
+  }
+
+  @Delete('bind-user/recover')
+  @SetMetadata(ALLOW_DEVICE_BINDING_RECOVERY, true)
+  @ApiHeader({ name: 'X-Device-Unbind-Key', required: true })
+  @ApiOperation({ summary: '사용자 세션 만료 후 기기 소유 연결 해제' })
+  @ApiResponse({ status: 200, description: '새 익명 deviceAccessToken' })
+  async recoverUnbindUser(@Req() request: DeviceRequest) {
+    return this.service.recoverUnbindUser(
+      this.deviceId(request),
+      request.header('x-device-unbind-key') ?? '',
+      request.devicePrincipal,
+    );
+  }
+
   @Get()
   @ApiOperation({ summary: '현재 기기 등록 상태 조회' })
   @ApiResponse({
@@ -136,6 +205,47 @@ export class DeviceController {
   @ApiResponse({ status: 204, description: '삭제됨' })
   async remove(@Req() request: DeviceRequest) {
     await this.service.remove(this.deviceId(request), request.devicePrincipal);
+  }
+
+  @Get('notification-settings')
+  @ApiOperation({
+    summary: '기기 알림 설정 조회',
+    description:
+      '현재 기기의 알림 종류별 수신 여부를 조회합니다. 처음 등록한 기기는 모두 true입니다.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: '알림 종류별 수신 여부',
+    schema: notificationSettingsSchema,
+  })
+  async notificationSettings(@Req() request: DeviceRequest) {
+    return this.service.notificationSettings(
+      this.deviceId(request),
+      request.devicePrincipal,
+    );
+  }
+
+  @Put('notification-settings')
+  @ApiOperation({
+    summary: '기기 알림 설정 저장',
+    description:
+      '보낸 항목만 바꿉니다. flagStatus·crewStatus·crewGather·packUpdates·setReminders가 꺼지면 이 기기에 해당 푸시를 보내지 않습니다. setReminders는 저장한 공연 2시간 전 알림입니다. homecoming은 서버 발송 기능 전까지 값만 저장합니다.',
+  })
+  @ApiBody({ type: NotificationSettingsDto })
+  @ApiResponse({
+    status: 200,
+    description: '저장 후 전체 알림 설정',
+    schema: notificationSettingsSchema,
+  })
+  async updateNotificationSettings(
+    @Body() body: NotificationSettingsDto,
+    @Req() request: DeviceRequest,
+  ) {
+    return this.service.updateNotificationSettings(
+      this.deviceId(request),
+      body,
+      request.devicePrincipal,
+    );
   }
 
   @Put('live-activity')

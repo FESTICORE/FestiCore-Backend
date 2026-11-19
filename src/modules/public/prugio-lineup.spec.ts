@@ -1,3 +1,4 @@
+import { publicFestivalTestDataSource } from '../../../test/public-festival-test-data-source';
 import { attachPrugioLineup, DiscoverySummary } from './crawl-catalog';
 import {
   PRUGIO_FESTIVAL_ID,
@@ -40,7 +41,7 @@ describe('Prugio public detail', () => {
     const service = new PublicFestivalService(
       { findOne: jest.fn().mockResolvedValue(null) } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     const detail = await service.detail(PRUGIO_FESTIVAL_ID);
@@ -82,7 +83,7 @@ describe('Prugio public detail', () => {
     const service = new PublicFestivalService(
       { findOne: jest.fn().mockResolvedValue(null) } as never,
       {} as never,
-      { query } as never,
+      publicFestivalTestDataSource(query) as never,
       {} as never,
     );
     const detail = await service.detail(PRUGIO_FESTIVAL_ID);

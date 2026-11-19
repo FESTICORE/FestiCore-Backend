@@ -14,6 +14,7 @@ import {
   CrewMember,
   CrewStatusIdempotency,
 } from './crew.entity';
+import { crewArchiveTime } from './crew-archive-time';
 
 const DAY_MS = 24 * 60 * 60_000;
 
@@ -55,20 +56,7 @@ export class CrewArchiveService implements OnModuleInit, OnModuleDestroy {
         const festival = await this.festivals.findOne({
           where: { id: crew.festivalId },
         });
-        const days = festival?.published?.days;
-        const ends = Array.isArray(days)
-          ? days
-              .map((day: unknown) =>
-                day &&
-                typeof day === 'object' &&
-                'endsAt' in day &&
-                typeof day.endsAt === 'string'
-                  ? Date.parse(day.endsAt)
-                  : NaN,
-              )
-              .filter(Number.isFinite)
-          : [];
-        if (ends.length && now.getTime() >= Math.max(...ends) + DAY_MS) {
+        if (now.getTime() >= crewArchiveTime(festival?.published?.days)) {
           await this.crews.manager.transaction(async (manager) => {
             const archived = await manager
               .getRepository(Crew)
