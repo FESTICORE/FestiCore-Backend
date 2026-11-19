@@ -158,6 +158,24 @@ class GitRulesHookTests(unittest.TestCase):
             f.write("export const c = 3;\n")
         self.assertBlocked(self.hook('git commit -m "설정을 바꾼다 #396"'), "검증하지 않은")
 
+    def test_other_repo_commit_uses_its_own_harness_state(self):
+        other = os.path.join(self.tmp, "other")
+        os.makedirs(os.path.join(other, "src"))
+        os.makedirs(os.path.join(other, ".claude", "hooks"))
+        with open(os.path.join(other, ".claude", "hooks", "harness_state.py"), "w") as f:
+            f.write("def unverified(root):\n    return []\n")  # 그 저장소 규칙으로는 검증할 변경이 없다
+        run("git", "init", "-q", "-b", "develop", cwd=other)
+        run("git", "config", "user.name", "tester", cwd=other)
+        run("git", "config", "user.email", "tester@example.com", cwd=other)
+        run("git", "commit", "-q", "--allow-empty", "-m", "init", cwd=other)
+        run("git", "checkout", "-q", "-b", "feature/other-change", cwd=other)
+        with open(os.path.join(other, "src", "b.ts"), "w") as f:
+            f.write("export const b = 2;\n")
+        run("git", "add", "-A", "src", cwd=other)
+        self.assertEqual(0, self.hook(f'git -C {other} commit -m "다른 저장소를 고친다 #396"').returncode)
+        os.remove(os.path.join(other, ".claude", "hooks", "harness_state.py"))  # 없으면 이 저장소 규칙으로 막는다
+        self.assertBlocked(self.hook(f'git -C {other} commit -m "다른 저장소를 고친다 #396"'), "검증하지 않은")
+
     def test_docs_only_change_needs_no_verify(self):
         for path in ("README.md", "src/README.md"):
             with open(os.path.join(self.repo, path), "w") as f:
