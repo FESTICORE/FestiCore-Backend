@@ -4,7 +4,6 @@ import { Logger, type INestApplication } from '@nestjs/common';
 import type { Server } from 'http';
 import request from 'supertest';
 import sharp from 'sharp';
-import { DataSource } from 'typeorm';
 import { ImageStorageService } from '../../storage/image-storage.service';
 import { AdminAuditService } from '../audit/admin-audit.service';
 import { AdminFestivalMapController } from './admin-festival-map.controller';
@@ -15,7 +14,14 @@ describe('admin festival map upload', () => {
   const key = `festivals/fst_01234567/maps/${imageId}.webp`;
   const festivals = { getDraft: jest.fn(), patch: jest.fn() };
   const storage = { saveFestivalMap: jest.fn(), delete: jest.fn() };
-  const audit = { record: jest.fn() };
+  const record = jest.fn();
+  const audit = {
+    record,
+    // 실제 서비스처럼 자체 트랜잭션 안에서 record를 부른다.
+    recordStandalone: jest.fn((input: unknown) =>
+      db.transaction((work) => record(work, input) as Promise<unknown>),
+    ),
+  };
   const manager = {};
   const db = {
     transaction: jest.fn((work: (manager: object) => Promise<unknown>) =>
@@ -33,7 +39,6 @@ describe('admin festival map upload', () => {
     festivals as unknown as AdminFestivalService,
     storage as unknown as ImageStorageService,
     config as ConfigService,
-    db as unknown as DataSource,
     audit as unknown as AdminAuditService,
   );
 
@@ -143,7 +148,6 @@ describe('admin festival map upload', () => {
         { provide: AdminFestivalService, useValue: festivals },
         { provide: ImageStorageService, useValue: storage },
         { provide: ConfigService, useValue: config },
-        { provide: DataSource, useValue: db },
         { provide: AdminAuditService, useValue: audit },
       ],
     }).compile();

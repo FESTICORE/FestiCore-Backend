@@ -83,6 +83,11 @@ export class AdminAuditService {
     );
   }
 
+  /** 다른 쓰기와 묶을 필요가 없는 감사 기록을 자체 트랜잭션으로 남긴다. */
+  async recordStandalone(input: AdminAuditInput): Promise<void> {
+    await this.dataSource.transaction((manager) => this.record(manager, input));
+  }
+
   async list(
     actor?: string,
     from?: string,

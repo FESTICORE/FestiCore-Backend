@@ -3,7 +3,6 @@ import request from 'supertest';
 import { INestApplication } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
-import { DataSource } from 'typeorm';
 import { ImageStorageService } from '../storage/image-storage.service';
 import { PublicFestivalMapController } from './public-festival-map.controller';
 import { PublicFestivalService } from './public-festival.service';
@@ -23,10 +22,13 @@ describe('public festival image throttling', () => {
           provide: ImageStorageService,
           useValue: { readCrawlImage, readFestivalMap: jest.fn() },
         },
-        { provide: DataSource, useValue: { query } },
         {
           provide: PublicFestivalService,
-          useValue: { hasCurrentArtist: jest.fn() },
+          useValue: {
+            hasCurrentArtist: jest.fn(),
+            findPublicPoster: async (id: string) =>
+              ((await query(id)) as unknown[])[0] ?? null,
+          },
         },
       ],
     }).compile();
