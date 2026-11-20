@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root"
+# 커밋 직전 실제 index를 verify 통과 기록과 대조한다. 같은 명령 안에서 고친 뒤 commit -a 해도 잡는다. (docs/agent/harness.md)
+python3 -I -S .claude/hooks/pre_commit_gate.py

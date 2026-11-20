@@ -46,11 +46,61 @@ PLACEHOLDER_RE = re.compile(r"@@HEREDOC(\d+)@@")
 CD_RE = re.compile(r"(?:^|&&|;|\n)\s*cd\s+(\"[^\"]+\"|'[^']+'|\S+)")
 GIT_C_RE = re.compile(r"git\s+-C\s+(\"[^\"]+\"|'[^']+'|\S+)")
 HOOK_DIR = os.path.dirname(os.path.abspath(__file__))
+# 바꾸는 경우만 본다: -c core.hooksPath=값, config core.hooksPath 값, --unset · --replace-all 등.
+# 조회와 게이트를 켜는 값(.githooks)은 통과.
+GATE_VALUE = r"(?!(?-i:\.githooks|\"\.githooks\"|'\.githooks')(?:\s|$|[;&|]))"  # 따옴표 포함 값 전체가 정확히 .githooks
+HOOKS_PATH_CHANGE_RE = re.compile(
+    r"core\.hooksPath[\"']?\s*=\s*" + GATE_VALUE + r"|config\b[^;&|\n]*?(?:--unset|--replace-all|--add)[^;&|\n]*core\.hooksPath"
+    r"|config\b(?:\s+--(?:local|global|system|worktree))*\s+[\"']?core\.hooksPath[\"']?\s+" + GATE_VALUE + r"[^\s;&|]"
+    # 환경 변수로 넘기는 설정(GIT_CONFIG_KEY_0=core.hooksPath · GIT_CONFIG_PARAMETERS)도 훅을 끈다
+    r"|GIT_CONFIG_(?:KEY_\d+|PARAMETERS)=[\"']?[^\s;&|]*core\.hooksPath",
+    re.I)
+SHELL_STRING_PREV = {"-c", "eval"}  # bash -c '…' · eval '…' 문자열 안의 명령도 본다
+NO_VERIFY = "--no-" + "verify"
+VALUE_OPTS = {"-m", "--message", "-F", "--file", "-C", "-c", "--reuse-message", "--reedit-message",
+              "-t", "--template", "--author", "--date", "--fixup", "--squash", "--cleanup"}
 
 
 def fail(reason):
     sys.stderr.write(f"[git 규칙 위반] {reason}\n규칙: docs/agent/harness.md\n")
     sys.exit(2)
+
+
+def skips_hooks(command):
+    """명령 안의 git commit에 훅 건너뛰기 옵션(긴 이름 또는 묶음 short 옵션 속 -n)이 있는지.
+    따옴표 안의 ; 로 잘리지 않게 명령 전체를 토큰으로 나누고, bash -c 등에 넘긴 문자열도 다시 본다."""
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|()")
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        return NO_VERIFY in command
+    in_commit = skip = False
+    prev = ""
+    for token in tokens:
+        before, prev = prev, token
+        if skip:  # 값을 받는 옵션 뒤 토큰은 값이다(-m ";" 포함)
+            skip = False
+            continue
+        if token and set(token) <= set(";&|()\n"):
+            in_commit = False
+            continue
+        if before in SHELL_STRING_PREV and "commit" in token and skips_hooks(token):
+            return True
+        if not in_commit:
+            in_commit = token == "commit"
+            continue
+        if token.startswith("--no-v") and NO_VERIFY.startswith(token):  # git은 긴 옵션 축약을 받는다
+            return True
+        elif token in VALUE_OPTS:
+            skip = True
+        elif token.startswith("-") and not token.startswith("--"):
+            for flag in token[1:]:
+                if flag == "n":
+                    return True
+                if f"-{flag}" in VALUE_OPTS:  # -am "메시지"처럼 값을 받는 옵션 뒤 글자는 값이다
+                    break
+    return False
 
 
 def check_message(subject):
@@ -219,6 +269,10 @@ def main():
     cmd = data.get("tool_input", {}).get("command", "")
 
     skeleton, bodies = strip_heredocs(cmd)
+    if skips_hooks(cmd):
+        fail("pre-commit 검증 게이트를 건너뛰는 옵션(-n 등)은 쓰지 않습니다. verify를 통과시킨 뒤 커밋하세요.")
+    if HOOKS_PATH_CHANGE_RE.search(skeleton):
+        fail("core.hooksPath를 바꾸면 pre-commit 검증 게이트가 꺼집니다. 바꾸지 않습니다.")
     commit_matches = list(COMMIT_RE.finditer(skeleton))
     push_matches = list(PUSH_RE.finditer(skeleton))
     commits = [segment(skeleton, m) for m in commit_matches]
