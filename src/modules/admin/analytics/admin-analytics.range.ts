@@ -12,6 +12,7 @@ const DAY = 86_400_000;
 export function parseAnalyticsRange(
   from?: string,
   to?: string,
+  maxDays = 31,
 ): AnalyticsRange {
   const parse = (value: string | undefined): number => {
     if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
@@ -31,9 +32,9 @@ export function parseAnalyticsRange(
   const todayKst = new Date(Date.now() + 9 * 60 * 60 * 1000)
     .toISOString()
     .slice(0, 10);
-  if (first > last || (last - first) / DAY >= 31 || to! > todayKst) {
+  if (first > last || (last - first) / DAY >= maxDays || to! > todayKst) {
     throw new BadRequestException(
-      '조회 기간은 KST 기준 과거 31일 이내여야 합니다.',
+      `조회 기간은 KST 기준 과거 ${maxDays}일 이내여야 합니다.`,
     );
   }
   return {

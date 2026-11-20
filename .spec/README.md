@@ -15,6 +15,7 @@
 - [me.md](./me.md) — 내 정보 조회·닉네임 변경·회원 탈퇴 요청 본문
 - [admin-auth.md](./admin-auth.md) — 일반 로그인과 관리자 권한
 - [admin-festivals.md](./admin-festivals.md) — 축제 초안·발행·롤백
+- [admin-dashboard.md](./admin-dashboard.md) — 관리자 대시보드 오늘 요약·참여율·추이
 - [flags.md](./flags.md) — 깃발·기수·팔로우·사진·신고
 - [public-festivals.md](./public-festivals.md) — 발행 축제 목록·팩·깃발·라이브 조회
 - [festival-websocket.md](./festival-websocket.md) — 공개 팩 갱신 WebSocket·재연결 계약
