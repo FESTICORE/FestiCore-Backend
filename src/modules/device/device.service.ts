@@ -31,6 +31,7 @@ const NOTIFICATION_SETTING_COLUMNS = {
   setReminders: 'notifySetReminders',
   homecoming: 'notifyHomecoming',
   packUpdates: 'notifyPackUpdates',
+  officialNews: 'notifyOfficialNews',
 } as const;
 
 export type NotificationSettings = Record<

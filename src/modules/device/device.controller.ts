@@ -45,6 +45,7 @@ const notificationSettingsSchema = {
         setReminders: { type: 'boolean', example: true },
         homecoming: { type: 'boolean', example: true },
         packUpdates: { type: 'boolean', example: true },
+        officialNews: { type: 'boolean', example: true },
       },
     },
     message: { type: 'string', example: '성공적으로 처리되었습니다.' },
@@ -229,7 +230,7 @@ export class DeviceController {
   @ApiOperation({
     summary: '기기 알림 설정 저장',
     description:
-      '보낸 항목만 바꿉니다. flagStatus·crewStatus·crewGather·packUpdates·setReminders가 꺼지면 이 기기에 해당 푸시를 보내지 않습니다. setReminders는 저장한 공연 2시간 전 알림입니다. homecoming은 서버 발송 기능 전까지 값만 저장합니다.',
+      '보낸 항목만 바꿉니다. flagStatus·crewStatus·crewGather·packUpdates·setReminders·officialNews가 꺼지면 이 기기에 해당 푸시를 보내지 않습니다. setReminders는 저장한 공연 2시간 전 알림입니다. homecoming은 서버 발송 기능 전까지 값만 저장합니다.',
   })
   @ApiBody({ type: NotificationSettingsDto })
   @ApiResponse({

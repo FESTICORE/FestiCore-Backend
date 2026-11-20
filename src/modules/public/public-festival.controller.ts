@@ -605,6 +605,54 @@ export class PublicFestivalController {
     this.send(response, body);
   }
 
+  @Get(':id/instagram')
+  @ApiOperation({
+    summary: '축제 공식 인스타그램 최근 게시물',
+    description:
+      '서버가 5분마다 Meta Business Discovery로 받아 둔 공식 인스타그램 최근 게시물(최대 6개)을 반환합니다. 공식 계정이 없거나 아직 받지 못했으면 available=false, posts=[]입니다. imageUrl은 이미지 게시물의 원본, 영상의 썸네일, 여러 장 게시물의 첫 이미지이며 없으면 null입니다. imageUrl은 인스타그램 CDN 주소라 시간이 지나면 만료될 수 있습니다. 요청 본문은 없습니다.',
+  })
+  @ApiParam(festivalId)
+  @ApiResponse({
+    status: 200,
+    description: '공식 인스타그램 최근 게시물',
+    schema: {
+      type: 'object',
+      example: {
+        code: 'SUCCESS',
+        data: {
+          festivalId: 'fst_01234567',
+          available: true,
+          account: {
+            username: 'grandmintfestival',
+            url: 'https://www.instagram.com/grandmintfestival/',
+          },
+          fetchedAt: '2026-11-20T09:00:00.000Z',
+          posts: [
+            {
+              id: '17900000000000000',
+              caption: '타임테이블이 변경되었습니다.',
+              mediaType: 'IMAGE',
+              imageUrl: 'https://scontent.cdninstagram.com/v/example.jpg',
+              permalink: 'https://www.instagram.com/p/EXAMPLE/',
+              postedAt: '2026-11-20T08:55:00.000Z',
+            },
+          ],
+        },
+        message: '성공적으로 처리되었습니다.',
+      },
+    },
+  })
+  @ApiResponse({
+    status: 404,
+    description: '발행된 축제가 없습니다.',
+    schema: jsonErrorSchema('FESTIVAL_NOT_FOUND'),
+  })
+  async officialNews(@Param('id') id: string, @Res() response: Response) {
+    const body = await this.service.officialNews(id);
+    response.setHeader('Cache-Control', 'public, max-age=60');
+    this.send(response, body);
+  }
+
   @Get(':id/live')
   @ApiOperation({
     summary: '축제 라이브 보드',

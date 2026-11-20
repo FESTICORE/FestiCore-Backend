@@ -69,6 +69,9 @@ APNS_TEAM_ID=                              # APNs Auth Key의 Apple Team ID
 APNS_KEY_ID=                               # APNs Auth Key ID
 APNS_PRIVATE_KEY=                          # APNs .p8 키, 개행은 \n
 APNS_BUNDLE_ID=                            # iOS 앱 bundle ID (apns-topic)
+INSTAGRAM_GRAPH_TOKEN=                     # Meta 장기 User 토큰(instagram_basic·instagram_manage_insights·pages_read_engagement), 약 60일마다 재발급
+INSTAGRAM_BUSINESS_ACCOUNT_ID=             # 호출 주체인 FestiCore 인스타그램 비즈니스 계정 ID(숫자)
+INSTAGRAM_GRAPH_VERSION=                   # 선택. 비우면 v25.0
 APPLE_REVOKE_ENCRYPTION_KEY=                # Apple 폐기 재시도 토큰 암호화: 32바이트 base64 또는 64자리 hex, 환경별 별도 키
 OAUTH_TOKEN_ENCRYPTION_KEY=                 # 사용자 OAuth 갱신 토큰 전용 32바이트 base64 또는 64자리 hex 키
 OAUTH_TOKEN_ENCRYPTION_PREVIOUS_KEY=        # 키 교체 기간에만 사용; 이전 암호문이 남아 있는 동안 유지
@@ -208,6 +211,11 @@ Apple 토큰 폐기가 실패하면 탈퇴 트랜잭션에서 암호화된 재�
 `apnsEnvironment`는 앱 entitlement를 기준으로 `sandbox` 또는 `production`을
 보내며 Railway 환경명으로 추측하지 않는다. TestFlight 토큰은 `production`이다.
 APNs HTTP 200은 Apple 서버의 수락 결과이며 실기기 수신 증거는 아니다.
+
+축제 공식 인스타그램 소식은 `INSTAGRAM_GRAPH_TOKEN`과
+`INSTAGRAM_BUSINESS_ACCOUNT_ID`가 모두 있을 때만 5분마다 받는다. 둘 중 하나라도
+없으면 수집을 건너뛰고 공개 조회는 `available=false`를 돌려준다. 토큰이 만료되면
+서버 로그에 한 번 남기고 30분마다 다시 시도하므로, 만료 전에 새 토큰으로 바꾼다.
 
 ## 관리자 인증 배포 조건
 
