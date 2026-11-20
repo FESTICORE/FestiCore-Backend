@@ -15,6 +15,7 @@ export type UserNotificationType =
   | 'festival.reminder'
   | 'festival.set_reminder'
   | 'festival.start'
+  | 'festival.official_news'
   | 'pack.updated';
 
 export interface UserNotificationEntry {

@@ -69,6 +69,10 @@ export class Device {
   @Column({ type: 'boolean', default: true })
   notifyPackUpdates!: boolean;
 
+  /** 축제 공식 인스타그램 새 게시물 알림 */
+  @Column({ type: 'boolean', default: true })
+  notifyOfficialNews!: boolean;
+
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt!: Date;
 

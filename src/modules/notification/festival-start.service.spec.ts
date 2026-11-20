@@ -117,6 +117,121 @@ describe('FestivalStartService', () => {
     );
   });
 
+  describe('official instagram news', () => {
+    const newsJob = {
+      ...job,
+      eventKey: `official-news:${festivalId}:17900000000000001`,
+      scheduledAt: new Date('2026-11-20T09:00:00Z'),
+    };
+    const sentAt = new Date('2026-11-20T09:01:00Z');
+
+    it('rechecks pin, the device setting and the stored post, then sends with the caption', async () => {
+      const { service, query, sendStartNotification } = setup();
+      query
+        .mockResolvedValueOnce([
+          {
+            ownerUserId: '33333333-3333-4333-8333-333333333333',
+            apnsToken: 'token',
+            apnsEnvironment: 'production',
+            name: '원더리벳',
+            published: { thumbUrl: 'https://cdn.example/thumb.jpg' },
+            instagramUrl: 'https://www.instagram.com/wonderliivet/',
+            feedUsername: 'wonderliivet',
+            caption: '타임테이블 변경 안내\n자세한 내용은 프로필 링크',
+            imageUrl: 'https://cdn.example/post.jpg',
+            permalink: 'https://www.instagram.com/p/AAA/',
+            postedAt: new Date('2026-11-20T08:58:00Z'),
+          },
+        ])
+        .mockResolvedValue([]);
+      sendStartNotification.mockResolvedValueOnce({ accepted: true });
+
+      await service.deliver(newsJob, sentAt);
+
+      expect(query.mock.calls[0][0]).toContain('s."pinned" = true');
+      expect(query.mock.calls[0][0]).toContain('d."notifyOfficialNews" = true');
+      expect(query.mock.calls[0][1]).toEqual([job.id, '17900000000000001']);
+      const inbox = query.mock.calls.find(([sql]) =>
+        sql.includes('INSERT INTO "user_notifications"'),
+      );
+      expect(inbox?.[1]?.[1]).toBe('festival.official_news');
+      expect(inbox?.[1]?.[5]).toBe(`/festivals/${festivalId}/live`);
+      expect(sendStartNotification).toHaveBeenCalledWith(
+        'token',
+        'production',
+        expect.objectContaining({
+          title: '원더리벳 공식 소식',
+          body: '타임테이블 변경 안내',
+          type: 'festival.official_news',
+          festivalId,
+          imageUrl: 'https://cdn.example/post.jpg',
+          eventKey: newsJob.eventKey,
+        }),
+      );
+    });
+
+    it('cancels when the device unpinned, turned the setting off or the post is gone', async () => {
+      const { service, query, sendStartNotification } = setup();
+      query.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+      await service.deliver(newsJob, sentAt);
+      expect(sendStartNotification).not.toHaveBeenCalled();
+      expect(query.mock.calls[1][1]).toEqual([
+        job.id,
+        leaseUntil,
+        'cancelled',
+        'TARGET_UNAVAILABLE',
+      ]);
+    });
+
+    it('does not send when the official account changed after enqueue', async () => {
+      const { service, query, sendStartNotification } = setup();
+      query
+        .mockResolvedValueOnce([
+          {
+            ownerUserId: null,
+            apnsToken: 'token',
+            apnsEnvironment: 'production',
+            name: '원더리벳',
+            published: {},
+            instagramUrl: 'https://www.instagram.com/newaccount/',
+            feedUsername: 'wonderliivet',
+            caption: null,
+            imageUrl: null,
+            permalink: 'https://www.instagram.com/p/AAA/',
+            postedAt: new Date('2026-11-20T08:58:00Z'),
+          },
+        ])
+        .mockResolvedValueOnce([]);
+      await service.deliver(newsJob, sentAt);
+      expect(sendStartNotification).not.toHaveBeenCalled();
+      expect(query.mock.calls[1][1]?.[2]).toBe('cancelled');
+    });
+
+    it('does not send a post older than a day', async () => {
+      const { service, query, sendStartNotification } = setup();
+      query
+        .mockResolvedValueOnce([
+          {
+            ownerUserId: null,
+            apnsToken: 'token',
+            apnsEnvironment: 'production',
+            name: '원더리벳',
+            published: {},
+            instagramUrl: 'https://www.instagram.com/wonderliivet/',
+            feedUsername: 'wonderliivet',
+            caption: null,
+            imageUrl: null,
+            permalink: 'https://www.instagram.com/p/AAA/',
+            postedAt: new Date('2026-11-19T08:00:00Z'),
+          },
+        ])
+        .mockResolvedValueOnce([]);
+      await service.deliver(newsJob, sentAt);
+      expect(sendStartNotification).not.toHaveBeenCalled();
+      expect(query.mock.calls[1][1]?.[2]).toBe('cancelled');
+    });
+  });
+
   it('rechecks pin and reminder opt-in before sending, then cancels an unsubscribed job', async () => {
     const { service, query, sendReminderNotification } = setup();
     query.mockResolvedValueOnce([]).mockResolvedValueOnce([]);

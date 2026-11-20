@@ -31,9 +31,9 @@ APNs 토큰은 제공할 때 2~256자 짝수 길이 hex 문자열이다. JSON �
 
 ## 알림 설정
 
-- `GET /api/v1/devices/notification-settings`: 현재 기기의 알림 종류별 수신 여부를 반환한다. 응답 `data`는 `flagStatus`(팔로우한 깃발 이동), `crewStatus`(크루원 상태), `crewGather`(크루 모여! 요청), `setReminders`(공연 10분 전), `homecoming`(귀가 알림), `packUpdates`(팩 업데이트)다. 처음 등록한 기기와 이 기능 전에 등록한 기기는 모두 `true`다.
+- `GET /api/v1/devices/notification-settings`: 현재 기기의 알림 종류별 수신 여부를 반환한다. 응답 `data`는 `flagStatus`(팔로우한 깃발 이동), `crewStatus`(크루원 상태), `crewGather`(크루 모여! 요청), `setReminders`(공연 10분 전), `homecoming`(귀가 알림), `packUpdates`(팩 업데이트), `officialNews`(고정한 축제의 공식 인스타그램 새 게시물)다. 처음 등록한 기기와 이 기능 전에 등록한 기기는 모두 `true`다.
 - `PUT /api/v1/devices/notification-settings`: 같은 이름의 boolean을 선택해 보낸다. 보낸 항목만 바꾸고 바뀐 전체 설정을 200으로 반환한다. boolean이 아니면 400이다. 기기 소유권 검사는 다른 기기 API와 같다.
-- 꺼진 종류는 발송 직전에 다시 확인해 보내지 않는다. `flagStatus`·`crewStatus`·`crewGather`는 각각 `flag.status`·`crew.status`·`crew.gather` 소셜 알림에 적용한다. `packUpdates`가 꺼지면 축제별 구독의 `packUpdates`가 켜져 있어도 `pack.updated`를 등록·발송하지 않는다.
+- 꺼진 종류는 발송 직전에 다시 확인해 보내지 않는다. `flagStatus`·`crewStatus`·`crewGather`는 각각 `flag.status`·`crew.status`·`crew.gather` 소셜 알림에 적용한다. `packUpdates`가 꺼지면 축제별 구독의 `packUpdates`가 켜져 있어도 `pack.updated`를 등록·발송하지 않는다. `officialNews`가 꺼지면 `festival.official_news`를 등록·발송하지 않는다.
 - `setReminders`는 저장한 공연 10분 전 `festival.set_reminder` 알림([notifications.md](./notifications.md#저장한-공연-10분-전-알림))에 적용한다. `homecoming`은 서버 발송 기능이 아직 없어 값만 저장한다.
 
 ## 기기 조회·삭제

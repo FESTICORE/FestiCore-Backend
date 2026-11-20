@@ -147,4 +147,12 @@ export class NotificationSettingsDto {
   @IsOptional()
   @IsBoolean()
   packUpdates?: boolean;
+
+  @ApiPropertyOptional({
+    example: true,
+    description: '고정한 축제의 공식 인스타그램 새 게시물 알림',
+  })
+  @IsOptional()
+  @IsBoolean()
+  officialNews?: boolean;
 }

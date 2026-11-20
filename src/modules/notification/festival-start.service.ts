@@ -9,6 +9,11 @@ import { ApnsService } from './apns.service';
 import { buildDeeplink } from './deeplink';
 import { buildLiveActivityContentState } from './live-activity-content';
 import {
+  instagramUsername,
+  OFFICIAL_NEWS_PREFIX,
+  officialNewsBody,
+} from './official-news.service';
+import {
   recordUserNotifications,
   UserNotificationEntry,
 } from './user-notification.service';
@@ -24,6 +29,7 @@ const BATCH_SIZE = 100;
 const SEND_CONCURRENCY = 10;
 const MAX_ATTEMPTS = 6;
 const LATE_GRACE_MS = 2 * 60 * 60_000;
+const OFFICIAL_NEWS_EXPIRY_MS = 24 * 60 * 60_000;
 
 interface PublishedRow {
   id: string;
@@ -41,6 +47,20 @@ interface SavedScheduleRow {
 interface Day {
   date: string;
   startsAt: string;
+}
+
+interface OfficialNewsTarget {
+  ownerUserId: string | null;
+  instagramUrl: string | null;
+  feedUsername: string | null;
+  apnsToken: string | null;
+  apnsEnvironment: 'sandbox' | 'production' | null;
+  name: string | null;
+  published: Record<string, unknown> | null;
+  caption: string | null;
+  imageUrl: string | null;
+  permalink: string;
+  postedAt: Date | string;
 }
 
 interface Delivery {
@@ -594,6 +614,10 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
       await this.deliverSetReminder(job, now);
       return;
     }
+    if (job.eventKey.startsWith(`${OFFICIAL_NEWS_PREFIX}${job.festivalId}:`)) {
+      await this.deliverOfficialNews(job, now);
+      return;
+    }
     const performanceStart =
       job.eventKey === `${PERFORMANCE_START_PREFIX}${job.festivalId}`;
     const liveStart =
@@ -767,6 +791,77 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
           festivalId: job.festivalId,
           festivalName: target.name!,
           imageUrl: publishedThumbUrl(target.published),
+        },
+      ),
+    );
+  }
+
+  /**
+   * 공식 인스타그램 새 게시물 알림. 발송 직전에 고정 구독 · 기기 설정 · 게시물이 남아 있는지 다시 확인한다.
+   * 하루가 지난 작업은 보내지 않는다.
+   */
+  private async deliverOfficialNews(job: Delivery, now: Date): Promise<void> {
+    const mediaId = job.eventKey.slice(
+      `${OFFICIAL_NEWS_PREFIX}${job.festivalId}:`.length,
+    );
+    const rows = await this.db.query<OfficialNewsTarget[]>(
+      `SELECT d."userId" AS "ownerUserId", d."apnsToken", d."apnsEnvironment",
+        f."published"->>'name' AS "name", f."published",
+        f."published"->>'officialInstagramUrl' AS "instagramUrl",
+        feed."username" AS "feedUsername",
+        p."caption", p."imageUrl", p."permalink", p."postedAt"
+      FROM "notification_deliveries" n
+      JOIN "devices" d ON d."id" = n."deviceId" AND d."notifyOfficialNews" = true
+      JOIN "device_subscriptions" s ON s."deviceId" = n."deviceId"
+        AND s."festivalId" = n."festivalId" AND s."pinned" = true
+      JOIN "admin_festivals" f ON f."id" = n."festivalId"
+        AND f."published" IS NOT NULL AND f."publishedVersion" > 0
+      JOIN "official_instagram_posts" p ON p."festivalId" = n."festivalId"
+        AND p."mediaId" = $2
+      LEFT JOIN "official_instagram_feeds" feed ON feed."festivalId" = n."festivalId"
+      WHERE n."id" = $1`,
+      [job.id, mediaId],
+    );
+    const target = rows[0];
+    // 작업을 넣은 뒤 공식 계정이 바뀌었으면 옛 계정 게시물을 알리지 않는다.
+    const sameAccount =
+      Boolean(target?.feedUsername) &&
+      instagramUsername(target?.instagramUrl)?.toLowerCase() ===
+        target?.feedUsername?.toLowerCase();
+    if (
+      !target?.apnsToken ||
+      !target.apnsEnvironment ||
+      !target.name ||
+      !sameAccount ||
+      new Date(target.postedAt).getTime() <
+        now.getTime() - OFFICIAL_NEWS_EXPIRY_MS
+    ) {
+      await this.finish(job, 'cancelled', 'TARGET_UNAVAILABLE');
+      return;
+    }
+    const title = `${target.name} 공식 소식`;
+    const body = officialNewsBody(target.caption);
+    await this.recordInbox(job, target, {
+      type: 'festival.official_news',
+      festivalId: job.festivalId,
+      title,
+      body,
+      route: `/festivals/${job.festivalId}/live`,
+      subject: { mediaId, permalink: target.permalink },
+    });
+    await this.sendDelivery(job, () =>
+      this.apns.sendStartNotification(
+        target.apnsToken!,
+        target.apnsEnvironment!,
+        {
+          title,
+          body,
+          eventKey: job.eventKey,
+          type: 'festival.official_news',
+          festivalId: job.festivalId,
+          festivalName: target.name!,
+          imageUrl:
+            target.imageUrl ?? publishedThumbUrl(target.published ?? undefined),
         },
       ),
     );

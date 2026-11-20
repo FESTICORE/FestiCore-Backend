@@ -430,6 +430,7 @@ describe('DeviceService ownership and pins', () => {
       setReminders: true,
       homecoming: true,
       packUpdates: true,
+      officialNews: true,
     });
   });
 
@@ -444,11 +445,12 @@ describe('DeviceService ownership and pins', () => {
       notifySetReminders: true,
       notifyHomecoming: true,
       notifyPackUpdates: true,
+      notifyOfficialNews: true,
     });
     await expect(
       service.updateNotificationSettings(
         id,
-        { crewGather: false, packUpdates: false },
+        { crewGather: false, packUpdates: false, officialNews: false },
         device,
       ),
     ).resolves.toEqual({
@@ -458,6 +460,7 @@ describe('DeviceService ownership and pins', () => {
       setReminders: true,
       homecoming: true,
       packUpdates: false,
+      officialNews: false,
     });
     expect(devices.update).toHaveBeenCalledWith(
       {
@@ -465,7 +468,11 @@ describe('DeviceService ownership and pins', () => {
         userId: IsNull(),
         deviceTokenId: 'token-a',
       },
-      { notifyCrewGather: false, notifyPackUpdates: false },
+      {
+        notifyCrewGather: false,
+        notifyPackUpdates: false,
+        notifyOfficialNews: false,
+      },
     );
   });
 

@@ -67,7 +67,7 @@ export class ApnsService {
       title: string;
       body: string;
       eventKey: string;
-      type?: 'festival.start';
+      type?: 'festival.start' | 'festival.official_news';
       festivalId?: string;
     } & FestivalContext,
   ): Promise<ApnsSendResult> {
