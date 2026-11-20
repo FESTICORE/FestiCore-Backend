@@ -1518,6 +1518,9 @@ export class FlagsService {
             joinedAt: bearer.createdAt.toISOString(),
             hidden: flag.hidden,
             status: flag.status,
+            zoneId: flag.zoneId,
+            activity: flag.activity,
+            statusUpdatedAt: flag.statusUpdatedAt?.toISOString() ?? null,
           },
         ];
       }),

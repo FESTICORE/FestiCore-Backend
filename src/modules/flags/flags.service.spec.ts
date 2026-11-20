@@ -220,7 +220,14 @@ describe('FlagsService security boundaries', () => {
       },
     ]);
     flags.find.mockResolvedValueOnce([
-      { ...flag, status: 'active', hidden: false },
+      {
+        ...flag,
+        status: 'active',
+        hidden: false,
+        zoneId: 'zon_front',
+        activity: 'slam',
+        statusUpdatedAt: new Date('2026-10-21T12:00:00.000Z'),
+      },
     ]);
     users.find.mockResolvedValueOnce([
       {
@@ -243,6 +250,9 @@ describe('FlagsService security boundaries', () => {
           joinedAt: '2026-10-21T00:00:00.000Z',
           hidden: false,
           status: 'active',
+          zoneId: 'zon_front',
+          activity: 'slam',
+          statusUpdatedAt: '2026-10-21T12:00:00.000Z',
         },
       ],
     });

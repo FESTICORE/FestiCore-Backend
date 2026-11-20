@@ -86,6 +86,7 @@
 | --- | --- | --- | --- |
 | POST | `/api/v1/admin/festivals/:festivalId/bearer-codes` | editor | 등록 코드 생성, 관리자 행위 감사 기록 |
 | GET | `/api/v1/admin/festivals/:festivalId/bearer-codes` | viewer | 코드 현황 |
+| GET | `/api/v1/admin/festivals/:festivalId/bearers` | viewer | 기수 현황(별명, 소유자 여부, 연결 깃발, 숨김, 현장 상태, 기수가 공유한 존 `zoneId`·활동 `activity`·갱신 시각 `statusUpdatedAt`, 공유 전이면 `null`), `Cache-Control: no-store` |
 | GET | `/api/v1/admin/festivals/:festivalId/flags` | viewer | 깃발 현황(프로필, 전체 계획과 계획 공개, 팔로워, 신고 수, 숨김, 현장 상태) |
 | POST | `/api/v1/admin/festivals/:festivalId/flags` | editor | 기수 없는 깃발 생성(이름·소개·태그·사진 URL·홈 존·계획·계획 공개), 예정 상태로 시작, 감사 기록 |
 | PATCH | `/api/v1/admin/flags/:flagId` | editor | 프로필·사진 URL·계획·계획 공개 편집, 바뀐 필드의 전후 감사 기록 |

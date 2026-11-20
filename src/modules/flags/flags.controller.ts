@@ -1298,7 +1298,7 @@ export class AdminFlagsController {
   @ApiOperation({
     summary: '축제 기수 및 깃발 상태 목록',
     description:
-      'Bearer JWT와 viewer 이상 역할이 필요합니다. 해당 축제 기수의 별명, 소유자 여부, 연결 깃발과 현재 현장 상태를 조회합니다. 응답은 Cache-Control: no-store입니다.',
+      'Bearer JWT와 viewer 이상 역할이 필요합니다. 해당 축제 기수의 별명, 소유자 여부, 연결 깃발과 현재 현장 상태(공유한 존·활동·갱신 시각)를 조회합니다. 응답은 Cache-Control: no-store입니다.',
   })
   @ApiResponse({
     status: 200,
@@ -1315,6 +1315,9 @@ export class AdminFlagsController {
             joinedAt: '2026-10-21T00:00:00.000Z',
             hidden: false,
             status: 'active',
+            zoneId: 'zon_front',
+            activity: 'slam',
+            statusUpdatedAt: '2026-10-21T12:00:00.000Z',
           },
         ],
       },
