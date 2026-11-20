@@ -5,7 +5,9 @@
       .claude/scripts/verify --all    모든 단계 실행(eslint · jest 전체)
       .claude/scripts/verify --e2e    위 단계에 npm run test:e2e를 더한다(Postgres 필요)
 
-- 통과하면 .claude/state/verify.json에 작업 트리 지문을 남긴다. 커밋 게이트와 종료 확인이 이 기록을 본다.
+- 통과하면 .claude/state/verify.json에 작업 트리 지문과 코드 파일별 내용(code)을 남긴다.
+  커밋 게이트(Claude 훅 · git pre-commit)와 종료 확인이 이 기록을 본다.
+- 실행할 때 git pre-commit 게이트(.githooks)를 켠다.
 - 모든 명령은 stdin을 /dev/null로 닫고 실행한다. 출력은 .claude/state/verify/{단계}.log에 저장하고
   종료 코드를 파이프로 가리지 않는다.
 - 같은 단계가 2번 연속 실패하면 세 번째 시도 전에 사용자에게 보고한다.
@@ -19,7 +21,7 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "hooks"))
 import harness_state as hs  # noqa: E402
 
-HARNESS_PATHS = (".claude/hooks/", ".claude/scripts/", ".claude/settings.json")
+HARNESS_PATHS = (".claude/hooks/", ".claude/scripts/", ".claude/settings.json", ".githooks/")
 BUILD_FILES = ("package.json", "package-lock.json", "tsconfig.json", "tsconfig.build.json", "nest-cli.json")
 LINT_FILES = BUILD_FILES + ("eslint.config.mjs", ".prettierrc")
 MIGRATIONS = "src/database/migrations/"
@@ -86,9 +88,12 @@ def steps_for(files, run_all, base, e2e=False):
     steps = []  # (이름, 명령)
     if touched(HARNESS_PATHS, (".claude/settings.json",)):
         steps.append(("harness-syntax", ["bash", "-c",
-                                         'for f in .claude/hooks/*.sh; do bash -n "$f" || exit 1; done && '
+                                         'for f in .claude/hooks/*.sh .githooks/*; do bash -n "$f" || exit 1; done && '
                                          'python3 -c "import json; json.load(open(\'.claude/settings.json\'))"']))
         steps.append(("harness-tests", ["python3", "-m", "unittest", "discover", "-s", ".claude/hooks/tests"]))
+    if run_all or files:
+        # 비밀 값 · 워크플로 셸 주입이 들어오지 않았는지 저장소 전체를 본다(1초 안팎)
+        steps.append(("security", [os.path.join(".claude", "scripts", "check-security")]))
     if touched(("src/",)):
         steps.append(("boundaries", [os.path.join(".claude", "scripts", "check-boundaries")]
                       + ([] if run_all else ["--base", base])))
@@ -118,6 +123,7 @@ def steps_for(files, run_all, base, e2e=False):
 def main():
     root = hs.repo_root(os.getcwd())
     os.chdir(root)
+    hs.install_git_hooks(root)
     args = sys.argv[1:]
     if args[:1] == ["--check-migrations"]:
         return check_migrations(args[1])
@@ -130,7 +136,8 @@ def main():
     steps = steps_for(files, run_all, hs.base_ref(root), e2e)
     if not steps:
         print("검증할 코드 변경이 없습니다(.md만 바뀌었거나 변경 없음).")
-        hs.save(root, {"passed": True, "fingerprint": hs.fingerprint(root), "steps": [], "failures": {}})
+        hs.save(root, {"passed": True, "fingerprint": hs.fingerprint(root), "code": hs.code_entries(root),
+                       "steps": [], "failures": {}})
         return 0
 
     if migration_changes(files):
@@ -168,7 +175,8 @@ def main():
         results.append({"name": name, "ok": True, "seconds": seconds})
         print(f"✔ {name} ({seconds}초)")
 
-    hs.save(root, {"passed": True, "fingerprint": hs.fingerprint(root), "steps": results, "failures": failures})
+    hs.save(root, {"passed": True, "fingerprint": hs.fingerprint(root), "code": hs.code_entries(root),
+                   "steps": results, "failures": failures})
     print(f"검증 통과 ({round(time.monotonic() - total_started)}초). 기록: {hs.VERIFY_FILE}")
     return 0
 
