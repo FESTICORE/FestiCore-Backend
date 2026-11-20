@@ -2378,8 +2378,18 @@ export class PublicFestivalService {
    */
   async officialNews(id: string): Promise<OfficialNewsView> {
     id = canonicalFestivalId(id);
-    const pack = await this.published(id);
-    const username = instagramUsername(pack.officialInstagramUrl);
+    // 발행 축제가 아니면 published()가 404를 던진다.
+    await this.published(id);
+    // 공개 팩 투영(projectPack)은 officialInstagramUrl을 내보내지 않으므로 발행 문서에서 직접 읽는다.
+    const source = (
+      await this.dataSource.query<{ instagramUrl: string | null }[]>(
+        `SELECT "published"->>'officialInstagramUrl' AS "instagramUrl"
+         FROM "admin_festivals"
+         WHERE "id" = $1 AND "published" IS NOT NULL AND "publishedVersion" > 0`,
+        [id],
+      )
+    )[0];
+    const username = instagramUsername(source?.instagramUrl);
     if (!username)
       return {
         festivalId: id,

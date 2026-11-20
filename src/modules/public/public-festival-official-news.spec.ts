@@ -3,18 +3,21 @@ import { PublicFestivalService } from './public-festival.service';
 describe('PublicFestivalService official instagram news', () => {
   const festivalId = 'fst_0123456789abcdef';
 
+  /** instagramUrl은 발행 문서(DB) 값이다. 공개 팩 투영에는 이 필드가 없다. */
   function makeService(
-    pack: Record<string, unknown>,
+    instagramUrl: string | null,
     feed: object | undefined,
     posts: object[] = [],
   ) {
     const query = jest.fn((sql: string) =>
       Promise.resolve(
-        sql.includes('"official_instagram_feeds"')
-          ? feed
-            ? [feed]
-            : []
-          : posts,
+        sql.includes('FROM "admin_festivals"')
+          ? [{ instagramUrl }]
+          : sql.includes('"official_instagram_feeds"')
+            ? feed
+              ? [feed]
+              : []
+            : posts,
       ),
     );
     const service = new PublicFestivalService(
@@ -23,12 +26,13 @@ describe('PublicFestivalService official instagram news', () => {
       { query } as never,
       {} as never,
     );
-    jest.spyOn(service, 'published').mockResolvedValue(pack);
+    // 실제 공개 팩처럼 officialInstagramUrl이 빠진 문서를 돌려준다.
+    jest.spyOn(service, 'published').mockResolvedValue({ name: '원더리벳' });
     return { service, query };
   }
 
   it('is unavailable without an official instagram profile', async () => {
-    const { service, query } = makeService({}, undefined);
+    const { service, query } = makeService(null, undefined);
     await expect(service.officialNews(festivalId)).resolves.toEqual({
       festivalId,
       available: false,
@@ -36,18 +40,16 @@ describe('PublicFestivalService official instagram news', () => {
       fetchedAt: null,
       posts: [],
     });
-    expect(query).not.toHaveBeenCalled();
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(query.mock.calls[0][0]).toContain('"publishedVersion" > 0');
   });
 
   it('is unavailable until the first fetch for the current account', async () => {
-    const { service } = makeService(
-      { officialInstagramUrl: 'https://www.instagram.com/wonderliivet/' },
-      {
-        username: 'oldaccount',
-        seededAt: new Date(),
-        lastFetchedAt: new Date(),
-      },
-    );
+    const { service } = makeService('https://www.instagram.com/wonderliivet/', {
+      username: 'oldaccount',
+      seededAt: new Date(),
+      lastFetchedAt: new Date(),
+    });
     await expect(service.officialNews(festivalId)).resolves.toMatchObject({
       available: false,
       account: {
@@ -61,7 +63,7 @@ describe('PublicFestivalService official instagram news', () => {
 
   it('returns the stored recent posts newest first', async () => {
     const { service, query } = makeService(
-      { officialInstagramUrl: 'https://www.instagram.com/wonderliivet/' },
+      'https://www.instagram.com/wonderliivet/',
       {
         username: 'WonderLiivet',
         seededAt: new Date('2026-11-19T00:00:00Z'),
@@ -97,7 +99,7 @@ describe('PublicFestivalService official instagram news', () => {
         },
       ],
     });
-    expect(query.mock.calls[1][0]).toContain('ORDER BY "postedAt" DESC');
-    expect(query.mock.calls[1][0]).toContain('LIMIT 6');
+    expect(query.mock.calls[2][0]).toContain('ORDER BY "postedAt" DESC');
+    expect(query.mock.calls[2][0]).toContain('LIMIT 6');
   });
 });
