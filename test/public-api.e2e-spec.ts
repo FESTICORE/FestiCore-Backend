@@ -36,6 +36,13 @@ function seoulToday(): string {
   }).format(new Date());
 }
 
+/** 목록 커서의 정렬 구간. 오늘 진행 중이면 0, 다가오면 1, 끝났으면 2다(하루짜리 축제 기준). */
+function listBucket(date: string): 0 | 1 | 2 {
+  const today = seoulToday();
+  if (date === today) return 0;
+  return date > today ? 1 : 2;
+}
+
 function envelopeData<T>(body: unknown, code: string): T {
   expect(body).toBeInstanceOf(Object);
   expect(Object.keys(body as object).sort()).toEqual([
@@ -1016,7 +1023,7 @@ describe('Public festival API', () => {
     );
     expect(body.items[0].id).toBe('fst_12345678');
     expect(body.nextCursor).toBe(
-      `2026-10-21~v2~${seoulToday()}~1~2026-11-20~fst_12345678`,
+      `2026-10-21~v2~${seoulToday()}~${listBucket('2026-11-20')}~2026-11-20~fst_12345678`,
     );
     queryBuilder.getMany.mockResolvedValueOnce([
       {
@@ -1039,7 +1046,11 @@ describe('Public festival API', () => {
     ).toBe('fst_87654321');
     expect(queryBuilder.andWhere).toHaveBeenCalledWith(
       expect.stringContaining('festival.id > :cursorId'),
-      { cursorBucket: 1, cursorDate: '2026-11-20', cursorId: 'fst_12345678' },
+      {
+        cursorBucket: listBucket('2026-11-20'),
+        cursorDate: '2026-11-20',
+        cursorId: 'fst_12345678',
+      },
     );
     expect(queryBuilder.orderBy).toHaveBeenCalledWith(
       expect.stringContaining('THEN 0 WHEN'),
@@ -1085,7 +1096,7 @@ describe('Public festival API', () => {
     });
     expect(firstPage.items[0]).not.toHaveProperty('startsAt');
     expect(firstPage.nextCursor).toBe(
-      `2026-10-21~v2~${seoulToday()}~1~2026-11-20~fst_000metadata1`,
+      `2026-10-21~v2~${seoulToday()}~${listBucket('2026-11-20')}~2026-11-20~fst_000metadata1`,
     );
 
     queryBuilder.andWhere.mockClear();
@@ -1100,12 +1111,12 @@ describe('Public festival API', () => {
       'fst_000metadata2',
     ]);
     expect(secondPage.nextCursor).toBe(
-      `2026-10-21~v2~${seoulToday()}~1~2026-11-20~fst_000metadata2`,
+      `2026-10-21~v2~${seoulToday()}~${listBucket('2026-11-20')}~2026-11-20~fst_000metadata2`,
     );
     expect(queryBuilder.andWhere).toHaveBeenCalledWith(
       expect.stringContaining('festival.id > :cursorId'),
       {
-        cursorBucket: 1,
+        cursorBucket: listBucket('2026-11-20'),
         cursorDate: '2026-11-20',
         cursorId: 'fst_000metadata1',
       },
@@ -1166,7 +1177,7 @@ describe('Public festival API', () => {
     );
     expect(body.items[0].id).toBe('fst_12345678');
     expect(body.nextCursor).toBe(
-      `2026-10-21~v2~${seoulToday()}~1~2026-11-20~fst_12345678`,
+      `2026-10-21~v2~${seoulToday()}~${listBucket('2026-11-20')}~2026-11-20~fst_12345678`,
     );
     queryBuilder.getMany.mockResolvedValueOnce([later]);
     await request(server)
@@ -1176,7 +1187,11 @@ describe('Public festival API', () => {
       .expect(200);
     expect(queryBuilder.andWhere).toHaveBeenCalledWith(
       expect.stringContaining('festival.id > :cursorId'),
-      { cursorBucket: 1, cursorDate: '2026-11-20', cursorId: 'fst_12345678' },
+      {
+        cursorBucket: listBucket('2026-11-20'),
+        cursorDate: '2026-11-20',
+        cursorId: 'fst_12345678',
+      },
     );
   });
 
