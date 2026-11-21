@@ -14,7 +14,10 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { AdminRoles } from '../auth/admin-roles.decorator';
-import { AdminAnalyticsService } from './admin-analytics.service';
+import {
+  AdminAnalyticsService,
+  parseFunnelSteps,
+} from './admin-analytics.service';
 import { parseAnalyticsRange } from './admin-analytics.range';
 
 @ApiTags('Admin Analytics')
@@ -63,5 +66,32 @@ export class AdminAnalyticsController {
   ) {
     response.setHeader('Cache-Control', 'no-store');
     return this.analytics.mixpanel(parseAnalyticsRange(from, to));
+  }
+
+  @Get('mixpanel/funnel')
+  @AdminRoles('viewer')
+  @ApiOperation({ summary: 'Mixpanel 이벤트 퍼널(단계별 도달 사용자 수) 조회' })
+  @ApiQuery({ name: 'from', description: 'KST 시작 날짜 YYYY-MM-DD' })
+  @ApiQuery({ name: 'to', description: 'KST 종료 날짜 YYYY-MM-DD (포함)' })
+  @ApiQuery({
+    name: 'steps',
+    description: '쉼표로 구분한 이벤트 이름 2~5개 (예: app_open,screen_view)',
+  })
+  @ApiResponse({
+    status: 200,
+    description: '단계별 고유 사용자 수. 조회량 상한 시 partial/truncated',
+  })
+  @ApiResponse({ status: 400, description: '날짜 또는 단계 오류' })
+  funnel(
+    @Res({ passthrough: true }) response: Response,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('steps') steps?: string,
+  ) {
+    response.setHeader('Cache-Control', 'no-store');
+    return this.analytics.funnel(
+      parseAnalyticsRange(from, to),
+      parseFunnelSteps(steps),
+    );
   }
 }

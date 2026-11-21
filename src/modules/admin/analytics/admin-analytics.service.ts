@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AnalyticsFetchError, fetchAnalytics } from './admin-analytics.fetch';
 import { AnalyticsRange, kstDate } from './admin-analytics.range';
@@ -43,6 +43,15 @@ type MixpanelResult = {
   topEvents: { name: string; count: number; users: number; series: Point[] }[];
   truncated: boolean;
 };
+type FunnelResult = {
+  status: Status;
+  reason?: 'unauthorized' | 'forbidden' | 'incomplete_export';
+  scope: 'shared';
+  /** 단계 순서대로, 이전 단계를 거친 뒤 그 단계에 도달한 고유 사용자 수. */
+  steps: { name: string; users: number | null }[];
+  truncated: boolean;
+};
+type AnalyticsResult = SentryResult | MixpanelResult | FunnelResult;
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -68,20 +77,46 @@ const isEmptyIssues = (result: PromiseSettledResult<unknown>): boolean =>
   result.reason instanceof AnalyticsFetchError &&
   result.reason.kind === 'empty_issues';
 
+// Only expose conventional static event identifiers, never arbitrary event names or event properties.
+const isPublicEventName = (name: string): boolean =>
+  /^[a-z][a-z0-9_.]{0,79}$/.test(name) && !/\d{4}/.test(name);
+
+/** `a,b,c` 형식 퍼널 단계를 검증한다. 공개 가능한 이벤트 이름 2~5개만 받는다. */
+export function parseFunnelSteps(value?: string): string[] {
+  const steps = typeof value === 'string' ? value.split(',') : [];
+  if (steps.length < 2 || steps.length > 5 || !steps.every(isPublicEventName))
+    throw new BadRequestException(
+      'steps는 쉼표로 구분한 이벤트 이름 2~5개여야 합니다.',
+    );
+  return steps;
+}
+
+type MixpanelEvent = {
+  event: string;
+  time: number;
+  date: string;
+  user: string | null;
+};
+
 @Injectable()
 export class AdminAnalyticsService {
   private readonly cache = new Map<
     string,
-    { expires: number; value: SentryResult | MixpanelResult }
+    { expires: number; value: AnalyticsResult }
   >();
-  private readonly inFlight = new Map<
+  private readonly inFlight = new Map<string, Promise<AnalyticsResult>>();
+  /** Mixpanel 원본 export는 지표·퍼널이 함께 쓰도록 성공 결과만 잠깐 공유한다. */
+  private readonly exports = new Map<
     string,
-    Promise<SentryResult | MixpanelResult>
+    {
+      expires: number;
+      value: Promise<{ events: MixpanelEvent[]; truncated: boolean }>;
+    }
   >();
 
   constructor(private readonly config: ConfigService) {}
 
-  private cached<T extends SentryResult | MixpanelResult>(
+  private cached<T extends AnalyticsResult>(
     key: string,
     load: () => Promise<T>,
   ): Promise<T> {
@@ -297,78 +332,38 @@ export class AdminAnalyticsService {
     });
     if (!username || !secret) return Promise.resolve(empty('unconfigured'));
     return this.cached(`mixpanel:${range.from}:${range.to}`, async () => {
-      const url = new URL('https://data.mixpanel.com/api/2.0/export');
-      url.searchParams.set('project_id', '4078612');
-      // Mixpanel may interpret export dates in UTC; include neighbouring dates and filter timestamps to KST below.
-      url.searchParams.set(
-        'from_date',
-        new Date(Date.parse(`${range.from}T00:00:00Z`) - 86_400_000)
-          .toISOString()
-          .slice(0, 10),
-      );
-      // Mixpanel은 오늘(UTC) 이후의 to_date를 400으로 거절하므로 다음 날 보정은 오늘까지만 한다.
-      const todayUtc = new Date().toISOString().slice(0, 10);
-      const nextDay = new Date(Date.parse(`${range.to}T00:00:00Z`) + 86_400_000)
-        .toISOString()
-        .slice(0, 10);
-      url.searchParams.set('to_date', nextDay > todayUtc ? todayUtc : nextDay);
-      url.searchParams.set('limit', '10000');
       try {
-        const raw = (await fetchAnalytics(
-          url,
-          `Basic ${Buffer.from(`${username}:${secret}`).toString('base64')}`,
-          true,
-        )) as string;
+        const { events, truncated } = await this.mixpanelEvents(
+          range,
+          username,
+          secret,
+        );
         const byDate = new Map<string, number>();
         const byEvent = new Map<string, number>();
         const users = new Set<string>();
         const usersByDate = new Map<string, Set<string>>();
         const eventDates = new Map<string, Map<string, number>>();
         const eventUsers = new Map<string, Set<string>>();
-        const lines = raw.trim() ? raw.trim().split('\n') : [];
-        if (lines.some((line) => line.trim() === 'terminated early'))
-          throw new AnalyticsFetchError('incomplete_export');
-        for (const line of lines) {
-          const event = JSON.parse(line) as unknown;
-          if (
-            !isObject(event) ||
-            !isObject(event.properties) ||
-            typeof event.event !== 'string' ||
-            typeof event.properties.time !== 'number'
-          )
-            throw new Error('invalid export');
-          const date = kstDate(event.properties.time * 1000);
-          if (date < range.from || date > range.to) continue;
+        for (const { event: name, date, user } of events) {
           byDate.set(date, (byDate.get(date) ?? 0) + 1);
-          const user =
-            typeof event.properties.distinct_id === 'string' &&
-            event.properties.distinct_id
-              ? event.properties.distinct_id
-              : null;
           if (user) {
             users.add(user);
             const daily = usersByDate.get(date) ?? new Set<string>();
             daily.add(user);
             usersByDate.set(date, daily);
           }
-          // Only expose conventional static event identifiers, never arbitrary event names or event properties.
-          if (
-            /^[a-z][a-z0-9_.]{0,79}$/.test(event.event) &&
-            !/\d{4}/.test(event.event)
-          ) {
-            byEvent.set(event.event, (byEvent.get(event.event) ?? 0) + 1);
-            const dates =
-              eventDates.get(event.event) ?? new Map<string, number>();
+          if (isPublicEventName(name)) {
+            byEvent.set(name, (byEvent.get(name) ?? 0) + 1);
+            const dates = eventDates.get(name) ?? new Map<string, number>();
             dates.set(date, (dates.get(date) ?? 0) + 1);
-            eventDates.set(event.event, dates);
+            eventDates.set(name, dates);
             if (user) {
-              const seen = eventUsers.get(event.event) ?? new Set<string>();
+              const seen = eventUsers.get(name) ?? new Set<string>();
               seen.add(user);
-              eventUsers.set(event.event, seen);
+              eventUsers.set(name, seen);
             }
           }
         }
-        const truncated = lines.length >= 10000;
         return {
           status: truncated ? 'partial' : 'ok',
           scope: 'shared' as const,
@@ -397,17 +392,144 @@ export class AdminAnalyticsService {
           truncated,
         };
       } catch (error) {
-        const result = empty(failure(error));
-        if (
-          error instanceof AnalyticsFetchError &&
-          (error.kind === 'unauthorized' ||
-            error.kind === 'forbidden' ||
-            error.kind === 'incomplete_export')
-        ) {
-          result.reason = error.kind;
-        }
-        return result;
+        return withReason(empty(failure(error)), error);
       }
     });
   }
+
+  funnel(range: AnalyticsRange, steps: string[]): Promise<FunnelResult> {
+    const username = this.config.get<string>(
+      'MIXPANEL_SERVICE_ACCOUNT_USERNAME',
+    );
+    const secret = this.config.get<string>('MIXPANEL_SERVICE_ACCOUNT_SECRET');
+    const empty = (status: Status): FunnelResult => ({
+      status,
+      scope: 'shared',
+      steps: steps.map((name) => ({ name, users: null })),
+      truncated: false,
+    });
+    if (!username || !secret) return Promise.resolve(empty('unconfigured'));
+    return this.cached(
+      `funnel:${range.from}:${range.to}:${steps.join(',')}`,
+      async () => {
+        try {
+          const { events, truncated } = await this.mixpanelEvents(
+            range,
+            username,
+            secret,
+          );
+          // 사용자마다 시간순으로 다음 단계 이벤트를 만나면 한 단계씩 나아간다.
+          // Mixpanel time은 초 단위라 같은 초의 이벤트는 퍼널 단계 순서대로 앞선 것으로 본다.
+          const rank = (name: string) => {
+            const index = steps.indexOf(name);
+            return index === -1 ? steps.length : index;
+          };
+          const progress = new Map<string, number>();
+          for (const { event: name, user } of [...events].sort(
+            (a, b) => a.time - b.time || rank(a.event) - rank(b.event),
+          )) {
+            if (!user) continue;
+            const reached = progress.get(user) ?? 0;
+            if (reached < steps.length && steps[reached] === name)
+              progress.set(user, reached + 1);
+          }
+          const reachedCounts = [...progress.values()];
+          return {
+            status: truncated ? 'partial' : 'ok',
+            scope: 'shared' as const,
+            steps: steps.map((name, index) => ({
+              name,
+              users: reachedCounts.filter((reached) => reached > index).length,
+            })),
+            truncated,
+          };
+        } catch (error) {
+          return withReason(empty(failure(error)), error);
+        }
+      },
+    );
+  }
+
+  private mixpanelEvents(
+    range: AnalyticsRange,
+    username: string,
+    secret: string,
+  ): Promise<{ events: MixpanelEvent[]; truncated: boolean }> {
+    const key = `${range.from}:${range.to}`;
+    const saved = this.exports.get(key);
+    if (saved && saved.expires > Date.now()) return saved.value;
+    const work = (async () => {
+      const url = new URL('https://data.mixpanel.com/api/2.0/export');
+      url.searchParams.set('project_id', '4078612');
+      // Mixpanel may interpret export dates in UTC; include neighbouring dates and filter timestamps to KST below.
+      url.searchParams.set(
+        'from_date',
+        new Date(Date.parse(`${range.from}T00:00:00Z`) - 86_400_000)
+          .toISOString()
+          .slice(0, 10),
+      );
+      // Mixpanel은 오늘(UTC) 이후의 to_date를 400으로 거절하므로 다음 날 보정은 오늘까지만 한다.
+      const todayUtc = new Date().toISOString().slice(0, 10);
+      const nextDay = new Date(Date.parse(`${range.to}T00:00:00Z`) + 86_400_000)
+        .toISOString()
+        .slice(0, 10);
+      url.searchParams.set('to_date', nextDay > todayUtc ? todayUtc : nextDay);
+      url.searchParams.set('limit', '10000');
+      const raw = (await fetchAnalytics(
+        url,
+        `Basic ${Buffer.from(`${username}:${secret}`).toString('base64')}`,
+        true,
+      )) as string;
+      const lines = raw.trim() ? raw.trim().split('\n') : [];
+      if (lines.some((line) => line.trim() === 'terminated early'))
+        throw new AnalyticsFetchError('incomplete_export');
+      const events: MixpanelEvent[] = [];
+      for (const line of lines) {
+        const event = JSON.parse(line) as unknown;
+        if (
+          !isObject(event) ||
+          !isObject(event.properties) ||
+          typeof event.event !== 'string' ||
+          typeof event.properties.time !== 'number'
+        )
+          throw new Error('invalid export');
+        const date = kstDate(event.properties.time * 1000);
+        if (date < range.from || date > range.to) continue;
+        events.push({
+          event: event.event,
+          time: event.properties.time,
+          date,
+          user:
+            typeof event.properties.distinct_id === 'string' &&
+            event.properties.distinct_id
+              ? event.properties.distinct_id
+              : null,
+        });
+      }
+      return { events, truncated: lines.length >= 10000 };
+    })();
+    this.exports.set(key, { value: work, expires: Date.now() + 60_000 });
+    work.catch(() => {
+      if (this.exports.get(key)?.value === work) this.exports.delete(key);
+    });
+    if (this.exports.size > 20) {
+      const oldest: unknown = this.exports.keys().next().value;
+      if (typeof oldest === 'string') this.exports.delete(oldest);
+    }
+    return work;
+  }
+}
+
+function withReason<T extends { reason?: FunnelResult['reason'] }>(
+  result: T,
+  error: unknown,
+): T {
+  if (
+    error instanceof AnalyticsFetchError &&
+    (error.kind === 'unauthorized' ||
+      error.kind === 'forbidden' ||
+      error.kind === 'incomplete_export')
+  )
+    result.reason = error.kind;
+  return result;
 }

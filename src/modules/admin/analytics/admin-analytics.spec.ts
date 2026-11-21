@@ -3,7 +3,10 @@ import { ConfigService } from '@nestjs/config';
 import { ADMIN_ROLES_KEY } from '../auth/admin-roles.decorator';
 import { AdminAnalyticsController } from './admin-analytics.controller';
 import { parseAnalyticsRange } from './admin-analytics.range';
-import { AdminAnalyticsService } from './admin-analytics.service';
+import {
+  AdminAnalyticsService,
+  parseFunnelSteps,
+} from './admin-analytics.service';
 import type { Response } from 'express';
 
 const range = () => parseAnalyticsRange('2026-10-20', '2026-10-21');
@@ -447,6 +450,148 @@ describe('admin analytics', () => {
         },
         { name: 'flag_follow', count: 1, users: 1 },
       ],
+    });
+  });
+
+  describe('Mixpanel 퍼널', () => {
+    const row = (event: string, iso: string, user?: string) =>
+      JSON.stringify({
+        event,
+        properties: { time: Date.parse(iso) / 1000, distinct_id: user },
+      });
+    const mixpanelConfig = config({
+      MIXPANEL_SERVICE_ACCOUNT_USERNAME: 'reader',
+      MIXPANEL_SERVICE_ACCOUNT_SECRET: 'secret',
+    });
+
+    it('단계는 공개 가능한 이벤트 이름 2~5개만 받고 viewer 권한이 필요하다', () => {
+      expect(parseFunnelSteps('app_open,flag_follow')).toEqual([
+        'app_open',
+        'flag_follow',
+      ]);
+      for (const bad of [
+        undefined,
+        'app_open',
+        'a,b,c,d,e,f',
+        'app_open,',
+        'app_open,Bad Event',
+        'app_open,event_2026',
+      ])
+        expect(() => parseFunnelSteps(bad)).toThrow(BadRequestException);
+      const controller = new AdminAnalyticsController(
+        new AdminAnalyticsService(config({})),
+      );
+      // eslint-disable-next-line @typescript-eslint/unbound-method
+      expect(Reflect.getMetadata(ADMIN_ROLES_KEY, controller.funnel)).toEqual([
+        'viewer',
+      ]);
+    });
+
+    it('사용자별로 시간순 도달만 세고 식별자는 내려주지 않는다', async () => {
+      global.fetch = jest.fn(() =>
+        Promise.resolve(
+          new Response(
+            [
+              // u1: 순서대로 세 단계 모두 도달
+              row('app_open', '2026-10-19T16:00:00Z', 'user-secret-1'),
+              row('flag_follow', '2026-10-19T17:00:00Z', 'user-secret-1'),
+              row('pack_sync', '2026-10-20T01:00:00Z', 'user-secret-1'),
+              // u2: 두 번째 단계를 첫 단계보다 먼저 해서 1단계만 인정
+              row('flag_follow', '2026-10-19T16:30:00Z', 'user-secret-2'),
+              row('app_open', '2026-10-19T18:00:00Z', 'user-secret-2'),
+              // u3: 범위 밖(KST 10/19) 이벤트는 제외되어 1단계만
+              row('app_open', '2026-10-20T02:00:00Z', 'user-secret-3'),
+              row('flag_follow', '2026-10-18T10:00:00Z', 'user-secret-3'),
+              // distinct_id 없는 이벤트는 퍼널에서 빠진다
+              row('app_open', '2026-10-19T19:00:00Z'),
+            ].join('\n'),
+            { status: 200 },
+          ),
+        ),
+      ) as typeof fetch;
+      const result = await new AdminAnalyticsService(mixpanelConfig).funnel(
+        range(),
+        ['app_open', 'flag_follow', 'pack_sync'],
+      );
+      expect(result).toEqual({
+        status: 'ok',
+        scope: 'shared',
+        steps: [
+          { name: 'app_open', users: 3 },
+          { name: 'flag_follow', users: 1 },
+          { name: 'pack_sync', users: 1 },
+        ],
+        truncated: false,
+      });
+      expect(JSON.stringify(result)).not.toContain('user-secret');
+    });
+
+    it('같은 초의 이벤트는 export 행 순서와 상관없이 단계 순서대로 본다', async () => {
+      global.fetch = jest.fn(() =>
+        Promise.resolve(
+          new Response(
+            [
+              row('flag_follow', '2026-10-19T16:00:00Z', 'u1'),
+              row('app_open', '2026-10-19T16:00:00Z', 'u1'),
+            ].join('\n'),
+            { status: 200 },
+          ),
+        ),
+      ) as typeof fetch;
+      const result = await new AdminAnalyticsService(mixpanelConfig).funnel(
+        range(),
+        ['app_open', 'flag_follow'],
+      );
+      expect(result.steps).toEqual([
+        { name: 'app_open', users: 1 },
+        { name: 'flag_follow', users: 1 },
+      ]);
+    });
+
+    it('지표와 퍼널이 같은 기간이면 Mixpanel export를 한 번만 부른다', async () => {
+      const fetchMock = jest.fn(() =>
+        Promise.resolve(
+          new Response(row('app_open', '2026-10-19T16:00:00Z', 'u1'), {
+            status: 200,
+          }),
+        ),
+      );
+      global.fetch = fetchMock;
+      const service = new AdminAnalyticsService(mixpanelConfig);
+      await Promise.all([
+        service.mixpanel(range()),
+        service.funnel(range(), ['app_open', 'flag_follow']),
+      ]);
+      await service.funnel(range(), ['app_open', 'pack_sync']);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('설정이 없으면 외부 호출 없이 null 단계로, 실패는 이유와 함께 돌려준다', async () => {
+      const fetchMock = jest.fn(() =>
+        Promise.resolve(new Response('', { status: 403 })),
+      );
+      global.fetch = fetchMock;
+      await expect(
+        new AdminAnalyticsService(config({})).funnel(range(), ['a', 'b']),
+      ).resolves.toEqual({
+        status: 'unconfigured',
+        scope: 'shared',
+        steps: [
+          { name: 'a', users: null },
+          { name: 'b', users: null },
+        ],
+        truncated: false,
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+      const service = new AdminAnalyticsService(mixpanelConfig);
+      await expect(service.funnel(range(), ['a', 'b'])).resolves.toMatchObject({
+        status: 'error',
+        reason: 'forbidden',
+        steps: [{ users: null }, {}],
+      });
+      // 실패한 export는 공유 캐시에 남지 않아 다음 조회가 다시 시도한다.
+      await service.mixpanel(range());
+      expect(fetchMock).toHaveBeenCalledTimes(2);
     });
   });
 
