@@ -259,6 +259,62 @@ describe('admin analytics', () => {
     });
   });
 
+  it('Sentry 이슈에 영향 사용자 수·level·firstSeen을 넣고 이상한 값은 null로 둔다', async () => {
+    global.fetch = jest.fn((url: URL) =>
+      Promise.resolve(
+        new Response(
+          url.pathname.endsWith('issues/')
+            ? JSON.stringify([
+                {
+                  id: '11',
+                  title: 'TypeError: secret detail',
+                  count: '4',
+                  userCount: 2,
+                  level: 'fatal',
+                  firstSeen: '2026-10-18T01:00:00Z',
+                  lastSeen: '2026-10-20T01:00:00Z',
+                },
+                {
+                  id: '12',
+                  count: 1,
+                  userCount: -1,
+                  level: '<script>',
+                  firstSeen: '1',
+                  lastSeen: '2026-10-20T02:00:00Z',
+                },
+              ])
+            : JSON.stringify({ timeSeries: [{ values: [] }] }),
+          { status: 200 },
+        ),
+      ),
+    ) as typeof fetch;
+    const service = new AdminAnalyticsService(
+      config({
+        ANALYTICS_ENVIRONMENT: 'stage',
+        SENTRY_IOS_PROJECT_ID: '123',
+        SENTRY_ANALYTICS_READ_TOKEN: 'read-token',
+      }),
+    );
+    const result = await service.sentry(range(), 'ios');
+    expect(result.issues).toEqual([
+      expect.objectContaining({
+        id: '11',
+        title: 'Sentry issue',
+        count: 4,
+        userCount: 2,
+        level: 'fatal',
+        firstSeen: '2026-10-18T01:00:00.000Z',
+      }),
+      expect.objectContaining({
+        id: '12',
+        userCount: null,
+        level: null,
+        firstSeen: null,
+      }),
+    ]);
+    expect(JSON.stringify(result)).not.toContain('secret detail');
+  });
+
   it('counts Mixpanel export in KST and shares concurrent requests', async () => {
     global.fetch = jest.fn(() =>
       Promise.resolve(
@@ -269,11 +325,15 @@ describe('admin analytics', () => {
               properties: {
                 time: Date.parse('2026-10-19T15:30:00Z') / 1000,
                 email: 'private@example.com',
+                distinct_id: 'user-secret-a',
               },
             }),
             JSON.stringify({
               event: 'user@example.com',
-              properties: { time: Date.parse('2026-10-20T00:00:00Z') / 1000 },
+              properties: {
+                time: Date.parse('2026-10-20T00:00:00Z') / 1000,
+                distinct_id: 'user-secret-b',
+              },
             }),
             JSON.stringify({
               event: 'app_open',
@@ -299,10 +359,20 @@ describe('admin analytics', () => {
       status: 'ok',
       totalEvents: 2,
       series: [{ date: '2026-10-20', count: 2 }],
-      topEvents: [{ name: 'app_open', count: 1 }],
+      uniqueUsers: 2,
+      userSeries: [{ date: '2026-10-20', count: 2 }],
+      topEvents: [
+        {
+          name: 'app_open',
+          count: 1,
+          users: 1,
+          series: [{ date: '2026-10-20', count: 1 }],
+        },
+      ],
       truncated: false,
     });
     expect(JSON.stringify(first)).not.toContain('private@example.com');
+    expect(JSON.stringify(first)).not.toContain('user-secret');
     expect(global.fetch).toHaveBeenCalledTimes(1);
   });
 
@@ -327,13 +397,58 @@ describe('admin analytics', () => {
         reason,
         scope: 'shared',
         totalEvents: null,
+        uniqueUsers: null,
         series: [],
+        userSeries: [],
         topEvents: [],
         truncated: false,
       });
       expect(JSON.stringify(result)).not.toContain('private');
     },
   );
+
+  it('같은 distinct_id가 여러 날·여러 이벤트에 나와도 사용자는 한 번만 센다', async () => {
+    const row = (event: string, iso: string, user?: string) =>
+      JSON.stringify({
+        event,
+        properties: { time: Date.parse(iso) / 1000, distinct_id: user },
+      });
+    global.fetch = jest.fn(() =>
+      Promise.resolve(
+        new Response(
+          [
+            row('app_open', '2026-10-19T16:00:00Z', 'u1'),
+            row('app_open', '2026-10-19T17:00:00Z', 'u1'),
+            row('flag_follow', '2026-10-19T18:00:00Z', 'u1'),
+            row('app_open', '2026-10-19T19:00:00Z', 'u2'),
+            row('app_open', '2026-10-19T20:00:00Z'),
+          ].join('\n'),
+          { status: 200 },
+        ),
+      ),
+    ) as typeof fetch;
+    const service = new AdminAnalyticsService(
+      config({
+        MIXPANEL_SERVICE_ACCOUNT_USERNAME: 'reader',
+        MIXPANEL_SERVICE_ACCOUNT_SECRET: 'secret',
+      }),
+    );
+    const result = await service.mixpanel(range());
+    expect(result).toMatchObject({
+      totalEvents: 5,
+      uniqueUsers: 2,
+      userSeries: [{ date: '2026-10-20', count: 2 }],
+      topEvents: [
+        {
+          name: 'app_open',
+          count: 4,
+          users: 2,
+          series: [{ date: '2026-10-20', count: 4 }],
+        },
+        { name: 'flag_follow', count: 1, users: 1 },
+      ],
+    });
+  });
 
   it('does not request a Mixpanel to_date later than today (UTC)', async () => {
     jest.useFakeTimers({ now: Date.parse('2026-10-21T05:00:00Z') });
@@ -378,7 +493,9 @@ describe('admin analytics', () => {
         reason: 'incomplete_export',
         scope: 'shared',
         totalEvents: null,
+        uniqueUsers: null,
         series: [],
+        userSeries: [],
         topEvents: [],
         truncated: false,
       });
@@ -402,7 +519,9 @@ describe('admin analytics', () => {
       status: 'ok',
       scope: 'shared',
       totalEvents: 0,
+      uniqueUsers: 0,
       series: [],
+      userSeries: [],
       topEvents: [],
       truncated: false,
     });

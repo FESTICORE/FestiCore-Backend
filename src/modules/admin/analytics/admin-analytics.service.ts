@@ -9,9 +9,20 @@ type SentryIssue = {
   id: string;
   title: string;
   count: number;
+  userCount: number | null;
+  level: SentryLevel | null;
+  firstSeen: string | null;
   lastSeen: string;
   permalink: string;
 };
+type SentryLevel = 'fatal' | 'error' | 'warning' | 'info' | 'debug';
+const sentryLevels: readonly string[] = [
+  'fatal',
+  'error',
+  'warning',
+  'info',
+  'debug',
+];
 type SentryResult = {
   status: Status;
   scope: string;
@@ -25,8 +36,11 @@ type MixpanelResult = {
   reason?: 'unauthorized' | 'forbidden' | 'incomplete_export';
   scope: 'shared';
   totalEvents: number | null;
+  /** 기간 안 고유 distinct_id 수. 식별자 자체는 내려주지 않는다. */
+  uniqueUsers: number | null;
   series: Point[];
-  topEvents: { name: string; count: number }[];
+  userSeries: Point[];
+  topEvents: { name: string; count: number; users: number; series: Point[] }[];
   truncated: boolean;
 };
 
@@ -202,6 +216,18 @@ export class AdminAnalyticsService {
               id: row.id,
               title: 'Sentry issue',
               count: count(row.count)!,
+              userCount: count(row.userCount),
+              level:
+                typeof row.level === 'string' &&
+                sentryLevels.includes(row.level)
+                  ? (row.level as SentryLevel)
+                  : null,
+              firstSeen:
+                typeof row.firstSeen === 'string' &&
+                /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(row.firstSeen) &&
+                Number.isFinite(Date.parse(row.firstSeen))
+                  ? new Date(row.firstSeen).toISOString()
+                  : null,
               lastSeen: row.lastSeen,
               permalink: `https://festicore.sentry.io/issues/${row.id}/`,
             });
@@ -263,7 +289,9 @@ export class AdminAnalyticsService {
       status,
       scope: 'shared',
       totalEvents: null,
+      uniqueUsers: null,
       series: [],
+      userSeries: [],
       topEvents: [],
       truncated: false,
     });
@@ -293,6 +321,10 @@ export class AdminAnalyticsService {
         )) as string;
         const byDate = new Map<string, number>();
         const byEvent = new Map<string, number>();
+        const users = new Set<string>();
+        const usersByDate = new Map<string, Set<string>>();
+        const eventDates = new Map<string, Map<string, number>>();
+        const eventUsers = new Map<string, Set<string>>();
         const lines = raw.trim() ? raw.trim().split('\n') : [];
         if (lines.some((line) => line.trim() === 'terminated early'))
           throw new AnalyticsFetchError('incomplete_export');
@@ -308,12 +340,33 @@ export class AdminAnalyticsService {
           const date = kstDate(event.properties.time * 1000);
           if (date < range.from || date > range.to) continue;
           byDate.set(date, (byDate.get(date) ?? 0) + 1);
+          const user =
+            typeof event.properties.distinct_id === 'string' &&
+            event.properties.distinct_id
+              ? event.properties.distinct_id
+              : null;
+          if (user) {
+            users.add(user);
+            const daily = usersByDate.get(date) ?? new Set<string>();
+            daily.add(user);
+            usersByDate.set(date, daily);
+          }
           // Only expose conventional static event identifiers, never arbitrary event names or event properties.
           if (
             /^[a-z][a-z0-9_.]{0,79}$/.test(event.event) &&
             !/\d{4}/.test(event.event)
-          )
+          ) {
             byEvent.set(event.event, (byEvent.get(event.event) ?? 0) + 1);
+            const dates =
+              eventDates.get(event.event) ?? new Map<string, number>();
+            dates.set(date, (dates.get(date) ?? 0) + 1);
+            eventDates.set(event.event, dates);
+            if (user) {
+              const seen = eventUsers.get(event.event) ?? new Set<string>();
+              seen.add(user);
+              eventUsers.set(event.event, seen);
+            }
+          }
         }
         const truncated = lines.length >= 10000;
         return {
@@ -323,13 +376,24 @@ export class AdminAnalyticsService {
             (sum, value) => sum + value,
             0,
           ),
+          uniqueUsers: users.size,
           series: [...byDate]
             .sort()
             .map(([date, value]) => ({ date, count: value })),
+          userSeries: [...usersByDate]
+            .sort()
+            .map(([date, value]) => ({ date, count: value.size })),
           topEvents: [...byEvent]
             .sort((a, b) => b[1] - a[1])
             .slice(0, 10)
-            .map(([name, value]) => ({ name, count: value })),
+            .map(([name, value]) => ({
+              name,
+              count: value,
+              users: eventUsers.get(name)?.size ?? 0,
+              series: [...(eventDates.get(name) ?? [])]
+                .sort()
+                .map(([date, total]) => ({ date, count: total })),
+            })),
           truncated,
         };
       } catch (error) {
