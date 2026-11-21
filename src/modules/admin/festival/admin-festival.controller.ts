@@ -343,7 +343,7 @@ export class AdminFestivalController {
   @ApiHeader(draftHeader)
   @ApiBody({
     description:
-      '수정할 필드만 보냅니다. 허용 필드: name, venue, timezone, days, thumbUrl, ticketLinks, flagsEnabled, source, stages, sets, zones, flags, directions, checklist, rules, mapImageUrl, mapAspect, mapStages. 존에 지도 영역(`area`)이 있으면 `mapAspect`(지도 너비/높이)가 필요합니다. 날짜 전용 초안은 days=[]를 유지할 수 있고, 발행하려면 검증된 시각·무대·세트가 필요합니다. eventPeriod는 수정할 수 없습니다.',
+      '수정할 필드만 보냅니다. 허용 필드: name, venue, timezone, days, thumbUrl, ticketLinks, officialInstagramUrl, flagsEnabled, source, stages, sets, zones, flags, directions, checklist, rules, mapImageUrl, mapAspect, mapStages. 존에 지도 영역(`area`)이 있으면 `mapAspect`(지도 너비/높이)가 필요합니다. 날짜 전용 초안은 days=[]를 유지할 수 있고, 발행하려면 검증된 시각·무대·세트가 필요합니다. eventPeriod는 수정할 수 없습니다.',
     schema: {
       type: 'object',
       minProperties: 1,
@@ -371,6 +371,13 @@ export class AdminFestivalController {
               url: { type: 'string', format: 'uri' },
             },
           },
+        },
+        officialInstagramUrl: {
+          type: 'string',
+          nullable: true,
+          format: 'uri',
+          description:
+            '축제 공식 Instagram 프로필 주소(https://www.instagram.com/<계정>/). 공식 소식을 가져오는 데 씁니다. null이면 지웁니다.',
         },
         flagsEnabled: { type: 'boolean' },
         source: { type: 'object' },

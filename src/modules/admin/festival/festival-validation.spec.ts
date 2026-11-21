@@ -396,6 +396,30 @@ describe('festival draft validation', () => {
     ).toEqual([]);
   });
 
+  it('accepts, clears and rejects the official Instagram profile URL', () => {
+    const next = mergeDraft(draft, {
+      officialInstagramUrl: 'https://www.instagram.com/grandmintfestival/',
+    });
+    expect(validateDraft(next, true)).toEqual([]);
+    expect(next.officialInstagramUrl).toBe(
+      'https://www.instagram.com/grandmintfestival/',
+    );
+    expect(mergeDraft(next, { officialInstagramUrl: null })).not.toHaveProperty(
+      'officialInstagramUrl',
+    );
+    for (const officialInstagramUrl of [
+      'http://www.instagram.com/grandmintfestival/',
+      'https://www.instagram.com/p/abc/',
+      'https://evil.example.com/grandmintfestival/',
+      'https://www.instagram.com/',
+      `https://www.instagram.com/${'a'.repeat(31)}/`,
+      42,
+    ])
+      expect(validateDraft({ ...draft, officialInstagramUrl })).toContain(
+        'officialInstagramUrl: https://www.instagram.com/<계정>/ 형태의 주소 필요',
+      );
+  });
+
   it('rejects invalid thumbnail and ticket links', () => {
     expect(
       validateDraft({ ...draft, thumbUrl: 'javascript:alert(1)' }),
