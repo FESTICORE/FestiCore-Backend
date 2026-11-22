@@ -138,7 +138,8 @@ export class AuthService {
     await this.dataSource.transaction(async (manager) => {
       await manager.query(
         `UPDATE "devices"
-         SET "apnsToken" = NULL, "liveActivityPushToStartToken" = NULL,
+         SET "apnsToken" = NULL, "fcmToken" = NULL,
+             "liveActivityPushToStartToken" = NULL,
              "liveActivityPushToken" = NULL, "liveActivityFestivalId" = NULL,
              "liveActivityId" = NULL, "updatedAt" = now()
          WHERE "userId" = $1`,

@@ -189,6 +189,7 @@ describe('DeviceService ownership and pins', () => {
       { id, deviceTokenId: unbindKey },
       expect.objectContaining({
         apnsToken: null,
+        fcmToken: null,
         liveActivityPushToStartToken: null,
         liveActivityPushToken: null,
         liveActivityFestivalId: null,
@@ -239,6 +240,11 @@ describe('DeviceService ownership and pins', () => {
       expect.anything(),
       expect.objectContaining({ id, deviceTokenId: 'token-a' }),
       { userId: null, deviceTokenId: unbindKey },
+    );
+    expect(transactionManager.update).toHaveBeenCalledWith(
+      expect.anything(),
+      { id, deviceTokenId: unbindKey },
+      expect.objectContaining({ apnsToken: null, fcmToken: null }),
     );
     expect(transactionManager.query).toHaveBeenCalledWith(
       expect.stringContaining("'live-activity-performance:%'"),
@@ -407,6 +413,93 @@ describe('DeviceService ownership and pins', () => {
       expect.objectContaining({ jti: 'token-a' }),
       expect.any(Object),
     );
+  });
+
+  it('registers an Android device with only the FCM token and keeps the response shape', async () => {
+    devices.findOne.mockResolvedValue(null);
+    const androidBody = {
+      platform: 'android' as const,
+      fcmToken: 'fcm-token',
+      appVersion: '1.0.0',
+      osVersion: '15',
+      locale: 'ko-KR',
+      timezone: 'Asia/Seoul',
+    };
+    const result = await service.register(id, androidBody, anonymous);
+    expect(Object.keys(result).sort()).toEqual([
+      'deviceAccessToken',
+      'deviceId',
+      'subscriptions',
+      'userId',
+    ]);
+    expect(devices.insert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        platform: 'android',
+        fcmToken: 'fcm-token',
+        apnsToken: null,
+        apnsEnvironment: null,
+        liveActivityPushToStartToken: null,
+      }),
+    );
+  });
+
+  it('registers an iOS device as ios without touching fcmToken', async () => {
+    devices.findOne.mockResolvedValue(null);
+    await service.register(id, body, anonymous);
+    const inserted = devices.insert.mock.calls[0][0] as Record<string, unknown>;
+    expect(inserted).toMatchObject({
+      platform: 'ios',
+      apnsEnvironment: 'sandbox',
+    });
+    expect(inserted).not.toHaveProperty('fcmToken');
+    devices.findOne.mockResolvedValue({
+      id,
+      userId: 'user-a',
+      platform: 'ios',
+    });
+    await service.register(id, body, user);
+    const [, updated] = devices.update.mock.calls[0] as [
+      unknown,
+      Record<string, unknown>,
+    ];
+    expect(updated).not.toHaveProperty('fcmToken');
+  });
+
+  it('rejects changing the platform of an existing device', async () => {
+    devices.findOne.mockResolvedValue({
+      id,
+      userId: 'user-a',
+      platform: 'ios',
+    });
+    await expect(
+      service.register(
+        id,
+        { ...body, apnsToken: null, platform: 'android', fcmToken: null },
+        user,
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    devices.findOne.mockResolvedValue({
+      id,
+      userId: 'user-a',
+      platform: 'android',
+    });
+    await expect(service.register(id, body, user)).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+    expect(devices.update).not.toHaveBeenCalled();
+  });
+
+  it('returns the platform in the device status', async () => {
+    devices.findOne.mockResolvedValue({
+      id,
+      userId: 'user-a',
+      platform: 'android',
+      apnsEnvironment: null,
+    });
+    await expect(service.get(id, user)).resolves.toMatchObject({
+      platform: 'android',
+      apnsEnvironment: null,
+    });
   });
 
   it('lets user Bearer update only its own device', async () => {

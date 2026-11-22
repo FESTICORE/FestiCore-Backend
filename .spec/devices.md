@@ -22,7 +22,38 @@
 }
 ```
 
-APNs 토큰은 제공할 때 2~256자 짝수 길이 hex 문자열이다. JSON 응답은 `{"code":"SUCCESS","data":{"deviceId":"UUID","userId":null,"deviceAccessToken":"JWT","subscriptions":[]},"message":"성공적으로 처리되었습니다."}` 형식이다. 계정 기기에는 `deviceAccessToken`이 없다. 다른 계정 또는 기존 익명 기기 ID의 토큰을 교체하려는 요청은 403이다.
+APNs 토큰은 제공할 때 2~256자 짝수 길이 hex 문자열이다.
+
+### 플랫폼 (`platform` · `fcmToken`)
+
+`platform`은 `ios` 또는 `android`다. 생략하면 `ios`로 보므로 위 iOS 본문은 그대로 통과한다. `null`이나 다른 값은 400이다.
+
+| 필드 | iOS(생략 또는 `"ios"`) | Android(`"android"`) |
+| --- | --- | --- |
+| `apnsEnvironment` | 필수 `sandbox`·`production` | 생략 또는 `null` |
+| `apnsToken` | 키 필수, hex 또는 `null` | 생략 또는 `null` |
+| `liveActivityPushToStartToken` | 선택 | 생략 또는 `null` |
+| `fcmToken` | 생략 또는 `null`(문자열이면 400) | 키 필수, 1~4096자 공백 없는 문자열 또는 `null`(알림 권한 없음) |
+| `appVersion` · `osVersion` · `locale` · `timezone` | 필수 | 필수(같은 규칙) |
+
+Android 본문:
+
+```json
+{
+  "platform": "android",
+  "fcmToken": "<FCM 등록 토큰>",
+  "appVersion": "1.0.0",
+  "osVersion": "15",
+  "locale": "ko-KR",
+  "timezone": "Asia/Seoul"
+}
+```
+
+- Android에 `null`이 아닌 APNs · Live Activity 필드가 있으면 400이다(FCM 토큰이 APNs로 가는 사고 방지). DB 제약 `CHK_devices_push_token_platform`도 같은 규칙을 지킨다.
+- Android 등록 · 갱신은 APNs 열을 `null`로, `fcmToken`을 요청 값으로 쓴다. iOS 요청은 `fcmToken`을 바꾸지 않는다.
+- 등록된 기기의 플랫폼은 바꿀 수 없다. 다른 플랫폼으로 갱신하면 403이고, 새 UUID v4로 등록한다.
+- 로그인 연결 해제 · 복구와 로그아웃은 `fcmToken`도 지운다. 응답 모양은 플랫폼과 무관하게 아래와 같다.
+- Android 기기로의 FCM 발송은 아직 없다. 지금은 등록만 받는다. JSON 응답은 `{"code":"SUCCESS","data":{"deviceId":"UUID","userId":null,"deviceAccessToken":"JWT","subscriptions":[]},"message":"성공적으로 처리되었습니다."}` 형식이다. 계정 기기에는 `deviceAccessToken`이 없다. 다른 계정 또는 기존 익명 기기 ID의 토큰을 교체하려는 요청은 403이다.
 
 ## Live Activity
 
@@ -38,7 +69,7 @@ APNs 토큰은 제공할 때 2~256자 짝수 길이 hex 문자열이다. JSON �
 
 ## 기기 조회·삭제
 
-- `GET /api/v1/devices`: 현재 기기의 등록 정보만 반환한다. 푸시 토큰은 응답에 포함하지 않는다.
+- `GET /api/v1/devices`: 현재 기기의 등록 정보만 반환한다. `platform`(`ios`·`android`)을 포함하고, Android는 `apnsEnvironment`가 `null`이다. 푸시 토큰(APNs · FCM)은 응답에 포함하지 않는다.
 - `DELETE /api/v1/devices`: 기기와 구독 및 대기 중인 알림 작업을 삭제한다. 성공 204.
 
 ## 축제 알림 구독
