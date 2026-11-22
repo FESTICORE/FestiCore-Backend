@@ -182,6 +182,7 @@ export class DeviceController {
           properties: {
             deviceId: { type: 'string', format: 'uuid' },
             userId: { type: 'string', format: 'uuid' },
+            platform: { type: 'string', enum: ['ios', 'android'] },
             appVersion: { type: 'string', example: '1.0.0' },
             osVersion: { type: 'string', example: '18.0' },
             locale: { type: 'string', example: 'ko-KR' },
@@ -189,6 +190,8 @@ export class DeviceController {
             apnsEnvironment: {
               type: 'string',
               enum: ['sandbox', 'production'],
+              nullable: true,
+              description: 'android 기기는 null',
             },
           },
         },
@@ -230,7 +233,7 @@ export class DeviceController {
   @ApiOperation({
     summary: '기기 알림 설정 저장',
     description:
-      '보낸 항목만 바꿉니다. flagStatus·crewStatus·crewGather·packUpdates·setReminders·officialNews가 꺼지면 이 기기에 해당 푸시를 보내지 않습니다. setReminders는 저장한 공연 2시간 전 알림입니다. homecoming은 서버 발송 기능 전까지 값만 저장합니다.',
+      '보낸 항목만 바꿉니다. flagStatus·crewStatus·crewGather·packUpdates·setReminders·officialNews가 꺼지면 이 기기에 해당 푸시를 보내지 않습니다. setReminders는 저장한 공연 10분 전 알림입니다. homecoming은 서버 발송 기능 전까지 값만 저장합니다.',
   })
   @ApiBody({ type: NotificationSettingsDto })
   @ApiResponse({

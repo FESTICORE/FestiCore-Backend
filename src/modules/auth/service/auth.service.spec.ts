@@ -54,6 +54,11 @@ describe('AuthService logout account devices', () => {
       [userId],
     );
     expect(query).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining('"apnsToken" = NULL, "fcmToken" = NULL'),
+      [userId],
+    );
+    expect(query).toHaveBeenNthCalledWith(
       2,
       expect.stringContaining('SELECT "id" FROM "devices" WHERE "userId" = $1'),
       [userId],

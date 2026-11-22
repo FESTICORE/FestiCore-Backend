@@ -8,38 +8,113 @@ import {
   IsString,
   Matches,
   MaxLength,
+  MinLength,
+  Validate,
   ValidateIf,
+  ValidatorConstraint,
+  type ValidationArguments,
+  type ValidatorConstraintInterface,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 const hexToken = /^(?:[0-9a-fA-F]{2}){1,128}$/;
 
-export class RegisterDeviceDto {
-  @ApiProperty({
-    enum: ['sandbox', 'production'],
-    description: '앱의 APNs entitlement 환경. Railway 배포 환경과 별개입니다.',
-  })
-  @IsIn(['sandbox', 'production'])
-  apnsEnvironment!: 'sandbox' | 'production';
+export const DEVICE_PLATFORMS = ['ios', 'android'] as const;
+export type DevicePlatform = (typeof DEVICE_PLATFORMS)[number];
 
-  @ApiProperty({
+/** Android 기기는 APNs · Live Activity 토큰을 보낼 수 없다(생략 또는 null만). */
+@ValidatorConstraint({ name: 'androidForbidsApnsFields' })
+export class AndroidForbidsApnsFields implements ValidatorConstraintInterface {
+  validate(platform: unknown, args: ValidationArguments): boolean {
+    if (platform !== 'android') return true;
+    const body = args.object as RegisterDeviceDto;
+    return [
+      body.apnsToken,
+      body.apnsEnvironment,
+      body.liveActivityPushToStartToken,
+    ].every((value) => value === undefined || value === null);
+  }
+
+  defaultMessage(): string {
+    return 'android 기기는 apnsToken · apnsEnvironment · liveActivityPushToStartToken을 보낼 수 없습니다.';
+  }
+}
+
+/** fcmToken 값은 Android 기기만 보낼 수 있다. */
+@ValidatorConstraint({ name: 'fcmTokenOnlyForAndroid' })
+export class FcmTokenOnlyForAndroid implements ValidatorConstraintInterface {
+  validate(_: unknown, args: ValidationArguments): boolean {
+    return (args.object as RegisterDeviceDto).platform === 'android';
+  }
+
+  defaultMessage(): string {
+    return 'fcmToken은 android 기기만 보낼 수 있습니다.';
+  }
+}
+
+export class RegisterDeviceDto {
+  @ApiPropertyOptional({
+    enum: DEVICE_PLATFORMS,
+    default: 'ios',
+    description:
+      '기기 플랫폼. 생략하면 ios입니다. 등록된 기기의 플랫폼은 바꿀 수 없습니다.',
+  })
+  @ValidateIf((_, value: unknown) => value !== undefined)
+  @IsIn(DEVICE_PLATFORMS)
+  @Validate(AndroidForbidsApnsFields)
+  platform?: DevicePlatform;
+
+  @ApiPropertyOptional({
+    enum: ['sandbox', 'production'],
+    description:
+      'iOS 필수. 앱의 APNs entitlement 환경. Railway 배포 환경과 별개입니다. android는 생략 또는 null',
+  })
+  @ValidateIf((object: RegisterDeviceDto) => object.platform !== 'android')
+  @IsIn(['sandbox', 'production'])
+  apnsEnvironment?: 'sandbox' | 'production' | null;
+
+  @ApiPropertyOptional({
     nullable: true,
     example: 'a'.repeat(64),
-    description: 'APNs 기기 토큰(hex). 알림 권한이 없으면 null',
+    description:
+      'iOS는 키 필수. APNs 기기 토큰(hex). 알림 권한이 없으면 null. android는 생략 또는 null',
   })
-  @ValidateIf((_, value: unknown) => value !== null)
+  @ValidateIf(
+    (object: RegisterDeviceDto, value: unknown) =>
+      object.platform !== 'android' && value !== null,
+  )
   @IsDefined()
   @Matches(hexToken)
-  apnsToken!: string | null;
+  apnsToken?: string | null;
 
   @ApiPropertyOptional({
     nullable: true,
     example: 'b'.repeat(64),
-    description: 'iOS 17.2+ Live Activity 원격 시작 토큰(hex)',
+    description:
+      'iOS 17.2+ Live Activity 원격 시작 토큰(hex). android는 생략 또는 null',
   })
   @IsOptional()
   @Matches(hexToken)
   liveActivityPushToStartToken?: string | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    example: 'fcm-registration-token',
+    description:
+      'android는 키 필수. FCM 등록 토큰. 알림 권한이 없으면 null. iOS는 생략 또는 null',
+  })
+  @ValidateIf((object: RegisterDeviceDto, value: unknown) =>
+    object.platform === 'android'
+      ? value !== null
+      : value !== undefined && value !== null,
+  )
+  @IsDefined()
+  @Validate(FcmTokenOnlyForAndroid)
+  @IsString()
+  @MinLength(1)
+  @MaxLength(4096)
+  @Matches(/^\S+$/)
+  fcmToken?: string | null;
 
   @ApiProperty({ example: '1.0.0' })
   @MaxLength(32)
@@ -126,7 +201,7 @@ export class NotificationSettingsDto {
 
   @ApiPropertyOptional({
     example: true,
-    description: '저장한 공연 2시간 전 알림. 꺼지면 이 기기에 보내지 않습니다.',
+    description: '저장한 공연 10분 전 알림. 꺼지면 이 기기에 보내지 않습니다.',
   })
   @IsOptional()
   @IsBoolean()
