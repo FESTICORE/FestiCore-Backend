@@ -7,7 +7,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { Device } from '../../device/device.entity';
-import { ApnsService } from '../../notification/apns.service';
+import { hasPushTarget, PushService } from '../../notification/push.service';
 import { AdminAuditService } from '../audit/admin-audit.service';
 import { TestPushDto } from './admin-push.dto';
 
@@ -15,25 +15,36 @@ import { TestPushDto } from './admin-push.dto';
 export class AdminPushService {
   constructor(
     @InjectRepository(Device) private readonly devices: Repository<Device>,
-    private readonly apns: ApnsService,
+    private readonly push: PushService,
     private readonly audit: AdminAuditService,
     private readonly dataSource: DataSource,
   ) {}
 
   async sendTest(input: TestPushDto, actor: string | null) {
-    if (!this.apns.isConfigured()) {
-      throw new ServiceUnavailableException(
-        'APNs 설정이 없어 테스트 푸시를 보낼 수 없습니다.',
-      );
-    }
     const device = await this.devices.findOne({
       where: { id: input.deviceId },
-      select: { id: true, apnsToken: true, apnsEnvironment: true },
+      select: {
+        id: true,
+        platform: true,
+        apnsToken: true,
+        apnsEnvironment: true,
+        fcmToken: true,
+      },
     });
     if (!device) throw new NotFoundException('등록된 기기를 찾을 수 없습니다.');
-    if (!device.apnsToken || !device.apnsEnvironment) {
+    const android = device.platform === 'android';
+    if (!this.push.isConfiguredFor(device.platform)) {
+      throw new ServiceUnavailableException(
+        android
+          ? 'FCM 설정이 없어 테스트 푸시를 보낼 수 없습니다.'
+          : 'APNs 설정이 없어 테스트 푸시를 보낼 수 없습니다.',
+      );
+    }
+    if (!hasPushTarget(device)) {
       throw new ConflictException(
-        '기기에 APNs 토큰과 환경이 등록되지 않았습니다.',
+        android
+          ? '기기에 FCM 토큰이 등록되지 않았습니다.'
+          : '기기에 APNs 토큰과 환경이 등록되지 않았습니다.',
       );
     }
 
@@ -47,16 +58,14 @@ export class AdminPushService {
         after: { type: input.type },
       }),
     );
-    const result = await this.apns.sendTestNotification(
-      device.apnsToken,
-      device.apnsEnvironment,
-      input.type,
-    );
+    const result = await this.push.sendTestNotification(device, input.type);
     return {
       deviceId: device.id,
       type: input.type,
       accepted: result.accepted,
-      reason: result.accepted ? null : (result.reason ?? 'APNS_REJECTED'),
+      reason: result.accepted
+        ? null
+        : (result.reason ?? (android ? 'FCM_REJECTED' : 'APNS_REJECTED')),
     };
   }
 }
