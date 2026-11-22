@@ -6,12 +6,13 @@ import {
 import { AdminPushService } from './admin-push.service';
 
 jest.mock('../../notification/apns.service', () => ({ ApnsService: class {} }));
+jest.mock('../../notification/fcm.service', () => ({ FcmService: class {} }));
 
 const DEVICE_ID = '1f0d7050-9b11-4099-84b5-7d71e31f8850';
 
 describe('AdminPushService', () => {
   const findOne = jest.fn();
-  const isConfigured = jest.fn();
+  const isConfiguredFor = jest.fn();
   const sendTestNotification = jest.fn();
   const record = jest.fn();
   const transaction = jest.fn(
@@ -19,16 +20,17 @@ describe('AdminPushService', () => {
   );
   const service = new AdminPushService(
     { findOne } as never,
-    { isConfigured, sendTestNotification } as never,
+    { isConfiguredFor, sendTestNotification } as never,
     { record } as never,
     { transaction } as never,
   );
 
   beforeEach(() => {
     jest.clearAllMocks();
-    isConfigured.mockReturnValue(true);
+    isConfiguredFor.mockReturnValue(true);
     findOne.mockResolvedValue({
       id: DEVICE_ID,
+      platform: 'ios',
       apnsToken: 'ab'.repeat(32),
       apnsEnvironment: 'sandbox',
     });
@@ -53,7 +55,13 @@ describe('AdminPushService', () => {
     });
     expect(findOne).toHaveBeenCalledWith({
       where: { id: DEVICE_ID },
-      select: { id: true, apnsToken: true, apnsEnvironment: true },
+      select: {
+        id: true,
+        platform: true,
+        apnsToken: true,
+        apnsEnvironment: true,
+        fcmToken: true,
+      },
     });
     expect(record).toHaveBeenCalledWith(
       expect.anything(),
@@ -65,19 +73,23 @@ describe('AdminPushService', () => {
       }),
     );
     expect(sendTestNotification).toHaveBeenCalledWith(
-      'ab'.repeat(32),
-      'sandbox',
+      expect.objectContaining({
+        platform: 'ios',
+        apnsToken: 'ab'.repeat(32),
+        apnsEnvironment: 'sandbox',
+      }),
       'pack.updated',
     );
     expect(JSON.stringify(record.mock.calls)).not.toContain('abababab');
   });
 
   it('refuses an unknown device, missing token, or APNs configuration', async () => {
-    isConfigured.mockReturnValue(false);
+    isConfiguredFor.mockReturnValue(false);
     await expect(
       service.sendTest({ deviceId: DEVICE_ID, type: 'crew.status' }, 'admin-1'),
     ).rejects.toBeInstanceOf(ServiceUnavailableException);
-    isConfigured.mockReturnValue(true);
+    expect(isConfiguredFor).toHaveBeenCalledWith('ios');
+    isConfiguredFor.mockReturnValue(true);
     findOne.mockResolvedValueOnce(null);
     await expect(
       service.sendTest({ deviceId: DEVICE_ID, type: 'crew.status' }, 'admin-1'),
@@ -94,6 +106,57 @@ describe('AdminPushService', () => {
     await expect(
       service.sendTest({ deviceId: DEVICE_ID, type: 'flag.status' }, 'admin-1'),
     ).rejects.toThrow('audit unavailable');
+    expect(sendTestNotification).not.toHaveBeenCalled();
+  });
+  it('sends an Android device test push through its FCM token', async () => {
+    findOne.mockResolvedValueOnce({
+      id: DEVICE_ID,
+      platform: 'android',
+      apnsToken: null,
+      apnsEnvironment: null,
+      fcmToken: 'fcm-registration-token',
+    });
+    sendTestNotification.mockResolvedValueOnce({
+      accepted: false,
+      permanent: true,
+      reason: 'FCM_UNREGISTERED',
+    });
+    await expect(
+      service.sendTest({ deviceId: DEVICE_ID, type: 'crew.gather' }, 'admin-1'),
+    ).resolves.toEqual({
+      deviceId: DEVICE_ID,
+      type: 'crew.gather',
+      accepted: false,
+      reason: 'FCM_UNREGISTERED',
+    });
+    expect(isConfiguredFor).toHaveBeenCalledWith('android');
+    expect(sendTestNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        platform: 'android',
+        fcmToken: 'fcm-registration-token',
+      }),
+      'crew.gather',
+    );
+    expect(JSON.stringify(record.mock.calls)).not.toContain('fcm-registration');
+  });
+
+  it('refuses an Android device without FCM configuration or token', async () => {
+    const android = {
+      id: DEVICE_ID,
+      platform: 'android',
+      apnsToken: null,
+      apnsEnvironment: null,
+      fcmToken: null,
+    };
+    findOne.mockResolvedValue(android);
+    isConfiguredFor.mockImplementation((platform) => platform === 'ios');
+    await expect(
+      service.sendTest({ deviceId: DEVICE_ID, type: 'flag.status' }, 'admin-1'),
+    ).rejects.toThrow('FCM 설정이 없어');
+    isConfiguredFor.mockReturnValue(true);
+    await expect(
+      service.sendTest({ deviceId: DEVICE_ID, type: 'flag.status' }, 'admin-1'),
+    ).rejects.toBeInstanceOf(ConflictException);
     expect(sendTestNotification).not.toHaveBeenCalled();
   });
 });

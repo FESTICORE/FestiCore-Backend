@@ -33,7 +33,7 @@
 - `PUT /api/v1/notifications/subscriptions/{festivalId}`: 본문 `{ "pinned": true, "reminders": true, "packUpdates": false }`를 저장한다. `pinned`는 필수이고 false여도 구독 행을 보존한다. 새 핀은 `reminders`와 `festivalStarts`가 기본 true, `packUpdates`는 기본 false다. 기존 구독에서 생략한 알림 설정은 유지한다. 기기별 분당 10회로 제한한다.
 - `PUT /api/v1/notifications/subscriptions/{festivalId}/pack-download`: 본문 `{ "packVersion": 1 }`은 현재 발행 버전과 일치할 때만 다운로드 완료를 기록한다. 성공 204.
 - `DELETE /api/v1/notifications/subscriptions/{festivalId}`: 해당 기기의 구독을 해제한다. 성공 204.
-- `POST /api/v1/admin/push/test`: Bearer JWT와 `editor` 이상 관리자 권한으로 `{ "deviceId": "UUID v4", "type": "flag.status|crew.status|crew.gather|pack.updated" }`를 보내면 등록된 한 기기의 APNs 토큰과 환경으로 테스트 푸시 1건을 시도한다. 자유 입력 메시지와 APNs 토큰은 받지 않는다. 분당 5회로 제한하고 감사 기록에 요청을 남긴다. 응답 `data`는 `deviceId`, `type`, APNs 수락 여부 `accepted`, 실패 시 `reason`이다. APNs 수락은 실기기 수신을 보장하지 않는다.
+- `POST /api/v1/admin/push/test`: Bearer JWT와 `editor` 이상 관리자 권한으로 `{ "deviceId": "UUID v4", "type": "flag.status|crew.status|crew.gather|pack.updated" }`를 보내면 등록된 한 기기에 테스트 푸시 1건을 시도한다. 기기 `platform`이 `ios`면 APNs 토큰과 환경, `android`면 FCM 토큰을 쓴다. 자유 입력 메시지와 푸시 토큰은 받지 않는다. 분당 5회로 제한하고 감사 기록에 요청을 남긴다. 기기가 없으면 404, 그 기기 platform의 발송 설정(APNs 또는 FCM)이 없으면 503, 토큰이 없으면 409다. 응답 `data`는 `deviceId`, `type`, APNs · FCM 수락 여부 `accepted`, 실패 시 `reason`(Android는 `FCM_*`)이다. 수락은 실기기 수신을 보장하지 않는다.
 
 JSON 응답은 공통 `{ "code", "data", "message" }` 형식을 따른다. 204에는 본문이 없다. 비밀값·APNs 토큰은 목록 응답에 넣지 않는다.
 
@@ -46,6 +46,14 @@ JSON 응답은 공통 `{ "code", "data", "message" }` 형식을 따른다. 204�
 - 여러 서버 인스턴스에서 같은 작업을 중복 선점하지 않도록 DB 잠금과 임대 시간을 사용한다. 매 주기 최대 100건을 동시성 10으로 처리하며 시작 2시간 이내의 작업을 발송한다. 실패 작업은 제한된 횟수로 재시도한다.
 - 발송 직전에 현재 구독, 기기 토큰, 발행된 시작 시각을 다시 확인한다. 구독 해제·기기 삭제·회원 탈퇴 후에는 보내지 않는다.
 - APNs는 기기별 `apnsEnvironment`에 따라 개발/운영 엔드포인트를 선택한다. 자격증명이 없으면 시작 시 명확히 로깅하고 발송을 시도하지 않는다.
+
+## Android(FCM) 발송기
+
+- `PushService`가 기기 `platform`에 따라 APNs(`ios`) 또는 FCM(`android`)으로 보낸다. 페이로드 원천은 `ApnsService.build*` 하나이고, APNs 본문 · 헤더는 바뀌지 않는다. Live Activity는 iOS 전용이다. 지금은 관리자 테스트 푸시만 이 경로를 쓰고, 예약 발송 경로의 Android 대상 전환은 다음 단계다.
+- FCM은 `notification` 키 없는 data 전용 메시지다. data 키는 iOS userInfo(aps 밖 최상위 키)와 같고, 보이는 알림은 `aps.alert`의 `title` · `body`를 최상위로 더한다. 값은 모두 문자열이다(숫자 · boolean은 `String()`, 예: `packVersion: "3"`, `dissolved: "true"`). `null`인 키는 넣지 않는다. 무음(`pack.updated`)에는 `title` · `body`가 없다.
+- Android 우선순위는 보이는 알림 `high`, 무음 `normal`이다. `ttl`은 APNs 만료(초)를 ms로 바꿔 넣고, `collapseKey`는 무음에만 쓴다. data가 4096바이트를 넘으면 보내지 않는다(`PayloadTooLarge`).
+- 자격 증명은 `FCM_SERVICE_ACCOUNT_JSON`([RAILWAY.md](../docs/deployment/RAILWAY.md))뿐이다. 없거나 형식이 틀리면 `FCM_NOT_CONFIGURED`로 Android 발송만 끈다.
+- 결과는 APNs와 같은 `{ accepted, permanent, reason }`이다. `UNREGISTERED`(`FCM_UNREGISTERED`) · 잘못된 토큰(`FCM_INVALID_TOKEN`)은 `permanent: true`, `SENDER_ID_MISMATCH` · 인증 오류는 토큰을 유지하는 `FCM_CONFIGURATION_ERROR`, 페이로드 오류는 `FCM_INVALID_ARGUMENT`, 일시 장애는 `FCM_HTTP_503` · `FCM_HTTP_500` · `FCM_QUOTA_EXCEEDED` · `FCM_NETWORK_ERROR`로 재시도 대상이다.
 - APNs 수락 직후 서버 장애가 나면 재시도 중복이 생길 수 있다. 앱은 `eventKey` 기반으로 알림을 중복 표시하지 않도록 처리한다.
 
 ## 검증
