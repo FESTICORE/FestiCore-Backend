@@ -8,6 +8,27 @@ import { InstagramMedia } from './instagram-graph.client';
 import { OfficialNewsService } from './official-news.service';
 
 jest.mock('./apns.service', () => ({ ApnsService: class {} }));
+jest.mock('./fcm.service', () => ({ FcmService: class {} }));
+
+/** 가짜 PushService: iOS는 기존 APNs 목에 (토큰, 환경, ...입력)으로 넘긴다. Android는 fcmSend로 보낸다. */
+function fakePush(apnsSends: Record<string, jest.Mock>, fcmSend: jest.Mock) {
+  const push: Record<string, unknown> = { isConfigured: () => true };
+  for (const [name, send] of Object.entries(apnsSends)) {
+    push[name] = (
+      target: {
+        platform: string;
+        apnsToken: string | null;
+        apnsEnvironment: string | null;
+        fcmToken: string | null;
+      },
+      ...args: unknown[]
+    ): unknown =>
+      (target.platform === 'android'
+        ? fcmSend(target.fcmToken, ...args)
+        : send(target.apnsToken, target.apnsEnvironment, ...args)) as unknown;
+  }
+  return push;
+}
 
 const url = process.env.LIVE_ACTIVITY_PG_URL;
 const describePostgres = url ? describe : describe.skip;
@@ -81,7 +102,9 @@ describePostgres('축제 공식 인스타그램 소식 (PostgreSQL)', () => {
     await db.query(`CREATE TABLE "devices" (
       "id" uuid PRIMARY KEY,
       "userId" uuid,
-      "apnsToken" varchar(256)
+      "apnsToken" varchar(256),
+      "platform" varchar(10) NOT NULL DEFAULT 'ios',
+      "fcmToken" varchar(4096)
     )`);
     await db.query(`CREATE TABLE "device_subscriptions" (
       "deviceId" uuid NOT NULL,
@@ -117,10 +140,11 @@ describePostgres('축제 공식 인스타그램 소식 (PostgreSQL)', () => {
       isConfigured: () => true,
       recentMedia,
     } as never);
-    deliveries = new FestivalStartService(db, {
-      isConfigured: () => true,
-      sendStartNotification,
-    } as never);
+    deliveries = new FestivalStartService(
+      db,
+      { isConfigured: () => true } as never,
+      fakePush({ sendStartNotification }, jest.fn()) as never,
+    );
     await publish('wonderliivet');
   });
 

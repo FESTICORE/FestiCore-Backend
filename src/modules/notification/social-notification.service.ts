@@ -7,7 +7,12 @@ import {
 import { DataSource, EntityManager } from 'typeorm';
 import { Crew, CrewGather } from '../crews/crew.entity';
 import { Flag } from '../flags/flag.entity';
-import { ApnsService } from './apns.service';
+import {
+  hasPushTarget,
+  PUSH_TARGET_SQL,
+  PushService,
+  type PushTarget,
+} from './push.service';
 import { socialAlertText } from './social-notification-text';
 import {
   recordUserNotifications,
@@ -31,10 +36,15 @@ interface Delivery {
   attempts: number;
 }
 
-interface Target {
-  apnsToken: string | null;
-  apnsEnvironment: 'sandbox' | 'production' | null;
-}
+/**
+ * 설정이 없어 보낼 수 없는 결과는 시도 횟수를 늘리지 않고 15분 뒤 다시 본다(오래된 작업은 EXPIRED).
+ * APNs 미설정은 예전에 tick 자체를 건너뛰던 동작과 같다. APNS_CONFIGURATION_ERROR는 기존대로 둔다.
+ */
+const NOT_CONFIGURED_REASONS: ReadonlySet<string> = new Set([
+  'APNS_NOT_CONFIGURED',
+  'FCM_NOT_CONFIGURED',
+  'FCM_CONFIGURATION_ERROR',
+]);
 
 const POLL_MS = 15_000;
 const BATCH_SIZE = 50;
@@ -51,7 +61,7 @@ export class SocialNotificationService
 
   constructor(
     private readonly db: DataSource,
-    private readonly apns: ApnsService,
+    private readonly push: PushService,
   ) {}
 
   onModuleInit(): void {
@@ -225,7 +235,7 @@ export class SocialNotificationService
       SELECT d."id", d."userId", 'crew.gather', $1, $2, $3, $4::jsonb, now()
       FROM "crew_members" r JOIN "devices" d ON d."userId" = r."userId"
       WHERE r."crewId" = $1 AND r."userId" <> $2
-        AND d."apnsToken" IS NOT NULL AND d."apnsEnvironment" IS NOT NULL
+        AND ${PUSH_TARGET_SQL}
       ON CONFLICT ("deviceId", "eventKey") DO NOTHING`,
       [
         crew.id,
@@ -268,7 +278,7 @@ export class SocialNotificationService
        FROM "crew_members" r
        JOIN "users" u ON u."id" = r."userId" AND u."pushOptIn" = true
        JOIN "devices" d ON d."userId" = r."userId"
-         AND d."apnsToken" IS NOT NULL AND d."apnsEnvironment" IS NOT NULL
+         AND ${PUSH_TARGET_SQL}
        WHERE r."crewId" = $1
        ON CONFLICT ("deviceId", "eventKey") DO NOTHING`,
       [
@@ -329,7 +339,7 @@ export class SocialNotificationService
       FROM ${recipientTable}
       JOIN "users" u ON u."id" = r."userId" AND u."pushOptIn" = true
       JOIN "devices" d ON d."userId" = r."userId"
-        AND d."apnsToken" IS NOT NULL AND d."apnsEnvironment" IS NOT NULL
+        AND ${PUSH_TARGET_SQL}
       WHERE ${recipientFilter}`;
     // Postgres는 쓰지 않는 매개변수의 형식을 정하지 못해 42P18로 실패하므로 payload($4)를 빼고 보낸다.
     await manager.query(
@@ -372,7 +382,7 @@ export class SocialNotificationService
   }
 
   async tick(): Promise<void> {
-    if (this.running || !this.apns.isConfigured()) return;
+    if (this.running || !this.push.isConfigured()) return;
     this.running = true;
     try {
       for (let i = 0; i < BATCH_SIZE; i++) {
@@ -411,8 +421,8 @@ export class SocialNotificationService
       await this.finish(job, 'cancelled', 'EXPIRED');
       return;
     }
-    const rows = await this.db.query<Target[]>(
-      `SELECT d."apnsToken", d."apnsEnvironment"
+    const rows = await this.db.query<PushTarget[]>(
+      `SELECT d."platform", d."apnsToken", d."apnsEnvironment", d."fcmToken"
       FROM "social_notification_deliveries" n
       JOIN "devices" d ON d."id" = n."deviceId" AND d."userId" = n."recipientUserId"
         AND ((n."type" = 'flag.status' AND d."notifyFlagStatus" = true)
@@ -421,7 +431,7 @@ export class SocialNotificationService
       JOIN "users" u ON u."id" = n."recipientUserId"
         AND (n."type" = 'crew.gather' OR u."pushOptIn" = true)
       WHERE n."id" = $1 AND n."status" = 'leased' AND n."leaseUntil" = $2
-        AND d."apnsToken" IS NOT NULL AND d."apnsEnvironment" IS NOT NULL
+        AND ${PUSH_TARGET_SQL}
         AND ((n."type" = 'flag.status' AND EXISTS (
           SELECT 1 FROM "flag_follows" f JOIN "flags" flag ON flag."id" = f."flagId"
           WHERE f."flagId" = n."subjectId" AND f."userId" = n."recipientUserId"
@@ -437,29 +447,39 @@ export class SocialNotificationService
       [job.id, job.leaseUntil],
     );
     const target = rows[0];
-    if (!target?.apnsToken || !target.apnsEnvironment) {
+    if (!hasPushTarget(target)) {
       await this.finish(job, 'cancelled', 'TARGET_UNAVAILABLE');
       return;
     }
-    let result: Awaited<ReturnType<ApnsService['sendSocialNotification']>>;
+    let result: Awaited<ReturnType<PushService['sendSocialNotification']>>;
     try {
-      result = await this.apns.sendSocialNotification(
-        target.apnsToken,
-        target.apnsEnvironment,
-        { type: job.type, payload: job.payload, eventKey: job.eventKey },
-      );
+      result = await this.push.sendSocialNotification(target, {
+        type: job.type,
+        payload: job.payload,
+        eventKey: job.eventKey,
+      });
     } catch {
       await this.retryOrFail(job, 'APNS_ERROR');
       return;
     }
     if (result.accepted) {
       await this.finish(job, 'sent', null);
+    } else if (result.reason && NOT_CONFIGURED_REASONS.has(result.reason)) {
+      await this.postpone(job, result.reason);
     } else if (result.permanent) {
-      await this.db.query(
-        `UPDATE "devices" SET "apnsToken" = NULL, "apnsEnvironment" = NULL
-        WHERE "id" = $1 AND "apnsToken" = $2 AND "apnsEnvironment" = $3`,
-        [job.deviceId, target.apnsToken, target.apnsEnvironment],
-      );
+      if (target.platform === 'android') {
+        await this.db.query(
+          `UPDATE "devices" SET "fcmToken" = NULL
+          WHERE "id" = $1 AND "fcmToken" = $2`,
+          [job.deviceId, target.fcmToken],
+        );
+      } else {
+        await this.db.query(
+          `UPDATE "devices" SET "apnsToken" = NULL, "apnsEnvironment" = NULL
+          WHERE "id" = $1 AND "apnsToken" = $2 AND "apnsEnvironment" = $3`,
+          [job.deviceId, target.apnsToken, target.apnsEnvironment],
+        );
+      }
       await this.finish(job, 'failed', result.reason ?? 'APNS_REJECTED');
     } else {
       await this.retryOrFail(job, result.reason ?? 'APNS_REJECTED');
@@ -479,6 +499,18 @@ export class SocialNotificationService
         "leaseUntil" = NULL, "lastErrorCode" = $4
       WHERE "id" = $1 AND "status" = 'leased' AND "leaseUntil" = $2`,
       [job.id, job.leaseUntil, minutes, reason.slice(0, 128)],
+    );
+  }
+
+  /** 시도 횟수를 늘리지 않고 15분 뒤 다시 본다. */
+  private async postpone(job: Delivery, reason: string): Promise<void> {
+    await this.db.query(
+      `UPDATE "social_notification_deliveries"
+      SET "status" = 'pending',
+        "nextAttemptAt" = now() + interval '15 minutes',
+        "leaseUntil" = NULL, "lastErrorCode" = $3
+      WHERE "id" = $1 AND "status" = 'leased' AND "leaseUntil" = $2`,
+      [job.id, job.leaseUntil, reason.slice(0, 128)],
     );
   }
 

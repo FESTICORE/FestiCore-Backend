@@ -26,6 +26,7 @@ import { CacheService } from '../../redis/service/cache.service';
 import { PublicFestivalService } from '../../public/public-festival.service';
 import { DiscoverySummary } from '../../public/crawl-catalog';
 import { LiveActivityService } from '../../notification/live-activity.service';
+import { PUSH_TARGET_SQL } from '../../notification/push.service';
 import {
   recordUserNotifications,
   withInboxSavepoint,
@@ -943,7 +944,7 @@ export class AdminFestivalService {
        JOIN "devices" d ON d."id" = s."deviceId"
        WHERE s."festivalId" = $1 AND s."packUpdates" = true
          AND d."notifyPackUpdates" = true
-         AND d."apnsToken" IS NOT NULL AND d."apnsEnvironment" IS NOT NULL
+         AND ${PUSH_TARGET_SQL}
        ON CONFLICT ("deviceId", "eventKey") DO NOTHING
        RETURNING "id"`,
       [id, `pack-updated:${id}:${version}`],

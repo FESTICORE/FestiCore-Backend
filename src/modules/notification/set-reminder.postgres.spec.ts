@@ -6,6 +6,27 @@ import { UserNotifications1792500095000 } from '../../database/migrations/179250
 import { FestivalStartService } from './festival-start.service';
 
 jest.mock('./apns.service', () => ({ ApnsService: class {} }));
+jest.mock('./fcm.service', () => ({ FcmService: class {} }));
+
+/** 가짜 PushService: iOS는 기존 APNs 목에 (토큰, 환경, ...입력)으로 넘긴다. Android는 fcmSend로 보낸다. */
+function fakePush(apnsSends: Record<string, jest.Mock>, fcmSend: jest.Mock) {
+  const push: Record<string, unknown> = { isConfigured: () => true };
+  for (const [name, send] of Object.entries(apnsSends)) {
+    push[name] = (
+      target: {
+        platform: string;
+        apnsToken: string | null;
+        apnsEnvironment: string | null;
+        fcmToken: string | null;
+      },
+      ...args: unknown[]
+    ): unknown =>
+      (target.platform === 'android'
+        ? fcmSend(target.fcmToken, ...args)
+        : send(target.apnsToken, target.apnsEnvironment, ...args)) as unknown;
+  }
+  return push;
+}
 
 const url = process.env.LIVE_ACTIVITY_PG_URL;
 const describePostgres = url ? describe : describe.skip;
@@ -83,6 +104,8 @@ describePostgres('저장한 공연 10분 전 알림 (PostgreSQL)', () => {
       "id" uuid PRIMARY KEY,
       "userId" uuid,
       "apnsToken" varchar(256),
+      "platform" varchar(10) NOT NULL DEFAULT 'ios',
+      "fcmToken" varchar(4096),
       "notifySetReminders" boolean NOT NULL DEFAULT true,
       "liveActivityPushToStartToken" varchar(256),
       "liveActivityId" varchar(128),
@@ -135,10 +158,11 @@ describePostgres('저장한 공연 10분 전 알림 (PostgreSQL)', () => {
               ($2, now(), now() + interval '30 days')`,
       [member, loggedOut],
     );
-    service = new FestivalStartService(db, {
-      isConfigured: () => true,
-      sendSetReminderNotification,
-    } as never);
+    service = new FestivalStartService(
+      db,
+      { isConfigured: () => true } as never,
+      fakePush({ sendSetReminderNotification }, jest.fn()) as never,
+    );
   });
 
   beforeEach(async () => {
@@ -178,6 +202,28 @@ describePostgres('저장한 공연 10분 전 알림 (PostgreSQL)', () => {
         lastErrorCode: null,
       },
     ]);
+  });
+
+  it('FCM 토큰이 있는 Android 로그인 기기도 10분 전 작업을 둔다', async () => {
+    const androidDevice = '99999999-9999-4999-8999-999999999999';
+    const tokenlessAndroid = '99999999-9999-4999-8999-999999999998';
+    await db.query(
+      `INSERT INTO "devices" ("id", "userId", "platform", "fcmToken", "notifySetReminders")
+       VALUES ($1, $3, 'android', 'fcm-token', true),
+              ($2, $3, 'android', NULL, true)`,
+      [androidDevice, tokenlessAndroid, member],
+    );
+    try {
+      await service.schedulePublished();
+
+      const devices = (await jobs()).map((job) => job.deviceId).sort();
+      expect(devices).toEqual([device, androidDevice].sort());
+    } finally {
+      await db.query('DELETE FROM "devices" WHERE "id" IN ($1, $2)', [
+        androidDevice,
+        tokenlessAndroid,
+      ]);
+    }
   });
 
   it('예전에 push-to-start 배너와 합쳐져 취소된 미래 공연 작업도 10분 전으로 다시 예약한다', async () => {

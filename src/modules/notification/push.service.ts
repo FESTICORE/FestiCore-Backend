@@ -21,8 +21,25 @@ export interface PushTarget {
   fcmToken: string | null;
 }
 
+/**
+ * 발송 대상 기기 조건(SQL). `devices` 별칭은 `d`다.
+ * iOS는 APNs 토큰 · 환경, Android는 FCM 토큰이 있어야 한다. `hasPushTarget`과 같은 규칙이다.
+ */
+export const PUSH_TARGET_SQL = `((d."platform" = 'ios' AND d."apnsToken" IS NOT NULL AND d."apnsEnvironment" IS NOT NULL)
+  OR (d."platform" = 'android' AND d."fcmToken" IS NOT NULL))`;
+
+/** 설정이 없거나 틀려 지금은 보낼 수 없는 결과. 시도 횟수를 늘리지 않고 나중에 다시 보낸다. */
+export const PUSH_NOT_READY_REASONS: ReadonlySet<string> = new Set([
+  'APNS_NOT_CONFIGURED',
+  'APNS_CONFIGURATION_ERROR',
+  'FCM_NOT_CONFIGURED',
+  'FCM_CONFIGURATION_ERROR',
+]);
+
 /** 기기 platform에 맞는 토큰이 있는지. */
-export function hasPushTarget(target: PushTarget | null | undefined): boolean {
+export function hasPushTarget<T extends PushTarget>(
+  target: T | null | undefined,
+): target is T {
   if (!target) return false;
   return target.platform === 'android'
     ? Boolean(target.fcmToken)
