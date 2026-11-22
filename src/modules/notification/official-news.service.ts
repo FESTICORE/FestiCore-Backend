@@ -12,6 +12,7 @@ import {
   InstagramMedia,
 } from './instagram-graph.client';
 import { festivalPeriod, records } from './live-activity.service';
+import { PUSH_TARGET_SQL } from './push.service';
 
 const POLL_MS = 5 * 60_000;
 /** 축제별로 남기는 최근 게시물 수 */
@@ -369,7 +370,7 @@ export class OfficialNewsService implements OnModuleInit, OnModuleDestroy {
        JOIN "devices" d ON d."id" = s."deviceId"
        WHERE s."festivalId" = $1 AND s."pinned" = true
          AND d."notifyOfficialNews" = true
-         AND d."apnsToken" IS NOT NULL AND d."apnsEnvironment" IS NOT NULL
+         AND ${PUSH_TARGET_SQL}
          AND NOT EXISTS (
            SELECT 1 FROM "notification_deliveries" recent
            WHERE recent."deviceId" = s."deviceId" AND recent."festivalId" = $1
