@@ -514,8 +514,9 @@ export class LiveActivityService implements OnModuleInit, OnModuleDestroy {
       }
       const flags = await manager.query<LiveActivityFlag[]>(
         `SELECT "id", "festivalId", "name",
-        "status", "visibility", "hidden", "zoneId", "activity" FROM "flags"
-        WHERE "festivalId" = $1 AND "visibility" = 'public' AND "hidden" = false`,
+        "status", "visibility", "hidden", "ownerPaused", "zoneId", "activity" FROM "flags"
+        WHERE "festivalId" = $1 AND "visibility" = 'public' AND "hidden" = false
+          AND "ownerPaused" = false`,
         [festivalId],
       );
       const member = target.userId

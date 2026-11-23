@@ -219,6 +219,7 @@ export class PublicLiveService {
               festivalId,
               visibility: 'public',
               hidden: false,
+              ownerPaused: false,
               status: Not('scheduled'),
             },
           });

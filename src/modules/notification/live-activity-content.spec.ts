@@ -40,6 +40,7 @@ function input(): LiveActivityContentInput {
         status: 'active',
         visibility: 'public',
         hidden: false,
+        ownerPaused: false,
         zoneId: 'zone_a',
         activity: 'sing',
       },
@@ -207,6 +208,7 @@ describe('buildLiveActivityContentState', () => {
   it('does not expose hidden, unfollowed, cross-festival or inactive flags', () => {
     for (const patch of [
       { hidden: true },
+      { ownerPaused: true },
       { visibility: 'private' as const },
       { festivalId: 'fst_other' },
       { status: 'ended' as const },

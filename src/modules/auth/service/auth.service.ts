@@ -178,6 +178,7 @@ export class AuthService {
     UserView & {
       currentTermsVersion: string;
       admin: { id: string; role: string } | null;
+      bearerMode: boolean;
     }
   > {
     const user = await this.userRepo.findOne({ where: { id: userId } });
@@ -195,6 +196,7 @@ export class AuthService {
       ...this.toView(user),
       currentTermsVersion: CURRENT_TERMS_VERSION,
       admin: admins[0] ?? null,
+      bearerMode: !user.bearerModeOff,
     };
   }
 
@@ -367,9 +369,10 @@ export class AuthService {
             ownerId: string | null;
             festivalId: string;
             hidden: boolean;
+            ownerPaused: boolean;
           }[]
         >(
-          `SELECT "id", "ownerId", "festivalId", "hidden" FROM "flags"
+          `SELECT "id", "ownerId", "festivalId", "hidden", "ownerPaused" FROM "flags"
          WHERE "ownerId" = $1 OR "id" IN (
            SELECT "flagId" FROM "flag_follows" WHERE "userId" = $1
          ) OR "id" IN (
@@ -402,10 +405,15 @@ export class AuthService {
             [flag.id, userId],
           );
           if (successors.length) {
-            await manager.query(
-              `UPDATE "flags" SET "ownerId" = $1, "updatedAt" = now() WHERE "id" = $2`,
+            // ownerPaused는 새 소유자의 기수 모드를 따른다.
+            const [moved] = await manager.query<{ ownerPaused: boolean }[]>(
+              `UPDATE "flags" SET "ownerId" = $1, "ownerPaused" = (
+                SELECT "bearerModeOff" FROM "users" WHERE "id" = $1
+              ), "updatedAt" = now() WHERE "id" = $2 RETURNING "ownerPaused"`,
               [successors[0].userId, flag.id],
             );
+            if (!flag.hidden && moved?.ownerPaused !== flag.ownerPaused)
+              hiddenFestivals.add(flag.festivalId);
             await manager.query(
               `UPDATE "flag_bearers" SET "isOwner" = true WHERE "flagId" = $1 AND "userId" = $2`,
               [flag.id, successors[0].userId],
@@ -413,7 +421,7 @@ export class AuthService {
           } else {
             if (!flag.hidden) hiddenFestivals.add(flag.festivalId);
             await manager.query(
-              `UPDATE "flags" SET "ownerId" = NULL, "hidden" = true, "updatedAt" = now() WHERE "id" = $1`,
+              `UPDATE "flags" SET "ownerId" = NULL, "hidden" = true, "ownerPaused" = false, "updatedAt" = now() WHERE "id" = $1`,
               [flag.id],
             );
             await manager.query(

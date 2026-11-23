@@ -43,6 +43,10 @@ export class User {
   @Column({ type: 'boolean', default: false })
   pushOptIn!: boolean;
 
+  // 계정 단위 기수 모드를 껐다(관객). 소유 깃발의 flags.ownerPaused와 같게 유지한다.
+  @Column({ type: 'boolean', default: false })
+  bearerModeOff!: boolean;
+
   // provider가 제공한 프로필 사진 URL.
   @Column({ type: 'varchar', nullable: true })
   profileImageUrl!: string | null;

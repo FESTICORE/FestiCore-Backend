@@ -28,6 +28,7 @@
 | GET | `/api/v1/me/pinned-flag` | 앱 JWT | 내 대표 깃발 ID와 상세, 없으면 200 `null`, `no-store` |
 | PUT | `/api/v1/me/pinned-flag` | 앱 JWT | 내 대표 깃발 지정 |
 | GET | `/api/v1/me/bearer-flags` | 앱 JWT | 내가 기수인 깃발 목록, 선택 `festivalId`, `no-store` |
+| PUT | `/api/v1/me/bearer-mode` | 앱 JWT·약관 | `{ "enabled": boolean }`, 계정 기수 모드 켜기·끄기, `{ bearerMode }` |
 
 ### 내 대표 깃발 조회
 
@@ -39,8 +40,26 @@
 
 ### 내 기수 깃발 목록
 
-- `items[]`는 `flagId`, `festivalId`, `isOwner`, `joinedAt`, `flag`(기수 시점 프로필, 비공개 계획 포함), `status`, `hidden`이다.
-- 발행된 축제의 깃발만 최근 기수 등록순으로 준다. 숨김 깃발은 `hidden: true`로 포함한다.
+- `items[]`는 `flagId`, `festivalId`, `isOwner`, `joinedAt`, `flag`(기수 시점 프로필, 비공개 계획 포함), `status`, `hidden`,
+  `ownerPaused`다.
+- 발행된 축제의 깃발만 최근 기수 등록순으로 준다. 숨김 깃발은 `hidden: true`로, 소유자가 기수 모드를 끈 깃발은
+  `ownerPaused: true`로 포함한다.
+
+### 기수 모드
+
+- 계정 단위다. `users."bearerModeOff"`가 true면 관객이고, 그 사용자가 소유(`ownerId`)한 깃발은 모두
+  `flags."ownerPaused"`=true다. `ownerPaused`는 항상 현재 소유자의 `bearerModeOff`와 같다. 관리자 숨김(`hidden`)과
+  따로 두어 다시 켜도 관리자 숨김은 풀리지 않는다. `GET /me`의 `bearerMode`는 `!bearerModeOff`다.
+- `PUT /me/bearer-mode`는 본문 `enabled`(boolean)만 받는다. 빠지거나 boolean이 아니거나 다른 필드가 있으면 400이다.
+  한 트랜잭션에서 `bearerModeOff`와 내 소유 깃발의 `ownerPaused`를 바꾸고, 값이 바뀐 깃발의 축제마다 관리자 숨김과
+  같이 Live Activity 갱신을 예약하고 공개 깃발 팩을 갱신한다. 공동 기수로만 있는 남의 깃발은 바꾸지 않는다.
+- `ownerPaused` 깃발은 깃발 목록(`GET /festivals/:id/flags`)·발행 팩(지도)·라이브 보드·Live Activity·팔로워 상태
+  알림에서 빠진다. 상세(`GET /flags/:flagId`), 사진·썸네일, 팔로우·해제, 대표 깃발 조회는 그대로 된다.
+- 꺼진 동안 그 깃발의 기수 쓰기(상태 변경, 프로필 수정, 사진 업로드, 공동 기수 초대·해제)는 소유자와 공동 기수 모두
+  409 `BEARER_MODE_OFF`다. 관리자 강제 상태 변경과 숨김은 막지 않으며 `ownerPaused`를 바꾸지 않는다.
+- `POST /bearer/register`와 `POST /bearer/claim`(새로 기수가 될 때)은 같은 트랜잭션에서 기수 모드를 켜고 내 소유 깃발을
+  모두 `ownerPaused`=false로 되돌린다.
+- 탈퇴로 소유권이 공동 기수에게 넘어가면 새 소유자의 `bearerModeOff`로 맞춘다. 후임 없이 숨기는 깃발은 false로 둔다.
 
 ### 코드 없는 기수 등록
 
