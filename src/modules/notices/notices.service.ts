@@ -190,7 +190,8 @@ export class NoticesService {
       const before = beforeRows[0];
       if (!before) throw new NotFoundException('공지를 찾을 수 없습니다.');
       const published = body.published ?? before.published;
-      const afterRows: NoticeRow[] = await manager.query(
+      // TypeORM Postgres는 UPDATE 쿼리에 [returnedRows, rowCount]를 돌려준다(#395).
+      const [afterRows] = await manager.query<[NoticeRow[], number]>(
         `UPDATE "notices" SET "title" = $2, "content" = $3,
          "publishedAt" = CASE
            WHEN $4 = true AND "published" = false THEN now()
