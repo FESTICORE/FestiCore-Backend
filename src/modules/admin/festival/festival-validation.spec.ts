@@ -407,6 +407,9 @@ describe('festival draft validation', () => {
     expect(mergeDraft(next, { officialInstagramUrl: null })).not.toHaveProperty(
       'officialInstagramUrl',
     );
+    expect(
+      validateDraft({ ...draft, officialInstagramUrl: null }, true),
+    ).toEqual([]);
     for (const officialInstagramUrl of [
       'http://www.instagram.com/grandmintfestival/',
       'https://www.instagram.com/p/abc/',
