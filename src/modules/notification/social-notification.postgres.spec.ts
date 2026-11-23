@@ -109,7 +109,8 @@ describePostgres('SocialNotificationService 큐 (PostgreSQL)', () => {
       "id" varchar(32) PRIMARY KEY,
       "visibility" varchar(16) NOT NULL,
       "hidden" boolean NOT NULL,
-      "status" varchar(16) NOT NULL
+      "status" varchar(16) NOT NULL,
+      "ownerPaused" boolean NOT NULL DEFAULT false
     )`);
     await db.query(`CREATE TABLE "flag_follows" (
       "flagId" varchar(32) NOT NULL,
