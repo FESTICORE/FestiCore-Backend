@@ -105,7 +105,9 @@ describe('NoticesService', () => {
 
   it('초안의 첫 게시·게시 취소·재게시에는 DB 시각을 쓰고 게시 중 수정은 유지한다', async () => {
     const draft = { ...row, published: false, publishedAt: null };
-    manager.query.mockResolvedValueOnce([draft]).mockResolvedValueOnce([row]);
+    manager.query
+      .mockResolvedValueOnce([draft])
+      .mockResolvedValueOnce([[row], 1]);
     await service.update('admin-id', id, { published: true });
     const updateSql = String(calls(manager.query)[1][0]);
     expect(updateSql).toContain(
@@ -114,15 +116,24 @@ describe('NoticesService', () => {
     expect(calls(manager.query)[1][1]).toEqual([id, '안내', '본문', true]);
 
     manager.query.mockReset();
-    manager.query.mockResolvedValueOnce([row]).mockResolvedValueOnce([row]);
+    manager.query
+      .mockResolvedValueOnce([row])
+      .mockResolvedValueOnce([[row], 1]);
     await service.update('admin-id', id, { title: '새 안내' });
     expect(String(calls(manager.query)[1][0])).toContain(
       'WHEN $4 = true THEN "publishedAt"',
     );
 
     manager.query.mockReset();
-    manager.query.mockResolvedValueOnce([row]).mockResolvedValueOnce([draft]);
-    await service.update('admin-id', id, { published: false });
+    manager.query
+      .mockResolvedValueOnce([row])
+      .mockResolvedValueOnce([[draft], 1]);
+    await expect(
+      service.update('admin-id', id, { published: false }),
+    ).resolves.toMatchObject({ id, published: false, publishedAt: null });
+    expect(calls(audit.record)[2][1]).toMatchObject({
+      after: { published: false, publishedAt: null, contentLength: 2 },
+    });
     expect(calls(manager.query)[1][1]).toEqual([id, '안내', '본문', false]);
     expect(audit.record).toHaveBeenCalledTimes(3);
   });
