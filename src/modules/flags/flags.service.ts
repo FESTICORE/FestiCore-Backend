@@ -275,6 +275,21 @@ export class FlagsService {
     return flag;
   }
 
+  /**
+   * 공개 상세·대표 깃발의 현장 상태. 소유자가 기수 모드를 끈 깃발은 기수가 아닌 사람에게
+   * 현장 정보가 없는 예정 상태(존·활동 null, 갱신 시각은 생성 시각)로 가린다.
+   */
+  private publicStatusView(flag: Flag, bearer: boolean) {
+    if (!flag.ownerPaused || bearer) return statusView(flag);
+    return {
+      flagId: flag.id,
+      status: 'scheduled' as const,
+      zoneId: null,
+      activity: null,
+      updatedAt: flag.createdAt.toISOString(),
+    };
+  }
+
   /** 소유자가 기수 모드를 끈 깃발은 기수 쓰기를 막는다. 공동 기수도 같은 깃발이면 막힌다. */
   private assertBearerModeOn(flag: Flag) {
     if (flag.ownerPaused)
@@ -361,7 +376,7 @@ export class FlagsService {
       : null;
     return {
       ...this.profile(flag),
-      status: statusView(flag),
+      status: this.publicStatusView(flag, bearer),
       isFollowing: follow,
       isBearer: userId ? bearer : null,
       isPinned: pinned,
@@ -532,7 +547,7 @@ export class FlagsService {
       flag: {
         ...this.profile(flag),
         festivalId: flag.festivalId,
-        status: statusView(flag),
+        status: this.publicStatusView(flag, bearer),
         isFollowing: true,
         isBearer: bearer,
         isPinned: true,

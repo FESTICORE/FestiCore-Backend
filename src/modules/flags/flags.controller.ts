@@ -178,7 +178,7 @@ export class FlagsController {
   @ApiOperation({
     summary: '공개 깃발 상세',
     description:
-      '익명 조회가 가능합니다. 유효한 앱 access 토큰을 보내면 isFollowing, isBearer, isPinned가 채워집니다. 유효하지 않은 토큰은 익명 조회로 처리합니다.',
+      '익명 조회가 가능합니다. 유효한 앱 access 토큰을 보내면 isFollowing, isBearer, isPinned가 채워집니다. 유효하지 않은 토큰은 익명 조회로 처리합니다. 소유자가 기수 모드를 끈 깃발은 기수가 아닌 조회자에게 status를 현장 정보 없는 예정 상태(status=scheduled, zoneId·activity null, updatedAt은 깃발 생성 시각)로 가립니다.',
   })
   @ApiResponse({
     status: 200,
@@ -828,7 +828,7 @@ export class MyFlagsController {
   @ApiOperation({
     summary: '내 대표 깃발 조회',
     description:
-      '대표 깃발은 계정당 하나이며 축제별로 나뉘지 않습니다. flag는 공개 깃발 상세와 같은 필드에 festivalId를 더합니다. 대표 깃발이 없거나, 팔로우가 끊겼거나, 공개 조회할 수 없으면(비공개·숨김·미발행 축제) 200으로 pinnedFlagId와 flag를 null로 줍니다.',
+      '대표 깃발은 계정당 하나이며 축제별로 나뉘지 않습니다. flag는 공개 깃발 상세와 같은 필드에 festivalId를 더합니다. 대표 깃발이 없거나, 팔로우가 끊겼거나, 공개 조회할 수 없으면(비공개·숨김·미발행 축제) 200으로 pinnedFlagId와 flag를 null로 줍니다. 소유자가 기수 모드를 끈 깃발은 기수가 아닌 조회자에게 status를 현장 정보 없는 예정 상태(status=scheduled, zoneId·activity null, updatedAt은 깃발 생성 시각)로 가립니다.',
   })
   @ApiResponse({
     status: 200,

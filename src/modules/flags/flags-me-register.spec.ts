@@ -253,6 +253,42 @@ describe('FlagsService 내 대표 깃발·기수 깃발·코드 없는 기수 �
       });
     });
 
+    it('소유자가 기수 모드를 끈 깃발은 상세·대표의 현장 상태를 가리고 기수 본인에게는 보여 준다', async () => {
+      flags.rows.push(
+        flagRow({
+          ownerPaused: true,
+          status: 'active',
+          zoneId: 'zone_a',
+          activity: 'slam',
+          statusUpdatedAt: new Date('2026-11-20T05:00:00.000Z'),
+        }),
+      );
+      follows.rows.push({ id: 'f1', userId: 'user-1', flagId: 'flg_1' });
+      pins.rows.push({ userId: 'user-1', flagId: 'flg_1' });
+      const hidden = {
+        flagId: 'flg_1',
+        status: 'scheduled',
+        zoneId: null,
+        activity: null,
+        updatedAt: '2026-11-10T00:00:00.000Z',
+      };
+      await expect(service.pinnedFlag('user-1')).resolves.toMatchObject({
+        flag: { name: '푸른 깃발', status: hidden },
+      });
+      await expect(service.detail('flg_1')).resolves.toMatchObject({
+        name: '푸른 깃발',
+        status: hidden,
+      });
+      bearers.rows.push({ id: 'b1', userId: 'user-1', flagId: 'flg_1' });
+      const live = { status: 'active', zoneId: 'zone_a', activity: 'slam' };
+      await expect(service.detail('flg_1', 'user-1')).resolves.toMatchObject({
+        status: live,
+      });
+      await expect(service.pinnedFlag('user-1')).resolves.toMatchObject({
+        flag: { status: live },
+      });
+    });
+
     it('숨김 깃발이라도 내가 기수면 hidden=true로 보여 준다', async () => {
       flags.rows.push(flagRow({ hidden: true }));
       follows.rows.push({ id: 'f1', userId: 'user-1', flagId: 'flg_1' });

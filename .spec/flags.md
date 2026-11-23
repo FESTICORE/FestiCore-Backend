@@ -55,6 +55,9 @@
   같이 Live Activity 갱신을 예약하고 공개 깃발 팩을 갱신한다. 공동 기수로만 있는 남의 깃발은 바꾸지 않는다.
 - `ownerPaused` 깃발은 깃발 목록(`GET /festivals/:id/flags`)·발행 팩(지도)·라이브 보드·Live Activity·팔로워 상태
   알림에서 빠진다. 상세(`GET /flags/:flagId`), 사진·썸네일, 팔로우·해제, 대표 깃발 조회는 그대로 된다.
+- 상세와 대표 깃발 조회는 프로필을 그대로 주되, 기수가 아닌 조회자에게 `status`를 현장 정보 없는 예정 상태로 가린다:
+  `{ flagId, status: 'scheduled', zoneId: null, activity: null, updatedAt: <깃발 생성 시각> }`. 기수 본인(`isBearer`)·
+  기수 상세(`GET /flags/:flagId/bearer`)·`GET /me/bearer-flags`는 가리지 않는다.
 - 꺼진 동안 그 깃발의 기수 쓰기(상태 변경, 프로필 수정, 사진 업로드, 공동 기수 초대·해제)는 소유자와 공동 기수 모두
   409 `BEARER_MODE_OFF`다. 관리자 강제 상태 변경과 숨김은 막지 않으며 `ownerPaused`를 바꾸지 않는다.
 - `POST /bearer/register`와 `POST /bearer/claim`(새로 기수가 될 때)은 같은 트랜잭션에서 기수 모드를 켜고 내 소유 깃발을
