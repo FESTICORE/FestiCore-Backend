@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { DataSource } from 'typeorm';
 import { Notices1792500103000 } from '../../database/migrations/1792500103000-notices';
+import type { AdminAuditService } from '../admin/audit/admin-audit.service';
+import { NoticesService } from './notices.service';
 
 const url = process.env.LIVE_ACTIVITY_PG_URL;
 const describePostgres = url ? describe : describe.skip;
@@ -65,5 +67,28 @@ describePostgres('공지 migration (PostgreSQL)', () => {
     expect(indexes.map((item) => item.indexname)).toContain(
       'IDX_notices_published_list',
     );
+  });
+
+  it('서비스 수정이 UPDATE 결과로 게시·게시 취소를 돌려준다(#395)', async () => {
+    const audit = { record: jest.fn().mockResolvedValue(undefined) };
+    const service = new NoticesService(
+      db,
+      audit as unknown as AdminAuditService,
+    );
+    const id = randomUUID();
+    await db.query(
+      `INSERT INTO "notices" ("id", "title", "content", "published", "publishedAt")
+       VALUES ($1, '안내', '본문', false, NULL)`,
+      [id],
+    );
+    const published = await service.update('admin-id', id, {
+      published: true,
+    });
+    expect(published).toMatchObject({ id, published: true });
+    expect(published.publishedAt).toEqual(expect.any(String));
+    await expect(
+      service.update('admin-id', id, { published: false }),
+    ).resolves.toMatchObject({ id, published: false, publishedAt: null });
+    expect(audit.record).toHaveBeenCalledTimes(2);
   });
 });
