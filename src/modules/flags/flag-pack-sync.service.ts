@@ -53,7 +53,12 @@ function replaceProfile(
   const current = profiles(document.flags);
   const withoutFlag = current.filter((profile) => profile.id !== flag.id);
   const enabled = document.flagsEnabled !== false;
-  if (enabled && flag.visibility === 'public' && !flag.hidden)
+  if (
+    enabled &&
+    flag.visibility === 'public' &&
+    !flag.hidden &&
+    !flag.ownerPaused
+  )
     withoutFlag.push(flagProfile(flag));
   return { ...document, flags: withoutFlag };
 }

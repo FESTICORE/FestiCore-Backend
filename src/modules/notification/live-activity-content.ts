@@ -15,6 +15,7 @@ export interface LiveActivityFlag {
   status: 'scheduled' | 'active' | 'resting' | 'ended';
   visibility: 'public' | 'private';
   hidden: boolean;
+  ownerPaused: boolean;
   zoneId: string | null;
   activity: string | null;
 }
@@ -152,6 +153,7 @@ export function buildLiveActivityContentState(
             flag.festivalId === input.festivalId &&
             flag.visibility === 'public' &&
             !flag.hidden &&
+            !flag.ownerPaused &&
             member.followedFlagIds.includes(flag.id) &&
             (flag.status === 'active' || flag.status === 'resting'),
         )

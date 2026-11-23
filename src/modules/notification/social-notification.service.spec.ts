@@ -299,11 +299,12 @@ describe('SocialNotificationService', () => {
       expect(inboxCall(query)).toBeUndefined();
     });
 
-    it('does not record hidden or resting flags', async () => {
+    it('does not record hidden, owner-paused or resting flags', async () => {
       const { service } = setup();
       const query = jest.fn().mockResolvedValue([{ userId: followerId }]);
       for (const flag of [
         { hidden: true, status: 'active' },
+        { hidden: false, ownerPaused: true, status: 'active' },
         { hidden: false, status: 'resting' },
       ])
         await service.enqueueFlagStatus(

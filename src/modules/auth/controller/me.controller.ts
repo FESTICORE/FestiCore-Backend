@@ -70,7 +70,7 @@ export class MeController {
   @ApiOperation({
     summary: '내 프로필 조회',
     description:
-      '현재 access 토큰의 사용자 정보와 활성 관리자 권한(admin: {id, role} 또는 null)을 조회합니다.',
+      '현재 access 토큰의 사용자 정보와 활성 관리자 권한(admin: {id, role} 또는 null), 계정 기수 모드(bearerMode)를 조회합니다. 기수 모드는 PUT /me/bearer-mode로 바꿉니다.',
   })
   @ApiResponse({ status: 200, description: '현재 사용자 정보' })
   @ApiResponse({

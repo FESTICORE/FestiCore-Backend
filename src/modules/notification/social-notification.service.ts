@@ -79,7 +79,7 @@ export class SocialNotificationService
     flag: Flag,
     actorUserId: string,
   ): Promise<void> {
-    if (flag.visibility !== 'public' || flag.hidden) return;
+    if (flag.visibility !== 'public' || flag.hidden || flag.ownerPaused) return;
     if (flag.status === 'resting') {
       await manager.query(
         `UPDATE "social_notification_deliveries"
@@ -436,6 +436,7 @@ export class SocialNotificationService
           SELECT 1 FROM "flag_follows" f JOIN "flags" flag ON flag."id" = f."flagId"
           WHERE f."flagId" = n."subjectId" AND f."userId" = n."recipientUserId"
             AND flag."visibility" = 'public' AND flag."hidden" = false
+            AND flag."ownerPaused" = false
             AND flag."status" <> 'resting'))
           OR (n."type" = 'crew.status'
               AND n."eventKey" = 'crew.status:dissolved:' || n."subjectId"

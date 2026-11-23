@@ -26,11 +26,13 @@ import {
   ApiHeader,
   ApiOperation,
   ApiParam,
+  ApiProperty,
   ApiQuery,
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { IsBoolean } from 'class-validator';
 import type { Request, Response } from 'express';
 import { AdminRoles } from '../admin/auth/admin-roles.decorator';
 import type { AdminRequest } from '../admin/auth/admin-session.guard';
@@ -39,6 +41,15 @@ import { RequireCurrentTerms } from '../auth/decorator/require-current-terms.dec
 import { Public } from '../auth/decorator/public.decorator';
 import type { AuthUser } from '../auth/types/social-profile';
 import { FlagsService } from './flags.service';
+
+class BearerModeDto {
+  @ApiProperty({
+    description: '기수 모드 켜기(true)·끄기(false)',
+    example: false,
+  })
+  @IsBoolean()
+  enabled!: boolean;
+}
 
 @ApiTags('Flags')
 @ApiParam({ name: 'flagId', description: '깃발 ID', example: 'flg_1234567890' })
@@ -89,7 +100,11 @@ export class FlagsController {
     description: '파일 누락, 형식/크기 또는 이미지 처리 오류',
   })
   @ApiResponse({ status: 403, description: '기수 권한 없음' })
-  @ApiResponse({ status: 409, description: '사진이 동시에 변경됨' })
+  @ApiResponse({
+    status: 409,
+    description:
+      '사진이 동시에 변경됨, BEARER_MODE_OFF: 소유자가 기수 모드를 끔',
+  })
   @ApiResponse({ status: 413, description: '원본 또는 변환된 사진 크기 초과' })
   @ApiResponse({ status: 415, description: '지원하지 않는 이미지 형식' })
   @UseInterceptors(
@@ -163,7 +178,7 @@ export class FlagsController {
   @ApiOperation({
     summary: '공개 깃발 상세',
     description:
-      '익명 조회가 가능합니다. 유효한 앱 access 토큰을 보내면 isFollowing, isBearer, isPinned가 채워집니다. 유효하지 않은 토큰은 익명 조회로 처리합니다.',
+      '익명 조회가 가능합니다. 유효한 앱 access 토큰을 보내면 isFollowing, isBearer, isPinned가 채워집니다. 유효하지 않은 토큰은 익명 조회로 처리합니다. 소유자가 기수 모드를 끈 깃발은 기수가 아닌 조회자에게 status를 현장 정보 없는 예정 상태(status=scheduled, zoneId·activity null, updatedAt은 깃발 생성 시각)로 가립니다.',
   })
   @ApiResponse({
     status: 200,
@@ -407,7 +422,11 @@ export class FlagsController {
   @ApiResponse({ status: 401, description: '앱 access 토큰 없음 또는 만료' })
   @ApiResponse({ status: 403, description: '기수 권한 없음' })
   @ApiResponse({ status: 404, description: '깃발/축제/존을 찾을 수 없음' })
-  @ApiResponse({ status: 409, description: '이미 사용 중인 깃발 이름' })
+  @ApiResponse({
+    status: 409,
+    description:
+      '이미 사용 중인 깃발 이름, BEARER_MODE_OFF: 소유자가 기수 모드를 끔',
+  })
   patch(
     @Param('flagId') id: string,
     @CurrentUser() user: AuthUser,
@@ -481,7 +500,7 @@ export class FlagsController {
   @ApiResponse({
     status: 409,
     description:
-      '오래된 clientAt, 허용되지 않은 상태 전이/재시작 또는 멱등키 충돌',
+      '오래된 clientAt, 허용되지 않은 상태 전이/재시작, 멱등키 충돌 또는 BEARER_MODE_OFF(소유자가 기수 모드를 끔)',
   })
   @ApiResponse({ status: 429, description: '분당 상태 업데이트 12회 초과' })
   status(
@@ -516,7 +535,11 @@ export class FlagsController {
   })
   @ApiResponse({ status: 401, description: '앱 access 토큰 없음 또는 만료' })
   @ApiResponse({ status: 403, description: '원래 기수가 아님' })
-  @ApiResponse({ status: 409, description: '공동 기수 정원 초과' })
+  @ApiResponse({
+    status: 409,
+    description:
+      '공동 기수 정원 초과, BEARER_MODE_OFF: 소유자가 기수 모드를 끔',
+  })
   invite(@Param('flagId') id: string, @CurrentUser() user: AuthUser) {
     return this.service.invite(id, user.userId);
   }
@@ -537,7 +560,11 @@ export class FlagsController {
   @ApiResponse({ status: 204, description: '해제 완료. 응답 본문 없음' })
   @ApiResponse({ status: 401, description: '앱 access 토큰 없음 또는 만료' })
   @ApiResponse({ status: 403, description: '해제 권한 없음' })
-  @ApiResponse({ status: 409, description: '원래 기수 제거 시도' })
+  @ApiResponse({
+    status: 409,
+    description:
+      '원래 기수 제거 시도, BEARER_MODE_OFF: 소유자가 기수 모드를 끔',
+  })
   removeBearer(
     @Param('flagId') id: string,
     @Param('userId') targetId: string,
@@ -801,7 +828,7 @@ export class MyFlagsController {
   @ApiOperation({
     summary: '내 대표 깃발 조회',
     description:
-      '대표 깃발은 계정당 하나이며 축제별로 나뉘지 않습니다. flag는 공개 깃발 상세와 같은 필드에 festivalId를 더합니다. 대표 깃발이 없거나, 팔로우가 끊겼거나, 공개 조회할 수 없으면(비공개·숨김·미발행 축제) 200으로 pinnedFlagId와 flag를 null로 줍니다.',
+      '대표 깃발은 계정당 하나이며 축제별로 나뉘지 않습니다. flag는 공개 깃발 상세와 같은 필드에 festivalId를 더합니다. 대표 깃발이 없거나, 팔로우가 끊겼거나, 공개 조회할 수 없으면(비공개·숨김·미발행 축제) 200으로 pinnedFlagId와 flag를 null로 줍니다. 소유자가 기수 모드를 끈 깃발은 기수가 아닌 조회자에게 status를 현장 정보 없는 예정 상태(status=scheduled, zoneId·activity null, updatedAt은 깃발 생성 시각)로 가립니다.',
   })
   @ApiResponse({
     status: 200,
@@ -848,7 +875,7 @@ export class MyFlagsController {
   @ApiOperation({
     summary: '내 기수 깃발 목록',
     description:
-      '내가 원래 기수 또는 공동 기수인 깃발을 최근 등록순으로 조회합니다. 발행된 축제의 깃발만 반환하며, 숨김 깃발도 hidden=true로 포함합니다. festivalId를 보내면 해당 축제만 반환합니다(축제당 최대 1개).',
+      '내가 원래 기수 또는 공동 기수인 깃발을 최근 등록순으로 조회합니다. 발행된 축제의 깃발만 반환하며, 숨김 깃발도 hidden=true로 포함합니다. 소유자가 기수 모드를 끈 깃발은 ownerPaused=true입니다. festivalId를 보내면 해당 축제만 반환합니다(축제당 최대 1개).',
   })
   @ApiQuery({
     name: 'festivalId',
@@ -887,6 +914,7 @@ export class MyFlagsController {
               updatedAt: '2026-10-21T00:00:00.000Z',
             },
             hidden: false,
+            ownerPaused: false,
           },
         ],
       },
@@ -936,6 +964,26 @@ export class MyFlagsController {
   @ApiResponse({ status: 409, description: '팔로우하지 않은 깃발' })
   pin(@CurrentUser() user: AuthUser, @Body() body: unknown) {
     return this.service.pin(user.userId, body);
+  }
+  @RequireCurrentTerms()
+  @Put('bearer-mode')
+  @ApiOperation({
+    summary: '내 기수 모드 켜기·끄기',
+    description:
+      '계정 단위 기수 모드를 저장합니다. 끄면 내가 원래 기수인 깃발이 깃발 목록·지도·라이브 보드·오프라인 팩·Live Activity·팔로워 알림에서 빠지고, 상세·사진·팔로우·대표 깃발 조회는 그대로입니다. 다시 켜면 바로 보입니다. 관리자 숨김은 풀리지 않습니다. 공동 기수로만 있는 깃발은 바꾸지 않습니다.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: '저장된 기수 모드',
+    schema: { example: { bearerMode: false } },
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'enabled가 없거나 boolean이 아니거나 다른 필드가 있음',
+  })
+  @ApiResponse({ status: 401, description: '앱 access 토큰 없음 또는 만료' })
+  bearerMode(@CurrentUser() user: AuthUser, @Body() body: BearerModeDto) {
+    return this.service.setBearerMode(user.userId, body.enabled);
   }
 }
 

@@ -154,6 +154,7 @@ export class FlagsService {
     file: { buffer: Buffer; mimetype: string } | undefined,
   ) {
     const flag = await this.bearerFlag(id, userId);
+    this.assertBearerModeOn(flag);
     if (!file?.buffer)
       throw new BadRequestException('photo 파일이 필요합니다.');
     const processed = await prepareFlagPhoto(file.buffer, file.mimetype);
@@ -274,6 +275,70 @@ export class FlagsService {
     return flag;
   }
 
+  /**
+   * 공개 상세·대표 깃발의 현장 상태. 소유자가 기수 모드를 끈 깃발은 기수가 아닌 사람에게
+   * 현장 정보가 없는 예정 상태(존·활동 null, 갱신 시각은 생성 시각)로 가린다.
+   */
+  private publicStatusView(flag: Flag, bearer: boolean) {
+    if (!flag.ownerPaused || bearer) return statusView(flag);
+    return {
+      flagId: flag.id,
+      status: 'scheduled' as const,
+      zoneId: null,
+      activity: null,
+      updatedAt: flag.createdAt.toISOString(),
+    };
+  }
+
+  /** 소유자가 기수 모드를 끈 깃발은 기수 쓰기를 막는다. 공동 기수도 같은 깃발이면 막힌다. */
+  private assertBearerModeOn(flag: Flag) {
+    if (flag.ownerPaused)
+      fail('BEARER_MODE_OFF', 409, '기수 모드가 꺼진 깃발입니다.');
+  }
+
+  /**
+   * 계정 기수 모드를 저장하고 내가 소유한 깃발의 ownerPaused를 같은 값으로 맞춘다.
+   * 값이 바뀐 깃발은 관리자 숨김과 같이 라이브·팩에 반영하고, 팩이 바뀐 축제를 돌려준다.
+   */
+  private async applyBearerMode(
+    manager: EntityManager,
+    userId: string,
+    off: boolean,
+  ): Promise<string[]> {
+    await manager
+      .getRepository(User)
+      .update({ id: userId }, { bearerModeOff: off });
+    const flags = manager.getRepository(Flag);
+    const changed = (
+      await flags.find({
+        where: { ownerId: userId },
+        order: { id: 'ASC' },
+        lock: { mode: 'pessimistic_write' },
+      })
+    ).filter((flag) => flag.ownerPaused !== off);
+    if (!changed.length) return [];
+    await flags.update(
+      { id: In(changed.map((flag) => flag.id)) },
+      { ownerPaused: off },
+    );
+    for (const festivalId of new Set(changed.map((flag) => flag.festivalId)))
+      await this.liveActivity.enqueueFestival(festivalId, manager);
+    return this.packSync.syncMany(
+      changed.map((flag) => flag.id),
+      manager,
+    );
+  }
+
+  /** 계정 기수 모드를 켜거나 끈다. 공동 기수로만 있는 남의 깃발은 건드리지 않는다. */
+  async setBearerMode(userId: string, enabled: boolean) {
+    const changed = await this.db.transaction(async (manager) => {
+      await this.lockActiveUser(manager, userId);
+      return this.applyBearerMode(manager, userId, !enabled);
+    });
+    if (changed.length) await this.packSync.invalidatePacks(changed);
+    return { bearerMode: enabled };
+  }
+
   /** 깃발 프로필. 비공개 계획은 공개 응답에서 가리고 기수 본인 응답에는 그대로 보낸다. */
   private profile(flag: Flag, viewer: 'public' | 'bearer' = 'public') {
     return {
@@ -311,7 +376,7 @@ export class FlagsService {
       : null;
     return {
       ...this.profile(flag),
-      status: statusView(flag),
+      status: this.publicStatusView(flag, bearer),
       isFollowing: follow,
       isBearer: userId ? bearer : null,
       isPinned: pinned,
@@ -482,7 +547,7 @@ export class FlagsService {
       flag: {
         ...this.profile(flag),
         festivalId: flag.festivalId,
-        status: statusView(flag),
+        status: this.publicStatusView(flag, bearer),
         isFollowing: true,
         isBearer: bearer,
         isPinned: true,
@@ -521,6 +586,7 @@ export class FlagsService {
             flag: this.profile(flag, 'bearer'),
             status: statusView(flag),
             hidden: flag.hidden,
+            ownerPaused: flag.ownerPaused,
           },
         ];
       }),
@@ -677,6 +743,7 @@ export class FlagsService {
         remainingAttempts: gate.remainingAttempts,
       });
     const now = new Date();
+    let modeChanged: string[] = [];
     const claimed = await this.db.transaction(async (manager) => {
       const codes = manager.getRepository(FlagBearerCode);
       const flags = manager.getRepository(Flag);
@@ -766,6 +833,8 @@ export class FlagsService {
       lockedCode.usedBy = userId;
       lockedCode.usedAt = now;
       await codes.save(lockedCode);
+      // 기수가 되면 계정 기수 모드를 켠다. 내 소유 깃발이 모두 다시 보인다.
+      modeChanged = await this.applyBearerMode(manager, userId, false);
       return {
         flagId: flag.id,
         flag: this.profile(flag, 'bearer'),
@@ -776,6 +845,7 @@ export class FlagsService {
       };
     });
     await this.packSync.sync(claimed.flagId);
+    if (modeChanged.length) await this.packSync.invalidatePacks(modeChanged);
     return claimed;
   }
 
@@ -834,6 +904,12 @@ export class FlagsService {
               code: 'FLAG_NAME_TAKEN',
               message: '이미 사용 중인 깃발 이름입니다.',
             });
+          // 등록하면 계정 기수 모드를 켠다. 내 다른 소유 깃발도 다시 보인다.
+          const modeChanged = await this.applyBearerMode(
+            manager,
+            userId,
+            false,
+          );
           const flag = await flags.save(
             flags.create({
               id: `flg_${randomBytes(5).toString('hex')}`,
@@ -875,9 +951,10 @@ export class FlagsService {
             coBearers: [userId],
           };
           await this.remember(manager, userId, key, operation, input, created);
+          const synced = await this.packSync.sync(flag.id, manager);
           return {
             response: created,
-            changed: await this.packSync.sync(flag.id, manager),
+            changed: [...new Set([...modeChanged, ...synced])],
           };
         },
       );
@@ -935,6 +1012,7 @@ export class FlagsService {
 
   async patch(id: string, userId: string, input: unknown) {
     const flag = await this.bearerFlag(id, userId);
+    this.assertBearerModeOn(flag);
     const patch = validateProfilePatch(input);
     const festival = await this.festivals.findOne({
       where: { id: flag.festivalId },
@@ -1002,6 +1080,7 @@ export class FlagsService {
         .where('flag.id = :id', { id })
         .getOne();
       if (!flag) throw new NotFoundException({ code: 'NOT_FOUND' });
+      this.assertBearerModeOn(flag);
       if (repeatsAppliedStatus(flag, input)) {
         const author = flag.statusUpdatedBy
           ? await manager
@@ -1145,6 +1224,7 @@ export class FlagsService {
         code: 'FLAG_NOT_OWNER',
         message: '원래 기수만 초대할 수 있습니다.',
       });
+    this.assertBearerModeOn(flag);
     if (
       (await this.bearers.count({ where: { flagId: id } })) >= MAX_FLAG_BEARERS
     )
@@ -1197,6 +1277,7 @@ export class FlagsService {
           code: 'FLAG_OWNER_REQUIRED',
           message: '원래 기수는 제거할 수 없습니다.',
         });
+      this.assertBearerModeOn(flag);
       await bearers.delete({ flagId: id, userId: targetId });
     });
   }

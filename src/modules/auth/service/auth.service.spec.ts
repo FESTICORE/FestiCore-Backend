@@ -199,6 +199,7 @@ describe('AuthService web grant replacement', () => {
     );
     await expect(service.me('user-id')).resolves.toMatchObject({
       admin: { id: 'admin-id', role: 'editor' },
+      bearerMode: true,
     });
     expect(query).toHaveBeenCalledWith(
       expect.stringContaining('"userId" = $1'),
@@ -745,6 +746,7 @@ describe('AuthService 회원 탈퇴의 깃발과 Apple 재시도', () => {
   function setup(
     options: {
       successor?: string;
+      successorModeOff?: boolean;
       apple?: boolean;
       refreshToken?: string;
     } = {},
@@ -762,9 +764,19 @@ describe('AuthService 회원 탈퇴의 깃발과 Apple 재시도', () => {
           },
         ];
       if (sql.includes('FROM "flags"') && sql.includes('FOR UPDATE'))
-        return [{ id: flagId, ownerId: userId }];
+        return [
+          {
+            id: flagId,
+            ownerId: userId,
+            festivalId: 'fst_12345678',
+            hidden: false,
+            ownerPaused: false,
+          },
+        ];
       if (sql.includes('FROM "flag_bearers"'))
         return options.successor ? [{ userId: options.successor }] : [];
+      if (sql.includes('RETURNING "ownerPaused"'))
+        return [{ ownerPaused: options.successorModeOff ?? false }];
       return [];
     });
     const remove = jest.fn().mockResolvedValue({ affected: 1 });
@@ -780,6 +792,7 @@ describe('AuthService 회원 탈퇴의 깃발과 Apple 재시도', () => {
     const enqueue = jest.fn().mockResolvedValue(undefined);
     const syncMany = jest.fn().mockResolvedValue(['fst_12345678']);
     const invalidatePacks = jest.fn().mockResolvedValue(undefined);
+    const enqueueWithdrawalImpact = jest.fn().mockResolvedValue(undefined);
     const userRepo = {
       findOne: jest.fn().mockResolvedValue({
         id: userId,
@@ -801,7 +814,7 @@ describe('AuthService 회원 탈퇴의 깃발과 Apple 재시도', () => {
       {
         enqueueCrewMembers: jest.fn().mockResolvedValue(undefined),
         enqueueFestival: jest.fn().mockResolvedValue(undefined),
-        enqueueWithdrawalImpact: jest.fn().mockResolvedValue(undefined),
+        enqueueWithdrawalImpact,
       } as never,
     );
     return {
@@ -812,6 +825,7 @@ describe('AuthService 회원 탈퇴의 깃발과 Apple 재시도', () => {
       enqueue,
       syncMany,
       invalidatePacks,
+      enqueueWithdrawalImpact,
     };
   }
 
@@ -832,12 +846,38 @@ describe('AuthService 회원 탈퇴의 깃발과 Apple 재시도', () => {
     expect(invalidatePacks).toHaveBeenCalledWith(['fst_12345678']);
   });
 
+  it('이전된 깃발의 ownerPaused를 새 소유자의 기수 모드로 맞추고 바뀌면 라이브를 갱신한다', async () => {
+    const successor = '00000000-0000-4000-8000-000000000002';
+    const kept = setup({ successor });
+    await kept.service.withdraw(userId);
+    expect(kept.query).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /"ownerPaused" = \(\s*SELECT "bearerModeOff" FROM "users" WHERE "id" = \$1/,
+      ),
+      [successor, flagId],
+    );
+    expect(kept.enqueueWithdrawalImpact).toHaveBeenCalledWith(
+      [],
+      [],
+      expect.anything(),
+    );
+
+    const paused = setup({ successor, successorModeOff: true });
+    await paused.service.withdraw(userId);
+    expect(paused.enqueueWithdrawalImpact).toHaveBeenCalledWith(
+      [],
+      ['fst_12345678'],
+      expect.anything(),
+    );
+    expect(paused.syncMany).toHaveBeenCalledWith([flagId], expect.anything());
+  });
+
   it('후임이 없는 깃발을 숨기고 관리자 알림을 남긴다', async () => {
     const { service, query } = setup();
     await service.withdraw(userId);
 
     expect(query).toHaveBeenCalledWith(
-      expect.stringContaining('"hidden" = true'),
+      expect.stringContaining('"hidden" = true, "ownerPaused" = false'),
       [flagId],
     );
     expect(query).toHaveBeenCalledWith(

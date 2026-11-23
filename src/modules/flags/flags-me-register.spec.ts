@@ -52,6 +52,11 @@ class MemoryRepository {
       this.rows.find((row) => this.matches(row, options.where)) ?? null,
     );
   }
+  update(where: Row, patch: Row) {
+    for (const row of this.rows)
+      if (this.matches(row, where)) Object.assign(row, patch);
+    return Promise.resolve({ affected: 1 });
+  }
   exists(options: { where: Row }) {
     return Promise.resolve(
       this.rows.some((row) => this.matches(row, options.where)),
@@ -76,7 +81,10 @@ describe('FlagsService 내 대표 깃발·기수 깃발·코드 없는 기수 �
   let festivals: MemoryRepository;
   let idempotency: MemoryRepository;
   let codes: MemoryRepository;
+  let users: MemoryRepository;
   let sync: jest.Mock;
+  let syncMany: jest.Mock;
+  let enqueueFestival: jest.Mock;
   let invalidatePacks: jest.Mock;
   let service: FlagsService;
   let activeUsers: Set<string>;
@@ -104,6 +112,8 @@ describe('FlagsService 내 대표 깃발·기수 깃발·코드 없는 기수 �
     zoneId: null,
     activity: null,
     hidden: false,
+    ownerPaused: false,
+    ownerId: null,
     statusUpdatedAt: null,
     createdAt: new Date('2026-11-10T00:00:00.000Z'),
     ...overrides,
@@ -117,6 +127,11 @@ describe('FlagsService 내 대표 깃발·기수 깃발·코드 없는 기수 �
     festivals = new MemoryRepository();
     idempotency = new MemoryRepository();
     codes = new MemoryRepository('codeHash');
+    users = new MemoryRepository();
+    users.rows.push(
+      { id: 'user-1', bearerModeOff: false },
+      { id: 'user-2', bearerModeOff: false },
+    );
     activeUsers = new Set(['user-1', 'user-2']);
     festivals.rows.push(
       { id: 'fst_1', published: publishedPack, draft: null },
@@ -125,6 +140,8 @@ describe('FlagsService 내 대표 깃발·기수 깃발·코드 없는 기수 �
     );
     sync = jest.fn().mockResolvedValue(['fst_1']);
     invalidatePacks = jest.fn().mockResolvedValue(undefined);
+    syncMany = jest.fn().mockResolvedValue(['fst_2']);
+    enqueueFestival = jest.fn().mockResolvedValue(undefined);
     const manager = {
       query: jest.fn((sql: string, params: string[]) =>
         Promise.resolve(
@@ -138,6 +155,7 @@ describe('FlagsService 내 대표 깃발·기수 깃발·코드 없는 기수 �
         if (entity === FlagBearer) return bearers;
         if (entity === FlagIdempotency) return idempotency;
         if (entity === AdminFestival) return festivals;
+        if (entity === User) return users;
         throw new Error('Unexpected repository');
       },
     };
@@ -159,10 +177,10 @@ describe('FlagsService 내 대표 깃발·기수 깃발·코드 없는 기수 �
       festivals as unknown as Repository<AdminFestival>,
       {} as Repository<User>,
       {} as ImageStorageService,
-      { sync, invalidatePacks } as unknown as FlagPackSyncService,
+      { sync, syncMany, invalidatePacks } as unknown as FlagPackSyncService,
       {} as AdminAuditService,
       {} as SocialNotificationService,
-      {} as LiveActivityService,
+      { enqueueFestival } as unknown as LiveActivityService,
     );
   });
 
@@ -235,6 +253,42 @@ describe('FlagsService 내 대표 깃발·기수 깃발·코드 없는 기수 �
       });
     });
 
+    it('소유자가 기수 모드를 끈 깃발은 상세·대표의 현장 상태를 가리고 기수 본인에게는 보여 준다', async () => {
+      flags.rows.push(
+        flagRow({
+          ownerPaused: true,
+          status: 'active',
+          zoneId: 'zone_a',
+          activity: 'slam',
+          statusUpdatedAt: new Date('2026-11-20T05:00:00.000Z'),
+        }),
+      );
+      follows.rows.push({ id: 'f1', userId: 'user-1', flagId: 'flg_1' });
+      pins.rows.push({ userId: 'user-1', flagId: 'flg_1' });
+      const hidden = {
+        flagId: 'flg_1',
+        status: 'scheduled',
+        zoneId: null,
+        activity: null,
+        updatedAt: '2026-11-10T00:00:00.000Z',
+      };
+      await expect(service.pinnedFlag('user-1')).resolves.toMatchObject({
+        flag: { name: '푸른 깃발', status: hidden },
+      });
+      await expect(service.detail('flg_1')).resolves.toMatchObject({
+        name: '푸른 깃발',
+        status: hidden,
+      });
+      bearers.rows.push({ id: 'b1', userId: 'user-1', flagId: 'flg_1' });
+      const live = { status: 'active', zoneId: 'zone_a', activity: 'slam' };
+      await expect(service.detail('flg_1', 'user-1')).resolves.toMatchObject({
+        status: live,
+      });
+      await expect(service.pinnedFlag('user-1')).resolves.toMatchObject({
+        flag: { status: live },
+      });
+    });
+
     it('숨김 깃발이라도 내가 기수면 hidden=true로 보여 준다', async () => {
       flags.rows.push(flagRow({ hidden: true }));
       follows.rows.push({ id: 'f1', userId: 'user-1', flagId: 'flg_1' });
@@ -301,6 +355,7 @@ describe('FlagsService 내 대표 깃발·기수 깃발·코드 없는 기수 �
         flag: { id: 'flg_1', plan: ['set_1'], planVisible: false },
         status: { flagId: 'flg_1', status: 'scheduled' },
         hidden: false,
+        ownerPaused: false,
       });
       await expect(
         service.myBearerFlags('user-1', 'fst_1'),
@@ -308,6 +363,86 @@ describe('FlagsService 내 대표 깃발·기수 깃발·코드 없는 기수 �
       await expect(service.myBearerFlags('nobody')).resolves.toEqual({
         items: [],
       });
+    });
+  });
+
+  describe('setBearerMode', () => {
+    beforeEach(() => {
+      flags.rows.push(
+        flagRow({ ownerId: 'user-1' }),
+        flagRow({
+          id: 'flg_2',
+          festivalId: 'fst_2',
+          ownerId: 'user-1',
+          hidden: true,
+        }),
+        flagRow({ id: 'flg_co', ownerId: 'user-2' }),
+      );
+    });
+
+    it('끄면 내 소유 깃발만 ownerPaused로 바꾸고 축제마다 라이브·팩을 갱신한다', async () => {
+      await expect(service.setBearerMode('user-1', false)).resolves.toEqual({
+        bearerMode: false,
+      });
+      expect(users.rows[0]).toMatchObject({ bearerModeOff: true });
+      expect(
+        flags.rows.map((row) => [row.id, row.ownerPaused, row.hidden]),
+      ).toEqual([
+        ['flg_1', true, false],
+        ['flg_2', true, true],
+        ['flg_co', false, false],
+      ]);
+      expect(enqueueFestival).toHaveBeenNthCalledWith(
+        1,
+        'fst_1',
+        expect.anything(),
+      );
+      expect(enqueueFestival).toHaveBeenNthCalledWith(
+        2,
+        'fst_2',
+        expect.anything(),
+      );
+      expect(syncMany).toHaveBeenCalledWith(
+        ['flg_1', 'flg_2'],
+        expect.anything(),
+      );
+      expect(invalidatePacks).toHaveBeenCalledWith(['fst_2']);
+    });
+
+    it('다시 켜면 ownerPaused만 풀고 관리자 숨김은 그대로 둔다', async () => {
+      await service.setBearerMode('user-1', false);
+      syncMany.mockClear();
+      await expect(service.setBearerMode('user-1', true)).resolves.toEqual({
+        bearerMode: true,
+      });
+      expect(users.rows[0]).toMatchObject({ bearerModeOff: false });
+      expect(
+        flags.rows.map((row) => [row.id, row.ownerPaused, row.hidden]),
+      ).toEqual([
+        ['flg_1', false, false],
+        ['flg_2', false, true],
+        ['flg_co', false, false],
+      ]);
+      expect(syncMany).toHaveBeenCalledWith(
+        ['flg_1', 'flg_2'],
+        expect.anything(),
+      );
+    });
+
+    it('바뀐 깃발이 없으면 팩·라이브를 갱신하지 않는다', async () => {
+      await expect(service.setBearerMode('user-1', true)).resolves.toEqual({
+        bearerMode: true,
+      });
+      expect(syncMany).not.toHaveBeenCalled();
+      expect(enqueueFestival).not.toHaveBeenCalled();
+      expect(invalidatePacks).not.toHaveBeenCalled();
+    });
+
+    it('탈퇴 중인 사용자는 401이다', async () => {
+      activeUsers.delete('user-1');
+      await expect(
+        service.setBearerMode('user-1', false),
+      ).rejects.toMatchObject({ status: 401 });
     });
   });
 
@@ -355,6 +490,28 @@ describe('FlagsService 내 대표 깃발·기수 깃발·코드 없는 기수 �
       expect(codes.rows).toHaveLength(0);
       expect(sync).toHaveBeenCalledWith(result.flagId, expect.anything());
       expect(invalidatePacks).toHaveBeenCalledWith(['fst_1']);
+    });
+
+    it('등록하면 기수 모드를 켜고 꺼 둔 내 다른 깃발도 다시 보이게 한다', async () => {
+      users.rows[0].bearerModeOff = true;
+      flags.rows.push(
+        flagRow({
+          id: 'flg_old',
+          festivalId: 'fst_2',
+          name: '예전 깃발',
+          ownerId: 'user-1',
+          ownerPaused: true,
+        }),
+      );
+      const result = await service.register('user-1', 'key-1', body);
+      expect(users.rows[0]).toMatchObject({ bearerModeOff: false });
+      expect(flags.rows.find((row) => row.id === 'flg_old')).toMatchObject({
+        ownerPaused: false,
+      });
+      expect(enqueueFestival).toHaveBeenCalledWith('fst_2', expect.anything());
+      expect(syncMany).toHaveBeenCalledWith(['flg_old'], expect.anything());
+      expect(sync).toHaveBeenCalledWith(result.flagId, expect.anything());
+      expect(invalidatePacks).toHaveBeenCalledWith(['fst_2', 'fst_1']);
     });
 
     it('태그를 생략하면 claim과 같은 기본 태그를 쓴다', async () => {

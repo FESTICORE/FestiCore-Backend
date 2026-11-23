@@ -117,6 +117,18 @@ describe('FlagPackSyncService', () => {
     expect(festival.published?.flags).toHaveLength(2);
     expect(invalidatePack).toHaveBeenCalledTimes(1);
     expect(invalidatePack).toHaveBeenCalledWith(base.id);
+
+    // 소유자가 기수 모드를 끄면 팩에서 빠지고, 켜면 돌아온다.
+    flag.ownerPaused = true;
+    await service.sync(flag.id, manager as unknown as EntityManager);
+    expect(festival.publishedVersion).toBe(5);
+    expect(
+      (festival.published?.flags as { id: string }[]).map((item) => item.id),
+    ).toEqual([secondFlag.id]);
+    flag.ownerPaused = false;
+    await service.sync(flag.id, manager as unknown as EntityManager);
+    expect(festival.publishedVersion).toBe(6);
+    expect(festival.published?.flags).toHaveLength(2);
   });
 
   describe('legacy free-text return times', () => {

@@ -981,6 +981,13 @@ describe('Public festival API', () => {
         visibility: 'public',
         hidden: true,
       },
+      {
+        id: 'flg_paused01',
+        festivalId: pack.id,
+        visibility: 'public',
+        hidden: false,
+        ownerPaused: true,
+      },
     ]);
     const response = await request(server)
       .get(`/api/v1/festivals/${pack.id}/flags`)
@@ -1264,6 +1271,14 @@ describe('Public festival API', () => {
       .set('X-Device-Id', device)
       .expect(200);
     expect(successData<{ me: null }>(first.body).me).toBeNull();
+    // 관리자 숨김과 소유자 기수 모드 끔 깃발은 라이브 보드에서 뺀다.
+    expect(flagRepo.find).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        visibility: 'public',
+        hidden: false,
+        ownerPaused: false,
+      }) as unknown,
+    });
     expect(first.headers['x-poll-after']).toBe('30');
     expect(first.headers['cache-control']).toBe('private, max-age=30');
     expect(dataSource.query).toHaveBeenCalledWith(

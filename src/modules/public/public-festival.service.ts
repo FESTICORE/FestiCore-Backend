@@ -2466,7 +2466,7 @@ export class PublicFestivalService {
       requiredArray(pack.flags).map((flag) => [flag.id, flag]),
     );
     for (const flag of records) {
-      if (flag.visibility !== 'public' || flag.hidden) {
+      if (flag.visibility !== 'public' || flag.hidden || flag.ownerPaused) {
         profiles.delete(flag.id);
         continue;
       }
