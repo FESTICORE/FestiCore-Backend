@@ -28,9 +28,11 @@ describe('AutoPublishVerifiedService', () => {
     value: unknown = detail,
     url = 'https://festicore-dev.up.railway.app',
     flag?: string,
+    inferEndTimesFlag?: string,
+    candidate = festival,
   ) {
     const publicFestivals = {
-      crawlCandidates: jest.fn().mockResolvedValue([festival]),
+      crawlCandidates: jest.fn().mockResolvedValue([candidate]),
       crawlDetail: jest.fn().mockResolvedValue(value),
     };
     const adminFestivals = {
@@ -39,7 +41,11 @@ describe('AutoPublishVerifiedService', () => {
         .mockResolvedValue({ packVersion: 1, changed: true }),
     };
     const config = {
-      get: jest.fn((key: string) => (key === 'PUBLIC_URL' ? url : flag)),
+      get: jest.fn((key: string) => {
+        if (key === 'PUBLIC_URL') return url;
+        if (key === 'AUTO_PUBLISH_INFER_END_TIMES') return inferEndTimesFlag;
+        return flag;
+      }),
     };
     const service = new AutoPublishVerifiedService(
       publicFestivals as never,
@@ -84,6 +90,118 @@ describe('AutoPublishVerifiedService', () => {
       expect(adminFestivals.publishCrawled).not.toHaveBeenCalled();
     },
   );
+  it('infers missing ends only for the opted-in development festival IDs', async () => {
+    const target = { ...festival, id: 'fst_00e0f4f1d8065a93' };
+    const value = {
+      ...detail,
+      timetable: [
+        { ...detail.timetable[0], endsAt: null },
+        {
+          artist: '다음 밴드',
+          date: '2026-11-20',
+          stageName: '메인',
+          startsAt: '2026-11-20T14:00:00+09:00',
+          endsAt: '2026-11-20T15:00:00+09:00',
+        },
+      ],
+    };
+    const { service, adminFestivals } = fixture(
+      value,
+      'https://festicore-dev.up.railway.app',
+      undefined,
+      'true',
+      target,
+    );
+
+    await service.tick();
+
+    const publishedCall = adminFestivals.publishCrawled.mock
+      .calls[0] as unknown as [unknown, { sets: Array<{ endsAt: string }> }];
+    const timetable = publishedCall[1];
+    expect(timetable).toEqual(
+      expect.objectContaining({
+        sets: [
+          expect.objectContaining({ endsAt: '2026-11-20T14:00:00+09:00' }),
+          expect.objectContaining({ endsAt: '2026-11-20T15:00:00+09:00' }),
+        ],
+      }),
+    );
+  });
+  it.each([
+    ['missing opt-in', undefined, { ...festival, id: 'fst_00e0f4f1d8065a93' }],
+    ['non-target festival', 'true', festival],
+    ['non-exact opt-in', 'TRUE', { ...festival, id: 'fst_00e0f4f1d8065a93' }],
+  ])(
+    'continues to hold missing ends with %s',
+    async (_label, inferFlag, candidate) => {
+      const value = {
+        ...detail,
+        timetable: [{ ...detail.timetable[0], endsAt: null }],
+      };
+      const { service, adminFestivals } = fixture(
+        value,
+        'https://festicore-dev.up.railway.app',
+        undefined,
+        inferFlag,
+        candidate,
+      );
+
+      await service.tick();
+
+      expect(adminFestivals.publishCrawled).not.toHaveBeenCalled();
+    },
+  );
+  it.each([
+    [
+      'no later set on the same stage',
+      [{ ...detail.timetable[0], endsAt: null }],
+    ],
+    [
+      'later set on another stage',
+      [
+        { ...detail.timetable[0], endsAt: null },
+        {
+          artist: '다음 밴드',
+          date: '2026-11-20',
+          stageName: '다른 무대',
+          startsAt: '2026-11-20T14:00:00+09:00',
+          endsAt: '2026-11-20T15:00:00+09:00',
+        },
+      ],
+    ],
+  ])('holds inference with %s', async (_label, timetable) => {
+    const target = { ...festival, id: 'fst_00e0f4f1d8065a93' };
+    const value = { ...detail, timetable };
+    const { service, adminFestivals } = fixture(
+      value,
+      'https://festicore-dev.up.railway.app',
+      undefined,
+      'true',
+      target,
+    );
+
+    await service.tick();
+
+    expect(adminFestivals.publishCrawled).not.toHaveBeenCalled();
+  });
+  it('never infers missing ends in production even when both flags are true', async () => {
+    const target = { ...festival, id: 'fst_00e0f4f1d8065a93' };
+    const value = {
+      ...detail,
+      timetable: [{ ...detail.timetable[0], endsAt: null }],
+    };
+    const { service, adminFestivals } = fixture(
+      value,
+      'https://festicore.up.railway.app',
+      'true',
+      'true',
+      target,
+    );
+
+    await service.tick();
+
+    expect(adminFestivals.publishCrawled).not.toHaveBeenCalled();
+  });
   it('does not reject every stable ID just because names match', async () => {
     const { service, publicFestivals, adminFestivals } = fixture();
     publicFestivals.crawlCandidates.mockResolvedValue([
