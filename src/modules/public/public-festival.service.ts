@@ -55,6 +55,7 @@ import {
   WONDERLIVET_TICKET_SEED,
 } from '../admin/crawl/service/wonderlivet-ticket-link';
 import { WONDERLIVET_FESTIVAL_URL } from '../admin/crawl/service/wonderlivet-lineup';
+import { instagramUsername } from '../notification/official-news.service';
 import {
   SOHYANG_COMMONS_CREDIT,
   SOHYANG_COMMONS_SEED,
@@ -503,6 +504,24 @@ export interface PublicPosterRow {
   festivalId: string | null;
   festivalSourceUrl: string | null;
   artistName: string | null;
+}
+
+/** 공식 인스타그램 공개 조회에서 돌려주는 최근 게시물 수 */
+const OFFICIAL_NEWS_LIMIT = 6;
+
+export interface OfficialNewsView {
+  festivalId: string;
+  available: boolean;
+  account: { username: string; url: string } | null;
+  fetchedAt: string | null;
+  posts: {
+    id: string;
+    caption: string | null;
+    mediaType: string;
+    imageUrl: string | null;
+    permalink: string;
+    postedAt: string;
+  }[];
 }
 
 @Injectable()
@@ -2353,6 +2372,84 @@ export class PublicFestivalService {
     };
   }
 
+  /**
+   * 축제 공식 인스타그램 최근 게시물. 5분 수집 작업이 저장한 게시물만 읽고 Meta를 직접 부르지 않는다.
+   * 계정이 없거나 아직 한 번도 받지 못했으면 available=false다.
+   */
+  async officialNews(id: string): Promise<OfficialNewsView> {
+    id = canonicalFestivalId(id);
+    // 발행 축제가 아니면 published()가 404를 던진다.
+    await this.published(id);
+    // 공개 팩 투영(projectPack)은 officialInstagramUrl을 내보내지 않으므로 발행 문서에서 직접 읽는다.
+    const source = (
+      await this.dataSource.query<{ instagramUrl: string | null }[]>(
+        `SELECT "published"->>'officialInstagramUrl' AS "instagramUrl"
+         FROM "admin_festivals"
+         WHERE "id" = $1 AND "published" IS NOT NULL AND "publishedVersion" > 0`,
+        [id],
+      )
+    )[0];
+    const username = instagramUsername(source?.instagramUrl);
+    if (!username)
+      return {
+        festivalId: id,
+        available: false,
+        account: null,
+        fetchedAt: null,
+        posts: [],
+      };
+    const feed = (
+      await this.dataSource.query<
+        {
+          username: string;
+          seededAt: Date | null;
+          lastFetchedAt: Date | null;
+        }[]
+      >(
+        `SELECT "username", "seededAt", "lastFetchedAt"
+         FROM "official_instagram_feeds" WHERE "festivalId" = $1`,
+        [id],
+      )
+    )[0];
+    const available = Boolean(
+      feed?.seededAt && feed.username.toLowerCase() === username.toLowerCase(),
+    );
+    const rows = available
+      ? await this.dataSource.query<
+          {
+            mediaId: string;
+            caption: string | null;
+            mediaType: string;
+            imageUrl: string | null;
+            permalink: string;
+            postedAt: Date;
+          }[]
+        >(
+          `SELECT "mediaId", "caption", "mediaType", "imageUrl", "permalink", "postedAt"
+           FROM "official_instagram_posts" WHERE "festivalId" = $1
+           ORDER BY "postedAt" DESC, "mediaId" DESC LIMIT ${OFFICIAL_NEWS_LIMIT}`,
+          [id],
+        )
+      : [];
+    return {
+      festivalId: id,
+      available,
+      account: { username, url: `https://www.instagram.com/${username}/` },
+      fetchedAt:
+        available && feed?.lastFetchedAt
+          ? new Date(feed.lastFetchedAt).toISOString()
+          : null,
+      posts: rows.map((row) => ({
+        id: row.mediaId,
+        caption: row.caption,
+        mediaType: row.mediaType,
+        imageUrl: row.imageUrl,
+        permalink: row.permalink,
+        postedAt: new Date(row.postedAt).toISOString(),
+      })),
+    };
+  }
+
   async flags(id: string, tags: string[] | undefined) {
     id = canonicalFestivalId(id);
     const pack = await this.published(id);
@@ -2369,7 +2466,7 @@ export class PublicFestivalService {
       requiredArray(pack.flags).map((flag) => [flag.id, flag]),
     );
     for (const flag of records) {
-      if (flag.visibility !== 'public' || flag.hidden) {
+      if (flag.visibility !== 'public' || flag.hidden || flag.ownerPaused) {
         profiles.delete(flag.id);
         continue;
       }

@@ -12,11 +12,13 @@ import tempfile
 import time
 
 # 검증이 필요한 코드 경로. 문서(*.md)만 바뀌면 검증하지 않는다.
-CODE_DIRS = ("src", "test", "scripts", ".claude/hooks", ".claude/scripts")
+CODE_DIRS = ("src", "test", "scripts", ".claude/hooks", ".claude/scripts", ".githooks", ".github/workflows")
 CODE_FILES = ("package.json", "package-lock.json", "tsconfig.json", "tsconfig.build.json", "nest-cli.json",
               "eslint.config.mjs", ".prettierrc", "Dockerfile", "railway.toml", ".claude/settings.json")
 STATE_DIR = os.path.join(".claude", "state")
 VERIFY_FILE = os.path.join(STATE_DIR, "verify.json")
+GIT_HOOKS_DIR = ".githooks"
+DELETED = "deleted"
 MAX_FAILURES = 2  # 같은 단계가 이 횟수만큼 연속 실패하면 사용자에게 보고한다
 
 
@@ -60,12 +62,43 @@ def changed_code_files(root):
     return sorted({p for p in tracked + untracked if is_code(p)})
 
 
-def present_code_paths(root):
-    return [p for p in CODE_DIRS + CODE_FILES if os.path.exists(os.path.join(root, p))]
+def present_code_paths(root, env=None):
+    """디스크에 있거나 index에 남은 코드 경로. 지운 파일도 넣어야 삭제가 반영된다."""
+    tracked = set(p for p in git(root, "ls-files", "-z", "--", *CODE_DIRS, *CODE_FILES, env=env).split("\0") if p)
+    return [p for p in CODE_DIRS + CODE_FILES
+            if os.path.exists(os.path.join(root, p)) or any(t == p or t.startswith(p + "/") for t in tracked)]
 
 
 def fingerprint(root):
-    """작업 트리의 코드 파일 내용 지문. 커밋으로 나눠 담아도 내용이 같으면 같은 값이다.
+    """작업 트리의 코드 파일 내용 지문. 커밋으로 나눠 담아도 내용이 같으면 같은 값이다."""
+    return hashlib.sha256("\n".join(working_code(root)).encode()).hexdigest()
+
+
+def code_entries(root):
+    """작업 트리의 코드 파일 {경로: "모드 blob"}. HEAD에 있는데 지운 파일은 DELETED. pre-commit 게이트가 index와 대조한다."""
+    entries = {}
+    for line in working_code(root):
+        meta, path = line.split("\t", 1)
+        mode, _, sha = meta.split()
+        entries[path] = f"{mode} {sha}"
+    if has_head(root):
+        head = git(root, "ls-tree", "-r", "-z", "--name-only", "HEAD", "--", *CODE_DIRS, *CODE_FILES)
+        for path in head.split("\0"):
+            if path and path not in entries and is_code(path):
+                entries[path] = DELETED
+    return entries
+
+
+def has_head(root):
+    try:
+        git(root, "rev-parse", "--verify", "-q", "HEAD")
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
+def working_code(root):
+    """작업 트리의 코드 파일 ls-tree 줄("모드 blob 해시\t경로").
 
     실제 index는 건드리지 않는다. 복사한 임시 index에 담아 tree를 만든다(git stash를 쓰지 않는다).
     """
@@ -78,13 +111,12 @@ def fingerprint(root):
         else:
             os.unlink(index)
         env = dict(os.environ, GIT_INDEX_FILE=index)
-        paths = present_code_paths(root)
+        paths = present_code_paths(root, env)
         if paths:
             git(root, "add", "-A", "--", *paths, env=env)
         tree = git(root, "write-tree", env=env).strip()
-        listing = git(root, "ls-tree", "-r", tree, "--", *CODE_DIRS, *CODE_FILES).splitlines()
-        code = [line for line in listing if is_code(line.split("\t", 1)[-1])]
-        return hashlib.sha256("\n".join(code).encode()).hexdigest()
+        listing = git(root, "ls-tree", "-r", "-z", tree, "--", *CODE_DIRS, *CODE_FILES).split("\0")
+        return [line for line in listing if line and is_code(line.split("\t", 1)[-1])]
     finally:
         if os.path.exists(index):
             os.unlink(index)
@@ -114,3 +146,28 @@ def unverified(root):
     if state.get("passed") and state.get("fingerprint") == fingerprint(root):
         return []
     return files
+
+
+def staged_unverified(root):
+    """커밋될 index(GIT_INDEX_FILE 포함)의 코드 변경 중 verify 통과 시점과 내용이 다른 경로."""
+    staged = [p for p in git(root, "diff", "--cached", "--name-only", "--no-renames", "-z").split("\0")
+              if p and is_code(p)]
+    if not staged:
+        return []
+    state = load(root)
+    if not state.get("passed") or "code" not in state:
+        return staged  # 통과 기록이 없으면 삭제만 담은 커밋도 막는다
+    verified = state["code"]
+    index = {}
+    for line in git(root, "ls-files", "-s", "-z", "--", *staged).split("\0"):
+        if line:
+            meta, path = line.split("\t", 1)
+            mode, sha, _ = meta.split()
+            index[path] = f"{mode} {sha}"
+    return [p for p in staged if index.get(p, DELETED) != verified.get(p)]  # 삭제는 verify 때도 지워져 있어야 한다
+
+
+def install_git_hooks(root):
+    """pre-commit 게이트(.githooks)를 켠다. verify가 실행될 때 부른다."""
+    if git(root, "config", "--default", "", "--get", "core.hooksPath").strip() != GIT_HOOKS_DIR:
+        git(root, "config", "core.hooksPath", GIT_HOOKS_DIR)

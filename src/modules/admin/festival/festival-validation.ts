@@ -15,6 +15,7 @@ const keys = new Set([
   'days',
   'thumbUrl',
   'ticketLinks',
+  'officialInstagramUrl',
   'flagsEnabled',
   'source',
   'stages',
@@ -319,6 +320,17 @@ export function validateDraft(
       ))
   )
     errors.push('ticketLinks: 최대 5개, 1..20자 라벨과 HTTPS URL 필요');
+  if (
+    // 크롤링 반영은 계정을 못 찾으면 null을 남긴다. null은 주소 없음으로 본다(#403).
+    draft.officialInstagramUrl != null &&
+    (typeof draft.officialInstagramUrl !== 'string' ||
+      !/^https:\/\/(www\.)?instagram\.com\/[A-Za-z0-9._]{1,30}\/?$/.test(
+        draft.officialInstagramUrl,
+      ))
+  )
+    errors.push(
+      'officialInstagramUrl: https://www.instagram.com/<계정>/ 형태의 주소 필요',
+    );
   for (const [name, max] of [
     ['stages', 8],
     ['sets', 400],

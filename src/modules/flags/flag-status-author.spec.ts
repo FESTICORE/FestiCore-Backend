@@ -1,7 +1,12 @@
 import { DataSource, EntityManager } from 'typeorm';
 import { AdminFestival } from '../admin/festival/festival.entity';
 import { User } from '../auth/entity/user.entity';
-import { Flag, FlagIdempotency, FlagStatusEvent } from './flag.entity';
+import {
+  Flag,
+  FlagBearer,
+  FlagIdempotency,
+  FlagStatusEvent,
+} from './flag.entity';
 import { FlagsService } from './flags.service';
 
 describe('깃발 상태를 바꾼 기수', () => {
@@ -42,7 +47,16 @@ describe('깃발 상태를 바꾼 기수', () => {
       query: jest.fn().mockResolvedValue([]),
       getRepository: jest.fn((entity: unknown) => {
         if (entity === Flag)
-          return { createQueryBuilder: () => query, save: saveFlag };
+          return {
+            createQueryBuilder: () => query,
+            save: saveFlag,
+            findOne: jest.fn().mockResolvedValue(flag),
+          };
+        if (entity === FlagBearer)
+          return {
+            exists: jest.fn().mockResolvedValue(true),
+            delete: jest.fn().mockResolvedValue(undefined),
+          };
         if (entity === FlagStatusEvent)
           return {
             createQueryBuilder: () => query,
@@ -145,6 +159,33 @@ describe('깃발 상태를 바꾼 기수', () => {
     expect(result).toMatchObject({
       zoneId: 'zone_a',
       updatedBy: { userId: 'usr_owner' },
+    });
+  });
+  it('소유자가 기수 모드를 끈 깃발은 공동 기수의 쓰기도 409 BEARER_MODE_OFF로 막고 기수 상세는 연다', async () => {
+    const { service, flag, saveFlag } = setup();
+    flag.ownerPaused = true;
+    flag.ownerId = 'usr_co';
+    const off = { response: { code: 'BEARER_MODE_OFF' }, status: 409 };
+    await expect(
+      service.status('flg_1', 'usr_co', 'key-3', {
+        clientAt: new Date().toISOString(),
+        zoneId: 'zone_b',
+      }),
+    ).rejects.toMatchObject(off);
+    await expect(
+      service.patch('flg_1', 'usr_co', { bio: '바꿔요' }),
+    ).rejects.toMatchObject(off);
+    await expect(service.invite('flg_1', 'usr_co')).rejects.toMatchObject(off);
+    await expect(
+      service.uploadPhoto('flg_1', 'usr_co', undefined),
+    ).rejects.toMatchObject(off);
+    flag.ownerId = 'usr_owner';
+    await expect(
+      service.removeBearer('flg_1', 'usr_co', 'usr_co'),
+    ).rejects.toMatchObject(off);
+    expect(saveFlag).not.toHaveBeenCalled();
+    await expect(service.bearerView('flg_1', 'usr_co')).resolves.toMatchObject({
+      hidden: false,
     });
   });
 });

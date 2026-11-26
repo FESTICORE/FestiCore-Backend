@@ -26,6 +26,52 @@ export interface FestivalContext {
   imageUrl?: string;
 }
 
+/** APNs 헤더로 쓰는 발송 옵션. FCM은 같은 값으로 Android 우선순위 · ttl을 정한다. */
+export interface PushSendOptions {
+  pushType: 'alert' | 'background' | 'liveactivity';
+  priority: '5' | '10';
+  collapseKey?: string;
+  expirationSeconds?: number;
+}
+
+/** 플랫폼 공통 페이로드 원천. `body`는 APNs 본문(aps + userInfo)이다. */
+export interface PushMessage {
+  body: Record<string, unknown>;
+  options: PushSendOptions;
+}
+
+export type StartNotificationInput = {
+  title: string;
+  body: string;
+  eventKey: string;
+  type?: 'festival.start' | 'festival.official_news';
+  festivalId?: string;
+} & FestivalContext;
+
+export type ReminderNotificationInput = {
+  festivalId: string;
+  title: string;
+  body: string;
+  eventKey: string;
+  hasPack: boolean;
+} & FestivalContext;
+
+export type SetReminderNotificationInput = {
+  festivalId: string;
+  setId: string;
+  title: string;
+  body: string;
+  eventKey: string;
+  deeplink: string;
+  expiresAt: Date;
+} & FestivalContext;
+
+export interface SocialNotificationInput {
+  type: 'flag.status' | 'crew.status' | 'crew.gather';
+  payload: Record<string, unknown>;
+  eventKey: string;
+}
+
 function festivalContext(input: FestivalContext): FestivalContext {
   return {
     ...(input.festivalName ? { festivalName: input.festivalName } : {}),
@@ -63,18 +109,18 @@ export class ApnsService {
   async sendStartNotification(
     token: string,
     environment: 'sandbox' | 'production',
-    input: {
-      title: string;
-      body: string;
-      eventKey: string;
-      type?: 'festival.start';
-      festivalId?: string;
-    } & FestivalContext,
+    input: StartNotificationInput,
   ): Promise<ApnsSendResult> {
-    return this.send(
+    return this.sendMessage(
       token,
       environment,
-      {
+      this.buildStartNotification(input),
+    );
+  }
+
+  buildStartNotification(input: StartNotificationInput): PushMessage {
+    return {
+      body: {
         aps: {
           alert: { title: input.title, body: input.body },
           sound: 'default',
@@ -85,25 +131,29 @@ export class ApnsService {
         ...festivalContext(input),
         eventKey: input.eventKey,
       },
-      { pushType: 'alert', priority: '10', collapseKey: input.eventKey },
-    );
+      options: {
+        pushType: 'alert',
+        priority: '10',
+        collapseKey: input.eventKey,
+      },
+    };
   }
 
   async sendReminderNotification(
     token: string,
     environment: 'sandbox' | 'production',
-    input: {
-      festivalId: string;
-      title: string;
-      body: string;
-      eventKey: string;
-      hasPack: boolean;
-    } & FestivalContext,
+    input: ReminderNotificationInput,
   ): Promise<ApnsSendResult> {
-    return this.send(
+    return this.sendMessage(
       token,
       environment,
-      {
+      this.buildReminderNotification(input),
+    );
+  }
+
+  buildReminderNotification(input: ReminderNotificationInput): PushMessage {
+    return {
+      body: {
         aps: {
           alert: { title: input.title, body: input.body },
           sound: 'default',
@@ -115,28 +165,32 @@ export class ApnsService {
         ...festivalContext(input),
         eventKey: input.eventKey,
       },
-      { pushType: 'alert', priority: '10', collapseKey: input.eventKey },
-    );
+      options: {
+        pushType: 'alert',
+        priority: '10',
+        collapseKey: input.eventKey,
+      },
+    };
   }
 
   /** 저장한 공연 알림. Notification Service Extension을 거치고 탭하면 `deeplink`를 연다. */
   async sendSetReminderNotification(
     token: string,
     environment: 'sandbox' | 'production',
-    input: {
-      festivalId: string;
-      setId: string;
-      title: string;
-      body: string;
-      eventKey: string;
-      deeplink: string;
-      expiresAt: Date;
-    } & FestivalContext,
+    input: SetReminderNotificationInput,
   ): Promise<ApnsSendResult> {
-    return this.send(
+    return this.sendMessage(
       token,
       environment,
-      {
+      this.buildSetReminderNotification(input),
+    );
+  }
+
+  buildSetReminderNotification(
+    input: SetReminderNotificationInput,
+  ): PushMessage {
+    return {
+      body: {
         aps: {
           alert: { title: input.title, body: input.body },
           sound: 'default',
@@ -150,7 +204,7 @@ export class ApnsService {
         ...festivalContext(input),
         eventKey: input.eventKey,
       },
-      {
+      options: {
         pushType: 'alert',
         priority: '10',
         collapseKey: input.eventKey,
@@ -160,7 +214,7 @@ export class ApnsService {
           Math.floor((input.expiresAt.getTime() - Date.now()) / 1000),
         ),
       },
-    );
+    };
   }
 
   async sendPackUpdated(
@@ -169,22 +223,28 @@ export class ApnsService {
     festivalId: string,
     packVersion: number,
   ): Promise<ApnsSendResult> {
-    return this.send(
+    return this.sendMessage(
       token,
       environment,
-      {
+      this.buildPackUpdated(festivalId, packVersion),
+    );
+  }
+
+  buildPackUpdated(festivalId: string, packVersion: number): PushMessage {
+    return {
+      body: {
         aps: { 'content-available': 1 },
         type: 'pack.updated',
         festivalId,
         packVersion,
       },
-      {
+      options: {
         pushType: 'background',
         priority: '5',
         collapseKey: `pack:${festivalId}`,
         expirationSeconds: 24 * 60 * 60,
       },
-    );
+    };
   }
 
   async sendLiveActivityUpdate(
@@ -282,18 +342,20 @@ export class ApnsService {
   async sendSocialNotification(
     token: string,
     environment: 'sandbox' | 'production',
-    input: {
-      type: 'flag.status' | 'crew.status' | 'crew.gather';
-      payload: Record<string, unknown>;
-      eventKey: string;
-    },
+    input: SocialNotificationInput,
   ): Promise<ApnsSendResult> {
-    const gather = input.type === 'crew.gather';
-    const { title, body, route } = socialAlertText(input.type, input.payload);
-    return this.send(
+    return this.sendMessage(
       token,
       environment,
-      {
+      this.buildSocialNotification(input),
+    );
+  }
+
+  buildSocialNotification(input: SocialNotificationInput): PushMessage {
+    const gather = input.type === 'crew.gather';
+    const { title, body, route } = socialAlertText(input.type, input.payload);
+    return {
+      body: {
         aps: {
           alert: { title, body },
           // 보이는 알림은 모두 Notification Service Extension을 거친다.
@@ -307,13 +369,13 @@ export class ApnsService {
         ...input.payload,
         eventKey: input.eventKey,
       },
-      {
+      options: {
         pushType: 'alert',
         priority: gather ? '10' : '5',
         collapseKey: input.eventKey,
         expirationSeconds: gather ? 15 * 60 : 30 * 60,
       },
-    );
+    };
   }
 
   async sendTestNotification(
@@ -321,9 +383,17 @@ export class ApnsService {
     environment: 'sandbox' | 'production',
     type: TestPushType,
   ): Promise<ApnsSendResult> {
+    return this.sendMessage(
+      token,
+      environment,
+      this.buildTestNotification(type),
+    );
+  }
+
+  buildTestNotification(type: TestPushType): PushMessage {
     const background = type === 'pack.updated';
     const gather = type === 'crew.gather';
-    const payload = background
+    const body = background
       ? { aps: { 'content-available': 1 }, type, route: '/' }
       : {
           aps: {
@@ -339,24 +409,35 @@ export class ApnsService {
           type,
           route: '/',
         };
-    return this.send(token, environment, payload, {
-      pushType: background ? 'background' : 'alert',
-      priority: gather ? '10' : '5',
-      collapseKey: `test:${type}`,
-      expirationSeconds: background ? 24 * 60 * 60 : gather ? 15 * 60 : 30 * 60,
-    });
+    return {
+      body,
+      options: {
+        pushType: background ? 'background' : 'alert',
+        priority: gather ? '10' : '5',
+        collapseKey: `test:${type}`,
+        expirationSeconds: background
+          ? 24 * 60 * 60
+          : gather
+            ? 15 * 60
+            : 30 * 60,
+      },
+    };
+  }
+
+  /** `build*`로 만든 본문과 헤더 옵션을 그대로 APNs에 보낸다. */
+  sendMessage(
+    token: string,
+    environment: 'sandbox' | 'production',
+    message: PushMessage,
+  ): Promise<ApnsSendResult> {
+    return this.send(token, environment, message.body, message.options);
   }
 
   private async send(
     token: string,
     environment: 'sandbox' | 'production',
     body: object,
-    options: {
-      pushType: 'alert' | 'background' | 'liveactivity';
-      priority: '5' | '10';
-      collapseKey?: string;
-      expirationSeconds?: number;
-    },
+    options: PushSendOptions,
   ): Promise<ApnsSendResult> {
     if (!/^[a-f\d]{2,512}$/i.test(token) || token.length % 2 !== 0) {
       return { accepted: false, permanent: true, reason: 'BadDeviceToken' };

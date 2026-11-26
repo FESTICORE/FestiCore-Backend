@@ -36,6 +36,18 @@ function seoulToday(): string {
   }).format(new Date());
 }
 
+/** 목록 커서의 정렬 구간. 오늘 진행 중이면 0, 다가오면 1, 끝났으면 2다(하루짜리 축제 기준). */
+// 서버 목록 정렬과 같다: 진행 중 0, 예정 1, 종료 2. 종료 구간의 커서 날짜는 종료일이다.
+function listBucket(firstDate: string, lastDate = firstDate): 0 | 1 | 2 {
+  const today = seoulToday();
+  if (firstDate <= today && lastDate >= today) return 0;
+  return firstDate > today ? 1 : 2;
+}
+
+function listDate(firstDate: string, lastDate = firstDate): string {
+  return listBucket(firstDate, lastDate) === 2 ? lastDate : firstDate;
+}
+
 function envelopeData<T>(body: unknown, code: string): T {
   expect(body).toBeInstanceOf(Object);
   expect(Object.keys(body as object).sort()).toEqual([
@@ -969,6 +981,13 @@ describe('Public festival API', () => {
         visibility: 'public',
         hidden: true,
       },
+      {
+        id: 'flg_paused01',
+        festivalId: pack.id,
+        visibility: 'public',
+        hidden: false,
+        ownerPaused: true,
+      },
     ]);
     const response = await request(server)
       .get(`/api/v1/festivals/${pack.id}/flags`)
@@ -1016,7 +1035,7 @@ describe('Public festival API', () => {
     );
     expect(body.items[0].id).toBe('fst_12345678');
     expect(body.nextCursor).toBe(
-      `2026-10-21~v2~${seoulToday()}~1~2026-11-20~fst_12345678`,
+      `2026-10-21~v2~${seoulToday()}~${listBucket('2026-11-20')}~${listDate('2026-11-20')}~fst_12345678`,
     );
     queryBuilder.getMany.mockResolvedValueOnce([
       {
@@ -1039,7 +1058,11 @@ describe('Public festival API', () => {
     ).toBe('fst_87654321');
     expect(queryBuilder.andWhere).toHaveBeenCalledWith(
       expect.stringContaining('festival.id > :cursorId'),
-      { cursorBucket: 1, cursorDate: '2026-11-20', cursorId: 'fst_12345678' },
+      {
+        cursorBucket: listBucket('2026-11-20'),
+        cursorDate: listDate('2026-11-20'),
+        cursorId: 'fst_12345678',
+      },
     );
     expect(queryBuilder.orderBy).toHaveBeenCalledWith(
       expect.stringContaining('THEN 0 WHEN'),
@@ -1085,7 +1108,7 @@ describe('Public festival API', () => {
     });
     expect(firstPage.items[0]).not.toHaveProperty('startsAt');
     expect(firstPage.nextCursor).toBe(
-      `2026-10-21~v2~${seoulToday()}~1~2026-11-20~fst_000metadata1`,
+      `2026-10-21~v2~${seoulToday()}~${listBucket('2026-11-20', '2026-11-21')}~${listDate('2026-11-20', '2026-11-21')}~fst_000metadata1`,
     );
 
     queryBuilder.andWhere.mockClear();
@@ -1100,13 +1123,13 @@ describe('Public festival API', () => {
       'fst_000metadata2',
     ]);
     expect(secondPage.nextCursor).toBe(
-      `2026-10-21~v2~${seoulToday()}~1~2026-11-20~fst_000metadata2`,
+      `2026-10-21~v2~${seoulToday()}~${listBucket('2026-11-20', '2026-11-21')}~${listDate('2026-11-20', '2026-11-21')}~fst_000metadata2`,
     );
     expect(queryBuilder.andWhere).toHaveBeenCalledWith(
       expect.stringContaining('festival.id > :cursorId'),
       {
-        cursorBucket: 1,
-        cursorDate: '2026-11-20',
+        cursorBucket: listBucket('2026-11-20', '2026-11-21'),
+        cursorDate: listDate('2026-11-20', '2026-11-21'),
         cursorId: 'fst_000metadata1',
       },
     );
@@ -1166,7 +1189,7 @@ describe('Public festival API', () => {
     );
     expect(body.items[0].id).toBe('fst_12345678');
     expect(body.nextCursor).toBe(
-      `2026-10-21~v2~${seoulToday()}~1~2026-11-20~fst_12345678`,
+      `2026-10-21~v2~${seoulToday()}~${listBucket('2026-11-20')}~${listDate('2026-11-20')}~fst_12345678`,
     );
     queryBuilder.getMany.mockResolvedValueOnce([later]);
     await request(server)
@@ -1176,7 +1199,11 @@ describe('Public festival API', () => {
       .expect(200);
     expect(queryBuilder.andWhere).toHaveBeenCalledWith(
       expect.stringContaining('festival.id > :cursorId'),
-      { cursorBucket: 1, cursorDate: '2026-11-20', cursorId: 'fst_12345678' },
+      {
+        cursorBucket: listBucket('2026-11-20'),
+        cursorDate: listDate('2026-11-20'),
+        cursorId: 'fst_12345678',
+      },
     );
   });
 
@@ -1244,6 +1271,14 @@ describe('Public festival API', () => {
       .set('X-Device-Id', device)
       .expect(200);
     expect(successData<{ me: null }>(first.body).me).toBeNull();
+    // 관리자 숨김과 소유자 기수 모드 끔 깃발은 라이브 보드에서 뺀다.
+    expect(flagRepo.find).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        visibility: 'public',
+        hidden: false,
+        ownerPaused: false,
+      }) as unknown,
+    });
     expect(first.headers['x-poll-after']).toBe('30');
     expect(first.headers['cache-control']).toBe('private, max-age=30');
     expect(dataSource.query).toHaveBeenCalledWith(

@@ -1,6 +1,14 @@
 import { FestivalStartService } from './festival-start.service';
 
 jest.mock('./apns.service', () => ({ ApnsService: class {} }));
+jest.mock('./fcm.service', () => ({ FcmService: class {} }));
+
+interface FakeTarget {
+  platform?: 'ios' | 'android';
+  apnsToken?: string | null;
+  apnsEnvironment?: string | null;
+  fcmToken?: string | null;
+}
 
 describe('FestivalStartService', () => {
   const festivalId = 'fst_12345678';
@@ -42,19 +50,34 @@ describe('FestivalStartService', () => {
           },
         }),
     );
+    // 가짜 PushService: iOS는 기존 APNs 목에 (토큰, 환경, 입력)으로, Android는 fcmSend에 (FCM 토큰, 종류, 입력)으로 넘긴다.
+    const fcmSend = jest.fn();
+    const fcmConfigured = jest.fn().mockReturnValue(false);
+    const route =
+      (kind: string, apnsSend: jest.Mock) =>
+      (target: FakeTarget, ...args: unknown[]): unknown =>
+        target.platform === 'android'
+          ? fcmSend(target.fcmToken, kind, ...args)
+          : apnsSend(target.apnsToken, target.apnsEnvironment, ...args);
+    const push = {
+      isConfigured: () => Boolean(isConfigured()) || Boolean(fcmConfigured()),
+      sendStartNotification: route('start', sendStartNotification),
+      sendPackUpdated: route('pack', sendPackUpdated),
+      sendReminderNotification: route('reminder', sendReminderNotification),
+      sendSetReminderNotification: route(
+        'setReminder',
+        sendSetReminderNotification,
+      ),
+    };
     const service = new FestivalStartService(
       { query, transaction } as never,
-      {
-        sendStartNotification,
-        sendPackUpdated,
-        sendReminderNotification,
-        sendLiveActivityStart,
-        sendSetReminderNotification,
-        isConfigured,
-      } as never,
+      { sendLiveActivityStart, isConfigured } as never,
+      push as never,
     );
     return {
       service,
+      fcmSend,
+      fcmConfigured,
       query,
       sendStartNotification,
       sendPackUpdated,
@@ -115,6 +138,121 @@ describe('FestivalStartService', () => {
     expect(query.mock.calls[1][1]?.[2]).toEqual(
       new Date('2026-12-31T09:00:00Z'),
     );
+  });
+
+  describe('official instagram news', () => {
+    const newsJob = {
+      ...job,
+      eventKey: `official-news:${festivalId}:17900000000000001`,
+      scheduledAt: new Date('2026-11-20T09:00:00Z'),
+    };
+    const sentAt = new Date('2026-11-20T09:01:00Z');
+
+    it('rechecks pin, the device setting and the stored post, then sends with the caption', async () => {
+      const { service, query, sendStartNotification } = setup();
+      query
+        .mockResolvedValueOnce([
+          {
+            ownerUserId: '33333333-3333-4333-8333-333333333333',
+            apnsToken: 'token',
+            apnsEnvironment: 'production',
+            name: '원더리벳',
+            published: { thumbUrl: 'https://cdn.example/thumb.jpg' },
+            instagramUrl: 'https://www.instagram.com/wonderliivet/',
+            feedUsername: 'wonderliivet',
+            caption: '타임테이블 변경 안내\n자세한 내용은 프로필 링크',
+            imageUrl: 'https://cdn.example/post.jpg',
+            permalink: 'https://www.instagram.com/p/AAA/',
+            postedAt: new Date('2026-11-20T08:58:00Z'),
+          },
+        ])
+        .mockResolvedValue([]);
+      sendStartNotification.mockResolvedValueOnce({ accepted: true });
+
+      await service.deliver(newsJob, sentAt);
+
+      expect(query.mock.calls[0][0]).toContain('s."pinned" = true');
+      expect(query.mock.calls[0][0]).toContain('d."notifyOfficialNews" = true');
+      expect(query.mock.calls[0][1]).toEqual([job.id, '17900000000000001']);
+      const inbox = query.mock.calls.find(([sql]) =>
+        sql.includes('INSERT INTO "user_notifications"'),
+      );
+      expect(inbox?.[1]?.[1]).toBe('festival.official_news');
+      expect(inbox?.[1]?.[5]).toBe(`/festivals/${festivalId}/live`);
+      expect(sendStartNotification).toHaveBeenCalledWith(
+        'token',
+        'production',
+        expect.objectContaining({
+          title: '원더리벳 공식 소식',
+          body: '타임테이블 변경 안내',
+          type: 'festival.official_news',
+          festivalId,
+          imageUrl: 'https://cdn.example/post.jpg',
+          eventKey: newsJob.eventKey,
+        }),
+      );
+    });
+
+    it('cancels when the device unpinned, turned the setting off or the post is gone', async () => {
+      const { service, query, sendStartNotification } = setup();
+      query.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+      await service.deliver(newsJob, sentAt);
+      expect(sendStartNotification).not.toHaveBeenCalled();
+      expect(query.mock.calls[1][1]).toEqual([
+        job.id,
+        leaseUntil,
+        'cancelled',
+        'TARGET_UNAVAILABLE',
+      ]);
+    });
+
+    it('does not send when the official account changed after enqueue', async () => {
+      const { service, query, sendStartNotification } = setup();
+      query
+        .mockResolvedValueOnce([
+          {
+            ownerUserId: null,
+            apnsToken: 'token',
+            apnsEnvironment: 'production',
+            name: '원더리벳',
+            published: {},
+            instagramUrl: 'https://www.instagram.com/newaccount/',
+            feedUsername: 'wonderliivet',
+            caption: null,
+            imageUrl: null,
+            permalink: 'https://www.instagram.com/p/AAA/',
+            postedAt: new Date('2026-11-20T08:58:00Z'),
+          },
+        ])
+        .mockResolvedValueOnce([]);
+      await service.deliver(newsJob, sentAt);
+      expect(sendStartNotification).not.toHaveBeenCalled();
+      expect(query.mock.calls[1][1]?.[2]).toBe('cancelled');
+    });
+
+    it('does not send a post older than a day', async () => {
+      const { service, query, sendStartNotification } = setup();
+      query
+        .mockResolvedValueOnce([
+          {
+            ownerUserId: null,
+            apnsToken: 'token',
+            apnsEnvironment: 'production',
+            name: '원더리벳',
+            published: {},
+            instagramUrl: 'https://www.instagram.com/wonderliivet/',
+            feedUsername: 'wonderliivet',
+            caption: null,
+            imageUrl: null,
+            permalink: 'https://www.instagram.com/p/AAA/',
+            postedAt: new Date('2026-11-19T08:00:00Z'),
+          },
+        ])
+        .mockResolvedValueOnce([]);
+      await service.deliver(newsJob, sentAt);
+      expect(sendStartNotification).not.toHaveBeenCalled();
+      expect(query.mock.calls[1][1]?.[2]).toBe('cancelled');
+    });
   });
 
   it('rechecks pin and reminder opt-in before sending, then cancels an unsubscribed job', async () => {
@@ -1359,6 +1497,421 @@ describe('FestivalStartService', () => {
         reminderJob.id,
         leaseUntil,
         new Date('2026-11-20T05:50:00Z'),
+      ]);
+    });
+
+    it('Android 로그인 기기에도 알림함에 기록하고 FCM으로 보낸다', async () => {
+      const { service, query, fcmSend, sendSetReminderNotification } = setup();
+      query
+        .mockResolvedValueOnce([
+          {
+            ...reminderTarget,
+            platform: 'android',
+            apnsToken: null,
+            apnsEnvironment: null,
+            fcmToken: 'fcm-token',
+          },
+        ])
+        .mockResolvedValue([]);
+      fcmSend.mockResolvedValueOnce({ accepted: true });
+
+      await service.deliver(reminderJob, sendAt);
+
+      expect(query.mock.calls[0][0]).toContain('d."fcmToken"');
+      const inbox = query.mock.calls.find(([sql]) =>
+        sql.includes('INSERT INTO "user_notifications"'),
+      );
+      expect(inbox?.[1]?.[0]).toEqual([userId]);
+      expect(inbox?.[1]?.[1]).toBe('festival.set_reminder');
+      expect(fcmSend).toHaveBeenCalledWith(
+        'fcm-token',
+        'setReminder',
+        expect.objectContaining({ festivalId, setId, title: '공개 축제' }),
+      );
+      expect(sendSetReminderNotification).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Android(FCM) 대상', () => {
+    const iosTarget = {
+      ownerUserId: '55555555-5555-4555-8555-555555555555',
+      platform: 'ios',
+      apnsToken: 'token',
+      apnsEnvironment: 'production',
+      fcmToken: null,
+      name: '축제',
+      days: [{ date: '2026-11-20', startsAt: '2026-11-20T12:00:00+09:00' }],
+      published: {},
+    };
+    const androidTarget = {
+      ...iosTarget,
+      platform: 'android',
+      apnsToken: null,
+      apnsEnvironment: null,
+      fcmToken: 'fcm-token',
+    };
+    const updateCall = (query: jest.Mock) =>
+      query.mock.calls.find(([sql]) =>
+        String(sql).includes('UPDATE "devices"'),
+      ) as [string, unknown[]] | undefined;
+    const finishOrRetry = (query: jest.Mock) =>
+      query.mock.calls.find(([sql]) =>
+        String(sql).includes('UPDATE "notification_deliveries"'),
+      ) as [string, unknown[]];
+
+    it('예약 SQL 다섯 곳이 iOS APNs 기기와 Android FCM 기기를 함께 고른다', async () => {
+      const { service, query } = setup();
+      query.mockResolvedValueOnce([
+        {
+          id: festivalId,
+          name: '축제',
+          days: [{ date: '2026-11-21', startsAt: '2026-11-21T12:00:00+09:00' }],
+          sets: [],
+        },
+      ]);
+      query.mockResolvedValue([]);
+
+      await service.schedulePublished(new Date('2026-11-01T00:00:00Z'));
+
+      const inserts = query.mock.calls
+        .map(([sql]) => String(sql))
+        .filter(
+          (sql) =>
+            sql.includes('INSERT INTO "notification_deliveries"') &&
+            !sql.includes('liveActivityPushToStartToken'),
+        );
+      expect(inserts).toHaveLength(2);
+      for (const sql of inserts) {
+        expect(sql).toContain(
+          `d."platform" = 'ios' AND d."apnsToken" IS NOT NULL AND d."apnsEnvironment" IS NOT NULL`,
+        );
+        expect(sql).toContain(
+          `d."platform" = 'android' AND d."fcmToken" IS NOT NULL`,
+        );
+      }
+    });
+
+    it('Android만: 축제 시작을 FCM으로 보내고 APNs는 부르지 않으며 알림함에 기록한다', async () => {
+      const { service, query, fcmSend, sendStartNotification } = setup();
+      query.mockResolvedValueOnce([androidTarget]).mockResolvedValue([]);
+      fcmSend.mockResolvedValueOnce({ accepted: true });
+
+      await service.deliver(job, scheduledAt);
+
+      expect(query.mock.calls[0][0]).toContain('d."platform", d."fcmToken"');
+      expect(fcmSend).toHaveBeenCalledWith('fcm-token', 'start', {
+        title: '축제 시작',
+        body: '페스티벌이 시작됐어요.',
+        eventKey: job.eventKey,
+        type: 'festival.start',
+        festivalId,
+        festivalName: '축제',
+        imageUrl: undefined,
+      });
+      expect(sendStartNotification).not.toHaveBeenCalled();
+      const inbox = query.mock.calls.find(([sql]) =>
+        String(sql).includes('INSERT INTO "user_notifications"'),
+      );
+      expect(inbox?.[1]?.[0]).toEqual([iosTarget.ownerUserId]);
+      expect(finishOrRetry(query)[1]).toEqual([
+        job.id,
+        leaseUntil,
+        'sent',
+        null,
+      ]);
+    });
+
+    it('혼합: 같은 종류의 작업이 기기 platform에 따라 APNs와 FCM으로 나뉜다', async () => {
+      const { service, query, fcmSend, sendStartNotification } = setup();
+      const targets: unknown[] = [iosTarget, androidTarget];
+      query.mockImplementation((sql) =>
+        Promise.resolve(
+          sql.includes('FROM "notification_deliveries" n')
+            ? [targets.shift()]
+            : [],
+        ),
+      );
+      sendStartNotification.mockResolvedValueOnce({ accepted: true });
+      fcmSend.mockResolvedValueOnce({ accepted: true });
+
+      await service.deliver(job, scheduledAt);
+      await service.deliver(job, scheduledAt);
+
+      expect(sendStartNotification).toHaveBeenCalledTimes(1);
+      expect(sendStartNotification).toHaveBeenCalledWith(
+        'token',
+        'production',
+        expect.objectContaining({ type: 'festival.start' }),
+      );
+      expect(fcmSend).toHaveBeenCalledTimes(1);
+      expect(fcmSend).toHaveBeenCalledWith(
+        'fcm-token',
+        'start',
+        expect.objectContaining({ type: 'festival.start' }),
+      );
+    });
+
+    it('FCM 토큰이 없는 Android 기기는 보내지 않고 취소한다', async () => {
+      const { service, query, fcmSend } = setup();
+      query
+        .mockResolvedValueOnce([{ ...androidTarget, fcmToken: null }])
+        .mockResolvedValue([]);
+
+      await service.deliver(job, scheduledAt);
+
+      expect(fcmSend).not.toHaveBeenCalled();
+      expect(finishOrRetry(query)[1]).toEqual([
+        job.id,
+        leaseUntil,
+        'cancelled',
+        'TARGET_UNAVAILABLE',
+      ]);
+    });
+
+    it.each(['FCM_NOT_CONFIGURED', 'FCM_CONFIGURATION_ERROR'])(
+      '%s는 시도 횟수를 늘리지 않고 15분 뒤 다시 보낸다',
+      async (reason) => {
+        const { service, query, fcmSend } = setup();
+        query.mockResolvedValueOnce([androidTarget]).mockResolvedValue([]);
+        fcmSend.mockResolvedValueOnce({
+          accepted: false,
+          permanent: false,
+          reason,
+        });
+
+        await service.deliver({ ...job, attempts: 5 }, scheduledAt);
+
+        expect(finishOrRetry(query)[1]).toEqual([
+          job.id,
+          leaseUntil,
+          60,
+          reason,
+          0,
+        ]);
+        query.mockResolvedValueOnce([androidTarget]);
+        fcmSend.mockResolvedValueOnce({
+          accepted: false,
+          permanent: false,
+          reason,
+        });
+        await service.deliver(job, scheduledAt);
+        expect(query.mock.calls.at(-1)?.[1]).toEqual([
+          job.id,
+          leaseUntil,
+          15,
+          reason,
+          0,
+        ]);
+        expect(updateCall(query)).toBeUndefined();
+      },
+    );
+
+    it.each([['FCM_UNREGISTERED'], ['FCM_INVALID_TOKEN']])(
+      '%s(permanent)는 그 FCM 토큰만 지우고 작업을 failed로 끝낸다',
+      async (reason) => {
+        const { service, query, fcmSend } = setup();
+        query.mockResolvedValueOnce([androidTarget]).mockResolvedValue([]);
+        fcmSend.mockResolvedValueOnce({
+          accepted: false,
+          permanent: true,
+          reason,
+        });
+
+        await service.deliver(job, scheduledAt);
+
+        const update = updateCall(query);
+        expect(update?.[0]).toContain('"fcmToken" = NULL');
+        expect(update?.[0]).toContain('"fcmToken" = $2');
+        expect(update?.[0]).not.toContain('"apnsToken"');
+        expect(update?.[1]).toEqual([deviceId, 'fcm-token']);
+        expect(finishOrRetry(query)[1]).toEqual([
+          job.id,
+          leaseUntil,
+          'failed',
+          reason,
+        ]);
+      },
+    );
+
+    it('iOS APNs permanent 거절은 지금처럼 토큰을 지우지 않는다', async () => {
+      const { service, query, sendStartNotification } = setup();
+      query.mockResolvedValueOnce([iosTarget]).mockResolvedValue([]);
+      sendStartNotification.mockResolvedValueOnce({
+        accepted: false,
+        permanent: true,
+        reason: 'Unregistered',
+      });
+
+      await service.deliver(job, scheduledAt);
+
+      expect(updateCall(query)).toBeUndefined();
+      expect(finishOrRetry(query)[1]).toEqual([
+        job.id,
+        leaseUntil,
+        'failed',
+        'Unregistered',
+      ]);
+    });
+
+    it('FCM_INVALID_ARGUMENT는 토큰을 유지하고 제한된 횟수로 재시도한다', async () => {
+      const { service, query, fcmSend } = setup();
+      query.mockResolvedValueOnce([androidTarget]).mockResolvedValue([]);
+      fcmSend.mockResolvedValueOnce({
+        accepted: false,
+        permanent: false,
+        reason: 'FCM_INVALID_ARGUMENT',
+      });
+
+      await service.deliver(job, scheduledAt);
+
+      expect(updateCall(query)).toBeUndefined();
+      expect(finishOrRetry(query)[1]).toEqual([
+        job.id,
+        leaseUntil,
+        2,
+        'FCM_INVALID_ARGUMENT',
+        1,
+      ]);
+    });
+
+    it.each([
+      ['FCM_HTTP_503', 15],
+      ['FCM_HTTP_500', 15],
+      ['FCM_QUOTA_EXCEEDED', 2],
+      ['FCM_NETWORK_ERROR', 2],
+      ['FCM_UNKNOWN_ERROR', 2],
+    ])(
+      '일시 오류 %s는 %i분 뒤 재시도하고 토큰을 유지한다',
+      async (reason, minutes) => {
+        const { service, query, fcmSend } = setup();
+        query.mockResolvedValueOnce([androidTarget]).mockResolvedValue([]);
+        fcmSend.mockResolvedValueOnce({
+          accepted: false,
+          permanent: false,
+          reason,
+        });
+
+        await service.deliver(job, scheduledAt);
+
+        expect(updateCall(query)).toBeUndefined();
+        expect(finishOrRetry(query)[1]).toEqual([
+          job.id,
+          leaseUntil,
+          minutes,
+          reason,
+          1,
+        ]);
+      },
+    );
+
+    it('팩 업데이트 · D-1 · 공식 소식도 Android 기기에 FCM으로 보낸다', async () => {
+      const { service, query, fcmSend } = setup();
+      fcmSend.mockResolvedValue({ accepted: true });
+      query
+        .mockResolvedValueOnce([{ ...androidTarget, publishedVersion: 3 }])
+        .mockResolvedValue([]);
+      await service.deliver(
+        { ...job, eventKey: `pack-updated:${festivalId}:3` },
+        scheduledAt,
+      );
+      expect(fcmSend).toHaveBeenLastCalledWith(
+        'fcm-token',
+        'pack',
+        festivalId,
+        3,
+      );
+
+      query.mockReset();
+      query
+        .mockResolvedValueOnce([
+          {
+            ...androidTarget,
+            checklist: [],
+            publishedVersion: 3,
+            packDownloadedVersion: 3,
+          },
+        ])
+        .mockResolvedValue([]);
+      await service.deliver(
+        {
+          ...job,
+          eventKey: `festival-reminder:${festivalId}`,
+          scheduledAt: new Date('2026-11-19T09:00:00Z'),
+        },
+        new Date('2026-11-19T09:01:00Z'),
+      );
+      expect(fcmSend).toHaveBeenLastCalledWith(
+        'fcm-token',
+        'reminder',
+        expect.objectContaining({ festivalId, hasPack: true }),
+      );
+      expect(
+        query.mock.calls.some(([sql]) =>
+          String(sql).includes('INSERT INTO "user_notifications"'),
+        ),
+      ).toBe(true);
+
+      query.mockReset();
+      query
+        .mockResolvedValueOnce([
+          {
+            ...androidTarget,
+            instagramUrl: 'https://www.instagram.com/wonderliivet/',
+            feedUsername: 'wonderliivet',
+            caption: '안내',
+            imageUrl: null,
+            permalink: 'https://www.instagram.com/p/AAA/',
+            postedAt: new Date('2026-11-20T08:58:00Z'),
+          },
+        ])
+        .mockResolvedValue([]);
+      await service.deliver(
+        {
+          ...job,
+          eventKey: `official-news:${festivalId}:17900000000000001`,
+          scheduledAt: new Date('2026-11-20T09:00:00Z'),
+        },
+        new Date('2026-11-20T09:01:00Z'),
+      );
+      expect(query.mock.calls[0][0]).toContain('d."platform", d."fcmToken"');
+      expect(fcmSend).toHaveBeenLastCalledWith(
+        'fcm-token',
+        'start',
+        expect.objectContaining({ type: 'festival.official_news' }),
+      );
+      expect(fcmSend).toHaveBeenCalledTimes(3);
+    });
+
+    it('APNs 없이 FCM만 설정돼도 발송 작업을 선점한다', async () => {
+      const { service, query, isConfigured, fcmConfigured } = setup();
+      jest.spyOn(service, 'schedulePublished').mockResolvedValue();
+      const claim = jest.spyOn(service, 'claim').mockResolvedValue(null);
+      isConfigured.mockReturnValue(false);
+      fcmConfigured.mockReturnValue(true);
+
+      await service.tick(scheduledAt);
+
+      expect(claim).toHaveBeenCalled();
+      expect(query).not.toHaveBeenCalled();
+    });
+
+    it('APNs가 없으면 Live Activity 시작 작업은 보내지 않고 시도 횟수 없이 미룬다', async () => {
+      const { service, query, isConfigured, sendLiveActivityStart } = setup();
+      isConfigured.mockReturnValue(false);
+      query.mockResolvedValueOnce([iosTarget]).mockResolvedValue([]);
+
+      await service.deliver(
+        { ...job, eventKey: `live-activity-start:${festivalId}` },
+        scheduledAt,
+      );
+
+      expect(sendLiveActivityStart).not.toHaveBeenCalled();
+      expect(finishOrRetry(query)[1]).toEqual([
+        job.id,
+        leaseUntil,
+        15,
+        'APNS_NOT_CONFIGURED',
+        0,
       ]);
     });
   });

@@ -22,6 +22,13 @@ const { buildDraft } =
 const POLL_MS = 5 * 60 * 1000;
 const PROD_POLL_MS = 60 * 60 * 1000;
 const DEBOUNCE_MS = 1_000;
+const DEV_URL = 'https://festicore-dev.up.railway.app';
+const DEV_END_TIME_INFERENCE_FLAG = 'AUTO_PUBLISH_INFER_END_TIMES';
+const DEV_END_TIME_INFERENCE_FESTIVAL_IDS = new Set([
+  'fst_00e0f4f1d8065a93', // WONDERLIVET
+  'fst_0ba3ca6d072d7f44', // Grand Mint
+  'fst_8af99e67485b15d1', // XMF
+]);
 
 @Injectable()
 export class AutoPublishVerifiedService
@@ -44,7 +51,7 @@ export class AutoPublishVerifiedService
   private enabled(): boolean {
     if (this.stopped) return false;
     const url = this.config.get<string>('PUBLIC_URL');
-    if (url === 'https://festicore-dev.up.railway.app')
+    if (url === DEV_URL)
       return (
         this.config.get<string>('AUTO_PUBLISH_VERIFIED_TIMETABLE') !== 'false'
       );
@@ -138,7 +145,11 @@ export class AutoPublishVerifiedService
             skipped += 1;
             continue;
           }
-          const timetable = buildDraft(detail, false);
+          const inferMissingEnds =
+            this.config.get<string>('PUBLIC_URL') === DEV_URL &&
+            this.config.get<string>(DEV_END_TIME_INFERENCE_FLAG) === 'true' &&
+            DEV_END_TIME_INFERENCE_FESTIVAL_IDS.has(festival.id);
+          const timetable = buildDraft(detail, inferMissingEnds);
           if (typeof timetable === 'string') {
             this.logger.warn(`자동 발행 보류 ${festival.id}: ${timetable}`);
             skipped += 1;

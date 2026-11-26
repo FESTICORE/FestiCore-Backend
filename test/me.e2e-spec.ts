@@ -42,6 +42,7 @@ describe('Me API contract (e2e)', () => {
         termsVersion: null,
         currentTermsVersion: CURRENT_TERMS_VERSION,
         pushOptIn: false,
+        bearerMode: true,
       },
     });
   });

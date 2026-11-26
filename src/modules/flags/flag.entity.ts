@@ -37,6 +37,8 @@ export class Flag {
   @Column({ type: 'varchar', length: 20, nullable: true })
   activity!: FlagActivity | null;
   @Column({ type: 'boolean', default: false }) hidden!: boolean;
+  /** 소유자가 기수 모드를 껐다. 항상 현재 소유자의 users.bearerModeOff와 같다. 관리자 숨김(hidden)과 따로 둔다. */
+  @Column({ type: 'boolean', default: false }) ownerPaused!: boolean;
   @Column({ type: 'integer', default: 0 }) reportCount!: number;
   @Column({ type: 'uuid', nullable: true }) ownerId!: string | null;
   @Column({ type: 'date', nullable: true }) restartDate!: string | null;

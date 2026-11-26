@@ -6,8 +6,20 @@ import {
 } from '@nestjs/common';
 import { DataSource, EntityManager } from 'typeorm';
 import { ApnsService } from './apns.service';
+import {
+  hasPushTarget,
+  PUSH_NOT_READY_REASONS,
+  PUSH_TARGET_SQL,
+  PushService,
+  type PushPlatform,
+} from './push.service';
 import { buildDeeplink } from './deeplink';
 import { buildLiveActivityContentState } from './live-activity-content';
+import {
+  instagramUsername,
+  OFFICIAL_NEWS_PREFIX,
+  officialNewsBody,
+} from './official-news.service';
 import {
   recordUserNotifications,
   UserNotificationEntry,
@@ -24,6 +36,7 @@ const BATCH_SIZE = 100;
 const SEND_CONCURRENCY = 10;
 const MAX_ATTEMPTS = 6;
 const LATE_GRACE_MS = 2 * 60 * 60_000;
+const OFFICIAL_NEWS_EXPIRY_MS = 24 * 60 * 60_000;
 
 interface PublishedRow {
   id: string;
@@ -43,6 +56,22 @@ interface Day {
   startsAt: string;
 }
 
+interface OfficialNewsTarget {
+  ownerUserId: string | null;
+  instagramUrl: string | null;
+  feedUsername: string | null;
+  apnsToken: string | null;
+  apnsEnvironment: 'sandbox' | 'production' | null;
+  platform: PushPlatform;
+  fcmToken: string | null;
+  name: string | null;
+  published: Record<string, unknown> | null;
+  caption: string | null;
+  imageUrl: string | null;
+  permalink: string;
+  postedAt: Date | string;
+}
+
 interface Delivery {
   id: string;
   deviceId: string;
@@ -60,6 +89,8 @@ interface DeliveryTarget {
   liveActivityId: string | null;
   hasCurrentActivity: boolean;
   apnsEnvironment: 'sandbox' | 'production' | null;
+  platform: PushPlatform;
+  fcmToken: string | null;
   name: string | null;
   days: unknown;
   publishedVersion: number;
@@ -74,6 +105,8 @@ interface SetReminderTarget {
   ownerUserId: string | null;
   apnsToken: string | null;
   apnsEnvironment: 'sandbox' | 'production' | null;
+  platform: PushPlatform;
+  fcmToken: string | null;
   notifySetReminders: boolean;
   hasActiveSession: boolean;
   name: string | null;
@@ -179,6 +212,7 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly db: DataSource,
     private readonly apns: ApnsService,
+    private readonly push: PushService,
   ) {}
 
   onModuleInit(): void {
@@ -196,10 +230,10 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
     this.running = true;
     try {
       await this.schedulePublished(now);
-      if (!this.apns.isConfigured()) {
+      if (!this.push.isConfigured()) {
         if (!this.warnedMissingConfig) {
           this.logger.warn(
-            'APNs 설정이 없어 축제 시작 알림 발송을 보류합니다.',
+            'APNs · FCM 설정이 없어 축제 시작 알림 발송을 보류합니다.',
           );
           this.warnedMissingConfig = true;
         }
@@ -255,7 +289,7 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
            FROM "device_subscriptions" s
            JOIN "devices" d ON d."id" = s."deviceId"
            WHERE s."festivalId" = $1 AND s."pinned" = true AND s."reminders" = true
-             AND d."apnsToken" IS NOT NULL AND d."apnsEnvironment" IS NOT NULL
+             AND ${PUSH_TARGET_SQL}
            ON CONFLICT ("deviceId", "eventKey") DO UPDATE
              SET "scheduledAt" = EXCLUDED."scheduledAt",
                  "nextAttemptAt" = EXCLUDED."nextAttemptAt",
@@ -278,7 +312,7 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
            JOIN "devices" d ON d."id" = s."deviceId"
            WHERE s."festivalId" = $1 AND s."pinned" = true
              AND s."festivalStarts" = true
-             AND d."apnsToken" IS NOT NULL AND d."apnsEnvironment" IS NOT NULL
+             AND ${PUSH_TARGET_SQL}
            ON CONFLICT ("deviceId", "eventKey") DO UPDATE
              SET "scheduledAt" = EXCLUDED."scheduledAt",
                  "nextAttemptAt" = EXCLUDED."nextAttemptAt",
@@ -509,7 +543,7 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
        JOIN "user_schedules" us ON us."festivalId" = p."festivalId"
          AND us."setIds" ? p."setId"
        JOIN "devices" d ON d."userId" = us."userId"
-       WHERE d."apnsToken" IS NOT NULL AND d."apnsEnvironment" IS NOT NULL
+       WHERE ${PUSH_TARGET_SQL}
          AND d."notifySetReminders" = true
          AND ($2::uuid IS NULL OR us."userId" = $2::uuid)
          AND EXISTS (
@@ -594,6 +628,10 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
       await this.deliverSetReminder(job, now);
       return;
     }
+    if (job.eventKey.startsWith(`${OFFICIAL_NEWS_PREFIX}${job.festivalId}:`)) {
+      await this.deliverOfficialNews(job, now);
+      return;
+    }
     const performanceStart =
       job.eventKey === `${PERFORMANCE_START_PREFIX}${job.festivalId}`;
     const liveStart =
@@ -611,7 +649,7 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
     const rows = await this.db.query<DeliveryTarget[]>(
       `
       SELECT d."userId" AS "ownerUserId", d."apnsToken", d."liveActivityPushToStartToken",
-        d."liveActivityId", d."apnsEnvironment",
+        d."liveActivityId", d."apnsEnvironment", d."platform", d."fcmToken",
         NOT ${NO_CURRENT_ACTIVITY} AS "hasCurrentActivity",
         f."published"->>'name' AS "name", f."published"->'days' AS "days",
         f."published"->'checklist' AS "checklist", f."published",
@@ -644,6 +682,11 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
     );
     const target = rows[0];
     if (liveStart) {
+      // 발송 게이트가 FCM만으로도 열리므로 Live Activity(iOS 전용)는 APNs 설정을 따로 본다.
+      if (!this.apns.isConfigured()) {
+        await this.retry(job, 'APNS_NOT_CONFIGURED');
+        return;
+      }
       await this.deliverLiveActivityStart(job, target, now, performanceStart);
       return;
     }
@@ -652,29 +695,22 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
         job.eventKey.slice(`pack-updated:${job.festivalId}:`.length),
       );
       if (
-        !target?.apnsToken ||
-        !target.apnsEnvironment ||
+        !hasPushTarget(target) ||
         !Number.isSafeInteger(expectedVersion) ||
         Number(target.publishedVersion) !== expectedVersion
       ) {
         await this.finish(job, 'cancelled', 'TARGET_UNAVAILABLE');
         return;
       }
-      await this.sendDelivery(job, () =>
-        this.apns.sendPackUpdated(
-          target.apnsToken!,
-          target.apnsEnvironment!,
-          job.festivalId,
-          expectedVersion,
-        ),
+      await this.sendDelivery(job, target, () =>
+        this.push.sendPackUpdated(target, job.festivalId, expectedVersion),
       );
       return;
     }
     if (reminder) {
       const currentReminder = reminderAt(validDays(target?.days));
       if (
-        !target?.apnsToken ||
-        !target.apnsEnvironment ||
+        !hasPushTarget(target) ||
         !target.name ||
         !currentReminder ||
         currentReminder.getTime() < now.getTime() - LATE_GRACE_MS
@@ -706,20 +742,16 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
         route: hasPack ? `/festivals/${job.festivalId}/checklist` : '/',
         subject: {},
       });
-      await this.sendDelivery(job, () =>
-        this.apns.sendReminderNotification(
-          target.apnsToken!,
-          target.apnsEnvironment!,
-          {
-            festivalId: job.festivalId,
-            title,
-            body,
-            eventKey: job.eventKey,
-            hasPack,
-            festivalName: target.name!,
-            imageUrl: publishedThumbUrl(target.published),
-          },
-        ),
+      await this.sendDelivery(job, target, () =>
+        this.push.sendReminderNotification(target, {
+          festivalId: job.festivalId,
+          title,
+          body,
+          eventKey: job.eventKey,
+          hasPack,
+          festivalName: target.name!,
+          imageUrl: publishedThumbUrl(target.published),
+        }),
       );
       return;
     }
@@ -728,8 +760,7 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
     const currentStart = day && new Date(day.startsAt);
     const scheduledAt = new Date(job.scheduledAt);
     if (
-      !target?.apnsToken ||
-      !target.apnsEnvironment ||
+      !hasPushTarget(target) ||
       !target.name ||
       !currentStart ||
       currentStart.getTime() < now.getTime() - LATE_GRACE_MS
@@ -755,20 +786,83 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
       route: `/festivals/${job.festivalId}/live`,
       subject: {},
     });
-    await this.sendDelivery(job, () =>
-      this.apns.sendStartNotification(
-        target.apnsToken!,
-        target.apnsEnvironment!,
-        {
-          title: `${target.name} 시작`,
-          body: '페스티벌이 시작됐어요.',
-          eventKey: job.eventKey,
-          type: 'festival.start',
-          festivalId: job.festivalId,
-          festivalName: target.name!,
-          imageUrl: publishedThumbUrl(target.published),
-        },
-      ),
+    await this.sendDelivery(job, target, () =>
+      this.push.sendStartNotification(target, {
+        title: `${target.name} 시작`,
+        body: '페스티벌이 시작됐어요.',
+        eventKey: job.eventKey,
+        type: 'festival.start',
+        festivalId: job.festivalId,
+        festivalName: target.name!,
+        imageUrl: publishedThumbUrl(target.published),
+      }),
+    );
+  }
+
+  /**
+   * 공식 인스타그램 새 게시물 알림. 발송 직전에 고정 구독 · 기기 설정 · 게시물이 남아 있는지 다시 확인한다.
+   * 하루가 지난 작업은 보내지 않는다.
+   */
+  private async deliverOfficialNews(job: Delivery, now: Date): Promise<void> {
+    const mediaId = job.eventKey.slice(
+      `${OFFICIAL_NEWS_PREFIX}${job.festivalId}:`.length,
+    );
+    const rows = await this.db.query<OfficialNewsTarget[]>(
+      `SELECT d."userId" AS "ownerUserId", d."apnsToken", d."apnsEnvironment",
+        d."platform", d."fcmToken",
+        f."published"->>'name' AS "name", f."published",
+        f."published"->>'officialInstagramUrl' AS "instagramUrl",
+        feed."username" AS "feedUsername",
+        p."caption", p."imageUrl", p."permalink", p."postedAt"
+      FROM "notification_deliveries" n
+      JOIN "devices" d ON d."id" = n."deviceId" AND d."notifyOfficialNews" = true
+      JOIN "device_subscriptions" s ON s."deviceId" = n."deviceId"
+        AND s."festivalId" = n."festivalId" AND s."pinned" = true
+      JOIN "admin_festivals" f ON f."id" = n."festivalId"
+        AND f."published" IS NOT NULL AND f."publishedVersion" > 0
+      JOIN "official_instagram_posts" p ON p."festivalId" = n."festivalId"
+        AND p."mediaId" = $2
+      LEFT JOIN "official_instagram_feeds" feed ON feed."festivalId" = n."festivalId"
+      WHERE n."id" = $1`,
+      [job.id, mediaId],
+    );
+    const target = rows[0];
+    // 작업을 넣은 뒤 공식 계정이 바뀌었으면 옛 계정 게시물을 알리지 않는다.
+    const sameAccount =
+      Boolean(target?.feedUsername) &&
+      instagramUsername(target?.instagramUrl)?.toLowerCase() ===
+        target?.feedUsername?.toLowerCase();
+    if (
+      !hasPushTarget(target) ||
+      !target.name ||
+      !sameAccount ||
+      new Date(target.postedAt).getTime() <
+        now.getTime() - OFFICIAL_NEWS_EXPIRY_MS
+    ) {
+      await this.finish(job, 'cancelled', 'TARGET_UNAVAILABLE');
+      return;
+    }
+    const title = `${target.name} 공식 소식`;
+    const body = officialNewsBody(target.caption);
+    await this.recordInbox(job, target, {
+      type: 'festival.official_news',
+      festivalId: job.festivalId,
+      title,
+      body,
+      route: `/festivals/${job.festivalId}/live`,
+      subject: { mediaId, permalink: target.permalink },
+    });
+    await this.sendDelivery(job, target, () =>
+      this.push.sendStartNotification(target, {
+        title,
+        body,
+        eventKey: job.eventKey,
+        type: 'festival.official_news',
+        festivalId: job.festivalId,
+        festivalName: target.name!,
+        imageUrl:
+          target.imageUrl ?? publishedThumbUrl(target.published ?? undefined),
+      }),
     );
   }
 
@@ -798,7 +892,7 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
     );
     const rows = await this.db.query<SetReminderTarget[]>(
       `SELECT d."userId" AS "ownerUserId", d."apnsToken", d."apnsEnvironment",
-         d."notifySetReminders", f."published"->>'name' AS "name", f."published",
+         d."platform", d."fcmToken", d."notifySetReminders", f."published"->>'name' AS "name", f."published",
          us."setIds" AS "savedSetIds",
          EXISTS (
            SELECT 1 FROM "refresh_tokens" rt
@@ -823,8 +917,7 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
     const startsAt = set ? Date.parse(set.startsAt) : NaN;
     const scheduledAt = new Date(startsAt - SET_REMINDER_LEAD_MS);
     if (
-      !target?.apnsToken ||
-      !target.apnsEnvironment ||
+      !hasPushTarget(target) ||
       !target.notifySetReminders ||
       !target.hasActiveSession ||
       !target.name ||
@@ -860,26 +953,22 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
       subject: { setId },
     };
     await this.recordInbox(job, target, inbox);
-    await this.sendDelivery(job, () =>
-      this.apns.sendSetReminderNotification(
-        target.apnsToken!,
-        target.apnsEnvironment!,
-        {
+    await this.sendDelivery(job, target, () =>
+      this.push.sendSetReminderNotification(target, {
+        festivalId: job.festivalId,
+        setId,
+        title,
+        body,
+        eventKey: job.eventKey,
+        deeplink: buildDeeplink({
+          type: 'set',
           festivalId: job.festivalId,
           setId,
-          title,
-          body,
-          eventKey: job.eventKey,
-          deeplink: buildDeeplink({
-            type: 'set',
-            festivalId: job.festivalId,
-            setId,
-          }),
-          expiresAt: new Date(startsAt),
-          festivalName: title,
-          imageUrl: publishedThumbUrl(target.published),
-        },
-      ),
+        }),
+        expiresAt: new Date(startsAt),
+        festivalName: title,
+        imageUrl: publishedThumbUrl(target.published),
+      }),
     );
   }
 
@@ -1077,6 +1166,7 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
 
   private async sendDelivery(
     job: Delivery,
+    target: Pick<DeliveryTarget, 'platform' | 'fcmToken'>,
     send: () => Promise<
       Awaited<ReturnType<ApnsService['sendStartNotification']>>
     >,
@@ -1092,12 +1182,16 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
     }
     if (result.accepted) {
       await this.finish(job, 'sent', null);
-    } else if (
-      result.reason === 'APNS_NOT_CONFIGURED' ||
-      result.reason === 'APNS_CONFIGURATION_ERROR'
-    ) {
+    } else if (result.reason && PUSH_NOT_READY_REASONS.has(result.reason)) {
       await this.retry(job, result.reason);
     } else if (result.permanent || job.attempts + 1 >= MAX_ATTEMPTS) {
+      // FCM 무효 토큰은 지운다(소셜 경로의 APNs 410 처리와 같은 의미). APNs 토큰은 그대로 둔다.
+      if (result.permanent && target.platform === 'android' && target.fcmToken)
+        await this.db.query(
+          `UPDATE "devices" SET "fcmToken" = NULL
+           WHERE "id" = $1 AND "fcmToken" = $2`,
+          [job.deviceId, target.fcmToken],
+        );
       await this.finish(job, 'failed', result.reason ?? 'APNS_REJECTED');
     } else {
       await this.retry(job, result.reason ?? 'APNS_REJECTED');
@@ -1120,9 +1214,8 @@ export class FestivalStartService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async retry(job: Delivery, reason: string): Promise<void> {
-    const configurationError =
-      reason === 'APNS_NOT_CONFIGURED' || reason === 'APNS_CONFIGURATION_ERROR';
-    const serverError = /^APNS_HTTP_5\d\d$/.test(reason);
+    const configurationError = PUSH_NOT_READY_REASONS.has(reason);
+    const serverError = /^(APNS|FCM)_HTTP_5\d\d$/.test(reason);
     const minutes = Math.max(
       configurationError || serverError ? 15 : 0,
       Math.min(2 ** (job.attempts + 1), 60),

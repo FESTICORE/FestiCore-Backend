@@ -69,6 +69,10 @@ APNS_TEAM_ID=                              # APNs Auth Key의 Apple Team ID
 APNS_KEY_ID=                               # APNs Auth Key ID
 APNS_PRIVATE_KEY=                          # APNs .p8 키, 개행은 \n
 APNS_BUNDLE_ID=                            # iOS 앱 bundle ID (apns-topic)
+FCM_SERVICE_ACCOUNT_JSON=                  # Android 푸시: Firebase 서비스 계정 JSON 전체를 한 줄로, 환경별 Firebase 프로젝트 키
+INSTAGRAM_GRAPH_TOKEN=                     # Meta 장기 User 토큰(instagram_basic·instagram_manage_insights·pages_read_engagement), 약 60일마다 재발급
+INSTAGRAM_BUSINESS_ACCOUNT_ID=             # 호출 주체인 FestiCore 인스타그램 비즈니스 계정 ID(숫자)
+INSTAGRAM_GRAPH_VERSION=                   # 선택. 비우면 v25.0
 APPLE_REVOKE_ENCRYPTION_KEY=                # Apple 폐기 재시도 토큰 암호화: 32바이트 base64 또는 64자리 hex, 환경별 별도 키
 OAUTH_TOKEN_ENCRYPTION_KEY=                 # 사용자 OAuth 갱신 토큰 전용 32바이트 base64 또는 64자리 hex 키
 OAUTH_TOKEN_ENCRYPTION_PREVIOUS_KEY=        # 키 교체 기간에만 사용; 이전 암호문이 남아 있는 동안 유지
@@ -208,6 +212,25 @@ Apple 토큰 폐기가 실패하면 탈퇴 트랜잭션에서 암호화된 재�
 `apnsEnvironment`는 앱 entitlement를 기준으로 `sandbox` 또는 `production`을
 보내며 Railway 환경명으로 추측하지 않는다. TestFlight 토큰은 `production`이다.
 APNs HTTP 200은 Apple 서버의 수락 결과이며 실기기 수신 증거는 아니다.
+
+Android 푸시는 FCM HTTP v1(`firebase-admin`)로 보낸다. 자격 증명은
+`FCM_SERVICE_ACCOUNT_JSON` 하나만 쓴다. 값은 Firebase 콘솔 → 프로젝트 설정 →
+서비스 계정 → 새 비공개 키 생성으로 받은 JSON 파일 내용 전체를 한 줄로 넣는다
+(`project_id` · `client_email` · `private_key`가 있어야 한다. `private_key`의
+개행은 JSON 안의 `\n` 그대로 둔다). Railway `FestiCore-Backend` 서비스 →
+Variables에 환경마다 등록한다. `develop`에는 stage Android 앱
+(`io.festiCore.co.stage`)이 속한 Firebase 프로젝트 키, `production`에는 운영 앱
+(`io.festiCore.co`) 프로젝트 키를 넣는다. 환경을 바꿔 넣으면 FCM이
+`SENDER_ID_MISMATCH`를 돌려주고 서버는 토큰을 지우지 않은 채 설정 오류로 본다.
+파일 경로 · `GOOGLE_APPLICATION_CREDENTIALS`는 쓰지 않으며, 내려받은 키 파일은
+저장소에 두지 않고 등록 뒤 지운다. 값이 없거나 JSON 형식이 틀리면 부팅 로그에
+경고 한 줄(값은 남기지 않는다)을 남기고 Android 발송만 끈다. APNs 발송은
+그대로다. FCM 수락도 실기기 표시의 증거는 아니다.
+
+축제 공식 인스타그램 소식은 `INSTAGRAM_GRAPH_TOKEN`과
+`INSTAGRAM_BUSINESS_ACCOUNT_ID`가 모두 있을 때만 5분마다 받는다. 둘 중 하나라도
+없으면 수집을 건너뛰고 공개 조회는 `available=false`를 돌려준다. 토큰이 만료되면
+서버 로그에 한 번 남기고 30분마다 다시 시도하므로, 만료 전에 새 토큰으로 바꾼다.
 
 ## 관리자 인증 배포 조건
 

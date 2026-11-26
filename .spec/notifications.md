@@ -3,7 +3,7 @@
 ## D-1 축제 리마인더 (v0.2)
 
 - 발행 팩의 첫 `days[].date` 전날 18:00 Asia/Seoul(09:00 UTC)에 축제당 기기별 작업 하나를 예약한다. `eventKey`는 `festival-reminder:{festivalId}`이며 `(deviceId, eventKey)` 유일 제약으로 중복 예약을 막는다. 첫 개최일이 바뀌면 미발송 작업만 새 시각으로 옮긴다.
-- 발송 직전 `pinned=true`, `reminders=true`, 공개 팩, APNs 토큰을 다시 확인한다. 핀 해제, 알림 끄기, 구독 삭제, 기기 삭제 시 작업을 취소한다.
+- 발송 직전 `pinned=true`, `reminders=true`, 공개 팩, 푸시 토큰(iOS APNs · Android FCM)을 다시 확인한다. 핀 해제, 알림 끄기, 구독 삭제, 기기 삭제 시 작업을 취소한다.
 - 핀을 해제한 동안에는 시작 알림도 예약·발송하지 않는다. `festivalStarts` 선호값은 보존하며 다시 핀하면 적용한다.
 - `festival.reminder`는 준비물 확인 문구와 발행 팩 체크리스트 항목 최대 3개의 요약을 담은 소리 있는 alert다. `packDownloadedVersion`이 현재 `publishedVersion`과 다르면 `지금 팩을 받아 두세요.`를 덧붙이고 S00 경로 `/`를 보낸다. 같으면 S12 준비물 경로 `/festivals/{festivalId}/checklist`를 보낸다. `packUpdates`는 팩 업데이트 푸시 동의이므로 팩 다운로드 판정에 사용하지 않는다.
 - APNs 수락은 실제 단말 표시의 증거가 아니다. 앱은 `eventKey`로 중복 표시를 방지한다.
@@ -12,7 +12,7 @@
 
 - `user_schedules.setIds`에 저장한 공개 공연마다, `setReminders`를 켠 로그인 기기에 공연 시작 10분 전 작업을 1건씩 예약한다. `eventKey`는 `set-reminder:{festivalId}:{setId}`다. 일정 저장 때 빠진 공연의 미발송 작업은 `SCHEDULE_CHANGED`로 취소한다.
 - `festival.set_reminder` 본문은 `{아티스트} 공연이 10분 후 {무대}에서 시작돼요.`, 무대가 없으면 `{아티스트} 공연이 10분 후 시작돼요.`다. 알림함에 기록한 뒤 보낸다.
-- 발송 직전 저장 여부, 알림 설정, 로그인 세션, APNs 토큰, 공개 공연 시각을 다시 확인한다. 공연 시각이 바뀌었으면 보내지 않고 새 10분 전으로 다시 예약한다.
+- 발송 직전 저장 여부, 알림 설정, 로그인 세션, 푸시 토큰, 공개 공연 시각을 다시 확인한다. 공연 시각이 바뀌었으면 보내지 않고 새 10분 전으로 다시 예약한다.
 - 공연 2시간 전 Live Activity 원격 시작([live-activity-start](../docs/api/live-activity-start.spec.md))과 시각이 달라 둘을 합치지 않는다. 원격 시작이 이미 발송됐어도 10분 전 알림은 따로 보낸다.
 
 ## Notification Service Extension 보강
@@ -33,7 +33,7 @@
 - `PUT /api/v1/notifications/subscriptions/{festivalId}`: 본문 `{ "pinned": true, "reminders": true, "packUpdates": false }`를 저장한다. `pinned`는 필수이고 false여도 구독 행을 보존한다. 새 핀은 `reminders`와 `festivalStarts`가 기본 true, `packUpdates`는 기본 false다. 기존 구독에서 생략한 알림 설정은 유지한다. 기기별 분당 10회로 제한한다.
 - `PUT /api/v1/notifications/subscriptions/{festivalId}/pack-download`: 본문 `{ "packVersion": 1 }`은 현재 발행 버전과 일치할 때만 다운로드 완료를 기록한다. 성공 204.
 - `DELETE /api/v1/notifications/subscriptions/{festivalId}`: 해당 기기의 구독을 해제한다. 성공 204.
-- `POST /api/v1/admin/push/test`: Bearer JWT와 `editor` 이상 관리자 권한으로 `{ "deviceId": "UUID v4", "type": "flag.status|crew.status|crew.gather|pack.updated" }`를 보내면 등록된 한 기기의 APNs 토큰과 환경으로 테스트 푸시 1건을 시도한다. 자유 입력 메시지와 APNs 토큰은 받지 않는다. 분당 5회로 제한하고 감사 기록에 요청을 남긴다. 응답 `data`는 `deviceId`, `type`, APNs 수락 여부 `accepted`, 실패 시 `reason`이다. APNs 수락은 실기기 수신을 보장하지 않는다.
+- `POST /api/v1/admin/push/test`: Bearer JWT와 `editor` 이상 관리자 권한으로 `{ "deviceId": "UUID v4", "type": "flag.status|crew.status|crew.gather|pack.updated" }`를 보내면 등록된 한 기기에 테스트 푸시 1건을 시도한다. 기기 `platform`이 `ios`면 APNs 토큰과 환경, `android`면 FCM 토큰을 쓴다. 자유 입력 메시지와 푸시 토큰은 받지 않는다. 분당 5회로 제한하고 감사 기록에 요청을 남긴다. 기기가 없으면 404, 그 기기 platform의 발송 설정(APNs 또는 FCM)이 없으면 503, 토큰이 없으면 409다. 응답 `data`는 `deviceId`, `type`, APNs · FCM 수락 여부 `accepted`, 실패 시 `reason`(Android는 `FCM_*`)이다. 수락은 실기기 수신을 보장하지 않는다.
 
 JSON 응답은 공통 `{ "code", "data", "message" }` 형식을 따른다. 204에는 본문이 없다. 비밀값·APNs 토큰은 목록 응답에 넣지 않는다.
 
@@ -45,7 +45,18 @@ JSON 응답은 공통 `{ "code", "data", "message" }` 형식을 따른다. 204�
 - `(deviceId, eventKey)`를 유일하게 저장한다. `eventKey`는 `festival-start:{festivalId}:{YYYY-MM-DD}`다.
 - 여러 서버 인스턴스에서 같은 작업을 중복 선점하지 않도록 DB 잠금과 임대 시간을 사용한다. 매 주기 최대 100건을 동시성 10으로 처리하며 시작 2시간 이내의 작업을 발송한다. 실패 작업은 제한된 횟수로 재시도한다.
 - 발송 직전에 현재 구독, 기기 토큰, 발행된 시작 시각을 다시 확인한다. 구독 해제·기기 삭제·회원 탈퇴 후에는 보내지 않는다.
-- APNs는 기기별 `apnsEnvironment`에 따라 개발/운영 엔드포인트를 선택한다. 자격증명이 없으면 시작 시 명확히 로깅하고 발송을 시도하지 않는다.
+- APNs는 기기별 `apnsEnvironment`에 따라 개발/운영 엔드포인트를 선택한다. APNs · FCM 자격증명이 모두 없으면 시작 시 명확히 로깅하고 발송 작업을 선점하지 않는다. 한쪽만 있으면 다른 플랫폼 작업은 `APNS_NOT_CONFIGURED` · `FCM_NOT_CONFIGURED`로 시도 횟수 없이 15분 뒤 다시 본다(오래된 작업은 기존 만료 규칙으로 끝난다). Live Activity 원격 시작은 APNs가 없으면 보내지 않고 같은 방식으로 미룬다.
+
+## Android(FCM) 발송기
+
+- `PushService`가 기기 `platform`에 따라 APNs(`ios`) 또는 FCM(`android`)으로 보낸다. 페이로드 원천은 `ApnsService.build*` 하나이고, APNs 본문 · 헤더는 바뀌지 않는다. Live Activity는 iOS 전용이다.
+- 발송 대상 조건은 `PUSH_TARGET_SQL` 하나다: `platform='ios'`이고 APNs 토큰 · 환경이 있거나, `platform='android'`이고 `fcmToken`이 있다. D-1 리마인더 · 축제 시작 · 저장한 공연 · 공식 소식 · 팩 업데이트 · 깃발/크루 상태 · 크루 모여 · 크루 해산의 예약과 발송 직전 확인이 모두 이 조건을 쓴다. 관리자 테스트 푸시도 같은 `PushService`를 쓴다.
+- 발송 작업 안에서 알림함에 기록하는 축제 시작 · D-1 · 저장한 공연 · 공식 소식은 Android 로그인 사용자에게도 남는다.
+- FCM은 `notification` 키 없는 data 전용 메시지다. data 키는 iOS userInfo(aps 밖 최상위 키)와 같고, 보이는 알림은 `aps.alert`의 `title` · `body`를 최상위로 더한다. 값은 모두 문자열이다(숫자 · boolean은 `String()`, 예: `packVersion: "3"`, `dissolved: "true"`). `null`인 키는 넣지 않는다. 무음(`pack.updated`)에는 `title` · `body`가 없다.
+- Android 우선순위는 보이는 알림 `high`, 무음 `normal`이다. `ttl`은 APNs 만료(초)를 ms로 바꿔 넣고, `collapseKey`는 무음에만 쓴다. data가 4096바이트를 넘으면 보내지 않는다(`PayloadTooLarge`).
+- 자격 증명은 `FCM_SERVICE_ACCOUNT_JSON`([RAILWAY.md](../docs/deployment/RAILWAY.md))뿐이다. 없거나 형식이 틀리면 `FCM_NOT_CONFIGURED`로 Android 발송만 끈다.
+- 결과는 APNs와 같은 `{ accepted, permanent, reason }`이다. `UNREGISTERED`(`FCM_UNREGISTERED`) · 잘못된 토큰(`FCM_INVALID_TOKEN`)은 `permanent: true`, `SENDER_ID_MISMATCH` · 인증 오류는 토큰을 유지하는 `FCM_CONFIGURATION_ERROR`, 페이로드 오류는 토큰을 유지하고 제한된 횟수로 재시도하는 `FCM_INVALID_ARGUMENT`, 일시 장애는 `FCM_HTTP_503` · `FCM_HTTP_500` · `FCM_QUOTA_EXCEEDED` · `FCM_NETWORK_ERROR`로 재시도 대상이다.
+- `permanent`(`FCM_UNREGISTERED` · `FCM_INVALID_TOKEN`)면 모든 경로에서 그 기기의 `fcmToken`만 지운다(값이 같을 때만, 소셜 경로의 APNs 410 처리와 같은 의미). 축제 계열의 APNs `permanent`는 지금처럼 토큰을 지우지 않는다. `FCM_NOT_CONFIGURED` · `FCM_CONFIGURATION_ERROR`는 토큰을 지우지 않고 시도 횟수 없이 15분 뒤 다시 본다. 축제 계열에서 `FCM_HTTP_5xx`는 APNs 5xx처럼 최소 15분 뒤 재시도한다.
 - APNs 수락 직후 서버 장애가 나면 재시도 중복이 생길 수 있다. 앱은 `eventKey` 기반으로 알림을 중복 표시하지 않도록 처리한다.
 
 ## 검증

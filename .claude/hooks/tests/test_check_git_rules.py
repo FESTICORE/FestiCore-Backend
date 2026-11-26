@@ -199,6 +199,75 @@ class GitRulesHookTests(unittest.TestCase):
         self.assertBlocked(self.hook('git commit -m "하네스를 맞춘다 #396"', cwd=worktree), "보호 브랜치")
         self.assertBlocked(self.hook(f'cd {worktree} && git commit -m "하네스를 맞춘다 #396"'), "보호 브랜치")
 
+    def test_skipping_pre_commit_gate_blocked(self):
+        no_verify = "--no-" + "verify"  # 이 테스트를 실행하는 명령이 훅에 걸리지 않게 나눠 쓴다
+        for command in (f'git commit {no_verify} -m "하네스를 맞춘다 #361"',
+                        'git commit -n -m "하네스를 맞춘다 #361"',
+                        'git commit -an -m "하네스를 맞춘다 #361"',
+                        f"bash -c 'git commit {no_verify} -m \"하네스를 맞춘다 #361\"'"):
+            self.assertBlocked(self.hook(command), "검증 게이트")
+        self.assertEqual(0, self.hook('git commit -m "옵션 -n; 설명 #361"').returncode)
+
+    def test_hooks_path_change_blocked(self):
+        for command in ("git config core.hooksPath /dev/null",
+                        "git config --unset core.hooksPath",
+                        'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null git commit -m "x #1"',
+                        'git -c core.hooksPath=/tmp commit -m "하네스를 맞춘다 #361"'):
+            self.assertBlocked(self.hook(command), "core.hooksPath")
+        for command in ("git config core.hooksPath .githooks", "git config --get core.hooksPath"):
+            self.assertEqual(0, self.hook(command).returncode, command)
+
+    def test_pre_commit_gate_compares_index_with_verify_record(self):
+        sys.path.insert(0, os.path.join(self.repo, ".claude", "hooks"))
+        import harness_state as hs
+        shutil.copytree(REPO / ".githooks", os.path.join(self.repo, ".githooks"))
+        hs.install_git_hooks(self.repo)
+        self.assertEqual(".githooks", run("git", "config", "--get", "core.hooksPath", cwd=self.repo).stdout.strip())
+        source = os.path.join(self.repo, "src", "a.ts")
+
+        def commit():
+            return run("git", "commit", "-q", "-m", "코드를 바꾼다 #361", cwd=self.repo, check=False)
+
+        with open(source, "a") as f:
+            f.write("export const b = 2;\n")
+        run("git", "add", "-A", "src", cwd=self.repo)
+        result = commit()
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("[검증 게이트]", result.stderr)
+        # 지문만 있는 옛 기록으로는 통과하지 않는다
+        hs.save(self.repo, {"passed": True, "fingerprint": hs.fingerprint(self.repo)})
+        self.assertNotEqual(0, commit().returncode)
+        hs.save(self.repo, {"passed": True, "fingerprint": hs.fingerprint(self.repo), "code": hs.code_entries(self.repo)})
+        # 검증 뒤 작업 트리만 바뀌고 index가 검증 내용과 같으면 커밋된다
+        with open(source, "a") as f:
+            f.write("export const c = 3;\n")
+        result = commit()
+        self.assertEqual(0, result.returncode, result.stderr)
+        # 검증 뒤 고친 내용을 스테이징하면 막힌다
+        run("git", "add", "-A", "src", cwd=self.repo)
+        self.assertIn("src/a.ts", commit().stderr)
+        # 삭제도 verify 때 지워져 있어야 통과한다
+        run("git", "reset", "-q", "--", "src", cwd=self.repo)
+        run("git", "checkout", "-q", "--", "src", cwd=self.repo)
+        run("git", "rm", "-q", "src/a.ts", cwd=self.repo)
+        self.assertIn("src/a.ts", commit().stderr)
+        hs.save(self.repo, {"passed": True, "fingerprint": hs.fingerprint(self.repo), "code": hs.code_entries(self.repo)})
+        self.assertEqual(hs.DELETED, hs.load(self.repo)["code"]["src/a.ts"])
+        self.assertEqual(0, commit().returncode)
+        # 문서만 담은 커밋은 게이트가 보지 않는다
+        with open(os.path.join(self.repo, "README.md"), "w") as f:
+            f.write("x")
+        run("git", "add", "README.md", cwd=self.repo)
+        self.assertEqual(0, commit().returncode)
+        # 직접 커밋해도 .env · 키 파일은 막고, 실수로 올린 파일을 지우는 커밋은 통과한다
+        with open(os.path.join(self.repo, ".env"), "w") as f:
+            f.write("A=1\n")
+        run("git", "add", "-f", ".env", cwd=self.repo)
+        self.assertIn("[커밋 게이트]", commit().stderr)
+        run("git", "-c", "core.hooksPath=/dev/null", "commit", "-q", "-m", "실수로 올린다 #361", cwd=self.repo)
+        run("git", "rm", "-q", "--cached", ".env", cwd=self.repo)
+        self.assertEqual(0, commit().returncode)
+
     def test_stop_guard_blocks_once(self):
         with open(os.path.join(self.repo, "src", "a.ts"), "a") as f:
             f.write("export const b = 2;\n")
@@ -233,9 +302,10 @@ class VerifyAndBoundaryTests(unittest.TestCase):
     def test_steps_for_paths(self):
         names = lambda files, run_all=False, e2e=False: [n for n, _ in self.verify.steps_for(files, run_all, "BASE", e2e)]
         self.assertEqual([], names([]))
-        self.assertEqual(["harness-syntax", "harness-tests"], names([".claude/hooks/check_git_rules.py"]))
-        self.assertEqual(["boundaries", "lint", "typecheck", "build", "unit"], names(["src/main.ts"]))
-        self.assertEqual(["boundaries", "migrations", "build", "unit"],
+        self.assertEqual(["harness-syntax", "harness-tests", "security"], names([".claude/hooks/check_git_rules.py"]))
+        self.assertEqual(["security", "boundaries", "lint", "typecheck", "build", "unit"], names(["src/main.ts"]))
+        self.assertEqual(["security"], names([".github/workflows/backend-ci.yml"]))
+        self.assertEqual(["security", "boundaries", "migrations", "build", "unit"],
                          names(["src/database/migrations/1792500999000-x.ts"]))  # 없는 파일은 lint 대상이 아니다
         self.assertIn("e2e", names([], e2e=True))
         steps = dict(self.verify.steps_for(["src/main.ts"], False, "BASE"))
@@ -251,6 +321,37 @@ class VerifyAndBoundaryTests(unittest.TestCase):
         self.assertTrue(hs.is_code("src/main.ts"))
         self.assertTrue(hs.is_code("package.json"))
         self.assertTrue(hs.is_code(".claude/hooks/check_git_rules.py"))
+        # 게이트 스크립트 · 워크플로를 고친 커밋도 검증을 거친다
+        self.assertTrue(hs.is_code(".githooks/pre-commit"))
+        self.assertTrue(hs.is_code(".github/workflows/backend-ci.yml"))
+
+    def test_security_check_finds_secrets_and_injection(self):
+        security = load_script("check_security", SCRIPTS / "check-security")
+        tmp = tempfile.mkdtemp(prefix="security-test-")
+        try:
+            files = {
+                ".github/workflows/a.yml": "jobs:\n  a:\n    steps:\n      - run: echo \"${{ github.event"
+                                           + ".pull_request.title }}\"\n      - env:\n          T: ${{ github.event"
+                                           + ".pull_request.title }}\n        run: echo \"$T\"\n",
+                # 패턴을 나눠 써서 이 테스트 파일 자체가 비밀 값으로 잡히지 않게 한다
+                "src/key.ts": "const key = '-----BEGIN " + "PRIVATE KEY-----';\n",
+                "src/safe.ts": "const host = 'https://example.com';\n",
+            }
+            for path, text in files.items():
+                os.makedirs(os.path.join(tmp, os.path.dirname(path)), exist_ok=True)
+                with open(os.path.join(tmp, path), "w") as f:
+                    f.write(text)
+            joined = "\n".join(security.check_workflows(tmp, list(files)) + security.check_secrets(tmp, list(files)))
+            self.assertIn("[워크플로 셸 주입] .github/workflows/a.yml:4", joined)
+            self.assertNotIn("a.yml:6", joined)
+            self.assertIn("[비밀 값: 개인 키] src/key.ts:1", joined)
+            self.assertNotIn("safe.ts", joined)
+            for value in ("github.head_ref", "github.event.pull_request.head.label"):
+                self.assertTrue(security.WORKFLOW_INJECTION.search("${{ " + value + " }}"), value)
+            for value in ("github.event.pull_request.number", "github.sha"):
+                self.assertFalse(security.WORKFLOW_INJECTION.search("${{ " + value + " }}"), value)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
     def test_boundary_rules_catch_violations(self):
         import re

@@ -32,8 +32,16 @@
 5. `Co-Authored-By` 금지(대소문자 무관, `--trailer` 포함).
 6. `.DS_Store` · `.env`(`.env.example` 제외) · `*.pem|p8|p12|key` · `credentials*.json` 등 스테이징 금지.
 7. 검증 게이트: 코드 변경이 있는데 `verify.json`의 통과 지문과 작업 트리 지문이 다르면 막는다.
+8. 게이트 우회 금지: `git commit`에 훅을 건너뛰는 옵션(긴 이름 · 축약 · `-n` · `-an` 같은 묶음, `bash -c` 안 포함)을 쓰거나 `core.hooksPath`를 바꾸는(`config` · `--unset` · `git -c core.hooksPath=…` · `GIT_CONFIG_KEY_n`/`GIT_CONFIG_PARAMETERS` 환경 변수) 명령을 막는다. 조회와 `.githooks`로 켜는 명령은 통과한다.
 
-- 저장소에 husky · lint-staged가 없고 `.git/hooks`는 git-lfs 훅뿐이라 합칠 기존 커밋 검사는 없다. 린트 · 타입 · 테스트는 CI(`backend-ci.yml`)와 같은 명령을 verify가 돌린다.
+- 저장소에 husky · lint-staged가 없다. 린트 · 타입 · 테스트는 CI(`backend-ci.yml`)와 같은 명령을 verify가 돌린다.
+
+### git pre-commit 게이트 (`.githooks/pre-commit`)
+
+Claude 훅은 `git commit` 명령만 보므로, 사람이 직접 커밋하거나 같은 명령 안에서 고친 뒤 `commit -a`하는 경우는 git 훅이 잡는다. `verify`가 실행될 때 `core.hooksPath`를 `.githooks`로 켠다. `core.hooksPath`를 켜면 `.git/hooks`의 git-lfs 훅은 쓰이지 않는데, 이 저장소는 LFS로 추적하는 파일이 없다.
+
+- `pre_commit_gate.py`는 먼저 `.DS_Store` · `.env` · 키 · 자격 증명 파일이 추가 · 수정으로 스테이징됐으면 막는다(6번과 같은 규칙, 지우는 변경은 통과). 이어서 커밋될 index의 코드 파일을 `verify.json`의 `code`(통과 시점 파일별 `모드 blob`)와 대조한다. 하나라도 다르면 막는다. 지운 파일은 verify 때도 지워져 있어야 한다. 통과 기록이 없거나 `code`가 없는 옛 기록이면 코드 커밋을 막는다. 문서(`.md`)만 담은 커밋은 보지 않는다.
+- 검증 뒤 작업 트리만 더 고치고 스테이징하지 않았다면, index가 검증 내용과 같으므로 커밋된다.
 - 개인 전역 gitignore가 `.claude/`를 무시하면 하네스 파일은 `git add -f`로 올린다.
 
 ```bash
@@ -52,7 +60,8 @@ python3 -m unittest discover -s .claude/hooks/tests < /dev/null
 
 | 바뀐 경로 | 단계 | 명령 |
 | --- | --- | --- |
-| `.claude/hooks` · `scripts` · `settings.json` | harness-syntax · harness-tests | `bash -n` · JSON 파싱 · `unittest` |
+| `.claude/hooks` · `scripts` · `settings.json` · `.githooks` | harness-syntax · harness-tests | `bash -n`(훅 셸 · `.githooks`) · JSON 파싱 · `unittest` |
+| 코드 변경 전체(`.github/workflows/` 포함) | security | `.claude/scripts/check-security` |
 | `src/` | boundaries | `check-boundaries --base <develop 분기점>`(바뀐 파일만) |
 | `src/database/migrations/` · `*.entity.ts` | migrations | 이름 · 타임스탬프 순서 검사 + 자동 적용 경고 |
 | `*.ts`(src · test) | lint · typecheck | `npx eslint <바뀐 파일>` · `npx tsc --noEmit --incremental false` |
@@ -65,7 +74,19 @@ python3 -m unittest discover -s .claude/hooks/tests < /dev/null
 - e2e와 `*.postgres.spec.ts`는 Postgres가 필요하다(`DB_HOST`=localhost · `DB_PORT`=5432 · `DB_USERNAME`/`DB_PASSWORD`=postgres · `DB_NAME`=festicore, `LIVE_ACTIVITY_PG_URL`). 없으면 CI가 맡는다.
 - 엔티티와 마이그레이션의 동기 여부는 DB 없이 알 수 없다. 로컬 Postgres에서 `npm run migration:run` 뒤 `npm run typeorm -- migration:generate src/database/migrations/Check --dryrun --check`로 본다.
 - 모든 명령은 stdin `/dev/null`로 돌리고 출력은 `.claude/state/verify/<단계>.log`에 남긴다. 종료 코드를 파이프로 가리지 않는다.
-- 통과하면 코드 내용 지문을 `verify.json`에 남긴다. 통과 후 코드를 고치면 다시 돌린다. 같은 단계가 연속 2번 실패하면 세 번째 전에 사용자에게 보고한다.
+- 통과하면 코드 내용 지문과 코드 파일별 내용(`code`)을 `verify.json`에 남긴다. 통과 후 코드를 고치면 다시 돌린다. 같은 단계가 연속 2번 실패하면 세 번째 전에 사용자에게 보고한다.
+
+### 보안 검사 (`check-security`)
+
+추적 파일과 아직 추적하지 않은 파일(.gitignore 제외)을 모두 본다. 하나라도 걸리면 실패한다.
+
+| 검사 | 대상 | 막는 것 |
+| --- | --- | --- |
+| 비밀 값 | 바이너리를 뺀 모든 파일 | 개인 키, GitHub · Slack · Atlassian · AWS · Google 키, Slack 웹훅, Sentry DSN |
+| 워크플로 셸 주입 | `.github/workflows/*.yml` | `run`에 외부에서 정할 수 있는 값(`github.head_ref`, 이슈 · PR · 댓글 · 리뷰 · 토론의 제목 · 본문, 브랜치 이름 · 라벨, 커밋 메시지 · 작성자)을 `${{ }}`로 바로 넣는 것. env로 받아 `"$VAR"`로 쓴다 |
+
+- 규칙을 더하려면 스크립트의 `FORBIDDEN` · `SECRET_PATTERNS`에 한 줄을 더하고 이 표에 같은 규칙을 적는다.
+- CIRQLE-Native-Mobile의 `check-security`에서 범용 검사만 가져왔다(FestiCore iOS #619와 같다).
 
 ### 계층 경계 (`check-boundaries`)
 

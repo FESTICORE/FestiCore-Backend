@@ -31,6 +31,7 @@ const NOTIFICATION_SETTING_COLUMNS = {
   setReminders: 'notifySetReminders',
   homecoming: 'notifyHomecoming',
   packUpdates: 'notifyPackUpdates',
+  officialNews: 'notifyOfficialNews',
 } as const;
 
 export type NotificationSettings = Record<
@@ -66,16 +67,34 @@ export class DeviceService {
     } catch {
       throw new BadRequestException('지원하지 않는 timezone입니다.');
     }
+    const platform = body.platform ?? 'ios';
+    // Android는 APNs 열을 비우고 fcmToken만 쓴다. iOS는 fcmToken을 건드리지 않는다.
+    const pushValues =
+      platform === 'android'
+        ? {
+            apnsToken: null,
+            apnsEnvironment: null,
+            liveActivityPushToStartToken: null,
+            fcmToken: body.fcmToken ?? null,
+          }
+        : {
+            ...(body.apnsToken !== undefined
+              ? { apnsToken: body.apnsToken }
+              : {}),
+            ...(body.liveActivityPushToStartToken !== undefined
+              ? {
+                  liveActivityPushToStartToken:
+                    body.liveActivityPushToStartToken,
+                }
+              : {}),
+            apnsEnvironment: body.apnsEnvironment,
+          };
     const values = {
-      ...(body.apnsToken !== undefined ? { apnsToken: body.apnsToken } : {}),
-      ...(body.liveActivityPushToStartToken !== undefined
-        ? { liveActivityPushToStartToken: body.liveActivityPushToStartToken }
-        : {}),
+      ...pushValues,
       appVersion: body.appVersion,
       osVersion: body.osVersion,
       locale: body.locale,
       timezone: body.timezone,
-      apnsEnvironment: body.apnsEnvironment,
     };
     const device = await this.devices.findOne({ where: { id } });
     const userId = principal.kind === 'user' ? principal.userId : null;
@@ -87,6 +106,7 @@ export class DeviceService {
           id,
           userId,
           deviceTokenId,
+          platform,
           apnsToken: body.apnsToken ?? null,
           liveActivityPushToStartToken:
             body.liveActivityPushToStartToken ?? null,
@@ -101,7 +121,11 @@ export class DeviceService {
     } else {
       if (principal.kind === 'anonymous')
         throw new ForbiddenException('이미 등록된 기기입니다.');
-      await this.ownedDevice(id, principal);
+      const owned = await this.ownedDevice(id, principal);
+      if ((owned.platform ?? 'ios') !== platform)
+        throw new ForbiddenException(
+          '다른 플랫폼으로 등록된 기기입니다. 새 기기 ID로 등록하세요.',
+        );
       deviceTokenId = principal.kind === 'device' ? principal.tokenId : null;
       const update = await this.devices.update(
         this.ownerCondition(id, principal),
@@ -154,6 +178,7 @@ export class DeviceService {
     return {
       deviceId: device.id,
       userId: device.userId,
+      platform: device.platform,
       appVersion: device.appVersion,
       osVersion: device.osVersion,
       locale: device.locale,
@@ -226,6 +251,7 @@ export class DeviceService {
         { id, deviceTokenId: unbindKey },
         {
           apnsToken: null,
+          fcmToken: null,
           liveActivityPushToStartToken: null,
           liveActivityPushToken: null,
           liveActivityFestivalId: null,
@@ -281,6 +307,7 @@ export class DeviceService {
         { id, deviceTokenId: unbindKey },
         {
           apnsToken: null,
+          fcmToken: null,
           liveActivityPushToStartToken: null,
           liveActivityPushToken: null,
           liveActivityFestivalId: null,

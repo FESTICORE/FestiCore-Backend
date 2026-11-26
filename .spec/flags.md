@@ -18,6 +18,7 @@
 | POST | `/api/v1/flags/:flagId/report` | 앱 JWT | 신고 사유·메모, 202 |
 | GET | `/api/v1/flags/:flagId/bearer` | 기수 | 기수 전용 상태, `no-store` |
 | PATCH | `/api/v1/flags/:flagId` | 기수 | 프로필 수정 |
+| POST | `/api/v1/flags/:flagId/festival-transfer` | 원래 기수·약관 | `Idempotency-Key` 필수, 기존 깃발을 다른 발행 축제로 이동, 200 |
 | POST | `/api/v1/flags/:flagId/status` | 기수 | `Idempotency-Key` 필수, 현장 상태 변경 |
 | POST | `/api/v1/flags/:flagId/photo` | 기수 | multipart `photo`(JPEG/PNG/HEIC/HEIF, 최대 5MB), WebP 변환·저장 |
 | POST | `/api/v1/flags/:flagId/co-bearers/invite` | 소유 기수 | 공동 기수 초대 |
@@ -28,6 +29,7 @@
 | GET | `/api/v1/me/pinned-flag` | 앱 JWT | 내 대표 깃발 ID와 상세, 없으면 200 `null`, `no-store` |
 | PUT | `/api/v1/me/pinned-flag` | 앱 JWT | 내 대표 깃발 지정 |
 | GET | `/api/v1/me/bearer-flags` | 앱 JWT | 내가 기수인 깃발 목록, 선택 `festivalId`, `no-store` |
+| PUT | `/api/v1/me/bearer-mode` | 앱 JWT·약관 | `{ "enabled": boolean }`, 계정 기수 모드 켜기·끄기, `{ bearerMode }` |
 
 ### 내 대표 깃발 조회
 
@@ -39,8 +41,43 @@
 
 ### 내 기수 깃발 목록
 
-- `items[]`는 `flagId`, `festivalId`, `isOwner`, `joinedAt`, `flag`(기수 시점 프로필, 비공개 계획 포함), `status`, `hidden`이다.
-- 발행된 축제의 깃발만 최근 기수 등록순으로 준다. 숨김 깃발은 `hidden: true`로 포함한다.
+- `items[]`는 `flagId`, `festivalId`, `isOwner`, `joinedAt`, `flag`(기수 시점 프로필, 비공개 계획 포함), `status`, `hidden`,
+  `ownerPaused`다.
+- 발행된 축제의 깃발만 최근 기수 등록순으로 준다. 숨김 깃발은 `hidden: true`로, 소유자가 기수 모드를 끈 깃발은
+  `ownerPaused: true`로 포함한다.
+
+### 기수 모드
+
+- 계정 단위다. `users."bearerModeOff"`가 true면 관객이고, 그 사용자가 소유(`ownerId`)한 깃발은 모두
+  `flags."ownerPaused"`=true다. `ownerPaused`는 항상 현재 소유자의 `bearerModeOff`와 같다. 관리자 숨김(`hidden`)과
+  따로 두어 다시 켜도 관리자 숨김은 풀리지 않는다. `GET /me`의 `bearerMode`는 `!bearerModeOff`다.
+- `PUT /me/bearer-mode`는 본문 `enabled`(boolean)만 받는다. 빠지거나 boolean이 아니거나 다른 필드가 있으면 400이다.
+  한 트랜잭션에서 `bearerModeOff`와 내 소유 깃발의 `ownerPaused`를 바꾸고, 값이 바뀐 깃발의 축제마다 관리자 숨김과
+  같이 Live Activity 갱신을 예약하고 공개 깃발 팩을 갱신한다. 공동 기수로만 있는 남의 깃발은 바꾸지 않는다.
+- `ownerPaused` 깃발은 깃발 목록(`GET /festivals/:id/flags`)·발행 팩(지도)·라이브 보드·Live Activity·팔로워 상태
+  알림에서 빠진다. 상세(`GET /flags/:flagId`), 사진·썸네일, 팔로우·해제, 대표 깃발 조회는 그대로 된다.
+- 상세와 대표 깃발 조회는 프로필을 그대로 주되, 기수가 아닌 조회자에게 `status`를 현장 정보 없는 예정 상태로 가린다:
+  `{ flagId, status: 'scheduled', zoneId: null, activity: null, updatedAt: <깃발 생성 시각> }`. 기수 본인(`isBearer`)·
+  기수 상세(`GET /flags/:flagId/bearer`)·`GET /me/bearer-flags`는 가리지 않는다.
+- 꺼진 동안 그 깃발의 기수 쓰기(상태 변경, 프로필 수정, 사진 업로드, 공동 기수 초대·해제)는 소유자와 공동 기수 모두
+  409 `BEARER_MODE_OFF`다. 관리자 강제 상태 변경과 숨김은 막지 않으며 `ownerPaused`를 바꾸지 않는다.
+- `POST /bearer/register`와 `POST /bearer/claim`(새로 기수가 될 때)은 같은 트랜잭션에서 기수 모드를 켜고 내 소유 깃발을
+  모두 `ownerPaused`=false로 되돌린다.
+- 탈퇴로 소유권이 공동 기수에게 넘어가면 새 소유자의 `bearerModeOff`로 맞춘다. 후임 없이 숨기는 깃발은 false로 둔다.
+
+### 깃발 축제 이동
+
+- 11/26 결정. 본문은 `{ fromFestivalId, toFestivalId }`만 받는다. 누락·다른 필드·같은 축제는 400 `VALIDATION`이다.
+  `PATCH /flags/:flagId`는 계속 `festivalId`를 400으로 거절한다.
+- 원래 기수(`ownerId`)만 옮긴다. 기수 아님 403 `FLAG_NOT_BEARER`, 공동 기수 403 `FLAG_NOT_OWNER`다.
+- 깃발 없음·현재 축제 미발행·대상 축제 미발행 404 `NOT_FOUND`. 409는 `FESTIVAL_MISMATCH`(현재 축제≠`fromFestivalId`),
+  `FLAG_HAS_CO_BEARERS`(공동 기수가 있음), `BEARER_LIMIT`(대상 축제에서 이미 기수), `FLAG_NAME_TAKEN`(대상 축제에 같은 이름),
+  `BEARER_MODE_OFF`, `IDEMPOTENCY_CONFLICT`다. 동시 요청은 고유 인덱스 위반을 같은 코드로 바꾼다.
+- 한 트랜잭션에서 `flags`·`flag_bearers`·`flag_follows`·미사용 `flag_bearer_codes`의 `festivalId`를 바꾼다.
+  flagId·이름·소개·태그·사진·팔로워·대표 깃발은 유지한다. 이전 축제에 묶인 `plan`=[]·`homeZoneId`=null로,
+  현장 상태는 `scheduled`(존·활동·갱신 시각·갱신자 null)로 초기화한다. 이전·새 축제 팩과 라이브를 함께 갱신한다.
+- 응답 `{ flagId, previousFestivalId, festivalId, flag }`. `flag`는 기수 시점 프로필(`PATCH` 응답과 같은 형식)이다.
+  같은 멱등키의 같은 요청은 저장된 응답을 재생한다. 새 컬럼·마이그레이션은 없다.
 
 ### 코드 없는 기수 등록
 

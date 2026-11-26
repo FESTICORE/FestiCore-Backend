@@ -17,8 +17,16 @@ export class Device {
   @Column({ type: 'uuid', nullable: true })
   deviceTokenId!: string | null;
 
+  /** 기존 행과 platform을 생략한 iOS 요청은 ios다. 등록 뒤 바꾸지 않는다. */
+  @Column({ type: 'varchar', length: 10, default: 'ios' })
+  platform!: 'ios' | 'android';
+
   @Column({ type: 'varchar', length: 256, nullable: true, select: false })
   apnsToken!: string | null;
+
+  /** Android FCM 등록 토큰. iOS 행은 늘 NULL이다(CHK_devices_push_token_platform). */
+  @Column({ type: 'varchar', length: 4096, nullable: true, select: false })
+  fcmToken!: string | null;
 
   @Column({ type: 'varchar', length: 10, nullable: true })
   apnsEnvironment!: 'sandbox' | 'production' | null;
@@ -68,6 +76,10 @@ export class Device {
 
   @Column({ type: 'boolean', default: true })
   notifyPackUpdates!: boolean;
+
+  /** 축제 공식 인스타그램 새 게시물 알림 */
+  @Column({ type: 'boolean', default: true })
+  notifyOfficialNews!: boolean;
 
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt!: Date;

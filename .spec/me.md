@@ -6,11 +6,15 @@ refresh 토큰은 사용할 수 없다. 관리자도 동일한 Bearer access JWT
 | 메서드 | 경로 | 요청 본문 | 성공 |
 | --- | --- | --- | --- |
 | GET | `/me` | 없음 | 200, 현재 사용자 정보 |
+| PUT | `/me/bearer-mode` | `{ "enabled": false }` | 200, `{ "bearerMode": false }` |
 | PATCH | `/me` | `{ "nickname": "축제관객", "acceptTerms": { "version": "2026-10" }, "pushOptIn": true }` (각 필드 선택, 닉네임 1~12자) | 200, 변경된 사용자 정보 |
 | DELETE | `/me` | 없음 | 204, 본문 없음 |
 
 `GET /me`는 내 정보 확인, `PATCH /me`는 닉네임 변경, `DELETE /me`는 계정 탈퇴에 사용한다.
 깃발 핀 변경은 별도 경로 `PUT /me/pinned-flag`에서 처리한다.
+`GET /me`는 계정 기수 모드 `bearerMode`(boolean, 기본 true)를 포함한다. `PUT /me/bearer-mode`로 켜고 끄며, 끄면 내가 소유한
+깃발이 목록·지도·라이브에서 빠지고 프로필과 팔로워는 남는다. 본문은 `enabled` 하나만 받고 다른 형식은 400이다.
+자세한 규칙은 `.spec/flags.md`의 기수 모드 절을 따른다.
 PATCH 본문 형식이 틀리면 400, 현재 약관 버전과 다르면 422 `TERMS_VERSION_OUTDATED`, 유효한 앱 access 토큰이 없으면 401이다. 현재 약관 버전은 `2026-10`이다. 두 필수 약관 동의 시 서버가 `termsAcceptedAt`과 `termsVersion`을 기록한다. 닉네임과 약관 동의를 완료하면 `nicknameConfirmed=true`가 된다. `pushOptIn`은 선택 알림 동의이며 기본값은 false다. GET/PATCH 응답에 이 네 필드를 포함한다.
 
 ## 탈퇴 처리
@@ -21,7 +25,7 @@ Apple 철회가 실패하면 암호화된 재시도 작업을 계정 삭제와 �
 access 토큰은 다음 요청부터 401이다.
 
 소유 크루는 가장 오래된 멤버에게 이전하고 혼자라면 삭제한다. 깃발은 첫 공동 기수에게
-이전하며 공동 기수가 없으면 숨기고 관리자 알림을 저장한다. 팔로우 수와 공개 팩을
+이전하며(기수 모드 끔 여부 `ownerPaused`는 새 소유자 값을 따른다) 공동 기수가 없으면 숨기고 관리자 알림을 저장한다. 팔로우 수와 공개 팩을
 신고 수와 함께 같은 트랜잭션에서 갱신한다. 기존의 깃발 숨김 상태는 유지한다.
 상태 이력의 사용자 ID, 깃발의 마지막 상태 변경자(`statusUpdatedBy`), 사용한 기수 코드의 사용자 ID를
 지운다. 실패한 트랜잭션은 계정 삭제를 롤백한다.

@@ -1,6 +1,7 @@
 import { SocialNotificationService } from './social-notification.service';
 
 jest.mock('./apns.service', () => ({ ApnsService: class {} }));
+jest.mock('./fcm.service', () => ({ FcmService: class {} }));
 
 describe('SocialNotificationService', () => {
   const crewId = 'crew_123';
@@ -32,11 +33,35 @@ describe('SocialNotificationService', () => {
     const sendSocialNotification = jest
       .fn()
       .mockResolvedValue({ accepted: true, permanent: false });
+    // 가짜 PushService: iOS는 기존 APNs 목에 (토큰, 환경, 입력)으로, Android는 fcmSend에 (FCM 토큰, 입력)으로 넘긴다.
+    const fcmSend = jest
+      .fn()
+      .mockResolvedValue({ accepted: true, permanent: false });
+    const isConfigured = jest.fn().mockReturnValue(true);
+    const push = {
+      isConfigured,
+      sendSocialNotification: (
+        target: {
+          platform?: string;
+          apnsToken?: string | null;
+          apnsEnvironment?: string | null;
+          fcmToken?: string | null;
+        },
+        input: unknown,
+      ): unknown =>
+        target.platform === 'android'
+          ? fcmSend(target.fcmToken, input)
+          : sendSocialNotification(
+              target.apnsToken,
+              target.apnsEnvironment,
+              input,
+            ),
+    };
     const service = new SocialNotificationService(
       { query } as never,
-      { sendSocialNotification, isConfigured: () => true } as never,
+      push as never,
     );
-    return { service, query, sendSocialNotification };
+    return { service, query, sendSocialNotification, fcmSend, isConfigured };
   }
 
   it('enqueues status in the caller transaction with opt-in, per-device merge, and a fixed first-event delay', async () => {
@@ -274,11 +299,12 @@ describe('SocialNotificationService', () => {
       expect(inboxCall(query)).toBeUndefined();
     });
 
-    it('does not record hidden or resting flags', async () => {
+    it('does not record hidden, owner-paused or resting flags', async () => {
       const { service } = setup();
       const query = jest.fn().mockResolvedValue([{ userId: followerId }]);
       for (const flag of [
         { hidden: true, status: 'active' },
+        { hidden: false, ownerPaused: true, status: 'active' },
         { hidden: false, status: 'resting' },
       ])
         await service.enqueueFlagStatus(
@@ -462,5 +488,176 @@ describe('SocialNotificationService', () => {
       'failed',
       'APNS_ERROR',
     ]);
+  });
+
+  describe('Android(FCM) 대상', () => {
+    const androidTarget = {
+      platform: 'android',
+      apnsToken: null,
+      apnsEnvironment: null,
+      fcmToken: 'fcm-token',
+    };
+    const at = new Date('2026-11-20T03:00:00Z');
+
+    it('예약 SQL 세 곳과 발송 확인 SQL이 iOS APNs 기기와 Android FCM 기기를 함께 고른다', async () => {
+      const { service } = setup();
+      const query = jest
+        .fn<Promise<unknown>, [string, unknown[]?]>()
+        .mockResolvedValue([]);
+      await service.enqueueFlagStatus(
+        { query } as never,
+        {
+          id: 'flag_123',
+          visibility: 'public',
+          hidden: false,
+          status: 'active',
+          zoneId: 'zone_123',
+          activity: 'sing',
+        } as never,
+        actorUserId,
+      );
+      query.mockResolvedValueOnce([{ nickname: '요청자' }]);
+      await service.enqueueCrewGather(
+        { query } as never,
+        { id: crewId, archivedAt: null } as never,
+        actorUserId,
+        { id: 'gather_123', zoneId: 'zone_123' } as never,
+      );
+      await service.enqueueCrewDissolved(
+        { query } as never,
+        { id: crewId } as never,
+        actorUserId,
+      );
+      const inserts = query.mock.calls
+        .map(([sql]) => sql)
+        .filter((sql) =>
+          sql.includes('INSERT INTO "social_notification_deliveries"'),
+        );
+      expect(inserts.length).toBeGreaterThanOrEqual(3);
+      for (const sql of inserts) {
+        expect(sql).toContain(
+          `d."platform" = 'android' AND d."fcmToken" IS NOT NULL`,
+        );
+        expect(sql).toContain(
+          `d."platform" = 'ios' AND d."apnsToken" IS NOT NULL`,
+        );
+      }
+
+      const { service: sender, query: deliverQuery } = setup();
+      await sender.deliver(job, at);
+      expect(deliverQuery.mock.calls[0][0]).toContain(
+        'd."platform", d."apnsToken", d."apnsEnvironment", d."fcmToken"',
+      );
+      expect(deliverQuery.mock.calls[0][0]).toContain(
+        `d."platform" = 'android' AND d."fcmToken" IS NOT NULL`,
+      );
+    });
+
+    it('Android만: FCM으로 보내고 APNs는 부르지 않는다', async () => {
+      const { service, query, sendSocialNotification, fcmSend } = setup();
+      query.mockResolvedValueOnce([androidTarget]);
+      await service.deliver(job, at);
+      expect(fcmSend).toHaveBeenCalledWith('fcm-token', {
+        type: job.type,
+        payload: job.payload,
+        eventKey: job.eventKey,
+      });
+      expect(sendSocialNotification).not.toHaveBeenCalled();
+      expect(query.mock.calls[1][1]).toEqual([
+        job.id,
+        leaseUntil,
+        'sent',
+        null,
+      ]);
+    });
+
+    it('혼합: iOS 작업은 APNs, Android 작업은 FCM으로 간다', async () => {
+      const { service, query, sendSocialNotification, fcmSend } = setup();
+      query
+        .mockResolvedValueOnce([
+          {
+            platform: 'ios',
+            apnsToken: 'aabb',
+            apnsEnvironment: 'sandbox',
+            fcmToken: null,
+          },
+        ])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([androidTarget]);
+      await service.deliver(job, at);
+      await service.deliver(job, at);
+      expect(sendSocialNotification).toHaveBeenCalledTimes(1);
+      expect(sendSocialNotification).toHaveBeenCalledWith(
+        'aabb',
+        'sandbox',
+        expect.objectContaining({ type: job.type }),
+      );
+      expect(fcmSend).toHaveBeenCalledTimes(1);
+    });
+
+    it('FCM 무효 토큰(permanent)은 그 fcmToken만 지우고 APNs 열은 건드리지 않는다', async () => {
+      const { service, query, fcmSend } = setup();
+      query.mockResolvedValueOnce([androidTarget]);
+      fcmSend.mockResolvedValueOnce({
+        accepted: false,
+        permanent: true,
+        reason: 'FCM_UNREGISTERED',
+      });
+      await service.deliver(job, at);
+      expect(query.mock.calls[1][0]).toContain('"fcmToken" = NULL');
+      expect(query.mock.calls[1][0]).toContain('"fcmToken" = $2');
+      expect(query.mock.calls[1][0]).not.toContain('"apnsToken"');
+      expect(query.mock.calls[1][1]).toEqual([job.deviceId, 'fcm-token']);
+      expect(query.mock.calls[2][1]).toEqual([
+        job.id,
+        leaseUntil,
+        'failed',
+        'FCM_UNREGISTERED',
+      ]);
+    });
+
+    it.each(['FCM_NOT_CONFIGURED', 'FCM_CONFIGURATION_ERROR'])(
+      '%s는 토큰을 지우지 않고 시도 횟수 없이 15분 뒤 다시 본다',
+      async (reason) => {
+        const { service, query, fcmSend } = setup();
+        query.mockResolvedValueOnce([androidTarget]);
+        fcmSend.mockResolvedValueOnce({
+          accepted: false,
+          permanent: false,
+          reason,
+        });
+        await service.deliver({ ...job, attempts: 5 }, at);
+        expect(query).toHaveBeenCalledTimes(2);
+        expect(query.mock.calls[1][0]).toContain("interval '15 minutes'");
+        expect(query.mock.calls[1][0]).not.toContain('"attempts"');
+        expect(query.mock.calls[1][1]).toEqual([job.id, leaseUntil, reason]);
+      },
+    );
+
+    it.each([
+      'FCM_HTTP_503',
+      'FCM_QUOTA_EXCEEDED',
+      'FCM_NETWORK_ERROR',
+      'FCM_INVALID_ARGUMENT',
+    ])('%s는 토큰을 유지하고 제한된 횟수로 재시도한다', async (reason) => {
+      const { service, query, fcmSend } = setup();
+      query.mockResolvedValueOnce([androidTarget]);
+      fcmSend.mockResolvedValueOnce({
+        accepted: false,
+        permanent: false,
+        reason,
+      });
+      await service.deliver(job, at);
+      expect(query).toHaveBeenCalledTimes(2);
+      expect(query.mock.calls[1][0]).toContain('"attempts" = "attempts" + 1');
+      expect(query.mock.calls[1][1]).toEqual([job.id, leaseUntil, 2, reason]);
+    });
+
+    it('APNs · FCM 둘 다 없으면 작업을 선점하지 않는다', async () => {
+      const { service, query, isConfigured } = setup();
+      isConfigured.mockReturnValue(false);
+      await service.tick();
+      expect(query).not.toHaveBeenCalled();
+    });
   });
 });

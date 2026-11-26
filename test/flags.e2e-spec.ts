@@ -1,4 +1,8 @@
-import { ForbiddenException, INestApplication } from '@nestjs/common';
+import {
+  ForbiddenException,
+  INestApplication,
+  ValidationPipe,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { JwtModule, JwtService } from '@nestjs/jwt';
@@ -39,6 +43,10 @@ describe('Flags HTTP authorization (e2e)', () => {
     pinnedFlag: jest.fn().mockResolvedValue({ pinnedFlagId: null, flag: null }),
     myBearerFlags: jest.fn().mockResolvedValue({ items: [] }),
     register: jest.fn().mockResolvedValue({ flagId: 'flag-2', isNew: true }),
+    setBearerMode: jest.fn().mockResolvedValue({ bearerMode: false }),
+    transferFestival: jest
+      .fn()
+      .mockResolvedValue({ flagId: 'flag-1', festivalId: 'fst-2' }),
   };
   const adminAuth = {
     findActiveByUserId: jest
@@ -96,6 +104,13 @@ describe('Flags HTTP authorization (e2e)', () => {
     jwt = moduleRef.get(JwtService);
     app = moduleRef.createNestApplication();
     app.setGlobalPrefix('api/v1');
+    app.useGlobalPipes(
+      new ValidationPipe({
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
+      }),
+    );
     await app.listen(0);
     server = app.getHttpServer() as App;
   });
@@ -336,5 +351,76 @@ describe('Flags HTTP authorization (e2e)', () => {
       isNew: true,
     });
     expect(service.register).toHaveBeenCalledWith('user-1', 'register-1', body);
+  });
+
+  it('깃발 축제 이동은 인증·약관 동의·멱등키가 필요하고 200으로 응답한다', async () => {
+    const body = { fromFestivalId: 'fst-1', toFestivalId: 'fst-2' };
+    await request(server)
+      .post('/api/v1/flags/flag-1/festival-transfer')
+      .set('Idempotency-Key', 'transfer-1')
+      .send(body)
+      .expect(401);
+    const token = await accessToken();
+    acceptedTerms = false;
+    const denied = await request(server)
+      .post('/api/v1/flags/flag-1/festival-transfer')
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', 'transfer-1')
+      .send(body)
+      .expect(403);
+    expect((denied.body as { code: string }).code).toBe('TERMS_REQUIRED');
+    acceptedTerms = true;
+    const missingKey = await request(server)
+      .post('/api/v1/flags/flag-1/festival-transfer')
+      .set('Authorization', `Bearer ${token}`)
+      .send(body)
+      .expect(400);
+    expect((missingKey.body as { code: string }).code).toBe('VALIDATION');
+    expect(service.transferFestival).not.toHaveBeenCalled();
+    const response = await request(server)
+      .post('/api/v1/flags/flag-1/festival-transfer')
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', 'transfer-1')
+      .send(body)
+      .expect(200);
+    expect((response.body as { data: unknown }).data).toEqual({
+      flagId: 'flag-1',
+      festivalId: 'fst-2',
+    });
+    expect(service.transferFestival).toHaveBeenCalledWith(
+      'flag-1',
+      'user-1',
+      'transfer-1',
+      body,
+    );
+  });
+
+  it('기수 모드 변경은 enabled boolean 하나만 받고 다른 필드·빈 본문은 400이다', async () => {
+    const token = await accessToken();
+    await request(server)
+      .put('/api/v1/me/bearer-mode')
+      .send({ enabled: false })
+      .expect(401);
+    for (const body of [
+      {},
+      { enabled: 'false' },
+      { enabled: null },
+      { enabled: false, flagId: 'flag-1' },
+    ])
+      await request(server)
+        .put('/api/v1/me/bearer-mode')
+        .set('Authorization', `Bearer ${token}`)
+        .send(body)
+        .expect(400);
+    expect(service.setBearerMode).not.toHaveBeenCalled();
+    const response = await request(server)
+      .put('/api/v1/me/bearer-mode')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ enabled: false })
+      .expect(200);
+    expect((response.body as { data: unknown }).data).toEqual({
+      bearerMode: false,
+    });
+    expect(service.setBearerMode).toHaveBeenCalledWith('user-1', false);
   });
 });
