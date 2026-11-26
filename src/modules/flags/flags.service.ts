@@ -64,6 +64,26 @@ function newCode(): string {
     (byte) => codeAlphabet[byte % codeAlphabet.length],
   ).join('');
 }
+/** 동시 요청이 사전 확인을 함께 통과하면 고유 인덱스가 막는다. 그 오류를 기존 409 코드로 바꾼다. */
+function uniqueConflict(cause: unknown): unknown {
+  if (cause instanceof HttpException) return cause;
+  const constraint =
+    (cause as { code?: string; constraint?: string }).code === '23505'
+      ? (cause as { constraint?: string }).constraint
+      : undefined;
+  if (constraint === 'IDX_flags_festival_name')
+    return new ConflictException({
+      code: 'FLAG_NAME_TAKEN',
+      message: '이미 사용 중인 깃발 이름입니다.',
+    });
+  if (constraint === 'IDX_flag_bearers_user_festival')
+    return new ConflictException({
+      code: 'BEARER_LIMIT',
+      message: '페스티벌당 한 깃발만 맡을 수 있습니다.',
+    });
+  return cause;
+}
+
 function fail(
   code: string,
   status: number,
@@ -961,23 +981,166 @@ export class FlagsService {
       if (changed.length) await this.packSync.invalidatePacks(changed);
       return response;
     } catch (cause) {
-      // 동시 요청이 사전 확인을 함께 통과하면 고유 인덱스가 막는다.
-      if (cause instanceof HttpException) throw cause;
-      const constraint =
-        (cause as { code?: string; constraint?: string }).code === '23505'
-          ? (cause as { constraint?: string }).constraint
-          : undefined;
-      if (constraint === 'IDX_flags_festival_name')
-        throw new ConflictException({
-          code: 'FLAG_NAME_TAKEN',
-          message: '이미 사용 중인 깃발 이름입니다.',
-        });
-      if (constraint === 'IDX_flag_bearers_user_festival')
-        throw new ConflictException({
-          code: 'BEARER_LIMIT',
-          message: '페스티벌당 한 깃발만 맡을 수 있습니다.',
-        });
-      throw cause;
+      throw uniqueConflict(cause);
+    }
+  }
+
+  /**
+   * 원래 기수가 깃발을 다른 발행 축제로 옮긴다. flagId·이름·소개·태그·사진·팔로워는 유지하고,
+   * 이전 축제에 묶인 계획·홈 존·현장 상태는 초기화한다. 공동 기수가 있으면 거절한다.
+   */
+  async transferFestival(
+    id: string,
+    userId: string,
+    key: string,
+    input: unknown,
+  ) {
+    if (
+      !isRecord(input) ||
+      Object.keys(input).some(
+        (field) => field !== 'fromFestivalId' && field !== 'toFestivalId',
+      ) ||
+      typeof input.fromFestivalId !== 'string' ||
+      typeof input.toFestivalId !== 'string' ||
+      !input.fromFestivalId ||
+      !input.toFestivalId
+    )
+      throw new BadRequestException({
+        code: 'VALIDATION',
+        message: 'fromFestivalId와 toFestivalId만 문자열로 보내야 합니다.',
+      });
+    const { fromFestivalId, toFestivalId } = input as {
+      fromFestivalId: string;
+      toFestivalId: string;
+    };
+    if (fromFestivalId === toFestivalId)
+      throw new BadRequestException({
+        code: 'VALIDATION',
+        message: '현재 축제와 다른 축제를 골라 주세요.',
+      });
+    const operation = `festival-transfer:${id}`;
+    try {
+      const { response, changed } = await this.db.transaction(
+        async (manager) => {
+          await this.lockActiveUser(manager, userId);
+          const prior = await this.replay(
+            manager,
+            userId,
+            key,
+            operation,
+            input,
+          );
+          if (prior) return { response: prior, changed: [] as string[] };
+          const flags = manager.getRepository(Flag);
+          const bearers = manager.getRepository(FlagBearer);
+          const festivals = manager.getRepository(AdminFestival);
+          const flag = await flags.findOne({
+            where: { id, visibility: 'public' },
+            lock: { mode: 'pessimistic_write' },
+          });
+          const source = flag
+            ? await festivals.findOne({ where: { id: flag.festivalId } })
+            : null;
+          if (!flag || !source?.published)
+            throw new NotFoundException({
+              code: 'NOT_FOUND',
+              message: '깃발을 찾을 수 없습니다.',
+            });
+          const flagBearers = await bearers.find({ where: { flagId: id } });
+          if (!flagBearers.some((bearer) => bearer.userId === userId))
+            throw new ForbiddenException({
+              code: 'FLAG_NOT_BEARER',
+              message: '기수 권한이 없습니다.',
+            });
+          if (flag.ownerId !== userId)
+            throw new ForbiddenException({
+              code: 'FLAG_NOT_OWNER',
+              message: '원래 기수만 축제를 옮길 수 있습니다.',
+            });
+          this.assertBearerModeOn(flag);
+          if (flag.festivalId !== fromFestivalId)
+            fail(
+              'FESTIVAL_MISMATCH',
+              409,
+              '깃발의 현재 축제가 요청과 다릅니다.',
+            );
+          if (flagBearers.length > 1)
+            fail(
+              'FLAG_HAS_CO_BEARERS',
+              409,
+              '공동 기수가 있는 깃발은 축제를 옮길 수 없습니다.',
+            );
+          const target = await festivals.findOne({
+            where: { id: toFestivalId },
+          });
+          if (!target?.published)
+            throw new NotFoundException({
+              code: 'NOT_FOUND',
+              message: '공개된 페스티벌이 없습니다.',
+            });
+          if (
+            await bearers.exists({
+              where: { userId, festivalId: toFestivalId },
+            })
+          )
+            throw new ConflictException({
+              code: 'BEARER_LIMIT',
+              message: '페스티벌당 한 깃발만 맡을 수 있습니다.',
+            });
+          if (
+            await flags.exists({
+              where: { festivalId: toFestivalId, name: flag.name },
+            })
+          )
+            throw new ConflictException({
+              code: 'FLAG_NAME_TAKEN',
+              message: '이미 사용 중인 깃발 이름입니다.',
+            });
+          await flags.update(
+            { id },
+            {
+              festivalId: toFestivalId,
+              plan: [],
+              homeZoneId: null,
+              status: 'scheduled',
+              zoneId: null,
+              activity: null,
+              statusUpdatedAt: null,
+              statusUpdatedBy: null,
+              statusClientAt: null,
+            },
+          );
+          await bearers.update({ flagId: id }, { festivalId: toFestivalId });
+          await manager
+            .getRepository(FlagFollow)
+            .update({ flagId: id }, { festivalId: toFestivalId });
+          const codes = manager.getRepository(FlagBearerCode);
+          const unused = (await codes.find({ where: { flagId: id } }))
+            .filter((code) => !code.usedBy)
+            .map((code) => code.codeHash);
+          if (unused.length)
+            await codes.update(
+              { codeHash: In(unused) },
+              { festivalId: toFestivalId },
+            );
+          const moved = await flags.findOne({ where: { id } });
+          const result = {
+            flagId: id,
+            previousFestivalId: fromFestivalId,
+            festivalId: toFestivalId,
+            flag: this.profile(moved as Flag, 'bearer'),
+          };
+          await this.remember(manager, userId, key, operation, input, result);
+          await this.liveActivity.enqueueFestival(fromFestivalId, manager);
+          await this.liveActivity.enqueueFestival(toFestivalId, manager);
+          const synced = await this.packSync.sync(id, manager, fromFestivalId);
+          return { response: result, changed: synced };
+        },
+      );
+      if (changed.length) await this.packSync.invalidatePacks(changed);
+      return response;
+    } catch (cause) {
+      throw uniqueConflict(cause);
     }
   }
 

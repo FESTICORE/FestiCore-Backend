@@ -71,13 +71,19 @@ export class FlagPackSyncService {
     private readonly cache: CacheService,
   ) {}
 
-  async sync(flagId: string, transaction?: EntityManager): Promise<string[]> {
-    return this.syncMany([flagId], transaction);
+  /** detachedFrom을 주면 축제를 옮긴 깃발을 이전 축제 팩에서도 뺀다. */
+  async sync(
+    flagId: string,
+    transaction?: EntityManager,
+    detachedFrom?: string,
+  ): Promise<string[]> {
+    return this.syncMany([flagId], transaction, detachedFrom);
   }
 
   async syncMany(
     flagIds: string[],
     transaction?: EntityManager,
+    detachedFrom?: string,
   ): Promise<string[]> {
     const apply = async (manager: EntityManager) => {
       const changedFestivalIds: string[] = [];
@@ -89,6 +95,12 @@ export class FlagPackSyncService {
         const group = byFestival.get(flag.festivalId) ?? [];
         group.push(flag);
         byFestival.set(flag.festivalId, group);
+        // 비공개로 넘기면 replaceProfile이 이전 축제 팩에서 이 깃발을 지운다.
+        if (detachedFrom && detachedFrom !== flag.festivalId)
+          byFestival.set(detachedFrom, [
+            ...(byFestival.get(detachedFrom) ?? []),
+            { ...flag, visibility: 'private' },
+          ]);
       }
       const festivals = manager.getRepository(AdminFestival);
       for (const [festivalId, changedFlags] of byFestival) {

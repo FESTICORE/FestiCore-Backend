@@ -156,6 +156,8 @@ describe('FlagsService 내 대표 깃발·기수 깃발·코드 없는 기수 �
         if (entity === FlagIdempotency) return idempotency;
         if (entity === AdminFestival) return festivals;
         if (entity === User) return users;
+        if (entity === FlagFollow) return follows;
+        if (entity === FlagBearerCode) return codes;
         throw new Error('Unexpected repository');
       },
     };
@@ -631,6 +633,237 @@ describe('FlagsService 내 대표 깃발·기수 깃발·코드 없는 기수 �
       await expect(
         service.register('user-1', 'key-1', body),
       ).rejects.toMatchObject({ status: 401 });
+    });
+  });
+  describe('transferFestival', () => {
+    const body = { fromFestivalId: 'fst_1', toFestivalId: 'fst_2' };
+    beforeEach(() => {
+      flags.rows.push(
+        flagRow({
+          ownerId: 'user-1',
+          status: 'active',
+          zoneId: 'zone_a',
+          activity: 'sing',
+          statusUpdatedAt: new Date('2026-11-20T00:00:00.000Z'),
+          statusUpdatedBy: 'user-1',
+          statusClientAt: new Date('2026-11-20T00:00:00.000Z'),
+        }),
+      );
+      bearers.rows.push({
+        id: 'b1',
+        flagId: 'flg_1',
+        festivalId: 'fst_1',
+        userId: 'user-1',
+        isOwner: true,
+      });
+      follows.rows.push({
+        id: 'f1',
+        userId: 'user-2',
+        flagId: 'flg_1',
+        festivalId: 'fst_1',
+      });
+      codes.rows.push(
+        { codeHash: 'c1', flagId: 'flg_1', festivalId: 'fst_1', usedBy: null },
+        {
+          codeHash: 'c2',
+          flagId: 'flg_1',
+          festivalId: 'fst_1',
+          usedBy: 'user-9',
+        },
+      );
+    });
+
+    it('같은 flagId로 축제를 옮기고 기수·팔로우·미사용 코드 축제를 함께 바꾸며 계획·존·현장 상태를 초기화한다', async () => {
+      const result = await service.transferFestival(
+        'flg_1',
+        'user-1',
+        'key-1',
+        body,
+      );
+      expect(result).toEqual({
+        flagId: 'flg_1',
+        previousFestivalId: 'fst_1',
+        festivalId: 'fst_2',
+        flag: expect.objectContaining({
+          id: 'flg_1',
+          name: '푸른 깃발',
+          plan: [],
+          homeZoneId: null,
+          followerCount: 3,
+        }) as unknown,
+      });
+      expect(flags.rows[0]).toMatchObject({
+        festivalId: 'fst_2',
+        plan: [],
+        homeZoneId: null,
+        status: 'scheduled',
+        zoneId: null,
+        activity: null,
+        statusUpdatedAt: null,
+        statusUpdatedBy: null,
+        statusClientAt: null,
+      });
+      expect(bearers.rows[0].festivalId).toBe('fst_2');
+      expect(follows.rows[0].festivalId).toBe('fst_2');
+      expect(codes.rows.map((row) => row.festivalId)).toEqual([
+        'fst_2',
+        'fst_1',
+      ]);
+      expect(sync).toHaveBeenCalledWith('flg_1', expect.anything(), 'fst_1');
+      expect(enqueueFestival).toHaveBeenCalledWith('fst_1', expect.anything());
+      expect(enqueueFestival).toHaveBeenCalledWith('fst_2', expect.anything());
+      expect(invalidatePacks).toHaveBeenCalledWith(['fst_1']);
+    });
+
+    it('같은 멱등키의 같은 요청은 저장된 응답을 재생하고 다른 요청은 409다', async () => {
+      const first = await service.transferFestival(
+        'flg_1',
+        'user-1',
+        'key-1',
+        body,
+      );
+      await expect(
+        service.transferFestival('flg_1', 'user-1', 'key-1', body),
+      ).resolves.toEqual(first);
+      await expect(
+        service.transferFestival('flg_1', 'user-1', 'key-1', {
+          fromFestivalId: 'fst_2',
+          toFestivalId: 'fst_1',
+        }),
+      ).rejects.toMatchObject({
+        status: 409,
+        response: { code: 'IDEMPOTENCY_CONFLICT' },
+      });
+    });
+
+    it('본문 검증: 필드 누락·추가 필드·같은 축제는 400 VALIDATION이다', async () => {
+      for (const input of [
+        null,
+        { toFestivalId: 'fst_2' },
+        { fromFestivalId: 'fst_1' },
+        { ...body, name: 'x' },
+        { fromFestivalId: 'fst_1', toFestivalId: 'fst_1' },
+      ])
+        await expect(
+          service.transferFestival('flg_1', 'user-1', 'key-1', input),
+        ).rejects.toMatchObject({
+          status: 400,
+          response: { code: 'VALIDATION' },
+        });
+    });
+
+    it('기수가 아니면 403 FLAG_NOT_BEARER, 공동 기수면 403 FLAG_NOT_OWNER다', async () => {
+      await expect(
+        service.transferFestival('flg_1', 'user-2', 'key-1', body),
+      ).rejects.toMatchObject({
+        status: 403,
+        response: { code: 'FLAG_NOT_BEARER' },
+      });
+      bearers.rows.push({
+        id: 'b2',
+        flagId: 'flg_1',
+        festivalId: 'fst_1',
+        userId: 'user-2',
+        isOwner: false,
+      });
+      await expect(
+        service.transferFestival('flg_1', 'user-2', 'key-1', body),
+      ).rejects.toMatchObject({
+        status: 403,
+        response: { code: 'FLAG_NOT_OWNER' },
+      });
+    });
+
+    it('공동 기수가 있으면 409 FLAG_HAS_CO_BEARERS이고 아무것도 바꾸지 않는다', async () => {
+      bearers.rows.push({
+        id: 'b2',
+        flagId: 'flg_1',
+        festivalId: 'fst_1',
+        userId: 'user-2',
+        isOwner: false,
+      });
+      await expect(
+        service.transferFestival('flg_1', 'user-1', 'key-1', body),
+      ).rejects.toMatchObject({
+        status: 409,
+        response: { code: 'FLAG_HAS_CO_BEARERS' },
+      });
+      expect(flags.rows[0].festivalId).toBe('fst_1');
+    });
+
+    it('원본 축제가 현재 축제와 다르면 409 FESTIVAL_MISMATCH다', async () => {
+      await expect(
+        service.transferFestival('flg_1', 'user-1', 'key-1', {
+          fromFestivalId: 'fst_9',
+          toFestivalId: 'fst_2',
+        }),
+      ).rejects.toMatchObject({
+        status: 409,
+        response: { code: 'FESTIVAL_MISMATCH' },
+      });
+    });
+
+    it('대상 축제가 미발행·없으면 404 NOT_FOUND다', async () => {
+      for (const toFestivalId of ['fst_draft', 'fst_none'])
+        await expect(
+          service.transferFestival('flg_1', 'user-1', 'key-1', {
+            fromFestivalId: 'fst_1',
+            toFestivalId,
+          }),
+        ).rejects.toMatchObject({
+          status: 404,
+          response: { code: 'NOT_FOUND' },
+        });
+    });
+
+    it('대상 축제에서 이미 기수면 BEARER_LIMIT, 같은 이름이 있으면 FLAG_NAME_TAKEN, 기수 모드 꺼짐이면 BEARER_MODE_OFF(모두 409)다', async () => {
+      bearers.rows.push({
+        id: 'b3',
+        flagId: 'flg_other',
+        festivalId: 'fst_2',
+        userId: 'user-1',
+        isOwner: true,
+      });
+      await expect(
+        service.transferFestival('flg_1', 'user-1', 'key-1', body),
+      ).rejects.toMatchObject({
+        status: 409,
+        response: { code: 'BEARER_LIMIT' },
+      });
+      bearers.rows.pop();
+      flags.rows.push(
+        flagRow({ id: 'flg_2', festivalId: 'fst_2', name: '푸른 깃발' }),
+      );
+      await expect(
+        service.transferFestival('flg_1', 'user-1', 'key-1', body),
+      ).rejects.toMatchObject({
+        status: 409,
+        response: { code: 'FLAG_NAME_TAKEN' },
+      });
+      flags.rows.pop();
+      flags.rows[0].ownerPaused = true;
+      await expect(
+        service.transferFestival('flg_1', 'user-1', 'key-1', body),
+      ).rejects.toMatchObject({
+        status: 409,
+        response: { code: 'BEARER_MODE_OFF' },
+      });
+    });
+
+    it('동시 요청이 고유 인덱스에 막히면 기존 409 코드로 바꾼다', async () => {
+      const update = jest.spyOn(flags, 'update').mockRejectedValueOnce(
+        Object.assign(new Error('duplicate'), {
+          code: '23505',
+          constraint: 'IDX_flags_festival_name',
+        }),
+      );
+      await expect(
+        service.transferFestival('flg_1', 'user-1', 'key-1', body),
+      ).rejects.toMatchObject({
+        status: 409,
+        response: { code: 'FLAG_NAME_TAKEN' },
+      });
+      update.mockRestore();
     });
   });
 });
