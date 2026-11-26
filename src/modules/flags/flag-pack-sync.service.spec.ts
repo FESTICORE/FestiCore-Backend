@@ -129,6 +129,30 @@ describe('FlagPackSyncService', () => {
     await service.sync(flag.id, manager as unknown as EntityManager);
     expect(festival.publishedVersion).toBe(6);
     expect(festival.published?.flags).toHaveLength(2);
+
+    // 축제를 옮긴 깃발은 이전 축제 팩에서 빠지고 새 축제 팩에 들어간다.
+    const target = {
+      ...festival,
+      id: 'fst_target01',
+      draft: { ...base, id: 'fst_target01', flags: [] },
+      published: { ...base, id: 'fst_target01', flags: [], packVersion: 1 },
+      publishedVersion: 1,
+    } as unknown as AdminFestival;
+    repositories.get(AdminFestival)!.findOne = jest
+      .fn()
+      .mockImplementation(({ where }: { where: { id: string } }) =>
+        where.id === target.id ? target : festival,
+      );
+    flag.festivalId = target.id;
+    await expect(
+      service.sync(flag.id, manager as unknown as EntityManager, base.id),
+    ).resolves.toEqual([target.id, base.id]);
+    expect(
+      (festival.published?.flags as { id: string }[]).map((item) => item.id),
+    ).toEqual([secondFlag.id]);
+    expect(
+      (target.published?.flags as { id: string }[]).map((item) => item.id),
+    ).toEqual([flag.id]);
   });
 
   describe('legacy free-text return times', () => {

@@ -436,6 +436,93 @@ export class FlagsController {
   }
 
   @RequireCurrentTerms()
+  @Post(':flagId/festival-transfer')
+  @HttpCode(200)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: '깃발 축제 이동',
+    description:
+      '원래 기수가 기존 깃발을 다른 발행 축제로 옮깁니다. flagId·이름·소개·태그·사진·팔로워는 유지하고, 이전 축제에 묶인 plan·homeZoneId와 현장 상태(scheduled, zoneId·activity null)는 초기화합니다. 공동 기수가 있는 깃발은 옮길 수 없습니다. 이전·새 축제 팩과 라이브를 함께 갱신합니다. 같은 멱등키의 동일 요청은 저장된 응답을 재생합니다.',
+  })
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    description: '요청별 고유 키, 최대 128자. 24시간 보관',
+    required: true,
+    example: 'transfer-flg-123-001',
+  })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['fromFestivalId', 'toFestivalId'],
+      additionalProperties: false,
+      properties: {
+        fromFestivalId: {
+          type: 'string',
+          description: '깃발의 현재 축제 ID. 다르면 409 FESTIVAL_MISMATCH',
+        },
+        toFestivalId: { type: 'string', description: '옮길 발행 축제 ID' },
+      },
+      example: { fromFestivalId: 'fst_old', toFestivalId: 'fst_new' },
+    },
+  })
+  @ApiResponse({
+    status: 200,
+    description: '같은 flagId와 옮긴 뒤 기수 시점 프로필',
+    schema: {
+      example: {
+        flagId: 'flg_123',
+        previousFestivalId: 'fst_old',
+        festivalId: 'fst_new',
+        flag: {
+          id: 'flg_123',
+          name: '푸른 깃발',
+          thumbUrl: null,
+          photoUrl: null,
+          tags: ['sing'],
+          bio: '함께 노래해요',
+          followerCount: 12,
+          planVisible: true,
+          plan: [],
+          homeZoneId: null,
+        },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 400,
+    description:
+      'VALIDATION: 멱등키 누락, fromFestivalId·toFestivalId 누락·미허용 필드, 같은 축제',
+  })
+  @ApiResponse({ status: 401, description: '앱 access 토큰 없음 또는 만료' })
+  @ApiResponse({
+    status: 403,
+    description:
+      'FLAG_NOT_BEARER: 기수 아님, FLAG_NOT_OWNER: 원래 기수 아님, TERMS_REQUIRED: 현재 약관 미동의',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'NOT_FOUND: 깃발 없음 또는 현재·대상 축제 미발행',
+  })
+  @ApiResponse({
+    status: 409,
+    description:
+      'FESTIVAL_MISMATCH: 현재 축제가 fromFestivalId와 다름, FLAG_HAS_CO_BEARERS: 공동 기수 있음, BEARER_LIMIT: 대상 축제에서 이미 기수, FLAG_NAME_TAKEN: 대상 축제에 같은 이름, BEARER_MODE_OFF: 기수 모드 꺼짐, IDEMPOTENCY_CONFLICT: 같은 멱등키로 다른 요청',
+  })
+  transferFestival(
+    @Param('flagId') id: string,
+    @CurrentUser() user: AuthUser,
+    @Headers('idempotency-key') key: string | undefined,
+    @Body() body: unknown,
+  ) {
+    if (!key || key.length > 128)
+      throw new BadRequestException({
+        code: 'VALIDATION',
+        message: 'Idempotency-Key가 필요합니다.',
+      });
+    return this.service.transferFestival(id, user.userId, key, body);
+  }
+
+  @RequireCurrentTerms()
   @Post(':flagId/status')
   @HttpCode(200)
   @ApiBearerAuth()
